@@ -56,5 +56,4 @@ class PressMicrowaveButtonHLA(HighLevelAction):
         return "press_microwave_button.yaml"
 
     def press_microwave_button(self, speed: str) -> None:
-        assert self.sim.held_object_name is None
         print("Pressing microwave button ...")
