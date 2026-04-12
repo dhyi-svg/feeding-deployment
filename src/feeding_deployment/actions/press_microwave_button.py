@@ -55,5 +55,5 @@ class PressMicrowaveButtonHLA(HighLevelAction):
         )
         return "press_microwave_button.yaml"
 
-    def press_microwave_button(self, speed: str) -> None:
-        print("Pressing microwave button ...")
+    def press_microwave_button(self, speed: str, duration: float) -> None:
+        print(f"Pressing microwave button (duration={duration}s) ...")
