@@ -63,9 +63,11 @@ class PlacePlateInApplianceHLA(HighLevelAction):
         return f"place_plate_in_{appliance.name}.yaml"
 
     def place_plate_in_fridge(self, speed: str) -> None:
+        # assert self.sim.held_object_name == "plate"
         print("Placing plate in fridge ...")
 
     def place_plate_in_microwave(self, speed: str) -> None:
+        # assert self.sim.held_object_name == "plate"
         print("Placing plate in microwave ...")
 
 
@@ -108,6 +110,7 @@ class PlacePlateOnHolderHLA(HighLevelAction):
         return "place_plate_on_holder.yaml"
 
     def place_plate_on_holder(self, speed: str) -> None:
+        # assert self.sim.held_object_name == "plate"
         print("Placing plate on holder ...")
 
 class PlacePlateInSinkHLA(HighLevelAction):
@@ -151,6 +154,7 @@ class PlacePlateInSinkHLA(HighLevelAction):
         return f"place_plate_in_sink.yaml"
 
     def place_plate_in_sink(self, speed: str) -> None:
+        # assert self.sim.held_object_name == "plate"
         print("Placing plate in sink ...")
 
 class PlacePlateOnTableHLA(HighLevelAction):
@@ -194,4 +198,5 @@ class PlacePlateOnTableHLA(HighLevelAction):
         return f"place_plate_on_table.yaml"
 
     def place_plate_on_table(self, speed: str) -> None:
+        # assert self.sim.held_object_name == "plate"
         print("Placing plate on table ...")
