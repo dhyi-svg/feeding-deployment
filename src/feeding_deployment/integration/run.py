@@ -115,6 +115,7 @@ from feeding_deployment.actions.flair.flair import FLAIR
 from feeding_deployment.transparency.query_llm import TransparencyQuery
 from feeding_deployment.integration.preference_context import build_preference_context
 from feeding_deployment.preference_learning.methods.prediction_model import PredictionModel, PREF_OPTIONS
+from feeding_deployment.preference_learning.config import MEALS, SETTINGS, TIMES_OF_DAY
 from feeding_deployment.preference_learning.config.physical_capabilities import (
     PHYSICAL_CAPABILITY_PROFILES,
 )
@@ -424,10 +425,8 @@ class _Runner:
         """Require a valid preference context before the web session; no implicit defaults."""
         if self.preference_context is None:
             raise RuntimeError(
-                "preference_context is required but unset. Each run must set it explicitly "
-                "(e.g. non-empty --pref_meal with --use_interface, or call "
-                "set_meal_preference_context(meal, setting, time_of_day) before run()). "
-                "Context is not loaded from or saved to disk; after a crash, supply it again."
+                "preference_context is required but unset. Call "
+                "set_meal_preference_context(meal, setting, time_of_day) before run()."
             )
         return self.preference_context
 
@@ -459,6 +458,23 @@ class _Runner:
                     terminal_correct_preferences,
                 )
                 ctx_dict = terminal_collect_context()
+                self.set_meal_preference_context(
+                    meal=ctx_dict["meal"],
+                    setting=ctx_dict["setting"],
+                    time_of_day=ctx_dict["time_of_day"],
+                )
+            elif self._pref_mode == "interface" and self.preference_context is None:
+                ctx_defaults = {
+                    "meal": MEALS[0],
+                    "setting": SETTINGS[0],
+                    "time_of_day": TIMES_OF_DAY[0],
+                }
+                ctx_dict = self.web_interface.get_preference_context(
+                    list(MEALS),
+                    list(SETTINGS),
+                    list(TIMES_OF_DAY),
+                    ctx_defaults,
+                )
                 self.set_meal_preference_context(
                     meal=ctx_dict["meal"],
                     setting=ctx_dict["setting"],
@@ -540,6 +556,10 @@ class _Runner:
                 ground_truth_bundle=self.ground_truth_bundle,
             )
             print(f"[learn] Memory update complete (day {day}).")
+            if self._pref_mode == "interface":
+                self.web_interface.notify_preference_corrections_applied(
+                    "Preferences were applied successfully."
+                )
 
             self.web_interface.ready_for_task_selection()
         last_task_type = None
@@ -926,23 +946,12 @@ if __name__ == "__main__":
              "'interface': predict + correct via web interface (requires frontend).",
     )
     parser.add_argument(
-        "--pref_meal",
-        type=str,
-        default="",
-        help="Meal label (preference_learning.config.MEALS). "
-             "Required with --pref_mode=interface. With --pref_mode=terminal, "
-             "context is collected interactively and this flag is ignored.",
-    )
-    parser.add_argument(
         "--physical_profile_file",
         type=str,
         default="",
         help="UTF-8 text file describing the user's physical capabilities. "
              "Required with --pref_mode=terminal or --pref_mode=interface.",
     )
-    parser.add_argument("--pref_setting", type=str, default="Personal", help="Dining setting (must match preference_learning.config.SETTINGS).")
-    parser.add_argument(
-        "--pref_time_of_day", type=str, default="morning", help="Time of day (must match preference_learning.config.TIMES_OF_DAY).")
     parser.add_argument(
         "--pref_day", type=int, default=None,
         help="Override the deployment day number for preference learning. "
@@ -988,20 +997,6 @@ if __name__ == "__main__":
                      pref_day=args.pref_day,
                      pref_mode=args.pref_mode)
 
-    if args.pref_mode == "interface":
-        if not args.pref_meal.strip():
-            raise ValueError(
-                "With --pref_mode=interface, pass a non-empty --pref_meal every run "
-                "(exact MEALS label), with --pref_setting and --pref_time_of_day "
-                "matching config vocabularies. "
-                "Preference context is not stored on disk; after a crash, pass them again."
-            )
-        runner.set_meal_preference_context(
-            meal=args.pref_meal.strip(),
-            setting=args.pref_setting,
-            time_of_day=args.pref_time_of_day,
-        )
-        print("Meal preference context (this run only):", runner.preference_context)
     # Handle Ctrl+C gracefully
     signal.signal(signal.SIGINT, runner.signal_handler)
 

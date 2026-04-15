@@ -125,7 +125,7 @@ class PredictionModel:
         self.user = user
         self.physical_profile_label = physical_profile_label
         self.physical_profile_description = physical_profile_description
-        self.client = OpenAI(api_key=_resolve_api_key())
+        self.client = OpenAI(api_key=_resolve_api_key(None))
         self.chat_model = chat_model
         self.embed_model = embed_model
         self._retry = retry_fn

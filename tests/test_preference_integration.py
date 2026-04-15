@@ -13,7 +13,12 @@ contracts are tested against the same functions those classes delegate to.
 
 from __future__ import annotations
 
+import importlib
 import json
+import queue
+import sys
+import threading
+import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 from io import StringIO
@@ -36,6 +41,46 @@ from feeding_deployment.preference_learning.methods.prediction_model import (
 from feeding_deployment.preference_learning.methods.utils import PREF_FIELDS
 
 _PM_MODULE = "feeding_deployment.preference_learning.methods.prediction_model"
+
+
+def _import_web_interface_module():
+    """Import web_interface.py with lightweight dependency stubs."""
+    module_name = "feeding_deployment.interfaces.web_interface"
+    sys.modules.pop(module_name, None)
+
+    fake_modules = {
+        "cv2": types.ModuleType("cv2"),
+        "rospy": types.ModuleType("rospy"),
+        "sensor_msgs": types.ModuleType("sensor_msgs"),
+        "sensor_msgs.msg": types.ModuleType("sensor_msgs.msg"),
+        "std_msgs": types.ModuleType("std_msgs"),
+        "std_msgs.msg": types.ModuleType("std_msgs.msg"),
+        "cv_bridge": types.ModuleType("cv_bridge"),
+        "pybullet_helpers": types.ModuleType("pybullet_helpers"),
+        "pybullet_helpers.geometry": types.ModuleType("pybullet_helpers.geometry"),
+        "pybullet_helpers.joint": types.ModuleType("pybullet_helpers.joint"),
+        "scipy": types.ModuleType("scipy"),
+        "scipy.spatial": types.ModuleType("scipy.spatial"),
+        "scipy.spatial.transform": types.ModuleType("scipy.spatial.transform"),
+        "feeding_deployment.transparency.continuous_llm": types.ModuleType(
+            "feeding_deployment.transparency.continuous_llm"
+        ),
+    }
+
+    fake_modules["sensor_msgs.msg"].CompressedImage = type("CompressedImage", (), {})
+    fake_modules["std_msgs.msg"].String = type("String", (), {})
+    fake_modules["cv_bridge"].CvBridge = type("CvBridge", (), {})
+    fake_modules["pybullet_helpers.geometry"].Pose = type("Pose", (), {})
+    fake_modules["pybullet_helpers.joint"].JointPositions = type(
+        "JointPositions", (), {}
+    )
+    fake_modules["scipy.spatial.transform"].Rotation = type("Rotation", (), {})
+    fake_modules["feeding_deployment.transparency.continuous_llm"].TransparencyContinuous = type(
+        "TransparencyContinuous", (), {}
+    )
+
+    with patch.dict(sys.modules, fake_modules):
+        return importlib.import_module(module_name)
 
 
 # ===================================================================
@@ -140,6 +185,20 @@ class TestRunnerPreferenceContextContract:
                 for t in TIMES_OF_DAY:
                     ctx = build_preference_context(m, s, t)
                     validate_preference_context(ctx)
+
+    def test_interface_mode_context_defaults_are_valid(self):
+        """Interface mode can safely fall back to canonical default context values."""
+        ctx = {
+            "meal": MEALS[0],
+            "setting": SETTINGS[0],
+            "time_of_day": TIMES_OF_DAY[0],
+        }
+        defaults = build_preference_context(
+            ctx["meal"],
+            ctx["setting"],
+            ctx["time_of_day"],
+        )
+        assert defaults == ctx
 
 
 # ===================================================================
@@ -319,25 +378,237 @@ class TestPredictionModelPredictBundle:
 
 
 # ===================================================================
-# Step 3 — preference correction stub + corrected-diff logic
+# Step 3 — preference correction web interface contract
 # ===================================================================
 
 
-class TestPreferenceCorrectionStubContract:
-    """The stub in WebInterface.get_preference_corrections returns
-    dict(predicted_bundle), i.e. an unchanged copy.  We verify the
-    contract here without importing web_interface.py."""
+class TestPreferenceCorrectionWebInterfaceContract:
+    """Verify the live WebInterface preference-correction message flow."""
 
-    def test_stub_returns_copy_of_predicted(self):
+    def test_preference_context_round_trip_sends_jump_then_data(self):
+        module = _import_web_interface_module()
+        interface = module.WebInterface.__new__(module.WebInterface)
+        defaults = {
+            "meal": MEALS[0],
+            "setting": SETTINGS[0],
+            "time_of_day": TIMES_OF_DAY[0],
+        }
+        sent_messages = []
+
+        interface.current_page = "task_selection"
+        interface._send_message = sent_messages.append
+
+        def fake_get_required_message(condition):
+            response = {
+                "state": "preference_context_response",
+                "meal": MEALS[1],
+                "setting": SETTINGS[1],
+                "time_of_day": TIMES_OF_DAY[1],
+            }
+            assert condition(response) is True
+            return response
+
+        interface.get_required_web_interface_message = fake_get_required_message
+
+        with patch.object(module.time, "sleep") as mock_sleep:
+            returned = module.WebInterface.get_preference_context(
+                interface,
+                list(MEALS),
+                list(SETTINGS),
+                list(TIMES_OF_DAY),
+                defaults,
+            )
+
+        assert interface.current_page == "preference_context"
+        assert sent_messages == [
+            {"state": "preference_context", "status": "jump"},
+            {
+                "state": "preference_context_data",
+                "meals": list(MEALS),
+                "settings": list(SETTINGS),
+                "time_of_day": list(TIMES_OF_DAY),
+                "defaults": defaults,
+            },
+        ]
+        mock_sleep.assert_called_once_with(0.5)
+        assert returned == {
+            "meal": MEALS[1],
+            "setting": SETTINGS[1],
+            "time_of_day": TIMES_OF_DAY[1],
+        }
+
+    def test_preference_context_raises_when_page_exits_early(self):
+        module = _import_web_interface_module()
+        interface = module.WebInterface.__new__(module.WebInterface)
+        defaults = {
+            "meal": MEALS[0],
+            "setting": SETTINGS[0],
+            "time_of_day": TIMES_OF_DAY[0],
+        }
+        sent_messages = []
+
+        interface.current_page = "task_selection"
+        interface._send_message = sent_messages.append
+        interface.get_required_web_interface_message = lambda condition: None
+
+        with patch.object(module.time, "sleep") as mock_sleep:
+            with pytest.raises(RuntimeError, match="Preference context exited before submission"):
+                module.WebInterface.get_preference_context(
+                    interface,
+                    list(MEALS),
+                    list(SETTINGS),
+                    list(TIMES_OF_DAY),
+                    defaults,
+                )
+
+        assert interface.current_page == "preference_context"
+        assert sent_messages[0] == {"state": "preference_context", "status": "jump"}
+        assert sent_messages[1]["state"] == "preference_context_data"
+        mock_sleep.assert_called_once_with(0.5)
+
+    def test_round_trip_sends_jump_then_data_and_returns_bundle(self):
+        module = _import_web_interface_module()
+        interface = module.WebInterface.__new__(module.WebInterface)
         predicted = _default_bundle()
-        returned = dict(predicted)  # same logic as the stub
+        corrected_bundle = dict(predicted)
+        corrected_bundle[PREF_FIELDS[0]] = PREF_OPTIONS[PREF_FIELDS[0]][-1]
+        sent_messages = []
+
+        interface.current_page = "task_selection"
+        interface._send_message = sent_messages.append
+
+        def fake_get_required_message(condition):
+            response = {
+                "state": "preference_correction_response",
+                "bundle": corrected_bundle,
+            }
+            assert condition(response) is True
+            return response
+
+        interface.get_required_web_interface_message = fake_get_required_message
+
+        with patch.object(module.time, "sleep") as mock_sleep:
+            returned = module.WebInterface.get_preference_corrections(
+                interface,
+                predicted,
+                dict(PREF_OPTIONS),
+            )
+
+        assert interface.current_page == "preference_correction"
+        assert sent_messages == [
+            {"state": "preference_correction", "status": "jump"},
+            {
+                "state": "preference_correction_data",
+                "predicted_bundle": predicted,
+                "options": dict(PREF_OPTIONS),
+            },
+        ]
+        mock_sleep.assert_called_once_with(0.5)
+        assert returned == corrected_bundle
+
+    def test_callback_accepts_status_less_preference_response(self, tmp_path):
+        module = _import_web_interface_module()
+        interface = module.WebInterface.__new__(module.WebInterface)
+        response_bundle = _default_bundle()
+
+        interface.webapp_received_messages_log = tmp_path / "received.txt"
+        interface.task_selection_queue = queue.Queue()
+        interface.received_web_interface_messages = queue.Queue()
+        interface.explanation_lock = threading.Lock()
+        interface.current_page = "preference_correction"
+        interface.task_selection_jump = True
+
+        msg = types.SimpleNamespace(
+            data=json.dumps({
+                "state": "preference_correction_response",
+                "bundle": response_bundle,
+            })
+        )
+
+        module.WebInterface._message_callback(interface, msg)
+
+        assert interface.task_selection_jump is False
+        assert interface.task_selection_queue.empty()
+        queued = interface.received_web_interface_messages.get_nowait()
+        assert queued == {
+            "state": "preference_correction_response",
+            "bundle": response_bundle,
+        }
+
+    def test_callback_accepts_status_less_preference_context_response(self, tmp_path):
+        module = _import_web_interface_module()
+        interface = module.WebInterface.__new__(module.WebInterface)
+
+        interface.webapp_received_messages_log = tmp_path / "received.txt"
+        interface.task_selection_queue = queue.Queue()
+        interface.received_web_interface_messages = queue.Queue()
+        interface.explanation_lock = threading.Lock()
+        interface.current_page = "preference_context"
+        interface.task_selection_jump = True
+
+        msg = types.SimpleNamespace(
+            data=json.dumps({
+                "state": "preference_context_response",
+                "meal": MEALS[0],
+                "setting": SETTINGS[0],
+                "time_of_day": TIMES_OF_DAY[0],
+            })
+        )
+
+        module.WebInterface._message_callback(interface, msg)
+
+        assert interface.task_selection_jump is False
+        assert interface.task_selection_queue.empty()
+        queued = interface.received_web_interface_messages.get_nowait()
+        assert queued == {
+            "state": "preference_context_response",
+            "meal": MEALS[0],
+            "setting": SETTINGS[0],
+            "time_of_day": TIMES_OF_DAY[0],
+        }
+
+    def test_returns_predicted_bundle_when_correction_page_exits_early(self):
+        module = _import_web_interface_module()
+        interface = module.WebInterface.__new__(module.WebInterface)
+        predicted = _default_bundle()
+        sent_messages = []
+
+        interface.current_page = "task_selection"
+        interface._send_message = sent_messages.append
+        interface.get_required_web_interface_message = lambda condition: None
+
+        with patch.object(module.time, "sleep") as mock_sleep:
+            returned = module.WebInterface.get_preference_corrections(
+                interface,
+                predicted,
+                dict(PREF_OPTIONS),
+            )
+
+        assert interface.current_page == "preference_correction"
+        assert sent_messages[0] == {"state": "preference_correction", "status": "jump"}
+        assert sent_messages[1]["state"] == "preference_correction_data"
+        mock_sleep.assert_called_once_with(0.5)
         assert returned == predicted
         assert returned is not predicted
 
-    def test_stub_preserves_all_fields(self):
-        predicted = _default_bundle()
-        returned = dict(predicted)
-        assert set(returned.keys()) == set(PREF_FIELDS)
+    def test_preference_correction_applied_confirmation_message(self):
+        module = _import_web_interface_module()
+        interface = module.WebInterface.__new__(module.WebInterface)
+        sent_messages = []
+
+        interface._send_message = sent_messages.append
+
+        module.WebInterface.notify_preference_corrections_applied(
+            interface,
+            "Preferences were applied successfully.",
+        )
+
+        assert sent_messages == [
+            {
+                "state": "preference_correction_applied",
+                "message": "Preferences were applied successfully.",
+            }
+        ]
 
 
 class TestCorrectedDiffLogic:
