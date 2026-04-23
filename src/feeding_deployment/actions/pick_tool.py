@@ -58,16 +58,39 @@ class PickToolHLA(HighLevelAction):
     def pick_utensil(self, speed: str) -> None:
         assert self.sim.held_object_name is None
 
-        print("Picking up utensil ...")
-        return
-
         if self.robot_interface is not None:
             self.robot_interface.set_speed(speed)
             
+        self.move_to_joint_positions(self.sim.scene_description.retract_pos)
+        self.close_gripper()
+        self.move_to_joint_positions(self.sim.scene_description.utensil_above_mount_pos)
+        self.move_to_ee_pose(self.sim.scene_description.utensil_inside_mount)
+        self.grasp_tool("utensil")
+
+        # if self.wrist_interface is not None:
+        #     time.sleep(1.0) # wait for the utensil to be connected
+        #     print("Resetting wrist controller ...")
+        #     self.wrist_interface.set_velocity_mode()
+        #     self.wrist_interface.reset()
+
+        self.move_to_ee_pose(self.sim.scene_description.utensil_outside_mount)
+        if self.sim.scene_description.scene_label == "vention":
+            self.move_to_ee_pose(self.sim.scene_description.utensil_outside_above_mount)
+        elif self.sim.scene_description.scene_label == "wheelchair":
+            # Not sure if this is necessary.
+            self.move_to_joint_positions(self.sim.scene_description.retract_pos)
+        # Pre-emptively move to the before_transfer_pos because moving to above_plate_pos from retract_pos is unsafe.
+        self.move_to_joint_positions(self.sim.scene_description.absolute_before_transfer_pos)
+        self.move_to_joint_positions(self.sim.scene_description.before_transfer_pos)
+
         # self.move_to_joint_positions(self.sim.scene_description.retract_pos)
         # self.close_gripper()
-        # self.move_to_joint_positions(self.sim.scene_description.utensil_above_mount_pos)
-        # self.move_to_ee_pose(self.sim.scene_description.utensil_inside_mount)
+
+        # if self.sim.scene_description.scene_label == "vention":
+        #     self.move_to_joint_positions(self.sim.scene_description.wipe_infront_mount_pos)
+
+        # self.move_to_joint_positions(self.sim.scene_description.wipe_above_mount_pos)
+        # self.move_to_ee_pose(self.sim.scene_description.wipe_inside_mount)
         # self.grasp_tool("utensil")
 
         # if self.wrist_interface is not None:
@@ -76,41 +99,15 @@ class PickToolHLA(HighLevelAction):
         #     self.wrist_interface.set_velocity_mode()
         #     self.wrist_interface.reset()
 
-        # self.move_to_ee_pose(self.sim.scene_description.utensil_outside_mount)
-        # if self.sim.scene_description.scene_label == "vention":
-        #     self.move_to_ee_pose(self.sim.scene_description.utensil_outside_above_mount)
-        # elif self.sim.scene_description.scene_label == "wheelchair":
-        #     # Not sure if this is necessary.
-        #     self.move_to_joint_positions(self.sim.scene_description.retract_pos)
-        # # Pre-emptively move to the before_transfer_pos because moving to above_plate_pos from retract_pos is unsafe.
+        # self.move_to_ee_pose(self.sim.scene_description.wipe_outside_mount)
+        
+        # if self.sim.scene_description.scene_label == "wheelchair":
+        #     self.move_to_ee_pose(self.sim.scene_description.wipe_outside_above_mount)
+        # elif self.sim.scene_description.scene_label == "vention":
+        #     self.move_to_joint_positions(self.sim.scene_description.wipe_neutral_pos)
+        # self.move_to_joint_positions(self.sim.scene_description.retract_pos)
         # self.move_to_joint_positions(self.sim.scene_description.absolute_before_transfer_pos)
         # self.move_to_joint_positions(self.sim.scene_description.before_transfer_pos)
-
-        self.move_to_joint_positions(self.sim.scene_description.retract_pos)
-        self.close_gripper()
-
-        if self.sim.scene_description.scene_label == "vention":
-            self.move_to_joint_positions(self.sim.scene_description.wipe_infront_mount_pos)
-
-        self.move_to_joint_positions(self.sim.scene_description.wipe_above_mount_pos)
-        self.move_to_ee_pose(self.sim.scene_description.wipe_inside_mount)
-        self.grasp_tool("utensil")
-
-        if self.wrist_interface is not None:
-            time.sleep(1.0) # wait for the utensil to be connected
-            print("Resetting wrist controller ...")
-            self.wrist_interface.set_velocity_mode()
-            self.wrist_interface.reset()
-
-        self.move_to_ee_pose(self.sim.scene_description.wipe_outside_mount)
-        
-        if self.sim.scene_description.scene_label == "wheelchair":
-            self.move_to_ee_pose(self.sim.scene_description.wipe_outside_above_mount)
-        elif self.sim.scene_description.scene_label == "vention":
-            self.move_to_joint_positions(self.sim.scene_description.wipe_neutral_pos)
-        self.move_to_joint_positions(self.sim.scene_description.retract_pos)
-        self.move_to_joint_positions(self.sim.scene_description.absolute_before_transfer_pos)
-        self.move_to_joint_positions(self.sim.scene_description.before_transfer_pos)
         
     def pick_drink(self, speed: str) -> None:
         assert self.sim.held_object_name is None

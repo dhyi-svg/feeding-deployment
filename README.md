@@ -107,6 +107,53 @@ You can move the robot to preset configurations by running:
 - IP for robot: 192.168..10
 - IP for webapp: `http://192.168.1.2:8080/#/task_selection`
 
+## Build navigation map + save named base locations (ros_vention)
+
+`roslaunch ros_vention vention_navigation.launch` does **not** load map files by itself.
+It starts `move_base`, which uses whatever `/map` and `map -> odom` are currently published.
+
+The workflow below uses Cartographer-native saved state (`.pbstream`).
+
+### Part 1: First-time mapping + save map state + save named locations
+
+From `/home/isacc/deployment_ws`, source your workspace in each terminal: `source devel/setup.bash`
+
+1. Start core and robot sources:
+   - `roscore`
+   - `roslaunch ros_vention vention_description.launch`
+   - `roslaunch ros_vention vention_rplidar_a1.launch`
+   - `roslaunch ros_vention vention_odm_d435.launch`
+   - `roslaunch ros_vention vention_cartographer_lidar.launch`
+2. Build map and save Cartographer state (`.pbstream`):
+   - `cd src/feeding-deployment`
+   - `python src/feeding_deployment/integration/build_map_interactive.py --pbstream-file /home/isacc/deployment_ws/src/feeding-deployment/config/maps/vention_map.pbstream`
+   - Optional: also export YAML/PGM snapshot: add `--save-occupancy-snapshot`
+   - By default this script does **not** call `/finish_trajectory`, so Cartographer can keep publishing `map -> odom` for follow-up steps like named location capture.
+   - Optional: if you explicitly want to finish the trajectory during save, add `--finish-trajectory-before-save`
+3. Save named navigation locations:
+   - `python src/feeding_deployment/integration/capture_named_locations.py --locations-file /home/isacc/deployment_ws/src/feeding-deployment/config/nav_named_locations.yaml`
+   - This captures in order: `fridge`, `microwave`, `table`, `sink`.
+
+### Part 2: Actual deployment (reuse saved map)
+
+From `/home/isacc/deployment_ws`, source your workspace in each terminal: `source devel/setup.bash`
+
+1. Start core and robot sources:
+   - `roscore`
+   - `roslaunch ros_vention vention_description.launch`
+   - `roslaunch ros_vention vention_rplidar_a1.launch`
+   - `roslaunch ros_vention vention_odm_d435.launch`
+2. Start Cartographer localization from saved state:
+   - `roslaunch ros_vention vention_cartographer_localization.launch load_state_filename:=/home/isacc/deployment_ws/src/feeding-deployment/config/maps/vention_map.pbstream`
+3. Start navigation:
+   - `roslaunch ros_vention vention_navigation.launch`
+
+In deployment mode, Cartographer publishes `/map` and `map -> odom` from the saved `.pbstream`, and `move_base` consumes that.
+
+By default, named locations are written to `config/nav_named_locations.yaml`.
+`NavigateHLA` reads this file automatically. To use a different file, set:
+`export FEEDING_NAV_LOCATIONS_FILE=/absolute/path/to/your_locations.yaml`
+
 ## Check Installation
 
 Run `./run_ci_checks.sh`. It should complete with all green successes in 5-10 seconds.

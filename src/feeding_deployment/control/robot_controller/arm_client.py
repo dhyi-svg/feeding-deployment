@@ -120,14 +120,22 @@ if __name__ == "__main__":
     if run_commands != "y":
         exit()
 
-    retract_pos = [0.0, -0.34903602299465675, -3.141591055693139, -2.0, 0.0, -0.872688061814757, 1.57075917569769]
-    arm_client_interface.execute_command(JointCommand(retract_pos))
+    # retract_pos = [0.0, -0.34903602299465675, -3.141591055693139, -2.0, 0.0, -0.872688061814757, 1.57075917569769]
+    # arm_client_interface.execute_command(JointCommand(retract_pos))
 
     # midpoint_pos = [2.2912525080624357, 0.730991513381838, 2.0830126187361424, -2.1737367965371632, 0.28532185799581516, -0.4648462461578422, -0.29495787389950756]
     # arm_client_interface.execute_command(JointCommand(midpoint_pos))
 
-    before_transfer_pos = [-2.86554642, -1.61951779, -2.60986085, -1.37302839, 1.11779249, -1.18028264, 2.05515862]
-    arm_client_interface.execute_command(JointCommand(before_transfer_pos))
+    # before_transfer_pos = [-2.86554642, -1.61951779, -2.60986085, -1.37302839, 1.11779249, -1.18028264, 2.05515862]
+    # arm_client_interface.execute_command(JointCommand(before_transfer_pos))
 
     # drink_gaze_pos = [-0.004187021865822871, 0.6034579885210962, -3.1259047705564633, -2.3538005746884725, 0.01149092320739253, 1.3411586039000891, 1.6825233913747728]
     # arm_client_interface.execute_command(JointCommand(drink_gaze_pos))
+
+    # input("Press enter to execute home position...")
+    # home_pos = [-2.8762139772986473e-05, 0.26193837151853794, -3.1415766746232525, -2.2690119171669654, 4.621619302645493e-06, 0.9598732314221993, 1.5708048489103847]
+    # arm_client_interface.execute_command(JointCommand(home_pos))
+
+    input("Press enter to execute test position...")
+    test_pos = [1.9303683476941251, 1.2582156501720618, -2.466566804725698, -1.8296553184344893, -2.7044885565073056, 1.347442865124349, 2.1667875439887103]
+    arm_client_interface.execute_command(JointCommand(test_pos))

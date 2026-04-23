@@ -1,0 +1,13 @@
+frame_id: map
+locations:
+  microwave:
+    frame_id: map
+    position:
+      x: 0.243387
+      y: 0.003358
+      z: -8.6e-05
+    orientation:
+      x: 0.000135
+      y: -2.9e-05
+      z: -0.006453
+      w: 0.999979
