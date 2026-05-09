@@ -21,7 +21,7 @@ class CollisionSensor:
     """See docstring above."""
 
     # Threshold for collision detection
-    COLLISION_THRESHOLD = 100.0
+    COLLISION_THRESHOLD = 20.0
 
     def __init__(self):
 
@@ -118,6 +118,8 @@ class CollisionSensor:
 
         error = np.abs(torque_reading - torque_model)
         max_error = np.max(error)
+
+        # print("Max Force Detected: ", max_error)
 
         # Very high error means collision, otherwise model error
         if max_error > self.COLLISION_THRESHOLD:

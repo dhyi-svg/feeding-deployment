@@ -136,6 +136,16 @@ if __name__ == "__main__":
     # home_pos = [-2.8762139772986473e-05, 0.26193837151853794, -3.1415766746232525, -2.2690119171669654, 4.621619302645493e-06, 0.9598732314221993, 1.5708048489103847]
     # arm_client_interface.execute_command(JointCommand(home_pos))
 
-    input("Press enter to execute test position...")
-    test_pos = [1.9303683476941251, 1.2582156501720618, -2.466566804725698, -1.8296553184344893, -2.7044885565073056, 1.347442865124349, 2.1667875439887103]
-    arm_client_interface.execute_command(JointCommand(test_pos))
+    input("Press enter to execute plate position...")
+    plate_pose = [0.219, -0.264, -0.001, 0.489, -0.491, -0.496, 0.524]
+    arm_client_interface.execute_command(CartesianCommand(plate_pose[:3], plate_pose[3:]))
+
+    # input("Press enter to execute outside plate position...")
+    # outside_plate_pose = plate_pose.copy()
+    # outside_plate_pose[0] += 0.1
+    # arm_client_interface.execute_command(CartesianCommand(outside_plate_pose[:3], outside_plate_pose[3:]))
+
+    input("Press enter to execute above plate position...")
+    above_plate_pose = plate_pose.copy()
+    above_plate_pose[2] += 0.1
+    arm_client_interface.execute_command(CartesianCommand(above_plate_pose[:3], above_plate_pose[3:]))

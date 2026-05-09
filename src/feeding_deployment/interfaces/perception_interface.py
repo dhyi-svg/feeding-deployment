@@ -51,17 +51,24 @@ class PerceptionInterface:
             self.tfBuffer = tf2_ros.Buffer()
             self.listener = tf2_ros.TransformListener(self.tfBuffer)
 
+            print("Initializing head perception ROS wrapper ...")
             self._head_perception = HeadPerceptionROSWrapper(record_goal_pose)
+            print("Head perception ROS wrapper initialized")
             
             # warm start head perception only if we're not recording the goal pose
             if not record_goal_pose:
+                print("Setting tool to fork")
                 self._head_perception.set_tool("fork")
                 for _ in range(10):
+                    print("Warming up head perception ...")
                     self._head_perception.run_head_perception()
 
+            print("Initializing drink perception ...")
             # Rajat ToDo: pass perception queues to all perception classes instead of having them use ros subscribers which spawn threads
             self._drink_perception = DrinkPerception()
+            print("Initializing handle perception ...")
             self._handle_perception = HandlePerception()
+            print("Perception interface initialized")
 
             self.speak_pub = rospy.Publisher('/speak', String, queue_size=1)
 
@@ -519,7 +526,7 @@ class PerceptionInterface:
             second_waypoints = self._generate_door_arc_waypoints(
                 start_pose=push_pose,
                 hinge_position=hinge_pose.position,
-                arc_length_m=0.5,
+                arc_length_m=0.5 if handle_type == "microwave" else 0.85, # the microwave is already partially open at the push waypoint
                 waypoint_spacing_m=0.05,
                 direction=1 if handle_type == "white fridge door" else -1, # microwave is left hinged
                 rotate_orientation=True,
@@ -593,6 +600,10 @@ class PerceptionInterface:
         self.sync_rviz()
 
         return handle_poses
+
+    def perceive_handle_closing_poses(self, handle_type: str):
+        assert handle_type in ["white fridge door", "microwave"]
+        return self.last_handle_poses
 
     def perceive_drink_pickup_poses(self):
 

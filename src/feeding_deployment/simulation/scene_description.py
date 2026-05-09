@@ -70,6 +70,7 @@ class SceneDescription:
     home_pos: JointPositions
     initial_joints: JointPositions
     retract_pos: JointPositions
+    side_retract_pos: JointPositions
     back_retract_pos: JointPositions
     retract_utensil_forward_pos: JointPositions
 

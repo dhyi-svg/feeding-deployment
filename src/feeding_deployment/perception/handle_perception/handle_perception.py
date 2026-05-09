@@ -208,202 +208,424 @@ class HandlePerception(TFInterface):
         depth_mm = (depth_image * 1000.0).astype("uint16")
         cv2.imwrite(file_path + "/depth.png", depth_mm)
 
-        vis_image, pixel_coords, response = self.molmo.query(
-            image_path=file_path + "/rgb.png",
-            prompt="Point to the center of the start / 30 secs button",
-            save_response_image_to=file_path + "/rgb_keypoint.png",
-        )
+        # vis_image, pixel_coords, response = self.molmo.query(
+        #     image_path=file_path + "/rgb.png",
+        #     prompt="Point to the center of the start / 30 secs button",
+        #     save_response_image_to=file_path + "/rgb_keypoint.png",
+        # )
 
-        print("Pixel coords from molmo:", pixel_coords)
+        # print("Pixel coords from molmo:", pixel_coords)
 
-        ok, button_3d = self.pixel2World(camera_info_msg, pixel_coords[0][0], pixel_coords[0][1], depth_image)
+        # ok, button_3d = self.pixel2World(camera_info_msg, pixel_coords[0][0], pixel_coords[0][1], depth_image)
 
-        if not ok:
-            print("Could not get valid 3D point for button")
-            return
+        # if not ok:
+        #     print("Could not get valid 3D point for button")
+        #     return
 
-        if transform is not None:   
-            print("Got transform between base_link and camera_color_optical_frame")
-            base_to_camera = self.make_homogeneous_transform(transform)
+        # if transform is not None:   
+        #     print("Got transform between base_link and camera_color_optical_frame")
+        #     base_to_camera = self.make_homogeneous_transform(transform)
 
-            camera_to_button = np.eye(4)
-            camera_to_button[:3, 3] = button_3d
-            camera_to_button[3, 3] = 1 
-            base_to_button = np.dot(base_to_camera, camera_to_button)
-            base_to_button[:3, :3] = Rotation.from_quat([0.0, 0.7071, 0.7071, 0.0]).as_matrix()
-            self.updateTF("base_link", "button", base_to_button)
-            print("Button in base frame:", base_to_button)
-            self.update_button_pose(base_to_button)
-        else:
-            print("Could not get transform between base_link and camera_color_optical_frame")
+        #     camera_to_button = np.eye(4)
+        #     camera_to_button[:3, 3] = button_3d
+        #     camera_to_button[3, 3] = 1 
+        #     base_to_button = np.dot(base_to_camera, camera_to_button)
+        #     base_to_button[:3, :3] = Rotation.from_quat([0.0, 0.7071, 0.7071, 0.0]).as_matrix()
+        #     self.updateTF("base_link", "button", base_to_button)
+        #     print("Button in base frame:", base_to_button)
+        #     self.update_button_pose(base_to_button)
+        # else:
+        #     print("Could not get transform between base_link and camera_color_optical_frame")
         
-        return
+        # return
 
-        detection = self.detect_items(rgb_image, [self.handle_type])
+        # detection = self.detect_items(rgb_image, [self.handle_type])
 
-        if detection is None:
-            print("No detection")
-            return
+        # if detection is None:
+        #     print("No detection")
+        #     return
 
-        # create mask using detection
-        x1, y1, x2, y2 = detection.astype(int)
-        mask = np.zeros(rgb_image.shape[:2], dtype=np.uint8)
-        mask[y1:y2, x1:x2] = 255
-        cv2.imwrite("detection_mask.png", mask)
+        # # create mask using detection
+        # x1, y1, x2, y2 = detection.astype(int)
+        # mask = np.zeros(rgb_image.shape[:2], dtype=np.uint8)
+        # mask[y1:y2, x1:x2] = 255
+        # cv2.imwrite("detection_mask.png", mask)
 
-        # -----------------------------
-        # Extract ALL 3D points from mask
-        # -----------------------------
-        bounding_box_points_3d = []
-        pixels = []
+        # # -----------------------------
+        # # Extract ALL 3D points from mask
+        # # -----------------------------
+        # bounding_box_points_3d = []
+        # pixels = []
 
-        ys, xs = np.where(mask > 0)
-        for u, v in zip(xs, ys):
-            ok, p = self.pixel2World(
-                camera_info_msg, u, v, depth_image)
-            if ok:
-                bounding_box_points_3d.append(p)
-                pixels.append((u, v))
+        # ys, xs = np.where(mask > 0)
+        # for u, v in zip(xs, ys):
+        #     ok, p = self.pixel2World(
+        #         camera_info_msg, u, v, depth_image)
+        #     if ok:
+        #         bounding_box_points_3d.append(p)
+        #         pixels.append((u, v))
 
-        if len(bounding_box_points_3d) == 0:
-            print("-------------- ERROR: No valid 3D points from mask.")
-            # rospy.logwarn("No valid 3D points from mask.")
-            return
+        # if len(bounding_box_points_3d) == 0:
+        #     print("-------------- ERROR: No valid 3D points from mask.")
+        #     # rospy.logwarn("No valid 3D points from mask.")
+        #     return
 
-        bounding_box_points_3d = np.array(bounding_box_points_3d)
-        pixels = np.array(pixels)
+        # bounding_box_points_3d = np.array(bounding_box_points_3d)
+        # pixels = np.array(pixels)
 
-        # Fit a plane to the 3D points to find the main planar surface (fridge door)
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(bounding_box_points_3d)
+        # # Fit a plane to the 3D points to find the main planar surface (fridge door)
+        # pcd = o3d.geometry.PointCloud()
+        # pcd.points = o3d.utility.Vector3dVector(bounding_box_points_3d)
 
-        plane_model, inliers = pcd.segment_plane(
-            distance_threshold=0.02,  # 1 cm threshold for inliers
-            ransac_n=3,
-            num_iterations=500
-        )
-        outliers = np.setdiff1d(np.arange(len(bounding_box_points_3d)), inliers)
+        # plane_model, inliers = pcd.segment_plane(
+        #     distance_threshold=0.02,  # 1 cm threshold for inliers
+        #     ransac_n=3,
+        #     num_iterations=500
+        # )
+        # outliers = np.setdiff1d(np.arange(len(bounding_box_points_3d)), inliers)
 
-        plane_cloud = pcd.select_by_index(inliers)
-        possible_handle_cloud = pcd.select_by_index(inliers, invert=True)
+        # plane_cloud = pcd.select_by_index(inliers)
+        # possible_handle_cloud = pcd.select_by_index(inliers, invert=True)
 
-        # visulize plane_cloud on image
+        # # visulize plane_cloud on image
 
-        vis = rgb_image.copy()
-        for u, v in pixels[inliers]:
-            vis[v, u] = (255, 0, 0)
-        cv2.imwrite("plane_pixels.png", vis)
+        # vis = rgb_image.copy()
+        # for u, v in pixels[inliers]:
+        #     vis[v, u] = (255, 0, 0)
+        # cv2.imwrite("plane_pixels.png", vis)
 
-        vis = rgb_image.copy()
-        for u, v in pixels[outliers]:
-            vis[v, u] = (0, 0, 255)
-        cv2.imwrite("possible_handle_pixels.png", vis)
+        # vis = rgb_image.copy()
+        # for u, v in pixels[outliers]:
+        #     vis[v, u] = (0, 0, 255)
+        # cv2.imwrite("possible_handle_pixels.png", vis)
 
-        plane_depth = np.median(np.asarray(plane_cloud.points)[:, 2])
-        print("Plane depth in m:", plane_depth)
+        # plane_depth = np.median(np.asarray(plane_cloud.points)[:, 2])
+        # print("Plane depth in m:", plane_depth)
 
-        # remove points from possible_handle_cloud which are behind the plane
-        possible_handle_points = np.asarray(possible_handle_cloud.points)
-        handle_points = []
-        handle_pixels = []
-        for i, p in enumerate(possible_handle_points):
-            if p[2] < plane_depth - 0.02 and p[2] > plane_depth - 0.07:  # within a reasonable distance infront of the door
-                handle_points.append(p)
-                handle_pixels.append(pixels[outliers[i]])
+        # # remove points from possible_handle_cloud which are behind the plane
+        # possible_handle_points = np.asarray(possible_handle_cloud.points)
+        # handle_points = []
+        # handle_pixels = []
+        # for i, p in enumerate(possible_handle_points):
+        #     if p[2] < plane_depth and p[2] > plane_depth - 0.07:  # within a reasonable distance infront of the door
+        #         handle_points.append(p)
+        #         handle_pixels.append(pixels[outliers[i]])
 
-        # visualize handle_pixels on image
-        vis = rgb_image.copy()
-        for u, v in handle_pixels:
-            vis[v, u] = (0, 255, 0)
-        cv2.imwrite("handle_pixels.png", vis)
+        # # visualize handle_pixels on image
+        # vis = rgb_image.copy()
+        # for u, v in handle_pixels:
+        #     vis[v, u] = (0, 255, 0)
+        # cv2.imwrite("handle_pixels.png", vis)
 
-        # -----------------------------
-        # DBSCAN clustering (7 cm)
-        # -----------------------------
-        clustering = DBSCAN(
-            eps=0.05,  # 30 cm to allow for fridge handles which can be quite large
-            min_samples=50
-        ).fit(handle_points)
+        # # -----------------------------
+        # # DBSCAN clustering (7 cm)
+        # # -----------------------------
+        # clustering = DBSCAN(
+        #     eps=0.05,  # 30 cm to allow for fridge handles which can be quite large
+        #     min_samples=50
+        # ).fit(handle_points)
 
-        # print("Ran DBSCAN")
+        # # print("Ran DBSCAN")
 
-        labels = clustering.labels_
-        valid = labels >= 0
+        # labels = clustering.labels_
+        # valid = labels >= 0
 
-        if not np.any(valid):
-            # rospy.logwarn("DBSCAN found no clusters.")
-            return
+        # if not np.any(valid):
+        #     # rospy.logwarn("DBSCAN found no clusters.")
+        #     return
 
-        unique, counts = np.unique(labels[valid], return_counts=True)
-        main_label = unique[np.argmax(counts)]
+        # unique, counts = np.unique(labels[valid], return_counts=True)
+        # main_label = unique[np.argmax(counts)]
 
-        handle_pixels = np.array(handle_pixels)
-        handle_points = np.array(handle_points)
-        cluster_pixels = handle_pixels[labels == main_label]
-        cluster_points_3d = handle_points[labels == main_label]
+        # handle_pixels = np.array(handle_pixels)
+        # handle_points = np.array(handle_points)
+        # cluster_pixels = handle_pixels[labels == main_label]
+        # cluster_points_3d = handle_points[labels == main_label]
 
-        top_most_y = np.max(cluster_points_3d[:, 1])
+        # top_most_y = np.max(cluster_points_3d[:, 1])
 
 
-        # for handle_centroid take median in x, y and z to be more robust to outliers
+        # # for handle_centroid take median in x, y and z to be more robust to outliers
 
-        handle_centroid = np.median(cluster_points_3d, axis=0)
-        handle_centroid[1] = top_most_y - 0.05
+        # handle_centroid = np.median(cluster_points_3d, axis=0)
+        # handle_centroid[1] = top_most_y - 0.05
 
-        handle_centroid_3d = handle_centroid
-        handle_centroid_pixel = self.world2Pixel(camera_info_msg, handle_centroid[0], handle_centroid[1], handle_centroid[2])
+        # handle_centroid_3d = handle_centroid
+        # handle_centroid_pixel = self.world2Pixel(camera_info_msg, handle_centroid[0], handle_centroid[1], handle_centroid[2])
 
-        vis = rgb_image.copy()
-        for u, v in cluster_pixels:
-            vis[v, u] = (0, 255, 255)
-        # draw large green circle at handle_centroid_pixel
-        print("Handle centroid pixel:", handle_centroid_pixel)
-        cv2.circle(vis, (handle_centroid_pixel[0], handle_centroid_pixel[1]), 10, (0, 255, 0), -1)
+        # vis = rgb_image.copy()
+        # for u, v in cluster_pixels:
+        #     vis[v, u] = (0, 255, 255)
+        # # draw large green circle at handle_centroid_pixel
+        # print("Handle centroid pixel:", handle_centroid_pixel)
+        # cv2.circle(vis, (handle_centroid_pixel[0], handle_centroid_pixel[1]), 10, (0, 255, 0), -1)
 
-        # left most point in bounding_box_points_3d with the same y value as handle_centroid_3d is likely the hinge
-        # same_y = np.isclose(bounding_box_points_3d[:, 1], handle_centroid_3d[1], atol=0.02)
+        # # left most point in bounding_box_points_3d with the same y value as handle_centroid_3d is likely the hinge
+        # # same_y = np.isclose(bounding_box_points_3d[:, 1], handle_centroid_3d[1], atol=0.02)
         
-        if self.handle_type == "white fridge door":
-            # take a strip of leftmost points on the plane_cloud (0.02 m wide)
-            strip_anchor_point = np.min(plane_cloud.points, axis=0)
-        else:
-            strip_anchor_point = np.max(plane_cloud.points, axis=0)
+        # if self.handle_type == "white fridge door":
+        #     # take a strip of leftmost points on the plane_cloud (0.02 m wide)
+        #     strip_anchor_point = np.min(plane_cloud.points, axis=0)
+        # else:
+        #     strip_anchor_point = np.max(plane_cloud.points, axis=0)
 
-        hinge_strip_points = []
-        for p in plane_cloud.points:
-            if np.abs(p[0] - strip_anchor_point[0]) < 0.02:
-                hinge_strip_points.append(p)
-        hinge_strip_points = np.array(hinge_strip_points)
-        hinge_idx = np.argmin(np.linalg.norm(hinge_strip_points - handle_centroid_3d, axis=1))
-        hinge_3d = hinge_strip_points[hinge_idx]
+        # hinge_strip_points = []
+        # for p in plane_cloud.points:
+        #     if np.abs(p[0] - strip_anchor_point[0]) < 0.02:
+        #         hinge_strip_points.append(p)
+        # hinge_strip_points = np.array(hinge_strip_points)
+        # hinge_idx = np.argmin(np.linalg.norm(hinge_strip_points - handle_centroid_3d, axis=1))
+        # hinge_3d = hinge_strip_points[hinge_idx]
 
-        # Hack: hinge y is the same as handle_centroid y
-        hinge_3d[1] = handle_centroid_3d[1]
+        # # Hack: hinge y is the same as handle_centroid y
+        # hinge_3d[1] = handle_centroid_3d[1]
 
-        hinge_pixel = self.world2Pixel(camera_info_msg, hinge_3d[0], hinge_3d[1], hinge_3d[2])
-        cv2.circle(vis, (hinge_pixel[0], hinge_pixel[1]), 10, (255, 0, 0), -1)
-        cv2.imwrite("handle_hinge_pixels.png", vis)
+        # hinge_pixel = self.world2Pixel(camera_info_msg, hinge_3d[0], hinge_3d[1], hinge_3d[2])
+        # cv2.circle(vis, (hinge_pixel[0], hinge_pixel[1]), 10, (255, 0, 0), -1)
+        # cv2.imwrite("handle_hinge_pixels.png", vis)
 
-        transform = self.get_frame_to_frame_transform(camera_info_msg)
+        # transform = self.get_frame_to_frame_transform(camera_info_msg)
 
-        if transform is not None:   
-            base_to_camera = self.make_homogeneous_transform(transform)
+        # if transform is not None:   
+        #     base_to_camera = self.make_homogeneous_transform(transform)
 
-            camera_to_handle = np.eye(4)
-            camera_to_handle[:3, 3] = handle_centroid_3d
-            camera_to_handle[3, 3] = 1 
-            base_to_handle = np.dot(base_to_camera, camera_to_handle)
-            base_to_handle[:3, :3] = Rotation.from_quat([0.0, 0.7071, 0.7071, 0.0]).as_matrix()
-            self.updateTF("base_link", "handle", base_to_handle)
-            self.update_handle_pose(base_to_handle)
+        #     camera_to_handle = np.eye(4)
+        #     camera_to_handle[:3, 3] = handle_centroid_3d
+        #     camera_to_handle[3, 3] = 1 
+        #     base_to_handle = np.dot(base_to_camera, camera_to_handle)
+        #     base_to_handle[:3, :3] = Rotation.from_quat([0.0, 0.7071, 0.7071, 0.0]).as_matrix()
+        #     self.updateTF("base_link", "handle", base_to_handle)
+        #     self.update_handle_pose(base_to_handle)
 
-            camera_to_hinge = np.eye(4)
-            camera_to_hinge[:3, 3] = hinge_3d
-            camera_to_hinge[3, 3] = 1
-            base_to_hinge = np.dot(base_to_camera, camera_to_hinge)
-            base_to_hinge[:3, :3] = Rotation.from_quat([0.0, 0.7071, 0.7071, 0.0]).as_matrix()
-            self.updateTF("base_link", "hinge", base_to_hinge)
-            self.update_hinge_pose(base_to_hinge)
+        #     camera_to_hinge = np.eye(4)
+        #     camera_to_hinge[:3, 3] = hinge_3d
+        #     camera_to_hinge[3, 3] = 1
+        #     base_to_hinge = np.dot(base_to_camera, camera_to_hinge)
+        #     base_to_hinge[:3, :3] = Rotation.from_quat([0.0, 0.7071, 0.7071, 0.0]).as_matrix()
+        #     self.updateTF("base_link", "hinge", base_to_hinge)
+        #     self.update_hinge_pose(base_to_hinge)
+
+    # def rgbdCallback(self, rgb_image_msg, camera_info_msg, depth_image_msg):
+
+    #     # if hasattr(self, "saved") and self.saved:
+    #         # return
+
+    #     if not self.turned_on or self.handle_type is None:
+    #         return
+
+    #     try:
+    #         rgb_image = self.bridge.imgmsg_to_cv2(
+    #             rgb_image_msg, "bgr8")
+    #         depth_image = self.bridge.imgmsg_to_cv2(
+    #             depth_image_msg, "32FC1")
+    #     except CvBridgeError as e:
+    #         print(e)
+    #         return
+        
+    #     transform = self.get_frame_to_frame_transform(camera_info_msg)
+
+    #     file_path = os.path.dirname(__file__)
+    #     print("Got images")
+    #     cv2.imwrite(file_path + "/rgb.png", rgb_image)
+    #     depth_mm = (depth_image * 1000.0).astype("uint16")
+    #     cv2.imwrite(file_path + "/depth.png", depth_mm)
+
+    #     # vis_image, pixel_coords, response = self.molmo.query(
+    #     #     image_path=file_path + "/rgb.png",
+    #     #     prompt="Point to the center of the start / 30 secs button",
+    #     #     save_response_image_to=file_path + "/rgb_keypoint.png",
+    #     # )
+
+    #     # print("Pixel coords from molmo:", pixel_coords)
+
+    #     # ok, button_3d = self.pixel2World(camera_info_msg, pixel_coords[0][0], pixel_coords[0][1], depth_image)
+
+    #     # if not ok:
+    #     #     print("Could not get valid 3D point for button")
+    #     #     return
+
+    #     # if transform is not None:   
+    #     #     print("Got transform between base_link and camera_color_optical_frame")
+    #     #     base_to_camera = self.make_homogeneous_transform(transform)
+
+    #     #     camera_to_button = np.eye(4)
+    #     #     camera_to_button[:3, 3] = button_3d
+    #     #     camera_to_button[3, 3] = 1 
+    #     #     base_to_button = np.dot(base_to_camera, camera_to_button)
+    #     #     base_to_button[:3, :3] = Rotation.from_quat([0.0, 0.7071, 0.7071, 0.0]).as_matrix()
+    #     #     self.updateTF("base_link", "button", base_to_button)
+    #     #     print("Button in base frame:", base_to_button)
+    #     #     self.update_button_pose(base_to_button)
+    #     # else:
+    #     #     print("Could not get transform between base_link and camera_color_optical_frame")
+        
+    #     # return
+
+    #     detection = self.detect_items(rgb_image, [self.handle_type])
+
+    #     if detection is None:
+    #         print("No detection")
+    #         return
+
+    #     # create mask using detection
+    #     x1, y1, x2, y2 = detection.astype(int)
+    #     mask = np.zeros(rgb_image.shape[:2], dtype=np.uint8)
+    #     mask[y1:y2, x1:x2] = 255
+    #     cv2.imwrite("detection_mask.png", mask)
+
+    #     # -----------------------------
+    #     # Extract ALL 3D points from mask
+    #     # -----------------------------
+    #     bounding_box_points_3d = []
+    #     pixels = []
+
+    #     ys, xs = np.where(mask > 0)
+    #     for u, v in zip(xs, ys):
+    #         ok, p = self.pixel2World(
+    #             camera_info_msg, u, v, depth_image)
+    #         if ok:
+    #             bounding_box_points_3d.append(p)
+    #             pixels.append((u, v))
+
+    #     if len(bounding_box_points_3d) == 0:
+    #         print("-------------- ERROR: No valid 3D points from mask.")
+    #         # rospy.logwarn("No valid 3D points from mask.")
+    #         return
+
+    #     bounding_box_points_3d = np.array(bounding_box_points_3d)
+    #     pixels = np.array(pixels)
+
+    #     # Fit a plane to the 3D points to find the main planar surface (fridge door)
+    #     pcd = o3d.geometry.PointCloud()
+    #     pcd.points = o3d.utility.Vector3dVector(bounding_box_points_3d)
+
+    #     plane_model, inliers = pcd.segment_plane(
+    #         distance_threshold=0.02,  # 1 cm threshold for inliers
+    #         ransac_n=3,
+    #         num_iterations=500
+    #     )
+    #     outliers = np.setdiff1d(np.arange(len(bounding_box_points_3d)), inliers)
+
+    #     plane_cloud = pcd.select_by_index(inliers)
+    #     possible_handle_cloud = pcd.select_by_index(inliers, invert=True)
+
+    #     # visulize plane_cloud on image
+
+    #     vis = rgb_image.copy()
+    #     for u, v in pixels[inliers]:
+    #         vis[v, u] = (255, 0, 0)
+    #     cv2.imwrite("plane_pixels.png", vis)
+
+    #     vis = rgb_image.copy()
+    #     for u, v in pixels[outliers]:
+    #         vis[v, u] = (0, 0, 255)
+    #     cv2.imwrite("possible_handle_pixels.png", vis)
+
+    #     plane_depth = np.median(np.asarray(plane_cloud.points)[:, 2])
+    #     print("Plane depth in m:", plane_depth)
+
+    #     # remove points from possible_handle_cloud which are behind the plane
+    #     possible_handle_points = np.asarray(possible_handle_cloud.points)
+    #     handle_points = []
+    #     handle_pixels = []
+    #     for i, p in enumerate(possible_handle_points):
+    #         if p[2] < plane_depth and p[2] > plane_depth - 0.07:  # within a reasonable distance infront of the door
+    #             handle_points.append(p)
+    #             handle_pixels.append(pixels[outliers[i]])
+
+    #     # visualize handle_pixels on image
+    #     vis = rgb_image.copy()
+    #     for u, v in handle_pixels:
+    #         vis[v, u] = (0, 255, 0)
+    #     cv2.imwrite("handle_pixels.png", vis)
+
+    #     # -----------------------------
+    #     # DBSCAN clustering (7 cm)
+    #     # -----------------------------
+    #     clustering = DBSCAN(
+    #         eps=0.05,  # 30 cm to allow for fridge handles which can be quite large
+    #         min_samples=50
+    #     ).fit(handle_points)
+
+    #     # print("Ran DBSCAN")
+
+    #     labels = clustering.labels_
+    #     valid = labels >= 0
+
+    #     if not np.any(valid):
+    #         # rospy.logwarn("DBSCAN found no clusters.")
+    #         return
+
+    #     unique, counts = np.unique(labels[valid], return_counts=True)
+    #     main_label = unique[np.argmax(counts)]
+
+    #     handle_pixels = np.array(handle_pixels)
+    #     handle_points = np.array(handle_points)
+    #     cluster_pixels = handle_pixels[labels == main_label]
+    #     cluster_points_3d = handle_points[labels == main_label]
+
+    #     top_most_y = np.max(cluster_points_3d[:, 1])
+
+
+    #     # for handle_centroid take median in x, y and z to be more robust to outliers
+
+    #     handle_centroid = np.median(cluster_points_3d, axis=0)
+    #     handle_centroid[1] = top_most_y - 0.05
+
+    #     handle_centroid_3d = handle_centroid
+    #     handle_centroid_pixel = self.world2Pixel(camera_info_msg, handle_centroid[0], handle_centroid[1], handle_centroid[2])
+
+    #     vis = rgb_image.copy()
+    #     for u, v in cluster_pixels:
+    #         vis[v, u] = (0, 255, 255)
+    #     # draw large green circle at handle_centroid_pixel
+    #     print("Handle centroid pixel:", handle_centroid_pixel)
+    #     cv2.circle(vis, (handle_centroid_pixel[0], handle_centroid_pixel[1]), 10, (0, 255, 0), -1)
+
+    #     # left most point in bounding_box_points_3d with the same y value as handle_centroid_3d is likely the hinge
+    #     # same_y = np.isclose(bounding_box_points_3d[:, 1], handle_centroid_3d[1], atol=0.02)
+        
+    #     if self.handle_type == "white fridge door":
+    #         # take a strip of leftmost points on the plane_cloud (0.02 m wide)
+    #         strip_anchor_point = np.min(plane_cloud.points, axis=0)
+    #     else:
+    #         strip_anchor_point = np.max(plane_cloud.points, axis=0)
+
+    #     hinge_strip_points = []
+    #     for p in plane_cloud.points:
+    #         if np.abs(p[0] - strip_anchor_point[0]) < 0.02:
+    #             hinge_strip_points.append(p)
+    #     hinge_strip_points = np.array(hinge_strip_points)
+    #     hinge_idx = np.argmin(np.linalg.norm(hinge_strip_points - handle_centroid_3d, axis=1))
+    #     hinge_3d = hinge_strip_points[hinge_idx]
+
+    #     # Hack: hinge y is the same as handle_centroid y
+    #     hinge_3d[1] = handle_centroid_3d[1]
+
+    #     hinge_pixel = self.world2Pixel(camera_info_msg, hinge_3d[0], hinge_3d[1], hinge_3d[2])
+    #     cv2.circle(vis, (hinge_pixel[0], hinge_pixel[1]), 10, (255, 0, 0), -1)
+    #     cv2.imwrite("handle_hinge_pixels.png", vis)
+
+    #     transform = self.get_frame_to_frame_transform(camera_info_msg)
+
+    #     if transform is not None:   
+    #         base_to_camera = self.make_homogeneous_transform(transform)
+
+    #         camera_to_handle = np.eye(4)
+    #         camera_to_handle[:3, 3] = handle_centroid_3d
+    #         camera_to_handle[3, 3] = 1 
+    #         base_to_handle = np.dot(base_to_camera, camera_to_handle)
+    #         base_to_handle[:3, :3] = Rotation.from_quat([0.0, 0.7071, 0.7071, 0.0]).as_matrix()
+    #         self.updateTF("base_link", "handle", base_to_handle)
+    #         self.update_handle_pose(base_to_handle)
+
+    #         camera_to_hinge = np.eye(4)
+    #         camera_to_hinge[:3, 3] = hinge_3d
+    #         camera_to_hinge[3, 3] = 1
+    #         base_to_hinge = np.dot(base_to_camera, camera_to_hinge)
+    #         base_to_hinge[:3, :3] = Rotation.from_quat([0.0, 0.7071, 0.7071, 0.0]).as_matrix()
+    #         self.updateTF("base_link", "hinge", base_to_hinge)
+    #         self.update_hinge_pose(base_to_hinge)
 
     def detect_items(self, input_image, classes_being_detected, log_path = None):
 
