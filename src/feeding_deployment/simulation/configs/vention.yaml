@@ -27,22 +27,22 @@ initial_joints:
   values: [0.0, -0.34903602299465675, -3.141591055693139, -2.5482592711638783, 0.0, -0.872688061814757, 1.57075917569769, 0.8, 0.8, 0.8, 0.8, -0.8, -0.8]
 
 # Plate holder
-inside_plate_holder_pos: 
-  description: "Inside plate holder configuration, the robot should be inside the plate holder in this configuration"
-  type: "joint_positions"
-  values: [0.35238657925159933, 1.619943899447873, -2.895968507303458, -1.0603892533401957, -2.7274362166721913, 1.962179141124849, 1.9248485468607723]
-inside_plate_holder_pose: 
-  description: "Inside plate holder configuration, the robot should be inside the plate holder in this configuration"
-  type: "ee_pose"
-  values: [0.219, -0.264, -0.001, 0.489, -0.491, -0.496, 0.524]
-above_plate_holder_pos: 
-  description: "Above plate holder configuration, the robot should be above the plate holder in this configuration"
-  type: "joint_positions"
-  values: [0.33448001671412453, 1.39225787415793, -2.883306774216785, -1.267919809710147, -2.683313762680086, 1.9669527242207616, 1.9597376881955189]
-above_plate_holder_pose: 
-  description: "Above plate holder configuration, the robot should be above the plate holder in this configuration"
-  type: "ee_pose"
-  values: [0.219, -0.264, 0.099, 0.489, -0.491, -0.496, 0.524]
+# inside_plate_holder_pos: 
+#   description: "Inside plate holder configuration, the robot should be inside the plate holder in this configuration"
+#   type: "joint_positions"
+#   values: [0.35238657925159933, 1.619943899447873, -2.895968507303458, -1.0603892533401957, -2.7274362166721913, 1.962179141124849, 1.9248485468607723]
+# inside_plate_holder_pose: 
+#   description: "Inside plate holder configuration, the robot should be inside the plate holder in this configuration"
+#   type: "ee_pose"
+#   values: [0.219, -0.264, -0.001, 0.489, -0.491, -0.496, 0.524]
+# above_plate_holder_pos: 
+#   description: "Above plate holder configuration, the robot should be above the plate holder in this configuration"
+#   type: "joint_positions"
+#   values: [0.33448001671412453, 1.39225787415793, -2.883306774216785, -1.267919809710147, -2.683313762680086, 1.9669527242207616, 1.9597376881955189]
+# above_plate_holder_pose: 
+#   description: "Above plate holder configuration, the robot should be above the plate holder in this configuration"
+#   type: "ee_pose"
+#   values: [0.219, -0.264, 0.099, 0.489, -0.491, -0.496, 0.524]
 
 microwave_closeup_gaze_pos: 
   description: "Gaze configuration, the button and inside of microwave should be visible from this configuration"

@@ -208,15 +208,15 @@ class HandlePerception(TFInterface):
         depth_mm = (depth_image * 1000.0).astype("uint16")
         cv2.imwrite(file_path + "/depth.png", depth_mm)
 
-        # vis_image, pixel_coords, response = self.molmo.query(
-        #     image_path=file_path + "/rgb.png",
-        #     prompt="Point to the center of the start / 30 secs button",
-        #     save_response_image_to=file_path + "/rgb_keypoint.png",
-        # )
+        vis_image, pixel_coords, response = self.molmo.query(
+            image_path=file_path + "/rgb.png",
+            prompt="Point to the center of the white back panel of the microwave",
+            save_response_image_to=file_path + "/rgb_keypoint.png",
+        )
 
-        # print("Pixel coords from molmo:", pixel_coords)
+        print("Pixel coords from molmo:", pixel_coords)
 
-        # ok, button_3d = self.pixel2World(camera_info_msg, pixel_coords[0][0], pixel_coords[0][1], depth_image)
+        ok, panel_keypoint_3d = self.pixel2World(camera_info_msg, pixel_coords[0][0], pixel_coords[0][1], depth_image)
 
         # if not ok:
         #     print("Could not get valid 3D point for button")
