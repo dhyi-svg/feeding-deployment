@@ -79,10 +79,10 @@ class NavigateHLA(HighLevelAction):
 
     def _speed_to_timeout(self, speed: str) -> float:
         return {
-            "low": 240.0,
-            "medium": 180.0,
-            "high": 120.0,
-        }.get(speed, 180.0)
+            "low": 300.0,
+            "medium": 300.0,
+            "high": 180.0,
+        }.get(speed, 300.0)
 
     def _get_move_base_client(self):
         if not ROS_NAV_IMPORTED:

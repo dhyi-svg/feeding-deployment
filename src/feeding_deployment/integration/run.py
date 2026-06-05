@@ -383,7 +383,7 @@ class _Runner:
             GroundAtom(IsUtensil, [self.utensil]),
             GroundAtom(DoorClosed, [self.fridge]),
             GroundAtom(DoorClosed, [self.microwave]),
-            GroundAtom(InFrontOf, [self.fridge]),
+            GroundAtom(InFrontOf, [self.microwave]),
             GroundAtom(PlateAt, [self.holder]),
             GroundAtom(SafeToNavigate, []),
         }
@@ -810,7 +810,8 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, runner.signal_handler)
 
     if not args.use_interface:
-        runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.fridge,)))
+        runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.microwave,)))
+        runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["CloseDoor"], (runner.microwave,)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromAppliance"], (runner.plate, runner.microwave)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.fridge,)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["TransferTool"], (runner.utensil,runner.table)))
