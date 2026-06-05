@@ -65,7 +65,7 @@ class TFInterface:
 
         self.broadcaster.sendTransform(t)
 
-    def get_frame_to_frame_transform(self, camera_info_data, frame_A = "base_link", target_frame = "camera_color_optical_frame"):
+    def get_frame_to_frame_transform(self, camera_info_data, frame_A = "arm_base_link", target_frame = "camera_color_optical_frame"):
         stamp = camera_info_data.header.stamp
         try:
             transform = self.tfBuffer.lookup_transform(
@@ -75,7 +75,7 @@ class TFInterface:
             )
             return transform
         except Exception as e:
-            print("Exception finding transform between base_link and", target_frame)
+            print("Exception finding transform between arm_base_link and", target_frame)
             print("Error:", e)
 
             return None
@@ -223,7 +223,7 @@ class HandlePerception(TFInterface):
         #     return
 
         # if transform is not None:   
-        #     print("Got transform between base_link and camera_color_optical_frame")
+        #     print("Got transform between arm_base_link and camera_color_optical_frame")
         #     base_to_camera = self.make_homogeneous_transform(transform)
 
         #     camera_to_button = np.eye(4)
@@ -231,11 +231,11 @@ class HandlePerception(TFInterface):
         #     camera_to_button[3, 3] = 1 
         #     base_to_button = np.dot(base_to_camera, camera_to_button)
         #     base_to_button[:3, :3] = Rotation.from_quat([0.0, 0.7071, 0.7071, 0.0]).as_matrix()
-        #     self.updateTF("base_link", "button", base_to_button)
+        #     self.updateTF("arm_base_link", "button", base_to_button)
         #     print("Button in base frame:", base_to_button)
         #     self.update_button_pose(base_to_button)
         # else:
-        #     print("Could not get transform between base_link and camera_color_optical_frame")
+        #     print("Could not get transform between arm_base_link and camera_color_optical_frame")
         
         # return
 
@@ -397,7 +397,7 @@ class HandlePerception(TFInterface):
             camera_to_handle[3, 3] = 1 
             base_to_handle = np.dot(base_to_camera, camera_to_handle)
             base_to_handle[:3, :3] = Rotation.from_quat([0.0, 0.7071, 0.7071, 0.0]).as_matrix()
-            self.updateTF("base_link", "handle", base_to_handle)
+            self.updateTF("arm_base_link", "handle", base_to_handle)
             self.update_handle_pose(base_to_handle)
 
             camera_to_hinge = np.eye(4)
@@ -405,7 +405,7 @@ class HandlePerception(TFInterface):
             camera_to_hinge[3, 3] = 1
             base_to_hinge = np.dot(base_to_camera, camera_to_hinge)
             base_to_hinge[:3, :3] = Rotation.from_quat([0.0, 0.7071, 0.7071, 0.0]).as_matrix()
-            self.updateTF("base_link", "hinge", base_to_hinge)
+            self.updateTF("arm_base_link", "hinge", base_to_hinge)
             self.update_hinge_pose(base_to_hinge)
 
     def detect_items(self, input_image, classes_being_detected, log_path = None):

@@ -78,7 +78,7 @@ class CloseDoorHLA(HighLevelAction):
         poses.append(handle_closing_poses["closing_waypoint"])
         poses.extend(handle_closing_poses["closing_waypoints"])
         print(f"Visualizing {len(poses)} handle opening poses in RViz ...")
-        self.rviz_interface.visualize_poses(poses, frame_id="base_link", ns="handle_closing_poses")
+        self.rviz_interface.visualize_poses(poses, frame_id="arm_base_link", ns="handle_closing_poses")
 
         # self.move_to_joint_positions(self.sim.scene_description.home_pos)
         self.move_to_joint_positions(self.sim.scene_description.fridge_door_staging_pos)

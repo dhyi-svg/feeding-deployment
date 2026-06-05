@@ -894,9 +894,9 @@ class PerceptionInterface:
     def sync_rviz(self):
         if self.last_plate_poses:
             plate_poses = self.last_plate_poses
-            self._drink_perception.updateTF("base_link", "plate", self.pose_to_matrix(plate_poses['plate_pose']))
-            self._drink_perception.updateTF("base_link", "plate_pre", self.pose_to_matrix(plate_poses['pre_grasp_pose']))
+            self._drink_perception.updateTF("arm_base_link", "plate", self.pose_to_matrix(plate_poses['plate_pose']))
+            self._drink_perception.updateTF("arm_base_link", "plate_pre", self.pose_to_matrix(plate_poses['pre_grasp_pose']))
         if self.last_drink_poses:
             drink_poses = self.last_drink_poses
-            self._drink_perception.updateTF("base_link", "drink", self.pose_to_matrix(drink_poses['drink_pose']))
-            self._drink_perception.updateTF("base_link", "drink_pre", self.pose_to_matrix(drink_poses['pre_grasp_pose']))
+            self._drink_perception.updateTF("arm_base_link", "drink", self.pose_to_matrix(drink_poses['drink_pose']))
+            self._drink_perception.updateTF("arm_base_link", "drink_pre", self.pose_to_matrix(drink_poses['pre_grasp_pose']))

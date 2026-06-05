@@ -48,7 +48,7 @@ if __name__ == "__main__":
     bag_file = "/home/isacc/deployment_ws/2024-09-07-18-26-32.bag"
 
     # Specify the frames of interest
-    base_frame = 'base_link'
+    base_frame = 'arm_base_link'
     target_frame = 'tool_tip_target'
 
     # Extract transforms and print the result

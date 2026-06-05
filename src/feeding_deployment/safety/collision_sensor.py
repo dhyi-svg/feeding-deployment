@@ -56,14 +56,14 @@ class CollisionSensor:
     def _joint_state_callback(self, joint_state_msg: "JointState") -> None:
         # Convert joint state message into JointPositions.
         assert joint_state_msg.name == [
-            "joint_1",
-            "joint_2",
-            "joint_3",
-            "joint_4",
-            "joint_5",
-            "joint_6",
-            "joint_7",
-            "finger_joint",
+            "arm_joint_1",
+            "arm_joint_2",
+            "arm_joint_3",
+            "arm_joint_4",
+            "arm_joint_5",
+            "arm_joint_6",
+            "arm_joint_7",
+            "arm_finger_joint",
         ]
         assert len(joint_state_msg.position)
         joint_pos = list(joint_state_msg.position)

@@ -19,7 +19,7 @@ def extract_topics(input_bag, output_bag, topics_to_extract, frames_to_extract):
                     filtered_transforms = []
                     for transform in msg.transforms:
                         # Extract only the transforms between the desired frames
-                        if (transform.header.frame_id == 'base_link' and 
+                        if (transform.header.frame_id == 'arm_base_link' and 
                             transform.child_frame_id in frames_to_extract):
                             filtered_transforms.append(transform)
                     

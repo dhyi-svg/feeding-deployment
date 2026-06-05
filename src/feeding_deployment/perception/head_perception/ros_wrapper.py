@@ -124,7 +124,7 @@ class HeadPerceptionROSWrapper:
         try:
             with self.tf_buffer_lock:
                 transform = self.tfBuffer.lookup_transform(
-                    "base_link",
+                    "arm_base_link",
                     target_frame,
                     rospy.Time(secs=stamp.secs, nsecs=stamp.nsecs),
                 )
@@ -134,7 +134,7 @@ class HeadPerceptionROSWrapper:
             tf2_ros.ConnectivityException,
             tf2_ros.ExtrapolationException,
         ):
-            # print("Exception finding transform between base_link and", target_frame)
+            # print("Exception finding transform between arm_base_link and", target_frame)
             return None
 
     def run_head_perception(self, visualize=False):
@@ -196,9 +196,9 @@ class HeadPerceptionROSWrapper:
             if self.head_perception.record_goal_pose:
                 self.updateTF("camera_color_optical_frame", "tool_tip_target", head_perception_data["tool_tip_target_pose"])
             else:
-                self.updateTF("base_link", "tool_tip_target", head_perception_data["tool_tip_target_pose"])
-            self.updateTF("base_link", "head_pose", head_perception_data["neck_frame"])
-            self.updateTF("base_link", "reference_head_pose", head_perception_data["reference_neck_frame"])
+                self.updateTF("arm_base_link", "tool_tip_target", head_perception_data["tool_tip_target_pose"])
+            self.updateTF("arm_base_link", "head_pose", head_perception_data["neck_frame"])
+            self.updateTF("arm_base_link", "reference_head_pose", head_perception_data["reference_neck_frame"])
 
             return {
                 "head_pose": head_perception_data["head_pose"],
@@ -248,7 +248,7 @@ class HeadPerceptionROSWrapper:
         if self.head_perception.record_goal_pose:
             tool_marker.header.frame_id = "camera_color_optical_frame"
         else:
-            tool_marker.header.frame_id = "base_link"
+            tool_marker.header.frame_id = "arm_base_link"
         # print(" --- Header frame id: ", tool_marker.header.frame_id)
         tool_marker.ns = "tool_marker"
         tool_marker.id = 1
@@ -298,7 +298,7 @@ class HeadPerceptionROSWrapper:
         marker = Marker()
         marker.header.seq = 0
         marker.header.stamp = rospy.Time.now()
-        marker.header.frame_id = "base_link"
+        marker.header.frame_id = "arm_base_link"
         marker.ns = namespace
         marker.id = 1
         marker.type = 6

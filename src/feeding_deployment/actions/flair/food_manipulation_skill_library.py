@@ -105,14 +105,14 @@ class FoodManipulationSkillLibrary:
 
         if self.robot_interface is not None:
 
-            self.tf_utils.publishTransformationToTF('base_link', 'fork_tip_target', tip_pose)
+            self.tf_utils.publishTransformationToTF('arm_base_link', 'fork_tip_target', tip_pose)
 
             if tip_to_wrist is None:
                 tip_to_wrist = self.tf_utils.getTransformationFromTF('fork_tip', 'tool_frame')
             tool_frame_target = tip_pose @ tip_to_wrist
 
             self.rviz_interface.visualize_fork(tip_pose)
-            self.tf_utils.publishTransformationToTF('base_link', 'tool_frame_target', tool_frame_target)
+            self.tf_utils.publishTransformationToTF('arm_base_link', 'tool_frame_target', tool_frame_target)
             
             if not self.no_waits:
                 input("Execute command?")
@@ -159,7 +159,7 @@ class FoodManipulationSkillLibrary:
             return False
 
         print("Getting transformation from base_link to camera_color_optical_frame")
-        base_to_camera_transform = self.get_transform('base_link', 'camera_color_optical_frame')
+        base_to_camera_transform = self.get_transform('arm_base_link', 'camera_color_optical_frame')
         print("Base to camera transform: ", base_to_camera_transform)
 
         food_base = np.eye(4)
@@ -175,7 +175,7 @@ class FoodManipulationSkillLibrary:
         food_base[:3,:3] = Rotation.from_quat([-0.7071068, 0.7071068, 0, 0]).as_matrix()
 
         if self.robot_interface is not None:
-            self.tf_utils.publishTransformationToTF('base_link', 'food_frame', food_base)
+            self.tf_utils.publishTransformationToTF('arm_base_link', 'food_frame', food_base)
             self.rviz_interface.visualize_food(food_base)
 
         if major_axis < np.pi/2:
@@ -233,7 +233,7 @@ class FoodManipulationSkillLibrary:
             return False
         
         print("Getting transformation from base_link to camera_color_optical_frame")
-        base_to_camera_transform = self.get_transform('base_link', 'camera_color_optical_frame')
+        base_to_camera_transform = self.get_transform('arm_base_link', 'camera_color_optical_frame')
         print("Base to camera transform: ", base_to_camera_transform)
 
         food_base = np.eye(4)
@@ -250,7 +250,7 @@ class FoodManipulationSkillLibrary:
         food_base[:3,:3] = Rotation.from_quat([-0.7071068, 0.7071068, 0, 0]).as_matrix()
 
         if self.robot_interface is not None:
-            self.tf_utils.publishTransformationToTF('base_link', 'food_frame', food_base)
+            self.tf_utils.publishTransformationToTF('arm_base_link', 'food_frame', food_base)
             self.rviz_interface.visualize_food(food_base)
 
         if major_axis < np.pi/2:
@@ -296,7 +296,7 @@ class FoodManipulationSkillLibrary:
 
         print("Distance: ", distance)
 
-        tool_frame = self.get_transform('base_link', 'tool_frame')
+        tool_frame = self.get_transform('arm_base_link', 'tool_frame')
 
         tool_frame_displacement = np.eye(4)
         tool_frame_displacement[0,3] = distance/10 # move down
@@ -305,7 +305,7 @@ class FoodManipulationSkillLibrary:
         tool_frame_target = tool_frame @ tool_frame_displacement
 
         if self.robot_interface is not None:
-            self.tf_utils.publishTransformationToTF('base_link', 'tool_frame_target', tool_frame_target)
+            self.tf_utils.publishTransformationToTF('arm_base_link', 'tool_frame_target', tool_frame_target)
         
         # input("Press enter to start scooping pickup")
 

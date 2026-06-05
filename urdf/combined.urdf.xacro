@@ -1,0 +1,60 @@
+<?xml version="1.0"?>
+<robot name="feeding_robot" xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <!-- ===== Kinova Gen3 arm + gripper + all tools ===== -->
+  <!-- This macro defines: world link, world_to_root joint (world->arm_base_link), -->
+  <!-- and the full arm/gripper/tool chain with arm_ prefix to avoid conflict      -->
+  <!-- with ZED camera's odom -> base_link publish.                               -->
+  <xacro:include filename="$(find kortex_description)/robots/kortex_robot.xacro"/>
+  <xacro:load_robot arm="gen3" dof="7" vision="false"
+                    gripper="robotiq_2f_85" sim="false" tool="all" prefix="arm_"/>
+
+  <!-- ===== Vention mobile base ===== -->
+  <link name="vention_base_link">
+    <visual>
+      <origin xyz="0.3576 0.4515 -0.335" rpy="1.5708 0 -1.5708"/>
+      <geometry>
+        <mesh filename="package://feeding_deployment/urdf/meshes/feeding_vention_modification.STL"
+              scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="grey"><color rgba="0.7 0.7 0.7 1.0"/></material>
+    </visual>
+  </link>
+
+  <link name="dummy_frame"/>
+  <joint name="dummy_joint" type="fixed">
+    <parent link="vention_base_link"/>
+    <child link="dummy_frame"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Nav RealSense D435 (front of cart) -->
+  <link name="vention_base_cam_1_link"/>
+  <joint name="vention_base_link_to_vention_base_cam_1" type="fixed">
+    <parent link="vention_base_link"/>
+    <child link="vention_base_cam_1_link"/>
+    <!-- TODO: fill in measured mount transform -->
+    <origin xyz="0.3176 0.0 0.386" rpy="0.0 0.0 0.0"/>
+  </joint>
+
+  <!-- ZED Mini is the odom anchor; URDF inverts it so robot_state_publisher
+       provides vention_base_link as a child of the ZED frame. -->
+  <link name="zed_mini_base_link"/>
+  <joint name="zed_base_link_to_vention_base_link" type="fixed">
+    <parent link="zed_mini_base_link"/>
+    <child link="vention_base_link"/>
+    <origin xyz="-0.3176 0.0 -0.386" rpy="0.0 0.0 0.0"/>
+  </joint>
+
+  <!-- ===== Arm mount: connect mobile base to arm root ===== -->
+  <!-- The kortex macro creates: world -> base_link (fixed, identity).         -->
+  <!-- This joint places 'world' as a child of 'vention_base_link',            -->
+  <!-- so the arm moves with the base. The origin is the physical mount offset. -->
+  <joint name="vention_to_arm_world" type="fixed">
+    <parent link="vention_base_link"/>
+    <child link="world"/>
+    <!-- TODO: replace with measured transform (vention_base_link -> arm base_link) -->
+    <origin xyz="0.212 0.0 0.39" rpy="0.0 0.0 -1.5708"/>
+  </joint>
+
+</robot>

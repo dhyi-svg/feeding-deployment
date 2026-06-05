@@ -52,7 +52,7 @@ class TFInterface:
 
         self.broadcaster.sendTransform(t)
 
-    def get_frame_to_frame_transform(self, camera_info_data, frame_A = "base_link", target_frame = "camera_color_optical_frame"):
+    def get_frame_to_frame_transform(self, camera_info_data, frame_A = "arm_base_link", target_frame = "camera_color_optical_frame"):
         stamp = camera_info_data.header.stamp
         try:
             transform = self.tfBuffer.lookup_transform(
@@ -66,7 +66,7 @@ class TFInterface:
             tf2_ros.ConnectivityException,
             tf2_ros.ExtrapolationException,
         ):
-            # print("Exexption finding transform between base_link and", target_frame)
+            # print("Exexption finding transform between arm_base_link and", target_frame)
             return None
 
     def make_homogeneous_transform(self, transform):
@@ -336,7 +336,7 @@ class AttachmentPerception(TFInterface):
 
             # base to tag homogeneous transform and update tf
             base_to_tag = np.dot(base_to_camera, camera_to_tag)
-            self.updateTF("base_link", "attachment", base_to_tag)
+            self.updateTF("arm_base_link", "attachment", base_to_tag)
             self.update_attachment_pose(base_to_tag)
 
     def update_attachment_pose(self, aruco_pose_mat):
