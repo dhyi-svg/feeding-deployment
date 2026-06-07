@@ -71,6 +71,7 @@ class SceneDescription:
     initial_joints: JointPositions
     retract_pos: JointPositions
     behind_retract_pos: JointPositions
+    behind_back_retract_pos: JointPositions
     left_retract_pos: JointPositions
     left_back_retract_pos: JointPositions
     back_retract_pos: JointPositions
@@ -114,7 +115,6 @@ class SceneDescription:
 
     # Plate holder constants
     inside_plate_holder_pose: Pose
-    inside_plate_holder_pos: JointPositions
     above_plate_holder_pose: Pose
     above_plate_holder_pos: JointPositions
 

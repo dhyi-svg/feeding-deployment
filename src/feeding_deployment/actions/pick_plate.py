@@ -125,8 +125,13 @@ class PickPlateFromHolderHLA(HighLevelAction):
         assert self.sim.held_object_name is None
         print("Picking plate from holder ...")
 
-        self.move_to_joint_positions(self.sim.scene_description.back_retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.above_plate_holder_pos)
+        self.close_gripper()
+        self.move_to_ee_pose(self.sim.scene_description.inside_plate_holder_pose)
+        self.open_gripper()
+        self.move_to_ee_pose(self.sim.scene_description.above_plate_holder_pose)
+        self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
 
 class PickPlateFromTableHLA(HighLevelAction):
     """Pick the plate from the table."""
