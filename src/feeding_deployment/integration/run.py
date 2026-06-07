@@ -199,7 +199,7 @@ class _Runner:
             self.wrist_interface = None
 
         self.llm = OpenAILLM(
-            model_name="gpt-4.1-2025-04-14",
+            model_name="gpt-5.4",
             cache_dir=self.log_dir / "llm_cache",
         )
 
@@ -386,6 +386,7 @@ class _Runner:
             GroundAtom(InFrontOf, [self.microwave]),
             GroundAtom(PlateAt, [self.holder]),
             GroundAtom(SafeToNavigate, []),
+            # GroundAtom(FoodHeated, []),
         }
 
         self.transparency_query = TransparencyQuery(self.log_dir)
@@ -427,11 +428,11 @@ class _Runner:
                     last_task_type = None
                 elif task == "meal_assistance":
                     if task_type == "bite":
-                        self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["TransferTool"], (self.utensil,)))
+                        self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["TransferTool"], (self.utensil,self.table)))
                     elif task_type == "sip":
-                        self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["TransferTool"], (self.drink,)))
+                        self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["TransferTool"], (self.drink,self.table)))
                     elif task_type == "wipe":
-                        self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["TransferTool"], (self.wipe,)))
+                        self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["TransferTool"], (self.wipe,self.table)))
                     last_task_type = task_type
                 elif task == "personalization":
                     if task_type == "transparency":
@@ -811,7 +812,7 @@ if __name__ == "__main__":
 
     if not args.use_interface:
         runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.microwave,)))
-        runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["CloseDoor"], (runner.microwave,)))
+        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["CloseDoor"], (runner.microwave,)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromAppliance"], (runner.plate, runner.microwave)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.fridge,)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["TransferTool"], (runner.utensil,runner.table)))

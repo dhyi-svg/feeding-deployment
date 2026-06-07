@@ -108,7 +108,7 @@ class FoodManipulationSkillLibrary:
             self.tf_utils.publishTransformationToTF('arm_base_link', 'fork_tip_target', tip_pose)
 
             if tip_to_wrist is None:
-                tip_to_wrist = self.tf_utils.getTransformationFromTF('fork_tip', 'tool_frame')
+                tip_to_wrist = self.tf_utils.getTransformationFromTF('arm_fork_tip', 'arm_tool_frame')
             tool_frame_target = tip_pose @ tip_to_wrist
 
             self.rviz_interface.visualize_fork(tip_pose)
@@ -131,7 +131,7 @@ class FoodManipulationSkillLibrary:
         if self.robot_interface is not None:
             return self.tf_utils.getTransformationFromTF(from_frame, to_frame)
         else:
-            if from_frame == "fork_tip" and to_frame == "tool_frame":
+            if from_frame == "arm_fork_tip" and to_frame == "arm_tool_frame":
                 tip_to_wrist = np.array([[0, 0, -1, -1.79500833e-02],
                                         [0, 1, 0, -2.66243553e-03],
                                         [1, 0, 0, -2.55099477e-01],
@@ -169,10 +169,12 @@ class FoodManipulationSkillLibrary:
         print("Plate height: ", self.plate_height)
         food_base[2,3] = max(food_base[2,3] - skewering_depth, self.plate_height) 
         # magic number for skewering offset
-        # food_base[0,3] = 0.005 # positive moves away from the robot
+        food_base[0,3] += 0.01 # positive moves away from the robot
         food_base[1,3] -= 0.01 # positive moves left from the robot
         # keep the orientation of the food base fixed
         food_base[:3,:3] = Rotation.from_quat([-0.7071068, 0.7071068, 0, 0]).as_matrix()
+
+        # print("Food base: ", food_base)
 
         if self.robot_interface is not None:
             self.tf_utils.publishTransformationToTF('arm_base_link', 'food_frame', food_base)
@@ -182,7 +184,7 @@ class FoodManipulationSkillLibrary:
             major_axis = major_axis + np.pi/2
 
         # caching this so that the robot doesn't rotate the wrist again
-        tip_to_wrist = self.get_transform('fork_tip', 'tool_frame')
+        tip_to_wrist = self.get_transform('arm_fork_tip', 'arm_tool_frame')
         print("Tip to wrist: ", tip_to_wrist)
         
         # Action 0: Rotate twirl DoF to skewer angle
@@ -191,6 +193,7 @@ class FoodManipulationSkillLibrary:
         # Action 1: Move to action start position
         waypoint_1_tip = np.copy(food_base)
         waypoint_1_tip[2,3] += 0.05
+        # input('Press ENTER to continue to skewering action')
         self.move_utensil_to_pose(waypoint_1_tip, tip_to_wrist)
 
         # Action 2: Move inside food item
@@ -257,7 +260,7 @@ class FoodManipulationSkillLibrary:
             major_axis = major_axis + np.pi/2
 
         # caching this so that the robot doesn't rotate the wrist again
-        # tip_to_wrist = self.get_transform('fork_tip', 'tool_frame')
+        # tip_to_wrist = self.get_transform('arm_fork_tip', 'arm_tool_frame')
         # print("Tip to wrist: ", tip_to_wrist)
         
         # action 0: Rotate scooping DoF to dip angle
@@ -290,19 +293,19 @@ class FoodManipulationSkillLibrary:
         
     def scooping_pickup(self, hack = True):
 
-        forkpitch_to_tip = self.get_transform('forkpitch', 'fork_tip')
+        forkpitch_to_tip = self.get_transform('arm_forkpitch', 'arm_fork_tip')
         print("Forkpitch to tip: ", forkpitch_to_tip)
         distance = forkpitch_to_tip[0,3]
 
         print("Distance: ", distance)
 
-        tool_frame = self.get_transform('arm_base_link', 'tool_frame')
+        arm_tool_frame = self.get_transform('arm_base_link', 'arm_tool_frame')
 
         tool_frame_displacement = np.eye(4)
         tool_frame_displacement[0,3] = distance/10 # move down
         tool_frame_displacement[1,3] = -distance*3/4 # move back
 
-        tool_frame_target = tool_frame @ tool_frame_displacement
+        tool_frame_target = arm_tool_frame @ tool_frame_displacement
 
         if self.robot_interface is not None:
             self.tf_utils.publishTransformationToTF('arm_base_link', 'tool_frame_target', tool_frame_target)

@@ -55,10 +55,10 @@ class WatchDog:
         # This will now use the single, shared instance of ArmInterface
         self._arm_interface = self.manager.ArmInterface()
 
-        # # bias FT sensor
-        # bias = rospy.ServiceProxy('/forque/bias_cmd', String_cmd)
-        # bias('bias')
-        # time.sleep(2.0) # wait for bias to complete
+        # bias FT sensor
+        bias = rospy.ServiceProxy('/forque/bias_cmd', String_cmd)
+        bias('bias')
+        time.sleep(2.0) # wait for bias to complete
 
         queue_size = 1000
         self.camera_info_sub = rospy.Subscriber("/camera/color/camera_info", CameraInfo, self.cameraCallback, queue_size = queue_size, buff_size = 65536*queue_size)
@@ -67,9 +67,9 @@ class WatchDog:
         self.camera_unexpected_sub = rospy.Subscriber("/head_perception/unexpected", Bool, self.cameraUnexpectedCallback, queue_size = queue_size, buff_size = 65536*queue_size)
         self.camera_unexpected = False 
         
-        # self.ft_sub = rospy.Subscriber('/forque/forqueSensor', WrenchStamped, self.ftCallback, queue_size = queue_size, buff_size = 65536*queue_size)
-        # self.ft_timestamps = PeekableQueue()
-        # self.ft_unexpected = False
+        self.ft_sub = rospy.Subscriber('/forque/forqueSensor', WrenchStamped, self.ftCallback, queue_size = queue_size, buff_size = 65536*queue_size)
+        self.ft_timestamps = PeekableQueue()
+        self.ft_unexpected = False
 
         self.collision_free_sub = rospy.Subscriber('/collision_free', Bool, self.collisionFreeCallback, queue_size = queue_size, buff_size = 65536*queue_size)
         self.collision_free_timestamps = PeekableQueue()
@@ -92,18 +92,19 @@ class WatchDog:
         self.camera_timestamps.put(time.time())
 
     def cameraUnexpectedCallback(self, msg):
-        self.camera_unexpected = msg.data
+        # self.camera_unexpected = msg.data
+        pass
 
-    # def ftCallback(self, msg):
+    def ftCallback(self, msg):
 
-    #     self.ft_timestamps.put(time.time())
-    #     ft = [msg.wrench.force.x, msg.wrench.force.y, msg.wrench.force.z, msg.wrench.torque.x, msg.wrench.torque.y, msg.wrench.torque.z]
-    #     if not self.ft_unexpected:
-    #         for i in range(6):
-    #             if abs(ft[i]) > FT_THRESHOLD[i]:
-    #                 print("FT threshold exceeded with magnitude: ", ft)
-    #                 self.ft_unexpected = True
-    #                 break
+        self.ft_timestamps.put(time.time())
+        ft = [msg.wrench.force.x, msg.wrench.force.y, msg.wrench.force.z, msg.wrench.torque.x, msg.wrench.torque.y, msg.wrench.torque.z]
+        if not self.ft_unexpected:
+            for i in range(6):
+                if abs(ft[i]) > FT_THRESHOLD[i]:
+                    print("FT threshold exceeded with magnitude: ", ft)
+                    self.ft_unexpected = True
+                    break
 
     def collisionFreeCallback(self, msg):
 
@@ -118,7 +119,7 @@ class WatchDog:
         start_time = time.time()
         frequencies = []
         for _queue, _threshold, _anomaly in [(self.camera_timestamps, CAMERA_FREQUENCY_THRESHOLD, AnomalyStatus.CAMERA_FREQUENCY), 
-                                            # (self.ft_timestamps, FT_FREQUENCY_THRESHOLD, AnomalyStatus.FT_FREQUENCY),
+                                            (self.ft_timestamps, FT_FREQUENCY_THRESHOLD, AnomalyStatus.FT_FREQUENCY),
                                             (self.collision_free_timestamps, COLLISION_FREE_FREQUENCY_THRESHOLD, AnomalyStatus.COLLISION_FREE_FREQUENCY)]:
             while _queue.peek() < start_time - 1.0:
                 _queue.get()
@@ -132,13 +133,13 @@ class WatchDog:
 
         if self.second_counter == WATCHDOG_RUN_FREQUENCY:
             print("Watchdog running at expected frequency.")
-            # print(f"Frequencies:  Camera: {frequencies[0]}, FT: {frequencies[1]}, Collision Free: {frequencies[2]}")
-            print(f"Frequencies:  Camera: {frequencies[0]}, Collision Free: {frequencies[1]}")
+            print(f"Frequencies:  Camera: {frequencies[0]}, FT: {frequencies[1]}, Collision Free: {frequencies[2]}")
+            # print(f"Frequencies:  Camera: {frequencies[0]}, Collision Free: {frequencies[1]}")
             self.second_counter = 0
 
         for _unexpected, _anomaly in [
                                     (self.camera_unexpected, AnomalyStatus.CAMERA_UNEXPECTED),
-                                    # (self.ft_unexpected, AnomalyStatus.FT_UNEXPECTED),
+                                    (self.ft_unexpected, AnomalyStatus.FT_UNEXPECTED),
                                     (self.collision_free_unexpected, AnomalyStatus.COLLISION_FREE_UNEXPECTED)]:
             if _unexpected:
                 print(f"Unexpected: {_anomaly}")

@@ -116,6 +116,12 @@
     <arg name="filters" value="pointcloud"/>
   </include>
 
+  <!-- ===== Arm FT sensor driver (from robot.launch) ===== -->
+  <include file="$(find netft_rdt_driver)/launch/ft_sensor.launch">
+    <arg name="ip_address" value="192.168.1.7"/>
+    <arg name="rate" value="1000"/>
+  </include>
+
   <!-- ===== ROS bridge for web app (from robot.launch) ===== -->
   <node pkg="rosbridge_server" type="rosbridge_websocket" name="rosbridge_websocket" output="screen"/>
 

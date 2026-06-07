@@ -274,7 +274,6 @@ class TransferToolHLA(HighLevelAction):
         # assert self.sim.held_object_name == "utensil"
 
         print("Transferring bite with utensil ...")
-        return
 
         if self.robot_interface is not None:
             self.robot_interface.set_speed(speed)
