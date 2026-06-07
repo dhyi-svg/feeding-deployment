@@ -1,4 +1,5 @@
 from typing import Any
+import time
 
 from relational_structs import (
     LiftedAtom,
@@ -59,7 +60,7 @@ class PressMicrowaveButtonHLA(HighLevelAction):
         assert self.sim.held_object_name is None
         print("Pressing microwave button ...")
 
-        self.move_to_joint_positions(self.sim.scene_description.retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.microwave_closeup_gaze_pos)
 
         time.sleep(5.0) # wait for the robot to stabilize before perception

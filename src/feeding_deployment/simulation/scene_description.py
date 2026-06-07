@@ -79,6 +79,8 @@ class SceneDescription:
 
     microwave_closeup_gaze_pos: JointPositions
 
+    microwave_plate_staging_pos: JointPositions
+
     # Fridge
     fridge_door_staging_pos: JointPositions
     fridge_door_gaze_pos: JointPositions

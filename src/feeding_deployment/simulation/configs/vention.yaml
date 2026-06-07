@@ -58,7 +58,11 @@ above_plate_holder_pose:
 microwave_closeup_gaze_pos: 
   description: "Gaze configuration, the button and inside of microwave should be visible from this configuration"
   type: "joint_positions"
-  values: [-1.4470951573218063, 0.6513355662292409, 2.6380229799177624, -1.6713082873922307, -1.5145285266514845, 1.9620664894107387, 2.3895670944443457]
+  values: [3.1204213218719903, 0.7215928184207848, 2.674816947222188, -1.505507867407168, -1.5691158721470568, 2.056660506591754, 2.4779065446472552]
+microwave_plate_staging_pos: 
+  description: "Staging configuration, the robot should be in front of the microwave in this configuration"
+  type: "joint_positions"
+  values: [3.129084851214127, -0.8821358920979225, -3.1265742892545094, -2.5615186175991647, -0.006664826944032143, 0.10794081516859698, 1.5825896030500946]
 
 # Fridge
 fridge_door_staging_pos:

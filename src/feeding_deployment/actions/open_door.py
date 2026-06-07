@@ -141,18 +141,5 @@ class OpenDoorHLA(HighLevelAction):
 
         self.move_to_ee_pose(handle_opening_poses["push_waypoints"][-3])
 
-        print("Microwave door should be open now. Moving to intermediate waypoint ...")
-        self.move_to_joint_positions(self.sim.scene_description.behind_retract_pos)
-        self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
-
-        self.move_to_ee_pose(handle_opening_poses["before_above_closing_waypoint"])
-        self.move_to_ee_pose(handle_opening_poses["above_closing_waypoint"])
-        self.move_to_ee_pose(handle_opening_poses["closing_waypoint"])
-        self.move_to_ee_pose_trajectory(handle_opening_poses["closing_waypoints"])
-
-        self.close_gripper()
-        self.move_to_ee_pose(handle_opening_poses["offset_closing_waypoints"][0])
-        self.move_to_ee_pose_trajectory(handle_opening_poses["offset_closing_waypoints"])
-
-        self.move_to_ee_pose(handle_opening_poses["pre_grasp_pose"])
-        self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.microwave_plate_staging_pos)
+        # self.move_to_joint_positions(self.sim.scene_description.behind_retract_pos)

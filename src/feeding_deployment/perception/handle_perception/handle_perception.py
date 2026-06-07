@@ -166,6 +166,7 @@ class HandlePerception(TFInterface):
 
         self.handle_pose_publisher = rospy.Publisher("/handle_pose", Pose, queue_size=10)
         self.hinge_pose_publisher = rospy.Publisher("/hinge_pose", Pose, queue_size=10)
+        self.placement_pose_publisher = rospy.Publisher("/placement_pose", Pose, queue_size=10)
         self.button_pose_publisher = rospy.Publisher("/button_pose", Pose, queue_size=10)
 
         ts = message_filters.TimeSynchronizer(
@@ -250,6 +251,8 @@ class HandlePerception(TFInterface):
         mask = np.zeros(rgb_image.shape[:2], dtype=np.uint8)
         mask[y1:y2, x1:x2] = 255
         cv2.imwrite("detection_mask.png", mask)
+
+        center_pixel = ((x1 + x2) // 2, (y1 + y2) // 2)
 
         # -----------------------------
         # Extract ALL 3D points from mask
@@ -385,7 +388,16 @@ class HandlePerception(TFInterface):
 
         hinge_pixel = self.world2Pixel(camera_info_msg, hinge_3d[0], hinge_3d[1], hinge_3d[2])
         cv2.circle(vis, (hinge_pixel[0], hinge_pixel[1]), 10, (255, 0, 0), -1)
+        
+        # update center pixel x is average of handle_centroid_pixel and hinge_pixel
+        center_pixel = ((handle_centroid_pixel[0] + hinge_pixel[0]) // 2, center_pixel[1])
+        cv2.circle(vis, (center_pixel[0], center_pixel[1]), 10, (0, 0, 255), -1)
         cv2.imwrite("handle_hinge_pixels.png", vis)
+
+        ok, center_3d = self.pixel2World(camera_info_msg, center_pixel[0], center_pixel[1], depth_image, depth=plane_depth)
+        if not ok:
+            print("Could not get valid 3D point for center pixel")
+            return
 
         transform = self.get_frame_to_frame_transform(camera_info_msg)
 
@@ -407,6 +419,14 @@ class HandlePerception(TFInterface):
             base_to_hinge[:3, :3] = Rotation.from_quat([-0.5, 0.5, 0.5, -0.5]).as_matrix()
             self.updateTF("arm_base_link", "hinge", base_to_hinge)
             self.update_hinge_pose(base_to_hinge)
+
+            camera_to_placement = np.eye(4)
+            camera_to_placement[:3, 3] = center_3d
+            camera_to_placement[3, 3] = 1
+            base_to_placement = np.dot(base_to_camera, camera_to_placement)
+            base_to_placement[:3, :3] = Rotation.from_quat([-0.5, 0.5, 0.5, -0.5]).as_matrix()
+            self.updateTF("arm_base_link", "handle_placement", base_to_placement)
+            self.update_placement_pose(base_to_placement)
 
     def detect_items(self, input_image, classes_being_detected, log_path = None):
 
@@ -547,6 +567,19 @@ class HandlePerception(TFInterface):
         pose_msg.orientation.w = orientation[3]
         self.hinge_pose_publisher.publish(pose_msg)
 
+    def update_placement_pose(self, placement_pose_mat):
+
+        position, orientation = self.matrix_to_pose(placement_pose_mat)        
+        pose_msg = Pose()
+        pose_msg.position.x = position[0]
+        pose_msg.position.y = position[1]
+        pose_msg.position.z = position[2]
+        pose_msg.orientation.x = orientation[0]
+        pose_msg.orientation.y = orientation[1]
+        pose_msg.orientation.z = orientation[2]
+        pose_msg.orientation.w = orientation[3]
+        self.placement_pose_publisher.publish(pose_msg)
+
     def detect_handle_color(self, bgr_image):
         hsv = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV)
         lower = np.array([60, 50, 50])
@@ -630,7 +663,7 @@ class HandlePerception(TFInterface):
 
         self.handle_center_pub.publish(corner_marker)
 
-    def pixel2World(self, camera_info, image_x, image_y, depth_image):
+    def pixel2World(self, camera_info, image_x, image_y, depth_image, depth=None):
 
         # print("Image pixels: ", image_x, image_y)
         # print("Depth shape: ", depth_image.shape)
@@ -638,9 +671,10 @@ class HandlePerception(TFInterface):
         if image_y >= depth_image.shape[0] or image_x >= depth_image.shape[1]:
             return False, None
 
-        depth = depth_image[image_y, image_x]
-        depth = depth / 1000 # convert from mm to m
-        # print("Depth: ", depth)
+        if depth is  None:
+            depth = depth_image[image_y, image_x]
+            depth = depth / 1000 # convert from mm to m
+            # print("Depth: ", depth)
 
         if math.isnan(depth) or depth < 0.05 or depth > 2.0:
             return False, None

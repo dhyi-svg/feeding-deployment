@@ -475,9 +475,17 @@ class PerceptionInterface:
 
             handle_pose_msg = rospy.wait_for_message("/handle_pose", PoseMsg)
             hinge_pose_msg = rospy.wait_for_message("/hinge_pose", PoseMsg)
+            placement_pose_msg = rospy.wait_for_message("/placement_pose", PoseMsg)
             self._handle_perception.turn_off()
 
-            # hack add 0.01 to y as the perception is slightly off
+
+            placement_pose = Pose(
+                position=(placement_pose_msg.position.x, placement_pose_msg.position.y, placement_pose_msg.position.z),
+                orientation=(placement_pose_msg.orientation.x, placement_pose_msg.orientation.y, placement_pose_msg.orientation.z, placement_pose_msg.orientation.w)
+            )
+            offset = np.eye(4)
+            offset[:3, 3] = np.array([0, -0.06, 0.0]) # x axis is left, y axis is up, z axis is forward.
+            placement_pose = self.matrix_to_pose(self.pose_to_matrix(placement_pose) @ offset)
 
             handle_pose = Pose(
                 position=(handle_pose_msg.position.x, handle_pose_msg.position.y, handle_pose_msg.position.z),
@@ -581,6 +589,7 @@ class PerceptionInterface:
             # beginning_closing_waypoint = self.matrix_to_pose(beginning_closing_waypoint_mat)
 
             handle_poses = {
+                "placement_pose": placement_pose,
                 "pre_grasp_pose": pre_grasp_pose,
                 "grasp_pose": grasp_pose,
                 "opening_waypoints": opening_waypoints,
@@ -597,13 +606,27 @@ class PerceptionInterface:
             }
 
         self.last_handle_poses = handle_poses
+        # Save in temp pickle file just for testing, we can remove this later if we don't need it
+        if self.log_dir is not None:
+            with open(self.log_dir / 'handle_opening_pos.pkl', 'wb') as f:
+                pickle.dump({"last_handle_poses": handle_poses}, f)
         self.sync_rviz()
 
         return handle_poses
 
+    def get_perceived_poses(self):
+        return self.last_handle_poses
+
     def perceive_handle_closing_poses(self, handle_type: str):
         assert handle_type in ["white fridge door", "microwave"]
-        return self.last_handle_poses
+        if self.log_dir is not None:
+            with open(self.log_dir / 'handle_opening_pos.pkl', 'rb') as f:
+                handle_opening_pos = pickle.load(f)
+            handle_poses = handle_opening_pos["last_handle_poses"]
+        else:
+            raise ValueError("No log directory provided, cannot load handle opening poses to compute closing poses. Please provide a log directory or run perceive_handle_opening_poses first to save the opening poses.")
+        return handle_poses
+        # return self.last_handle_poses
 
     def perceive_drink_pickup_poses(self):
 

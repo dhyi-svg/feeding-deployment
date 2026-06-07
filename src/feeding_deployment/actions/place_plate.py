@@ -70,6 +70,13 @@ class PlacePlateInApplianceHLA(HighLevelAction):
         # assert self.sim.held_object_name == "plate"
         print("Placing plate in microwave ...")
 
+        perceived_poses = self.perception_interface.get_perceived_poses()
+        placement_pose = perceived_poses["placement_pose"]
+
+        self.move_to_joint_positions(self.sim.scene_description.microwave_plate_staging_pos)
+        self.move_to_ee_pose(placement_pose)
+        self.close_gripper()
+        self.move_to_joint_positions(self.sim.scene_description.microwave_plate_staging_pos)
 
 class PlacePlateOnHolderHLA(HighLevelAction):
     """Place the plate onto the holder."""
