@@ -396,7 +396,7 @@ class HandlePerception(TFInterface):
             camera_to_handle[:3, 3] = handle_centroid_3d
             camera_to_handle[3, 3] = 1 
             base_to_handle = np.dot(base_to_camera, camera_to_handle)
-            base_to_handle[:3, :3] = Rotation.from_quat([0.0, 0.7071, 0.7071, 0.0]).as_matrix()
+            base_to_handle[:3, :3] = Rotation.from_quat([-0.5, 0.5, 0.5, -0.5]).as_matrix()
             self.updateTF("arm_base_link", "handle", base_to_handle)
             self.update_handle_pose(base_to_handle)
 
@@ -404,7 +404,7 @@ class HandlePerception(TFInterface):
             camera_to_hinge[:3, 3] = hinge_3d
             camera_to_hinge[3, 3] = 1
             base_to_hinge = np.dot(base_to_camera, camera_to_hinge)
-            base_to_hinge[:3, :3] = Rotation.from_quat([0.0, 0.7071, 0.7071, 0.0]).as_matrix()
+            base_to_hinge[:3, :3] = Rotation.from_quat([-0.5, 0.5, 0.5, -0.5]).as_matrix()
             self.updateTF("arm_base_link", "hinge", base_to_hinge)
             self.update_hinge_pose(base_to_hinge)
 

@@ -120,6 +120,21 @@ if __name__ == "__main__":
     if run_commands != "y":
         exit()
 
+    back_home_pos = [3.141592653589793, 0.26193837151853794, -3.1415766746232525, -2.2690119171669654, 4.621619302645493e-06, 0.9598732314221993, 1.5708048489103847]
+    arm_client_interface.execute_command(JointCommand(back_home_pos))
+
+    left_retract_pos = [-1.57, -0.34903602299465675, -3.141591055693139, -2.0, 0.0, -0.872688061814757, 1.57075917569769]
+    arm_client_interface.execute_command(JointCommand(left_retract_pos))
+
+    # left_back_retract_pos = [-1.57, -1.8338532592607812, 3.1415681525077646, -2.5482659290666034, 1.0329455279146852e-05, -0.8727280092311087, 1.570780081512247]
+    # arm_client_interface.execute_command(JointCommand(left_back_retract_pos))
+
+    # staging_pos = [3.141592653589793, 0.26193837151853794, -3.1415766746232525, -2.2690119171669654, 4.621619302645493e-06, 0.9598732314221993, 1.5708048489103847]
+    # arm_client_interface.execute_command(JointCommand(staging_pos))
+
+    # back_retract_pos = [-2.6098978682220775e-05, -1.8305038015577884, 3.1415657556627834, -2.5482749838143097, 4.621619302645493e-06, -0.8727317376566344, 1.5708057810167664]
+    # arm_client_interface.execute_command(JointCommand(back_retract_pos))
+    
     # retract_pos = [0.0, -0.34903602299465675, -3.141591055693139, -2.0, 0.0, -0.872688061814757, 1.57075917569769]
     # arm_client_interface.execute_command(JointCommand(retract_pos))
 
@@ -136,16 +151,16 @@ if __name__ == "__main__":
     # home_pos = [-2.8762139772986473e-05, 0.26193837151853794, -3.1415766746232525, -2.2690119171669654, 4.621619302645493e-06, 0.9598732314221993, 1.5708048489103847]
     # arm_client_interface.execute_command(JointCommand(home_pos))
 
-    input("Press enter to execute plate position...")
-    plate_pose = [0.219, -0.264, -0.001, 0.489, -0.491, -0.496, 0.524]
-    arm_client_interface.execute_command(CartesianCommand(plate_pose[:3], plate_pose[3:]))
+    # input("Press enter to execute plate position...")
+    # plate_pose = [0.219, -0.264, -0.001, 0.489, -0.491, -0.496, 0.524]
+    # arm_client_interface.execute_command(CartesianCommand(plate_pose[:3], plate_pose[3:]))
 
     # input("Press enter to execute outside plate position...")
     # outside_plate_pose = plate_pose.copy()
     # outside_plate_pose[0] += 0.1
     # arm_client_interface.execute_command(CartesianCommand(outside_plate_pose[:3], outside_plate_pose[3:]))
 
-    input("Press enter to execute above plate position...")
-    above_plate_pose = plate_pose.copy()
-    above_plate_pose[2] += 0.1
-    arm_client_interface.execute_command(CartesianCommand(above_plate_pose[:3], above_plate_pose[3:]))
+    # input("Press enter to execute above plate position...")
+    # above_plate_pose = plate_pose.copy()
+    # above_plate_pose[2] += 0.1
+    # arm_client_interface.execute_command(CartesianCommand(above_plate_pose[:3], above_plate_pose[3:]))

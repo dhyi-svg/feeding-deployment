@@ -70,7 +70,9 @@ class SceneDescription:
     home_pos: JointPositions
     initial_joints: JointPositions
     retract_pos: JointPositions
-    side_retract_pos: JointPositions
+    behind_retract_pos: JointPositions
+    left_retract_pos: JointPositions
+    left_back_retract_pos: JointPositions
     back_retract_pos: JointPositions
     retract_utensil_forward_pos: JointPositions
 
@@ -109,6 +111,12 @@ class SceneDescription:
     wipe_outside_mount_pos: JointPositions
     wipe_above_mount: Pose
     wipe_above_mount_pos: JointPositions
+
+    # Plate holder constants
+    inside_plate_holder_pose: Pose
+    inside_plate_holder_pos: JointPositions
+    above_plate_holder_pose: Pose
+    above_plate_holder_pos: JointPositions
 
     # Plate constants
     plate_staging_pos: JointPositions
