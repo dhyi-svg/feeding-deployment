@@ -384,7 +384,7 @@ class _Runner:
             GroundAtom(DoorClosed, [self.fridge]),
             GroundAtom(DoorClosed, [self.microwave]),
             GroundAtom(InFrontOf, [self.microwave]),
-            GroundAtom(PlateAt, [self.holder]),
+            GroundAtom(PlateAt, [self.microwave]),
             GroundAtom(SafeToNavigate, []),
             # GroundAtom(FoodHeated, []),
         }
@@ -819,7 +819,7 @@ if __name__ == "__main__":
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["CloseDoor"], (runner.microwave,)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromAppliance"], (runner.plate, runner.microwave)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.fridge,)))
-        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["TransferTool"], (runner.utensil,runner.table)))
+        runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["TransferTool"], (runner.utensil,runner.table)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateInSink"], (runner.plate, runner.sink)))
     else:
         runner.run()

@@ -69,10 +69,8 @@ class PressMicrowaveButtonHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.fridge_door_staging_pos)
         self.close_gripper() # just in case the gripper is open
         self.move_to_ee_pose(press_button_poses["pre_press_pose"])
-        self.move_to_ee_pose(press_button_poses["press_pose"])
-        self.move_to_ee_pose(press_button_poses["intermediate_pose"])
-        self.move_to_ee_pose(press_button_poses["press_pose"])
-        self.move_to_ee_pose(press_button_poses["intermediate_pose"])
-        self.move_to_ee_pose(press_button_poses["press_pose"])
+        for i in range(3): # Change this to depend on predicted heating time
+            self.move_to_ee_pose(press_button_poses["press_pose"])
+            self.move_to_ee_pose(press_button_poses["intermediate_pose"])
         self.move_to_ee_pose(press_button_poses["pre_press_pose"])
         self.move_to_joint_positions(self.sim.scene_description.fridge_door_staging_pos)

@@ -25,7 +25,7 @@ try:
 
     from feeding_deployment.perception.head_perception.ros_wrapper import HeadPerceptionROSWrapper
     from feeding_deployment.perception.drink_perception.drink_perception import DrinkPerception
-    from feeding_deployment.perception.handle_perception.handle_perception import HandlePerception
+    from feeding_deployment.perception.appliance_perception.appliance_perception import AppliancePerception
 except ModuleNotFoundError:
     ROSPY_IMPORTED = False
 
@@ -45,7 +45,7 @@ class PerceptionInterface:
             self.simulation = True
             self._head_perception = None
             self._drink_perception = None
-            self._handle_perception = None
+            self._appliance_perception = None
         else:
             self.simulation = False
             self.tfBuffer = tf2_ros.Buffer()
@@ -67,7 +67,7 @@ class PerceptionInterface:
             # Rajat ToDo: pass perception queues to all perception classes instead of having them use ros subscribers which spawn threads
             self._drink_perception = DrinkPerception()
             print("Initializing handle perception ...")
-            self._handle_perception = HandlePerception()
+            self._appliance_perception = AppliancePerception()
             print("Perception interface initialized")
 
             self.speak_pub = rospy.Publisher('/speak', String, queue_size=1)
@@ -372,49 +372,6 @@ class PerceptionInterface:
 
         return waypoints
     
-    def perceive_plate_poses(self):
-
-        if self.simulation:
-            # load them from a pickle file
-            with open(self.log_dir / 'button_pressing_pose.pkl', 'rb') as f:
-                button_pressing_pose = pickle.load(f)
-            handle_poses = button_pressing_pose["last_button_pressing_poses"]
-
-        else:
-            self._handle_perception.turn_on("microwave") # microwave and fridge have the same button, so we can just turn on microwave perception
-            # Rajat Hack: Wait three seconds
-            time.sleep(3)
-
-            # handle_pose_msg = rospy.wait_for_message("/handle_pose", PoseMsg)
-            # hinge_pose_msg = rospy.wait_for_message("/hinge_pose", PoseMsg)
-            button_pose_msg = rospy.wait_for_message("/button_pose", PoseMsg)
-            self._handle_perception.turn_off()
-
-            button_pose = Pose(
-                position=(button_pose_msg.position.x, button_pose_msg.position.y, button_pose_msg.position.z),
-                orientation=(button_pose_msg.orientation.x, button_pose_msg.orientation.y, button_pose_msg.orientation.z, button_pose_msg.orientation.w)
-            )
-
-            button_transform = self.pose_to_matrix(button_pose)
-            offset = np.eye(4)
-            offset[:3, 3] = np.array([0.005, -0.027, -0.042]) # x axis is left, y axis is up, z axis is forward. 
-            press_pose = self.matrix_to_pose(button_transform @ offset)
-
-            pre_press_offset = np.eye(4)
-            pre_press_offset[:3, 3] = np.array([0.005, -0.027, -0.12])
-            pre_press_pose = self.matrix_to_pose(button_transform @ pre_press_offset)
-
-            intermediate_offset = np.eye(4)
-            intermediate_offset[:3, 3] = np.array([0.005, -0.027, -0.08])
-            intermediate_pose = self.matrix_to_pose(button_transform @ intermediate_offset)
-            
-
-            return {
-                "press_pose": press_pose,
-                "pre_press_pose": pre_press_pose,
-                "intermediate_pose": intermediate_pose,
-            }
-    
     def perceive_button_pressing_poses(self):
 
         if self.simulation:
@@ -424,31 +381,23 @@ class PerceptionInterface:
             handle_poses = button_pressing_pose["last_button_pressing_poses"]
 
         else:
-            self._handle_perception.turn_on("microwave") # microwave and fridge have the same button, so we can just turn on microwave perception
-            # Rajat Hack: Wait three seconds
-            time.sleep(3)
-
-            # handle_pose_msg = rospy.wait_for_message("/handle_pose", PoseMsg)
-            # hinge_pose_msg = rospy.wait_for_message("/hinge_pose", PoseMsg)
-            button_pose_msg = rospy.wait_for_message("/button_pose", PoseMsg)
-            self._handle_perception.turn_off()
-
-            button_pose = Pose(
-                position=(button_pose_msg.position.x, button_pose_msg.position.y, button_pose_msg.position.z),
-                orientation=(button_pose_msg.orientation.x, button_pose_msg.orientation.y, button_pose_msg.orientation.z, button_pose_msg.orientation.w)
-            )
+            self._appliance_perception.turn_on("microwave") # microwave and fridge have the same button, so we can just turn on microwave perception
+            # Rajat Hack: Wait 1 second
+            time.sleep(1)
+            button_pose = self._appliance_perception.detect_start_button()
+            self._appliance_perception.turn_off()
 
             button_transform = self.pose_to_matrix(button_pose)
             offset = np.eye(4)
-            offset[:3, 3] = np.array([0.005, -0.027, -0.042]) # x axis is left, y axis is up, z axis is forward. 
+            offset[:3, 3] = np.array([0.005, 0.0, -0.055]) # x axis is left, y axis is up, z axis is forward. 
             press_pose = self.matrix_to_pose(button_transform @ offset)
 
             pre_press_offset = np.eye(4)
-            pre_press_offset[:3, 3] = np.array([0.005, -0.027, -0.12])
+            pre_press_offset[:3, 3] = np.array([0.005, 0.0, -0.12])
             pre_press_pose = self.matrix_to_pose(button_transform @ pre_press_offset)
 
             intermediate_offset = np.eye(4)
-            intermediate_offset[:3, 3] = np.array([0.005, -0.027, -0.08])
+            intermediate_offset[:3, 3] = np.array([0.005, 0.0, -0.08])
             intermediate_pose = self.matrix_to_pose(button_transform @ intermediate_offset)
             
 
@@ -469,28 +418,15 @@ class PerceptionInterface:
             handle_poses = handle_opening_pos["last_handle_poses"]
 
         else:
-            self._handle_perception.turn_on(handle_type)
-            # Rajat Hack: Wait three seconds
-            time.sleep(3)
+            self._appliance_perception.turn_on(handle_type)
+            # Rajat Hack: Wait 1 second
+            time.sleep(1)
+            handle_pose, hinge_pose, placement_pose = self._appliance_perception.detect_handle_and_placement()
+            self._appliance_perception.turn_off()
 
-            handle_pose_msg = rospy.wait_for_message("/handle_pose", PoseMsg)
-            hinge_pose_msg = rospy.wait_for_message("/hinge_pose", PoseMsg)
-            placement_pose_msg = rospy.wait_for_message("/placement_pose", PoseMsg)
-            self._handle_perception.turn_off()
-
-
-            placement_pose = Pose(
-                position=(placement_pose_msg.position.x, placement_pose_msg.position.y, placement_pose_msg.position.z),
-                orientation=(placement_pose_msg.orientation.x, placement_pose_msg.orientation.y, placement_pose_msg.orientation.z, placement_pose_msg.orientation.w)
-            )
             offset = np.eye(4)
             offset[:3, 3] = np.array([0, -0.06, 0.0]) # x axis is left, y axis is up, z axis is forward.
             placement_pose = self.matrix_to_pose(self.pose_to_matrix(placement_pose) @ offset)
-
-            handle_pose = Pose(
-                position=(handle_pose_msg.position.x, handle_pose_msg.position.y, handle_pose_msg.position.z),
-                orientation=(handle_pose_msg.orientation.x, handle_pose_msg.orientation.y, handle_pose_msg.orientation.z, handle_pose_msg.orientation.w)
-            )
 
             handle_transform = self.pose_to_matrix(handle_pose)
             offset = np.eye(4)
@@ -500,11 +436,6 @@ class PerceptionInterface:
             pre_grasp_offset = np.eye(4)
             pre_grasp_offset[:3, 3] = np.array([0.0, 0.0, -0.12])
             pre_grasp_pose = self.matrix_to_pose(handle_transform @ pre_grasp_offset)
-
-            hinge_pose = Pose(
-                position=(hinge_pose_msg.position.x, hinge_pose_msg.position.y, hinge_pose_msg.position.z),
-                orientation=(hinge_pose_msg.orientation.x, hinge_pose_msg.orientation.y, hinge_pose_msg.orientation.z, hinge_pose_msg.orientation.w)
-            )
 
             opening_waypoints = self._generate_door_arc_waypoints(
                 start_pose=grasp_pose,

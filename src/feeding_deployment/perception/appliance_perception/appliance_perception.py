@@ -10,6 +10,9 @@ from scipy.spatial.transform import Rotation
 from sklearn.cluster import DBSCAN   # <-- ADDED
 from feeding_deployment.actions.flair.inference_class import FOOD_MODELS_IMPORTS
 import open3d as o3d
+from pybullet_helpers.geometry import Pose, Pose3D
+from copy import deepcopy
+from threading import Lock
 
 # ros imports
 import rospy
@@ -17,7 +20,7 @@ import message_filters
 from sensor_msgs.msg import Image, CameraInfo
 from cv_bridge import CvBridge, CvBridgeError
 import tf2_ros
-from geometry_msgs.msg import Point, Pose
+from geometry_msgs.msg import Point
 from visualization_msgs.msg import MarkerArray, Marker
 
 from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceClient
@@ -25,7 +28,7 @@ from feeding_deployment.control.robot_controller.command_interface import Cartes
 from geometry_msgs.msg import TransformStamped
 from collections import deque
 
-from feeding_deployment.perception.handle_perception.remote_molmo import RemoteMolmo
+from feeding_deployment.perception.appliance_perception.remote_molmo import RemoteMolmo
 
 from geometry_msgs.msg import Pose as pose_msg
 
@@ -113,10 +116,10 @@ class TFInterface:
     def matrix_to_pose(self, mat):
         position = mat[:3, 3]
         orientation = Rotation.from_matrix(mat[:3, :3]).as_quat()
-        return (position, orientation)
+        return Pose(position, orientation) 
 
 
-class HandlePerception(TFInterface):
+class AppliancePerception(TFInterface):
     def __init__(self, num_perception_samples=25):
 
         self.DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -164,16 +167,18 @@ class HandlePerception(TFInterface):
         self.handle_points_pub = rospy.Publisher("/handle_points", Marker, queue_size=1)
         self.handle_center_pub = rospy.Publisher("/handle_center", Marker, queue_size=1)
 
-        self.handle_pose_publisher = rospy.Publisher("/handle_pose", Pose, queue_size=10)
-        self.hinge_pose_publisher = rospy.Publisher("/hinge_pose", Pose, queue_size=10)
-        self.placement_pose_publisher = rospy.Publisher("/placement_pose", Pose, queue_size=10)
-        self.button_pose_publisher = rospy.Publisher("/button_pose", Pose, queue_size=10)
-
         ts = message_filters.TimeSynchronizer(
             [self.color_image_sub,
              self.camera_info_sub,
              self.depth_image_sub], 1)
         ts.registerCallback(self.rgbdCallback)
+
+        self.camera_lock = Lock()
+        self.camera_header = None
+        self.camera_color_data = None
+        self.camera_info_data = None
+        self.camera_depth_data = None
+        self.camera_transform = None
 
         super().__init__()
 
@@ -203,42 +208,80 @@ class HandlePerception(TFInterface):
         
         transform = self.get_frame_to_frame_transform(camera_info_msg)
 
+        with self.camera_lock:
+            self.camera_color_data = rgb_image
+            self.camera_info_data = camera_info_msg
+            self.camera_depth_data = depth_image
+            self.camera_header = rgb_image_msg.header
+            self.camera_transform = transform
+
+    def get_camera_data(self):
+        with self.camera_lock:
+            return (
+                deepcopy(self.camera_color_data),
+                deepcopy(self.camera_info_data),
+                deepcopy(self.camera_depth_data),
+                deepcopy(self.camera_header),
+                deepcopy(self.camera_transform),
+            )
+
+    def detect_start_button(self):
+
+        rgb_image, camera_info_msg, depth_image, header, transform = self.get_camera_data()
+
         file_path = os.path.dirname(__file__)
         print("Got images")
         cv2.imwrite(file_path + "/rgb.png", rgb_image)
         depth_mm = (depth_image * 1000.0).astype("uint16")
         cv2.imwrite(file_path + "/depth.png", depth_mm)
 
-        # vis_image, pixel_coords, response = self.molmo.query(
-        #     image_path=file_path + "/rgb.png",
-        #     prompt="Point to the center of the start / 30 secs button",
-        #     save_response_image_to=file_path + "/rgb_keypoint.png",
-        # )
+        rgb_image_flipped = cv2.flip(rgb_image.copy(), -1)
+        cv2.imwrite(file_path + "/rgb_flipped.png", rgb_image_flipped)
 
-        # print("Pixel coords from molmo:", pixel_coords)
+        vis_image, pixel_coords, response = self.molmo.query(
+            image_path=file_path + "/rgb_flipped.png",
+            prompt="Point to the center of the start / 30 secs button which has a triangle symbol on it.",
+            save_response_image_to=file_path + "/rgb_keypoint.png",
+        )
 
-        # ok, button_3d = self.pixel2World(camera_info_msg, pixel_coords[0][0], pixel_coords[0][1], depth_image)
+        print("Pixel coords from molmo:", pixel_coords)
+        # Flip pixel coords back since we flipped the image before sending to molmo
+        button_pixel = (rgb_image.shape[1] - pixel_coords[0][0], rgb_image.shape[0] - pixel_coords[0][1])
 
-        # if not ok:
-        #     print("Could not get valid 3D point for button")
-        #     return
+        # visualize button pixel on original rgb image
+        vis_image = rgb_image.copy()
+        cv2.circle(vis_image, button_pixel, 10, (0, 0, 255), -1)
+        cv2.imwrite(file_path + "/rgb_button_pixel.png", vis_image)
 
-        # if transform is not None:   
-        #     print("Got transform between arm_base_link and camera_color_optical_frame")
-        #     base_to_camera = self.make_homogeneous_transform(transform)
+        ok, button_3d = self.pixel2World(camera_info_msg, button_pixel[0], button_pixel[1], depth_image)
 
-        #     camera_to_button = np.eye(4)
-        #     camera_to_button[:3, 3] = button_3d
-        #     camera_to_button[3, 3] = 1 
-        #     base_to_button = np.dot(base_to_camera, camera_to_button)
-        #     base_to_button[:3, :3] = Rotation.from_quat([0.0, 0.7071, 0.7071, 0.0]).as_matrix()
-        #     self.updateTF("arm_base_link", "button", base_to_button)
-        #     print("Button in base frame:", base_to_button)
-        #     self.update_button_pose(base_to_button)
-        # else:
-        #     print("Could not get transform between arm_base_link and camera_color_optical_frame")
-        
-        # return
+        if not ok:
+            print("Could not get valid 3D point for button")
+            return
+
+        if transform is not None:   
+            print("Got transform between arm_base_link and camera_color_optical_frame")
+            base_to_camera = self.make_homogeneous_transform(transform)
+
+            camera_to_button = np.eye(4)
+            camera_to_button[:3, 3] = button_3d
+            camera_to_button[3, 3] = 1 
+            base_to_button = np.dot(base_to_camera, camera_to_button)
+            base_to_button[:3, :3] = Rotation.from_quat([-0.5, 0.5, 0.5, -0.5]).as_matrix()
+            return self.matrix_to_pose(base_to_button)
+
+        print("Could not get transform between arm_base_link and camera_color_optical_frame")
+        return None
+
+    def detect_handle_and_placement(self):
+
+        rgb_image, camera_info_msg, depth_image, header, transform = self.get_camera_data()
+
+        file_path = os.path.dirname(__file__)
+        print("Got images")
+        cv2.imwrite(file_path + "/rgb.png", rgb_image)
+        depth_mm = (depth_image * 1000.0).astype("uint16")
+        cv2.imwrite(file_path + "/depth.png", depth_mm)
 
         detection = self.detect_items(rgb_image, [self.handle_type])
 
@@ -347,7 +390,6 @@ class HandlePerception(TFInterface):
 
         top_most_y = np.max(cluster_points_3d[:, 1])
 
-
         # for handle_centroid take median in x, y and z to be more robust to outliers
 
         handle_centroid = np.median(cluster_points_3d, axis=0)
@@ -409,25 +451,24 @@ class HandlePerception(TFInterface):
             camera_to_handle[3, 3] = 1 
             base_to_handle = np.dot(base_to_camera, camera_to_handle)
             base_to_handle[:3, :3] = Rotation.from_quat([-0.5, 0.5, 0.5, -0.5]).as_matrix()
-            self.updateTF("arm_base_link", "handle", base_to_handle)
-            self.update_handle_pose(base_to_handle)
 
             camera_to_hinge = np.eye(4)
             camera_to_hinge[:3, 3] = hinge_3d
             camera_to_hinge[3, 3] = 1
             base_to_hinge = np.dot(base_to_camera, camera_to_hinge)
             base_to_hinge[:3, :3] = Rotation.from_quat([-0.5, 0.5, 0.5, -0.5]).as_matrix()
-            self.updateTF("arm_base_link", "hinge", base_to_hinge)
-            self.update_hinge_pose(base_to_hinge)
 
             camera_to_placement = np.eye(4)
             camera_to_placement[:3, 3] = center_3d
             camera_to_placement[3, 3] = 1
             base_to_placement = np.dot(base_to_camera, camera_to_placement)
             base_to_placement[:3, :3] = Rotation.from_quat([-0.5, 0.5, 0.5, -0.5]).as_matrix()
-            self.updateTF("arm_base_link", "handle_placement", base_to_placement)
-            self.update_placement_pose(base_to_placement)
 
+            return self.matrix_to_pose(base_to_handle), self.matrix_to_pose(base_to_hinge), self.matrix_to_pose(base_to_placement)
+        
+        print("Could not get transform between arm_base_link and camera_color_optical_frame")
+        return None, None, None
+            
     def detect_items(self, input_image, classes_being_detected, log_path = None):
 
         # flip image because camera is mounted upside down
@@ -489,97 +530,6 @@ class HandlePerception(TFInterface):
 
         return detections.xyxy[0] if len(detections.xyxy) > 0 else None
 
-        # # Prompting SAM with detected boxes
-        # def segment(sam_predictor: SamPredictor, image: np.ndarray, xyxy: np.ndarray) -> np.ndarray:
-        #     sam_predictor.set_image(image)
-        #     result_masks = []
-        #     for box in xyxy:
-        #         masks, scores, logits = sam_predictor.predict(
-        #             box=box,
-        #             multimask_output=True
-        #         )
-        #         index = np.argmax(scores)
-        #         result_masks.append(masks[index])
-        #     return np.array(result_masks)
-
-
-        # # convert detections to masks
-        # detections.mask = segment(
-        #     sam_predictor=self.sam_predictor,
-        #     image=cv2.cvtColor(image, cv2.COLOR_BGR2RGB),
-        #     xyxy=detections.xyxy
-        # )
-        
-        # # annotate image with detections
-        # box_annotator = sv.BoxAnnotator()
-        # mask_annotator = sv.MaskAnnotator()
-        # labels = [
-        #     f"{classes_being_detected[class_id]} {confidence:0.2f}" 
-        #     for _, _, confidence, class_id, _, _
-        #     in detections]
-
-        # annotated_image = mask_annotator.annotate(scene=image.copy(), detections=detections)
-        # annotated_image = box_annotator.annotate(scene=annotated_image, detections=detections, labels=labels)
-
-        # # visualize annotated image
-        # # cv2.imshow("Detections", annotated_image)
-        # # cv2.waitKey(1)
-
-        # # save annotated image
-        # cv2.imwrite("segmentations.png", annotated_image)
-
-    def update_handle_pose(self, handle_pose_mat):
-
-        position, orientation = self.matrix_to_pose(handle_pose_mat)        
-        pose_msg = Pose()
-        pose_msg.position.x = position[0]
-        pose_msg.position.y = position[1]
-        pose_msg.position.z = position[2]
-        pose_msg.orientation.x = orientation[0]
-        pose_msg.orientation.y = orientation[1]
-        pose_msg.orientation.z = orientation[2]
-        pose_msg.orientation.w = orientation[3]
-        self.handle_pose_publisher.publish(pose_msg)
-
-    def update_button_pose(self, button_pose_mat):
-
-        position, orientation = self.matrix_to_pose(button_pose_mat)        
-        pose_msg = Pose()
-        pose_msg.position.x = position[0]
-        pose_msg.position.y = position[1]
-        pose_msg.position.z = position[2]
-        pose_msg.orientation.x = orientation[0]
-        pose_msg.orientation.y = orientation[1]
-        pose_msg.orientation.z = orientation[2]
-        pose_msg.orientation.w = orientation[3]
-        self.button_pose_publisher.publish(pose_msg)
-
-    def update_hinge_pose(self, hinge_pose_mat):
-
-        position, orientation = self.matrix_to_pose(hinge_pose_mat)        
-        pose_msg = Pose()
-        pose_msg.position.x = position[0]
-        pose_msg.position.y = position[1]
-        pose_msg.position.z = position[2]
-        pose_msg.orientation.x = orientation[0]
-        pose_msg.orientation.y = orientation[1]
-        pose_msg.orientation.z = orientation[2]
-        pose_msg.orientation.w = orientation[3]
-        self.hinge_pose_publisher.publish(pose_msg)
-
-    def update_placement_pose(self, placement_pose_mat):
-
-        position, orientation = self.matrix_to_pose(placement_pose_mat)        
-        pose_msg = Pose()
-        pose_msg.position.x = position[0]
-        pose_msg.position.y = position[1]
-        pose_msg.position.z = position[2]
-        pose_msg.orientation.x = orientation[0]
-        pose_msg.orientation.y = orientation[1]
-        pose_msg.orientation.z = orientation[2]
-        pose_msg.orientation.w = orientation[3]
-        self.placement_pose_publisher.publish(pose_msg)
-
     def detect_handle_color(self, bgr_image):
         hsv = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV)
         lower = np.array([60, 50, 50])
@@ -591,77 +541,6 @@ class HandlePerception(TFInterface):
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
         return mask
-    
-    def visualizeHandle(self, points):
-
-        marker = Marker()
-        marker.header.frame_id = "camera_color_optical_frame"  # IMPORTANT: match your camera TF
-        marker.header.stamp = rospy.Time.now()
-
-        marker.ns = "handle_points"
-        marker.id = 0
-        marker.type = Marker.POINTS
-        marker.action = Marker.ADD
-
-        # Point size (meters)
-        marker.scale.x = 0.005
-        marker.scale.y = 0.005
-
-        # Color (red)
-        marker.color.r = 1.0
-        marker.color.g = 0.0
-        marker.color.b = 0.0
-        marker.color.a = 1.0
-
-        # Lifetime (0 = forever)
-        marker.lifetime = rospy.Duration(0)
-
-        # Fill points
-        for x, y, z in points:
-            p = Point()
-            p.x = x
-            p.y = y
-            p.z = z
-            marker.points.append(p)
-
-        self.handle_points_pub.publish(marker)
-
-    def visualizeHandleCorners(self, points_3d):
-        """
-        points_3d: Nx3 numpy array.
-        First point is the center (green, larger).
-        Remaining points are corners (blue, smaller).
-        """
-
-        # --- Center marker (green sphere) ---
-        corner_marker = Marker()
-        corner_marker.header.frame_id = "camera_color_optical_frame"
-        corner_marker.header.stamp = rospy.Time.now()
-
-        corner_marker.ns = "handle_corners"
-        corner_marker.id = 1
-        corner_marker.type = Marker.SPHERE_LIST
-        corner_marker.action = Marker.ADD
-
-        corner_marker.scale.x = 0.015
-        corner_marker.scale.y = 0.015
-        corner_marker.scale.z = 0.015
-
-        corner_marker.color.r = 0.0
-        corner_marker.color.g = 0.0
-        corner_marker.color.b = 1.0
-        corner_marker.color.a = 1.0
-
-        corner_marker.lifetime = rospy.Duration(0)
-
-        for x, y, z in points_3d:
-            p = Point()
-            p.x = float(x)
-            p.y = float(y)
-            p.z = float(z)
-            corner_marker.points.append(p)
-
-        self.handle_center_pub.publish(corner_marker)
 
     def pixel2World(self, camera_info, image_x, image_y, depth_image, depth=None):
 
@@ -706,7 +585,7 @@ class HandlePerception(TFInterface):
 
 
 if __name__ == '__main__':
-    rospy.init_node('HandlePerception')
-    handle_perception = HandlePerception()
-    handle_perception.turn_on("Start / 30 SEC button") # "white fridge door" or "microwave"
+    rospy.init_node('AppliancePerception')
+    appliance_perception = AppliancePerception()
+    appliance_perception.turn_on("Start / 30 SEC button") # "white fridge door" or "microwave"
     rospy.spin()
