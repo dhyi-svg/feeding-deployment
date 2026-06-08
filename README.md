@@ -24,23 +24,29 @@
              - `cd ~/feeding-deployment/src/feeding_deployment/robot_controller`
              - `python kinova.py`
    - run the controller server:
-        - Alias `run_server` on NUC
+        - Alias `launch_arm` on NUC
         - Otherwise, run the following commands:
              - `conda activate controller`
              - `cd feeding-deployment/src/feeding_deployment/robot_controller`
              - `python arm_server.py`
 2. Run bulldog on the NUC:
    - ssh to the NUC: `sshnuc` with lab password
-   - run bulldog with alias `run_bulldog`
-2. Run a roscore on the compute system: `roscore`
-3. Launch all the sensors on the compute system using `launch_sensors`
-3. Launch the roslaunch on compute system for visualization / publish tfs:
-   - Alias `launch_robot` on compute system
+   - run bulldog with alias `launch_bulldog`
+3. Run a roscore on the compute system: `roscore`
+4. Launch the roslaunch on compute system for sensors / visualizations:
+   - Alias `launch_sensors` on compute system
    - Otherwise,run the following commands from the root of your ROS workspace:
         - `conda activate feed`
         - `source devel/setup.bash`
-        - `cd src/feeding-deployment/launch`
-        - `roslaunch robot.launch`
+        - `roslaunch feeding_deployment sensors.launch`
+5. Launch the watchdog on compute system:
+   - Alias `launch_watchdog` on compute system
+   - Otherwise,run the following commands from the root of your ROS workspace:
+        - `conda activate feed`
+        - `source devel/setup.bash`
+        - `cd ~/deployment_ws/src/feeding-deployment/src/feeding_deployment/integration`
+        - `chmod +x launch_robot.sh`
+        - `./launch_robot.sh`
 4. Start feeding utensil:
    - Alias `launch_utensil` on compute system
    - Otherwise, run the following commands from the root of your ROS workspace:
@@ -57,16 +63,19 @@
         - `cd ~/deployment_ws/src/feedingpage/vue-ros-demo`
         - `npm run serve`
    - On a browser connected to FeedingDeployment-5G (on the laptop or the iPad), open the following webpage: `http://192.168.1.2:8080/#/task_selection`  
+6. Start the cluster:
+   - If not on cornell network, make sure that CISCO VPN is on.
+   - ssh to the cluster: `sshcluster` or (ssh rj277@unicorn-login-01.coecis.cornell.edu)
+   - launch the molmo server: `launch_molmo`
 6. Run the feeding demo:
-   - Make sure that the feeding laptop's WiFi is on and connected to the internet so that ChatGPT API works (use KortexWiFi if available)
+   - Make sure that the feeding laptop's WiFi is on and connected to the internet so that ChatGPT API works 
    - Alias `run_demo` on compute system
    - Otherwise,run the following commands from the root of your ROS workspace:
         - `conda activate feed`
         - `source devel/setup.bash`
         - `cd src/feeding-deployment/src/feeding_deployment/integration`
-        - `python run.py --user tests --run_on_robot --use_interface --no_waits`
-   - _Important Note 1:_ If you want to resume from some state (state names: after_utensil_pickup, after_bite_pickup, last_state), use: `python run.py --user tests --run_on_robot --use_interface --no_waits --resume_from_state after_utensil_pickup` (replace after_utensil_pickup with appropriate state name).
-   - _Important Note 2:_ The preset food item for `tests` user is bananas. If you want to try some other food item, just change the user name to a new one. For example, `python run.py --user tests_new --run_on_robot --use_interface --no_waits`
+        - `python run.py --user feeding_deployment --run_on_robot --use_interface --no_waits`
+   - _Important Note:_ If you want to resume from some state (state names: after_utensil_pickup, after_bite_pickup, last_state), use: `python run.py --user tests --run_on_robot --use_interface --no_waits --resume_from_state after_utensil_pickup` (replace after_utensil_pickup with appropriate state name).
 
 ### Moving the robot to preset configurations
 
@@ -106,6 +115,7 @@ You can move the robot to preset configurations by running:
 - To check FT readings: `rostopic echo /forque/forqueSensor`
 - IP for robot: 192.168..10
 - IP for webapp: `http://192.168.1.2:8080/#/task_selection`
+- To check if wrist controller is working: `rostopic pub -1 /cmd_wrist_joint_angles wrist_driver_interfaces/SimpleJointAngleCommand '{q0: 0.0, q1: 0.0}'`
 
 ## Build navigation map + save named base locations (feeding_deployment)
 
