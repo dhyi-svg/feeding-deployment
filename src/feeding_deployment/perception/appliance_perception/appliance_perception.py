@@ -393,8 +393,8 @@ class AppliancePerception(TFInterface):
         # for handle_centroid take median in x, y and z to be more robust to outliers
 
         handle_centroid = np.median(cluster_points_3d, axis=0)
-        # handle_centroid[1] = top_most_y - 0.05
-        handle_centroid[1] = top_most_y - 0.02 # 2 cm below the top most point in the cluster, which should be close to the center of the handle
+        handle_centroid[1] = top_most_y - 0.04
+        # handle_centroid[1] = top_most_y - 0.02 # 2 cm below the top most point in the cluster, which should be close to the center of the handle
 
         handle_centroid_3d = handle_centroid
         handle_centroid_pixel = self.world2Pixel(camera_info_msg, handle_centroid[0], handle_centroid[1], handle_centroid[2])

@@ -95,6 +95,8 @@ class PerceptionInterface:
         self.last_plate_poses = None
         self.last_drink_poses = None
 
+        self.last_handle_poses = None
+        
         # set led brightness
         # self.set_led_brightness()
 
@@ -410,6 +412,10 @@ class PerceptionInterface:
 
 
     def perceive_handle_opening_poses(self, handle_type: str):
+
+        if self.last_handle_poses is not None:
+            print("Using last handle opening poses from perception cache")
+            return self.last_handle_poses
 
         if self.simulation:
             # load them from a pickle file

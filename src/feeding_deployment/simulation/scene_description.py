@@ -72,6 +72,7 @@ class SceneDescription:
     retract_pos: JointPositions
     behind_retract_pos: JointPositions
     behind_back_retract_pos: JointPositions
+    behind_intermediate_pos: JointPositions
     left_retract_pos: JointPositions
     left_back_retract_pos: JointPositions
     back_retract_pos: JointPositions
@@ -80,6 +81,7 @@ class SceneDescription:
     microwave_closeup_gaze_pos: JointPositions
 
     microwave_plate_staging_pos: JointPositions
+    microwave_plate_staging_pose: Pose
 
     # Fridge
     fridge_door_staging_pos: JointPositions

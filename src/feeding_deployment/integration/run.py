@@ -194,6 +194,7 @@ class _Runner:
         if run_on_robot:
             self.robot_interface = ArmInterfaceClient()  # type: ignore  # pylint: disable=no-member
             self.wrist_interface = WristInterface()
+            self.robot_interface.set_speed("high")
         else:
             self.robot_interface = None
             self.wrist_interface = None
@@ -384,7 +385,7 @@ class _Runner:
             GroundAtom(DoorClosed, [self.fridge]),
             GroundAtom(DoorClosed, [self.microwave]),
             GroundAtom(InFrontOf, [self.microwave]),
-            GroundAtom(PlateAt, [self.microwave]),
+            GroundAtom(PlateAt, [self.holder]),
             GroundAtom(SafeToNavigate, []),
             # GroundAtom(FoodHeated, []),
         }

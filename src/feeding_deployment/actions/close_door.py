@@ -62,7 +62,7 @@ class CloseDoorHLA(HighLevelAction):
         assert self.sim.held_object_name is None
         print("Closing microwave door ...")
 
-        self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
+        # self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
 
         handle_closing_poses = self.perception_interface.perceive_handle_closing_poses("microwave")
 
