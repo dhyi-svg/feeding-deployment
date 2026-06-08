@@ -436,19 +436,25 @@ class PerceptionInterface:
 
             handle_transform = self.pose_to_matrix(handle_pose)
             offset = np.eye(4)
-            offset[:3, 3] = np.array([0.0, 0.0, -0.04]) # x axis is left, y axis is up, z axis is forward. 
+            if handle_type == "bottom white fridge door":
+                offset[:3, 3] = np.array([0.01, 0.0, -0.04]) # x axis is left, y axis is up, z axis is forward. 
+            else:
+                offset[:3, 3] = np.array([0.0, 0.0, -0.04]) # x axis is left, y axis is up, z axis is forward. 
             grasp_pose = self.matrix_to_pose(handle_transform @ offset)
 
             pre_grasp_offset = np.eye(4)
-            pre_grasp_offset[:3, 3] = np.array([0.0, 0.0, -0.12])
+            if handle_type == "bottom white fridge door":
+                pre_grasp_offset[:3, 3] = np.array([0.01, 0.0, -0.12]) # x axis is left, y axis is up, z axis is forward. 
+            else:
+                pre_grasp_offset[:3, 3] = np.array([0.0, 0.0, -0.12])
             pre_grasp_pose = self.matrix_to_pose(handle_transform @ pre_grasp_offset)
 
             opening_waypoints = self._generate_door_arc_waypoints(
                 start_pose=grasp_pose,
                 hinge_position=hinge_pose.position,
-                arc_length_m=0.55,
+                arc_length_m=0.55 if handle_type == "microwave" else 0.35,
                 waypoint_spacing_m=0.05,
-                direction=1 if handle_type == "white fridge door" else -1, # microwave is left hinged
+                direction=1 if handle_type == "bottom white fridge door" else -1, # microwave is left hinged
                 rotate_orientation=True,
             )
 
@@ -462,7 +468,7 @@ class PerceptionInterface:
             # rotate the sixth-to-last (assuming thickness is 35cm) opening waypoint by 180 degrees so that the gripper can push the door open instead of pulling it
             push_pose = copy.deepcopy(opening_waypoints[-6])
             push_pose_mat = self.pose_to_matrix(push_pose)
-            if handle_type == "white fridge door":
+            if handle_type == "bottom white fridge door":
                 push_pose_mat[:3, :3] = push_pose_mat[:3, :3] @ R.from_euler("y", -np.pi/2).as_matrix()
             else:
                 push_pose_mat[:3, :3] = push_pose_mat[:3, :3] @ R.from_euler("y", np.pi/2).as_matrix()
@@ -473,7 +479,7 @@ class PerceptionInterface:
                 hinge_position=hinge_pose.position,
                 arc_length_m=0.5 if handle_type == "microwave" else 0.85, # the microwave is already partially open at the push waypoint
                 waypoint_spacing_m=0.05,
-                direction=1 if handle_type == "white fridge door" else -1, # microwave is left hinged
+                direction=1 if handle_type == "bottom white fridge door" else -1, # microwave is left hinged
                 rotate_orientation=True,
             )
             print("Number of second waypoints: ", len(second_waypoints))
@@ -555,7 +561,7 @@ class PerceptionInterface:
         return self.last_handle_poses
 
     def perceive_handle_closing_poses(self, handle_type: str):
-        assert handle_type in ["white fridge door", "microwave"]
+        assert handle_type in ["bottom white fridge door", "microwave"]
         if self.log_dir is not None:
             with open(self.log_dir / 'handle_opening_pos.pkl', 'rb') as f:
                 handle_opening_pos = pickle.load(f)

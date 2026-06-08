@@ -11,7 +11,7 @@ locations:
       y: 1.1e-05
       z: -0.73912
       w: 0.673574
-  microwave_a:
+  fridge:
     frame_id: map
     position:
       x: -0.324586

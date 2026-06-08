@@ -153,7 +153,7 @@ class AppliancePerception(TFInterface):
         )
 
         self.turned_on = False
-        self.handle_type = None # "white fridge door" or "microwave"
+        self.handle_type = None # "bottom white fridge door" or "microwave"
         self.num_perception_samples = num_perception_samples
         self.bridge = CvBridge()
 
@@ -277,6 +277,10 @@ class AppliancePerception(TFInterface):
 
         rgb_image, camera_info_msg, depth_image, header, transform = self.get_camera_data()
 
+        if rgb_image is None:
+            print("No camera data yet")
+            return None, None, None
+
         file_path = os.path.dirname(__file__)
         print("Got images")
         cv2.imwrite(file_path + "/rgb.png", rgb_image)
@@ -287,7 +291,7 @@ class AppliancePerception(TFInterface):
 
         if detection is None:
             print("No detection")
-            return
+            return None, None, None
 
         # create mask using detection
         x1, y1, x2, y2 = detection.astype(int)
@@ -409,7 +413,7 @@ class AppliancePerception(TFInterface):
         # left most point in bounding_box_points_3d with the same y value as handle_centroid_3d is likely the hinge
         # same_y = np.isclose(bounding_box_points_3d[:, 1], handle_centroid_3d[1], atol=0.02)
         
-        if self.handle_type == "white fridge door":
+        if self.handle_type == "bottom white fridge door":
             # take a strip of leftmost points on the plane_cloud (0.02 m wide)
             print("Finding strip anchor point for fridge door handle")
             strip_anchor_point = np.min(plane_cloud.points, axis=0)
@@ -587,5 +591,11 @@ class AppliancePerception(TFInterface):
 if __name__ == '__main__':
     rospy.init_node('AppliancePerception')
     appliance_perception = AppliancePerception()
-    appliance_perception.turn_on("Start / 30 SEC button") # "white fridge door" or "microwave"
+    # appliance_perception.turn_on("Start / 30 SEC button") # "bottom white fridge door" or "microwave"
+    appliance_perception.turn_on("bottom white fridge door") # "bottom white fridge door" or "microwave"
+    while True:
+        poses = appliance_perception.detect_handle_and_placement()
+        print("Handle pose:", poses[0])
+        print("Hinge pose:", poses[1])
+        print("Placement pose:", poses[2])
     rospy.spin()

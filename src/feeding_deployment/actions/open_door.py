@@ -56,15 +56,13 @@ class OpenDoorHLA(HighLevelAction):
 
     def open_fridge(self, speed: str) -> None:
 
-        # set speed of the robot to highest
-        self.robot_interface.set_speed("high")
         assert self.sim.held_object_name is None
         print("Opening fridge door ...")
         # return
-        self.move_to_joint_positions(self.sim.scene_description.retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.fridge_door_gaze_pos)
 
-        handle_opening_poses = self.perception_interface.perceive_handle_opening_poses("white fridge door")
+        handle_opening_poses = self.perception_interface.perceive_handle_opening_poses("bottom white fridge door")
 
         # visualize on rviz
         poses = []
@@ -79,7 +77,9 @@ class OpenDoorHLA(HighLevelAction):
         self.rviz_interface.visualize_poses(poses, frame_id="arm_base_link", ns="handle_opening_poses")
 
         # self.move_to_joint_positions(self.sim.scene_description.home_pos)
-        self.move_to_joint_positions(self.sim.scene_description.fridge_door_staging_pos)
+        # self.move_to_joint_positions(self.sim.scene_description.fridge_door_staging_pos)
+        self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.microwave_plate_staging_pos)
 
         self.move_to_ee_pose(handle_opening_poses["pre_grasp_pose"])
         self.open_gripper()

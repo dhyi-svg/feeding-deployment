@@ -120,25 +120,37 @@ if __name__ == "__main__":
     if run_commands != "y":
         exit()
 
+    # left_retract_pos = [-1.57, -0.34903602299465675, -3.141591055693139, -2.0, 0.0, -0.872688061814757, 1.57075917569769]
+    # arm_client_interface.execute_command(JointCommand(left_retract_pos))
+
+    fridge_door_gaze_pos = [-0.980015584273823, 0.47420615883552164, -3.015619807706865, -2.207007668035523, 0.7286555882107023, 1.2561937782724737, 1.2283014269116377]
+    arm_client_interface.execute_command(JointCommand(fridge_door_gaze_pos))
+
+    # behind_back_retract_pos = [3.141592653589793, -1.8338532592607812, 3.1415681525077646, -2.5482659290666034, 1.0329455279146852e-05, -0.8727280092311087, 1.570780081512247]
+    # arm_client_interface.execute_command(JointCommand(behind_back_retract_pos))
+
+    # microwave_config = [3.129084851214127, -0.8821358920979225, -3.1265742892545094, -2.5615186175991647, -0.006664826944032143, 0.10794081516859698, 1.5825896030500946]
+    # arm_client_interface.execute_command(JointCommand(microwave_config))
+
     # inside_plate_pos = [3.1062098953470003, -1.8586057436964136, 1.195002325905723, -1.6045593504627034, -0.3068414313156591, -1.4701101954622704, -0.34915320208262024]
     # arm_client_interface.execute_command(JointCommand(inside_plate_pos))
 
-    behind_back_retract_pos = [3.141592653589793, -1.8338532592607812, 3.1415681525077646, -2.5482659290666034, 1.0329455279146852e-05, -0.8727280092311087, 1.570780081512247]
-    inside_plate_pose = [0.08079531788825989, -0.264194130897522, 0.04117746278643608, -0.5071274014359088, 0.49509496077110954, 0.5030325925271225, -0.4946321758512664]
-    above_inside_plate_pos = [3.082130391718831, -1.7038792801561184, 1.3132477435696772, -1.74837857144247, -0.16963377405812263, -1.4230169852741819, -0.22686830167723393]
-    above_inside_plate_pose = inside_plate_pose.copy()
-    above_inside_plate_pose[2] += 0.1
-    microwave_config = [3.129084851214127, -0.8821358920979225, -3.1265742892545094, -2.5615186175991647, -0.006664826944032143, 0.10794081516859698, 1.5825896030500946]
-    intermediate_retract_pos = [-3.1387180375091615, -1.9098678662549133, 3.141273873207311, -2.0296824184331417, -0.012072641853547061, -1.4674305227734328, 1.5728473603084212]
+    # behind_back_retract_pos = [3.141592653589793, -1.8338532592607812, 3.1415681525077646, -2.5482659290666034, 1.0329455279146852e-05, -0.8727280092311087, 1.570780081512247]
+    # inside_plate_pose = [0.08079531788825989, -0.264194130897522, 0.04117746278643608, -0.5071274014359088, 0.49509496077110954, 0.5030325925271225, -0.4946321758512664]
+    # above_inside_plate_pos = [3.082130391718831, -1.7038792801561184, 1.3132477435696772, -1.74837857144247, -0.16963377405812263, -1.4230169852741819, -0.22686830167723393]
+    # above_inside_plate_pose = inside_plate_pose.copy()
+    # above_inside_plate_pose[2] += 0.1
+    # microwave_config = [3.129084851214127, -0.8821358920979225, -3.1265742892545094, -2.5615186175991647, -0.006664826944032143, 0.10794081516859698, 1.5825896030500946]
+    # intermediate_retract_pos = [-3.1387180375091615, -1.9098678662549133, 3.141273873207311, -2.0296824184331417, -0.012072641853547061, -1.4674305227734328, 1.5728473603084212]
 
     # arm_client_interface.execute_command(JointCommand(behind_back_retract_pos))
     # arm_client_interface.execute_command(JointCommand(intermediate_retract_pos))
     # arm_client_interface.execute_command(JointCommand(above_inside_plate_pos))
     # arm_client_interface.execute_command(CartesianCommand(inside_plate_pose[:3], inside_plate_pose[3:]))
-    arm_client_interface.execute_command(CartesianCommand(above_inside_plate_pose[:3], above_inside_plate_pose[3:]))
-    arm_client_interface.execute_command(JointCommand(intermediate_retract_pos))
-    arm_client_interface.execute_command(JointCommand(behind_back_retract_pos))
-    arm_client_interface.execute_command(JointCommand(microwave_config))
+    # arm_client_interface.execute_command(CartesianCommand(above_inside_plate_pose[:3], above_inside_plate_pose[3:]))
+    # arm_client_interface.execute_command(JointCommand(intermediate_retract_pos))
+    # arm_client_interface.execute_command(JointCommand(behind_back_retract_pos))
+    # arm_client_interface.execute_command(JointCommand(microwave_config))
 
     # for i in range(5):
     #     input("Press enter to execute inside plate position...")
