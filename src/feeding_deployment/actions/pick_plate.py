@@ -74,6 +74,27 @@ class PickPlateFromApplianceHLA(HighLevelAction):
         assert self.sim.held_object_name is None
         print("Picking plate from fridge ...")
 
+        self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.fridge_contents_gaze_pos)
+        attachment_poses = self.perception_interface.perceive_attachment_poses()
+
+        pickup_pose = attachment_poses["pickup_pose"]
+        pre_pickup_pose = attachment_poses["pre_pickup_pose"]
+        self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.fridge_inside_intermediate_pos)
+
+        self.move_to_ee_pose(pre_pickup_pose)
+        self.close_gripper()
+        self.move_to_ee_pose(pickup_pose)
+        self.open_gripper()
+        self.move_to_ee_pose(pre_pickup_pose)
+        
+        self.move_to_ee_pose(self.sim.scene_description.fridge_inside_intermediate_pose)
+        self.move_to_ee_pose(self.sim.scene_description.fridge_another_inside_intermediate_pose)
+        self.move_to_ee_pose(self.sim.scene_description.fridge_above_intermediate_pose)
+        # self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
+
     def pick_plate_from_microwave(self, speed: str) -> None:
         assert self.sim.held_object_name is None
         print("Picking plate from microwave ...")

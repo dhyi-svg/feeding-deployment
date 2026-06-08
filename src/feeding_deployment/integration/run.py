@@ -385,7 +385,7 @@ class _Runner:
             GroundAtom(DoorClosed, [self.fridge]),
             GroundAtom(DoorClosed, [self.microwave]),
             GroundAtom(InFrontOf, [self.fridge]),
-            GroundAtom(PlateAt, [self.holder]),
+            GroundAtom(PlateAt, [self.fridge]),
             GroundAtom(SafeToNavigate, []),
             # GroundAtom(FoodHeated, []),
         }
@@ -814,8 +814,9 @@ if __name__ == "__main__":
     if not args.use_interface:
         # for i in range(3):
         #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromHolder"], (runner.plate, runner.holder)))
-        #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateOnHolder"], (runner.plate, runner.holder)))
-        runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.fridge,)))
+            runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateOnHolder"], (runner.plate, runner.holder)))
+        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.fridge,)))
+        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromAppliance"], (runner.plate, runner.fridge)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateInAppliance"], (runner.plate, runner.microwave)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["CloseDoor"], (runner.microwave,)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromAppliance"], (runner.plate, runner.microwave)))

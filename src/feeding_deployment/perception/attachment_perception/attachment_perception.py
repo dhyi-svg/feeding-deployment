@@ -9,6 +9,9 @@ import math
 from scipy.spatial.transform import Rotation
 from sklearn.cluster import DBSCAN   # <-- ADDED
 import open3d as o3d
+from pybullet_helpers.geometry import Pose, Pose3D
+from copy import deepcopy
+from threading import Lock
 
 # ros imports
 import rospy
@@ -16,7 +19,7 @@ import message_filters
 from sensor_msgs.msg import Image, CameraInfo
 from cv_bridge import CvBridge, CvBridgeError
 import tf2_ros
-from geometry_msgs.msg import Point, Pose
+from geometry_msgs.msg import Point
 from visualization_msgs.msg import MarkerArray, Marker
 
 from geometry_msgs.msg import TransformStamped
@@ -102,7 +105,7 @@ class TFInterface:
     def matrix_to_pose(self, mat):
         position = mat[:3, 3]
         orientation = Rotation.from_matrix(mat[:3, :3]).as_quat()
-        return (position, orientation)
+        return Pose(position, orientation) 
 
 
 class AttachmentPerception(TFInterface):
@@ -122,14 +125,18 @@ class AttachmentPerception(TFInterface):
         self.attachment_points_pub = rospy.Publisher("/attachment_points", Marker, queue_size=1)
         self.attachment_center_pub = rospy.Publisher("/attachment_center", Marker, queue_size=1)
 
-        # to simulate an aruco being detected
-        self.attachment_pose_publisher = rospy.Publisher("/attachment_pose", Pose, queue_size=10)
-
         ts = message_filters.TimeSynchronizer(
             [self.color_image_sub,
              self.camera_info_sub,
              self.depth_image_sub], 1)
         ts.registerCallback(self.rgbdCallback)
+
+        self.camera_lock = Lock()
+        self.camera_header = None
+        self.camera_color_data = None
+        self.camera_info_data = None
+        self.camera_depth_data = None
+        self.camera_transform = None
 
         super().__init__()
 
@@ -155,6 +162,33 @@ class AttachmentPerception(TFInterface):
         except CvBridgeError as e:
             print(e)
             return
+
+        transform = self.get_frame_to_frame_transform(camera_info_msg)
+
+        with self.camera_lock:
+            self.camera_color_data = rgb_image
+            self.camera_info_data = camera_info_msg
+            self.camera_depth_data = depth_image
+            self.camera_header = rgb_image_msg.header
+            self.camera_transform = transform
+
+    def get_camera_data(self):
+        with self.camera_lock:
+            return (
+                deepcopy(self.camera_color_data),
+                deepcopy(self.camera_info_data),
+                deepcopy(self.camera_depth_data),
+                deepcopy(self.camera_header),
+                deepcopy(self.camera_transform),
+            )
+
+    def detect_attachment(self):
+
+        rgb_image, camera_info_msg, depth_image, header, transform = self.get_camera_data()
+
+        if rgb_image is None:
+            print("No camera data yet.")
+            return None
 
         file_path = os.path.dirname(__file__)
         print("Got images")
@@ -280,11 +314,22 @@ class AttachmentPerception(TFInterface):
         # Get 4 rectangle corners in 2D (plane coordinates)
         box_2d = cv2.boxPoints(rect)  # shape (4,2)
 
+        # visualize cornerns in an image
+        corner_vis = rgb_image.copy()
+        # visualize center
+        uv_center = self.world2Pixel(camera_info_msg, world_x=center_3d[0], world_y=center_3d[1], world_z=center_3d[2])
+        cv2.circle(corner_vis, (int(uv_center[0]), int(uv_center[1])), 5, (0, 0, 255), -1)
+
         # Back-project corners to 3D
         corners_3d = []
         for x2d, y2d in box_2d:
             p3d = P0 + x2d * u + y2d * v
             corners_3d.append(p3d)
+            # visualize corner in image
+            uv = self.world2Pixel(camera_info_msg, world_x=p3d[0], world_y=p3d[1], world_z=p3d[2])
+            cv2.circle(corner_vis, (int(uv[0]), int(uv[1])), 5, (0, 255, 0), -1)
+
+        cv2.imwrite(file_path + "/attachment_corners.png", corner_vis)
 
         corners_3d = np.array(corners_3d)
 
@@ -336,27 +381,23 @@ class AttachmentPerception(TFInterface):
 
             # base to tag homogeneous transform and update tf
             base_to_tag = np.dot(base_to_camera, camera_to_tag)
+
+            # Rajat Hack: Override rotation to fix handle facing the robot
+            base_to_tag[:3, :3] = Rotation.from_quat([-0.5, 0.5, 0.5, -0.5]).as_matrix()
+
             self.updateTF("arm_base_link", "attachment", base_to_tag)
-            self.update_attachment_pose(base_to_tag)
+            return self.matrix_to_pose(base_to_tag)
 
-    def update_attachment_pose(self, aruco_pose_mat):
-
-        position, orientation = self.matrix_to_pose(aruco_pose_mat)        
-        pose_msg = Pose()
-        pose_msg.position.x = position[0]
-        pose_msg.position.y = position[1]
-        pose_msg.position.z = position[2]
-        pose_msg.orientation.x = orientation[0]
-        pose_msg.orientation.y = orientation[1]
-        pose_msg.orientation.z = orientation[2]
-        pose_msg.orientation.w = orientation[3]
-        self.attachment_pose_publisher.publish(pose_msg)
+        print("Could not find transform between arm_base_link and camera_color_optical_frame.")
+        return None
 
     def detect_attachment_color(self, bgr_image):
         hsv = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV)
 
-        lower = np.array([35, 50, 120])
-        upper = np.array([50, 140, 220])
+        # lower = np.array([35, 50, 120])
+        # upper = np.array([50, 140, 220])
+        lower = np.array([80, 177, 133])
+        upper = np.array([100, 237, 193])
 
         return cv2.inRange(hsv, lower, upper)
 
@@ -465,9 +506,24 @@ class AttachmentPerception(TFInterface):
 
         return True, (world_x, world_y, world_z)
 
+    def world2Pixel(self, camera_info, world_x, world_y, world_z):
+
+        fx = camera_info.K[0]
+        fy = camera_info.K[4]
+        cx = camera_info.K[2]
+        cy = camera_info.K[5] 
+
+        image_x = world_x * (fx / world_z) + cx
+        image_y = world_y * (fy / world_z) + cy
+
+        return int(image_x), int(image_y)
+
 
 if __name__ == '__main__':
     rospy.init_node('AttachmentPerception')
     attachment_perception = AttachmentPerception()
     attachment_perception.turn_on()
+    while not rospy.is_shutdown():
+        attachment_pose = attachment_perception.detect_attachment()
+        time.sleep(0.1)
     rospy.spin()

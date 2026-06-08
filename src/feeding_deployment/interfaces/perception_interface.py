@@ -26,6 +26,7 @@ try:
     from feeding_deployment.perception.head_perception.ros_wrapper import HeadPerceptionROSWrapper
     from feeding_deployment.perception.drink_perception.drink_perception import DrinkPerception
     from feeding_deployment.perception.appliance_perception.appliance_perception import AppliancePerception
+    from feeding_deployment.perception.attachment_perception.attachment_perception import AttachmentPerception
 except ModuleNotFoundError:
     ROSPY_IMPORTED = False
 
@@ -46,6 +47,7 @@ class PerceptionInterface:
             self._head_perception = None
             self._drink_perception = None
             self._appliance_perception = None
+            self._attachment_perception = None
         else:
             self.simulation = False
             self.tfBuffer = tf2_ros.Buffer()
@@ -68,6 +70,8 @@ class PerceptionInterface:
             self._drink_perception = DrinkPerception()
             print("Initializing handle perception ...")
             self._appliance_perception = AppliancePerception()
+            print("Initializing attachment perception ...")
+            self._attachment_perception = AttachmentPerception()
             print("Perception interface initialized")
 
             self.speak_pub = rospy.Publisher('/speak', String, queue_size=1)
@@ -570,6 +574,37 @@ class PerceptionInterface:
             raise ValueError("No log directory provided, cannot load handle opening poses to compute closing poses. Please provide a log directory or run perceive_handle_opening_poses first to save the opening poses.")
         return handle_poses
         # return self.last_handle_poses
+
+    def perceive_attachment_poses(self):
+
+        if self.simulation:
+            # load them from a pickle file
+            with open(self.log_dir / 'attachment_poses.pkl', 'rb') as f:
+                attachment_poses = pickle.load(f)
+
+        else:
+            self._attachment_perception.turn_on()
+            # Rajat Hack: Wait 1 second
+            time.sleep(1)
+            attachment_pose = self._attachment_perception.detect_attachment()
+            self._attachment_perception.turn_off()
+
+            offset = np.eye(4)
+            offset[:3, 3] = np.array([0, 0, -0.02]) # x axis is left, y axis is up, z axis is forward.
+            pickup_pose = self.matrix_to_pose(self.pose_to_matrix(attachment_pose) @ offset)
+
+            offset[:3, 3] = np.array([0, 0.03, -0.12])
+            pre_pickup_pose = self.matrix_to_pose(self.pose_to_matrix(attachment_pose) @ offset)
+
+            attachment_poses = {
+                "pickup_pose": pickup_pose,
+                "pre_pickup_pose": pre_pickup_pose,
+            }
+            with open(self.log_dir / 'attachment_poses.pkl', 'wb') as f:
+                pickle.dump(attachment_poses, f)
+
+        return attachment_poses
+
 
     def perceive_drink_pickup_poses(self):
 

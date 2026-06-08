@@ -95,6 +95,8 @@ class OpenDoorHLA(HighLevelAction):
         self.move_to_ee_pose(handle_opening_poses["pre_push_pose"])
         self.move_to_ee_pose(handle_opening_poses["push_pose"])
         self.move_to_ee_pose_trajectory(handle_opening_poses["push_waypoints"])
+
+        self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         
     def open_microwave(self, speed: str) -> None:
         assert self.sim.held_object_name is None

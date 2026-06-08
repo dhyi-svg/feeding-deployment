@@ -87,6 +87,12 @@ class SceneDescription:
     fridge_door_staging_pos: JointPositions
     fridge_door_gaze_pos: JointPositions
     fridge_door_intermediate_restract_pos: JointPositions
+    fridge_contents_gaze_pos: JointPositions
+    fridge_inside_intermediate_pos: JointPositions
+    fridge_inside_intermediate_pose: Pose
+    fridge_another_inside_intermediate_pose: Pose
+    fridge_above_intermediate_pos: JointPositions
+    fridge_above_intermediate_pose: Pose
 
     # Feeding task constants
     plate_gaze_pos: JointPositions

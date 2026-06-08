@@ -81,6 +81,30 @@ fridge_door_gaze_pos:
   description: "Gaze configuration, the fridge door should be visible from this configuration"
   type: "joint_positions"
   values: [-0.980015584273823, 0.47420615883552164, -3.015619807706865, -2.207007668035523, 0.7286555882107023, 1.2561937782724737, 1.2283014269116377]
+fridge_contents_gaze_pos:
+  description: "Gaze configuration, the inside of fridge should be visible from this configuration"
+  type: "joint_positions"
+  values: [-2.1760412298284084, 0.563137862775351, 2.71337286190381, -2.4594899867610303, -0.9522223025055379, 1.6603493795065551, 1.836221075785971]
+fridge_inside_intermediate_pos:
+  description: "Intermediate configuration for going inside the fridge"
+  type: "joint_positions"
+  values: [2.300764254211763, -1.6941960264325902, -1.93227570366684, -1.8381923476248474, 0.6430000051753475, -0.6125052127972861, 2.4240739390046113]
+fridge_inside_intermediate_pose:
+  description: "Intermediate configuration for going inside the fridge"
+  type: "ee_pose"
+  values: [-0.27264952659606934, 0.45902228355407715, 0.35478997230529785, -0.4997596650153075, 0.5013910903477508, 0.5002481495947093, -0.4985970723648011]
+fridge_another_inside_intermediate_pose:
+  description: "Another intermediate configuration for going inside the fridge"
+  type: "ee_pose"
+  values: [-0.047114498913288116, 0.4568903148174286, 0.3556099832057953, -0.4993227648346084, 0.5006220611002768, 0.5011876851825641, -0.4988639420513131]
+fridge_above_intermediate_pos:
+  description: "Intermediate configuration for going above the fridge"
+  type: "joint_positions"
+  values: [-3.1399148621030433, -1.6540834940938165, -3.1407652094391056, -2.4261370899010957, -0.002468750330502978, -0.8149885462693183, 1.57272552068855]
+fridge_above_intermediate_pose:
+  description: "Intermediate configuration for going above the fridge"
+  type: "ee_pose"
+  values: [-0.08530566096305847, 0.000523008406162262, 0.4735228419303894, -0.5053744744642887, 0.49691096451778954, 0.5021637159852019, -0.4954873724424042]
 fridge_door_intermediate_restract_pos:
   description: "Intermediate retract configuration of the robot for fridge door opening"
   type: "joint_positions"
