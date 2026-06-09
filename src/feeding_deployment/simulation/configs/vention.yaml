@@ -28,6 +28,10 @@ left_back_retract_pos:
   description: "(left) back retract configuration of the robot"
   type: "joint_positions"
   values: [-1.57, -1.8338532592607812, 3.1415681525077646, -2.5482659290666034, 1.0329455279146852e-05, -0.8727280092311087, 1.570780081512247]
+right_back_retract_pos: 
+  description: "(right) back retract configuration of the robot"
+  type: "joint_positions"
+  values: [1.57, -1.8338532592607812, 3.1415681525077646, -2.5482659290666034, 1.0329455279146852e-05, -0.8727280092311087, 1.570780081512247]
 retract_pos: 
   description: "Rest configuration of the robot"
   type: "joint_positions"
@@ -35,7 +39,7 @@ retract_pos:
 back_retract_pos: 
   description: "Another rest configuration of the robot"
   type: "joint_positions"
-  values: [-2.6098978682220775e-05, -1.8305038015577884, 3.1415657556627834, -2.5482749838143097, 4.621619302645493e-06, -0.8727317376566344, 1.5708057810167664]
+  values: [0.0, -1.8305038015577884, 3.1415657556627834, -2.5482749838143097, 4.621619302645493e-06, -0.8727317376566344, 1.5708057810167664]
 retract_utensil_forward_pos:
   description: "Rest configuration of the robot"
   type: "joint_positions"
@@ -71,6 +75,19 @@ microwave_plate_staging_pose:
   description: "Staging configuration, the robot should be in front of the microwave in this configuration"
   type: "ee_pose"
   values: [-0.2742682099342346, -0.0002975307870656252, 0.5209454894065857, -0.5017572475198628, 0.4940268999619961, 0.5001758816377628, -0.5039852915543446]
+
+sink_gaze_pos: 
+  description: "Gaze configuration, the inside of sink should be visible from this configuration"
+  type: "joint_positions"
+  values: [1.5719251076229266, -1.4622394891766506, -3.1389148451137183, -2.2285848655034544, -0.0047164582905301344, -0.8208933070382427, 1.5754671118727321]
+sink_plate_staging_pos: 
+  description: "Staging configuration, the robot should be in front of the sink in this configuration"
+  type: "joint_positions"
+  values: [-0.005315136903580431, -0.5119618268990882, -3.126701854670724, -2.4800754230390156, -0.00943398184549693, 0.3965641273887561, 1.5819845328504285]
+sink_plate_staging_pose: 
+  description: "Staging configuration, the robot should be in front of the sink in this configuration"
+  type: "ee_pose"
+  values: [0.37332677841186523, 1.584771234774962e-05, 0.5310782194137573, 0.49716828386220684, 0.5009973946876455, 0.4985405006687815, 0.5031731646002675]
 
 # Fridge
 fridge_door_staging_pos:

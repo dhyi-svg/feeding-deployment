@@ -475,6 +475,54 @@ class AppliancePerception(TFInterface):
         
         print("Could not get transform between arm_base_link and camera_color_optical_frame")
         return None, None, None
+
+    def detect_sink_placement(self):
+
+        rgb_image, camera_info_msg, depth_image, header, transform = self.get_camera_data()
+
+        if rgb_image is None:
+            print("No camera data yet")
+            return None, None, None
+
+        file_path = os.path.dirname(__file__)
+        print("Got images")
+        cv2.imwrite(file_path + "/rgb.png", rgb_image)
+        depth_mm = (depth_image * 1000.0).astype("uint16")
+        cv2.imwrite(file_path + "/depth.png", depth_mm)
+
+        detection = self.detect_items(rgb_image, ["sink basin tap"])
+
+        if detection is None:
+            print("No detection")
+            return None, None, None
+
+        # create mask using detection
+        x1, y1, x2, y2 = detection.astype(int)
+        mask = np.zeros(rgb_image.shape[:2], dtype=np.uint8)
+        mask[y1:y2, x1:x2] = 255
+        cv2.imwrite("detection_mask.png", mask)
+
+        # Hack, take a point with x as center of bounding box and y as 40 pixels above the top of the bounding box 
+        center_pixel = ((x1 + x2) // 2, y1 - 50)
+        cv2.circle(rgb_image, center_pixel, 10, (0, 0, 255), -1)
+        cv2.imwrite("sink_back_pixel.png", rgb_image)
+
+        ok, center_3d = self.pixel2World(camera_info_msg, center_pixel[0], center_pixel[1], depth_image)
+        if not ok:
+            print("Could not get valid 3D point for sink placement")
+
+        if transform is not None:   
+            base_to_camera = self.make_homogeneous_transform(transform)
+
+            camera_to_sink = np.eye(4)
+            camera_to_sink[:3, 3] = center_3d
+            camera_to_sink[3, 3] = 1
+            base_to_sink = np.dot(base_to_camera, camera_to_sink)
+            base_to_sink[:3, :3] = Rotation.from_quat([0.5, 0.5, 0.5, 0.5]).as_matrix()
+            return self.matrix_to_pose(base_to_sink)
+        
+        print("Could not get transform between arm_base_link and camera_color_optical_frame")
+        return None
             
     def detect_items(self, input_image, classes_being_detected, log_path = None):
 
@@ -597,8 +645,6 @@ if __name__ == '__main__':
     # appliance_perception.turn_on("Start / 30 SEC button") # "bottom white fridge door" or "microwave"
     appliance_perception.turn_on("bottom white fridge door") # "bottom white fridge door" or "microwave"
     while True:
-        poses = appliance_perception.detect_handle_and_placement()
-        print("Handle pose:", poses[0])
-        print("Hinge pose:", poses[1])
-        print("Placement pose:", poses[2])
+        pose = appliance_perception.detect_sink_placement()
+        print("Sink placement pose:", pose)
     rospy.spin()

@@ -73,6 +73,7 @@ class CloseDoorHLA(HighLevelAction):
         self.move_to_ee_pose_trajectory(handle_closing_poses["push_closing_waypoints"])
 
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
 
     def close_microwave(self, speed: str) -> None:
         del speed
@@ -94,3 +95,4 @@ class CloseDoorHLA(HighLevelAction):
 
         self.move_to_ee_pose(handle_closing_poses["pre_grasp_pose"])
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)

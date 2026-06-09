@@ -390,7 +390,9 @@ class PerceptionInterface:
             self._appliance_perception.turn_on("microwave") # microwave and fridge have the same button, so we can just turn on microwave perception
             # Rajat Hack: Wait 1 second
             time.sleep(1)
-            button_pose = self._appliance_perception.detect_start_button()
+            button_pose = None
+            while button_pose is None:
+                button_pose = self._appliance_perception.detect_start_button()
             self._appliance_perception.turn_off()
 
             button_transform = self.pose_to_matrix(button_pose)
@@ -431,7 +433,9 @@ class PerceptionInterface:
             self._appliance_perception.turn_on(handle_type)
             # Rajat Hack: Wait 1 second
             time.sleep(1)
-            handle_pose, hinge_pose, placement_pose = self._appliance_perception.detect_handle_and_placement()
+            handle_pose = None
+            while handle_pose is None:
+                handle_pose, hinge_pose, placement_pose = self._appliance_perception.detect_handle_and_placement()
             self._appliance_perception.turn_off()
 
             offset = np.eye(4)
@@ -659,6 +663,35 @@ class PerceptionInterface:
                 pickle.dump(attachment_poses, f)
 
         return attachment_poses
+
+    def perceive_sink_placement_poses(self):
+
+        if self.simulation:
+            # load them from a pickle file
+            with open(self.log_dir / 'sink_placement_poses.pkl', 'rb') as f:
+                sink_placement_poses = pickle.load(f)
+
+        else:
+            self._appliance_perception.turn_on("sink")
+            # Rajat Hack: Wait 1 second
+            time.sleep(1)
+            sink_placement_pose = None
+            while sink_placement_pose is None:
+                sink_placement_pose = self._appliance_perception.detect_sink_placement()
+            self._appliance_perception.turn_off()
+
+            offset = np.eye(4)
+            offset[:3, 3] = np.array([0.0, 0.12, -0.4]) # x axis is left, y axis is up, z axis is forward. 
+            sink_placement_pose = self.matrix_to_pose(self.pose_to_matrix(sink_placement_pose) @ offset)
+
+            sink_placement_poses = {
+                "sink_placement_pose": sink_placement_pose,
+            }
+
+            with open(self.log_dir / 'sink_placement_poses.pkl', 'wb') as f:
+                pickle.dump(sink_placement_poses, f)
+
+        return sink_placement_poses
 
 
     def perceive_drink_pickup_poses(self):

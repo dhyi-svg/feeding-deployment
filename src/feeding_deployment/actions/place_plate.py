@@ -173,6 +173,20 @@ class PlacePlateInSinkHLA(HighLevelAction):
         # assert self.sim.held_object_name == "plate"
         print("Placing plate in sink ...")
 
+        self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.right_back_retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.sink_gaze_pos)
+
+        placement_poses = self.perception_interface.perceive_sink_placement_poses()
+
+        self.move_to_joint_positions(self.sim.scene_description.sink_plate_staging_pos)
+        self.move_to_ee_pose(placement_poses["sink_placement_pose"])
+        self.close_gripper()
+        self.move_to_ee_pose(self.sim.scene_description.sink_plate_staging_pose)
+        self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
+
+
+
 class PlacePlateOnTableHLA(HighLevelAction):
     """Place the plate on the table."""
 

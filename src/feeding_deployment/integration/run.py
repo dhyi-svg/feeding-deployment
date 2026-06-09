@@ -384,10 +384,11 @@ class _Runner:
             GroundAtom(IsUtensil, [self.utensil]),
             GroundAtom(DoorClosed, [self.fridge]),
             GroundAtom(DoorClosed, [self.microwave]),
-            GroundAtom(InFrontOf, [self.fridge]),
-            GroundAtom(PlateAt, [self.fridge]),
+            GroundAtom(InFrontOf, [self.sink]),
+            GroundAtom(PlateAt, [self.holder]),
+            # GroundAtom(Holding, [self.plate]),
             GroundAtom(SafeToNavigate, []),
-            # GroundAtom(FoodHeated, []),
+            GroundAtom(FoodHeated, []),
         }
 
         self.transparency_query = TransparencyQuery(self.log_dir)
@@ -821,8 +822,8 @@ if __name__ == "__main__":
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["CloseDoor"], (runner.fridge,)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromAppliance"], (runner.plate, runner.microwave)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.fridge,)))
-        runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["TransferTool"], (runner.utensil,runner.table)))
-        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateInSink"], (runner.plate, runner.sink)))
+        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["TransferTool"], (runner.utensil,runner.table)))
+        runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateInSink"], (runner.plate, runner.sink)))
     else:
         runner.run()
 
