@@ -120,8 +120,34 @@ if __name__ == "__main__":
     if run_commands != "y":
         exit()
 
-    right_back_retract_pos = [1.57, -1.8338532592607812, 3.1415681525077646, -2.5482659290666034, 1.0329455279146852e-05, -0.8727280092311087, 1.570780081512247]
-    arm_client_interface.execute_command(JointCommand(right_back_retract_pos))
+    # table_plate_staging_pos = [-1.5611519552232833, -1.1980677574784586, -3.136139032309529, -2.343054453373894, -0.012108860844372238, -0.4266282866185511, 1.5754833571553815]
+    # arm_client_interface.execute_command(JointCommand(table_plate_staging_pos))
+
+    # placement_pose = [0.35649746, 0.1227078 , 0.30696736, 0.0, 0.70710678, 0.70710678, 0.0]
+    # arm_client_interface.execute_command(CartesianCommand(placement_pose[:3], placement_pose[3:]))
+
+    # input("Press enter to execute table plate staging pose...")
+    # table_plate_staging_pose = [0.0014170326758176088, 0.1826012134552002, 0.5703349709510803, -0.0009756430171439222, 0.7051992859979599, 0.7090050961170583, 0.002188339258827599]
+    # arm_client_interface.execute_command(CartesianCommand(table_plate_staging_pose[:3], table_plate_staging_pose[3:]))
+
+    # behind_back_retract_pos = [3.141592653589793, -1.8338532592607812, 3.1415681525077646, -2.5482659290666034, 1.0329455279146852e-05, -0.8727280092311087, 1.570780081512247]
+    # arm_client_interface.execute_command(JointCommand(behind_back_retract_pos))
+
+    # values = [-2.9776942632552643, -1.0320159350864921, -2.6287490540537792, -0.9135500076842789, 1.0643195464769353, -1.1937869923422655, -2.919634954646556]
+    # arm_client_interface.execute_command(JointCommand(values))
+
+    # sink_plate_staging_pos = [-1.57, -0.8821358920979225, -3.1265742892545094, -2.5615186175991647, -0.006664826944032143, 0.10794081516859698, 1.5825896030500946]
+    # arm_client_interface.execute_command(JointCommand(sink_plate_staging_pos))
+
+    # behind_intermediate_pos = [-1.57, -1.9098678662549133, 3.141273873207311, -2.0296824184331417, -0.012072641853547061, -1.4674305227734328, 1.5728473603084212]
+    # arm_client_interface.execute_command(JointCommand(behind_intermediate_pos))
+
+    # input("Press enter to execute before transfer position...")
+    # before_transfer_pos = [-2.86554642, -1.61951779, -2.60986085, -1.37302839, 1.11779249, -1.18028264, 2.05515862]
+    # arm_client_interface.execute_command(JointCommand(before_transfer_pos))
+
+    # right_back_retract_pos = [1.57, -1.8338532592607812, 3.1415681525077646, -2.5482659290666034, 1.0329455279146852e-05, -0.8727280092311087, 1.570780081512247]
+    # arm_client_interface.execute_command(JointCommand(right_back_retract_pos))
 
     # sink_gaze_pos = [1.5719251076229266, -1.4622394891766506, -3.1389148451137183, -2.2285848655034544, -0.0047164582905301344, -0.8208933070382427, 1.5754671118727321]
     # arm_client_interface.execute_command(JointCommand(sink_gaze_pos))
@@ -133,8 +159,8 @@ if __name__ == "__main__":
     # left_retract_pos = [-1.57, -0.34903602299465675, -3.141591055693139, -2.0, 0.0, -0.872688061814757, 1.57075917569769]
     # arm_client_interface.execute_command(JointCommand(left_retract_pos))
 
-    # left_back_retract_pos = [-1.57, -1.8338532592607812, 3.1415681525077646, -2.5482659290666034, 1.0329455279146852e-05, -0.8727280092311087, 1.570780081512247]
-    # arm_client_interface.execute_command(JointCommand(left_back_retract_pos))
+    left_back_retract_pos = [-1.57, -1.8338532592607812, 3.1415681525077646, -2.5482659290666034, 1.0329455279146852e-05, -0.8727280092311087, 1.570780081512247]
+    arm_client_interface.execute_command(JointCommand(left_back_retract_pos))
 
     # fridge_door_gaze_pos = [-0.980015584273823, 0.47420615883552164, -3.015619807706865, -2.207007668035523, 0.7286555882107023, 1.2561937782724737, 1.2283014269116377]
     # arm_client_interface.execute_command(JointCommand(fridge_door_gaze_pos))

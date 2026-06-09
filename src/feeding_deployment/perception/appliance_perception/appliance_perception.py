@@ -523,6 +523,63 @@ class AppliancePerception(TFInterface):
         
         print("Could not get transform between arm_base_link and camera_color_optical_frame")
         return None
+
+    def detect_table_placement(self):
+
+        rgb_image, camera_info_msg, depth_image, header, transform = self.get_camera_data()
+
+        if rgb_image is None:
+            print("No camera data yet")
+            return None, None, None
+
+        file_path = os.path.dirname(__file__)
+        print("Got images")
+        cv2.imwrite(file_path + "/rgb.png", rgb_image)
+        depth_mm = (depth_image * 1000.0).astype("uint16")
+        cv2.imwrite(file_path + "/depth.png", depth_mm)
+
+        detection = self.detect_items(rgb_image, ["white circle on table"])
+
+        if detection is None:
+            print("No detection")
+            return None, None, None
+
+        # create mask using detection
+        x1, y1, x2, y2 = detection.astype(int)
+        mask = np.zeros(rgb_image.shape[:2], dtype=np.uint8)
+        mask[y1:y2, x1:x2] = 255
+        cv2.imwrite("detection_mask.png", mask)
+
+        center_pixel = ((x1 + x2) // 2, (y1 + y2) // 2)
+
+        # mark all "surrounding pixels" which will be used for depth estimation as well
+        pixel_range = 70
+        for dy in range(-pixel_range, pixel_range + 1):
+                for dx in range(-pixel_range, pixel_range + 1):
+                    new_y = center_pixel[1] + dy
+                    new_x = center_pixel[0] + dx
+                    if 0 <= new_x < rgb_image.shape[1] and 0 <= new_y < rgb_image.shape[0]:
+                        cv2.circle(rgb_image, (new_x, new_y), 2, (255, 0, 0), -1)
+
+        cv2.circle(rgb_image, center_pixel, 10, (0, 0, 255), -1)
+        cv2.imwrite("table_placement_pixel.png", rgb_image)
+
+        ok, center_3d = self.pixel2World(camera_info_msg, center_pixel[0], center_pixel[1], depth_image, use_surrounding_pixels=True)
+        if not ok:
+            print("Could not get valid 3D point for table placement")
+
+        if transform is not None:   
+            base_to_camera = self.make_homogeneous_transform(transform)
+
+            camera_to_center = np.eye(4)
+            camera_to_center[:3, 3] = center_3d
+            camera_to_center[3, 3] = 1
+            base_to_center = np.dot(base_to_camera, camera_to_center)
+            base_to_center[:3, :3] = Rotation.from_quat([0.0, 0.707, 0.707, 0.0]).as_matrix()
+            return self.matrix_to_pose(base_to_center)
+        
+        print("Could not get transform between arm_base_link and camera_color_optical_frame")
+        return None
             
     def detect_items(self, input_image, classes_being_detected, log_path = None):
 
@@ -597,7 +654,7 @@ class AppliancePerception(TFInterface):
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
         return mask
 
-    def pixel2World(self, camera_info, image_x, image_y, depth_image, depth=None):
+    def pixel2World(self, camera_info, image_x, image_y, depth_image, depth=None, use_surrounding_pixels=False):
 
         # print("Image pixels: ", image_x, image_y)
         # print("Depth shape: ", depth_image.shape)
@@ -605,13 +662,31 @@ class AppliancePerception(TFInterface):
         if image_y >= depth_image.shape[0] or image_x >= depth_image.shape[1]:
             return False, None
 
-        if depth is  None:
+        if depth is None:
             depth = depth_image[image_y, image_x]
             depth = depth / 1000 # convert from mm to m
             # print("Depth: ", depth)
 
         if math.isnan(depth) or depth < 0.05 or depth > 2.0:
-            return False, None
+            if use_surrounding_pixels:
+                pixel_range = 70
+                depth_values = []
+                for dy in range(-pixel_range, pixel_range + 1):
+                    for dx in range(-pixel_range, pixel_range + 1):
+                        new_y = image_y + dy
+                        new_x = image_x + dx
+                        if new_y >= 0 and new_y < depth_image.shape[0] and new_x >= 0 and new_x < depth_image.shape[1]:
+                            d = depth_image[new_y, new_x] / 1000.0
+                            if not math.isnan(d) and d >= 0.05 and d <= 2.0:
+                                depth_values.append(d)
+                if len(depth_values) > 0:
+                    depth = np.median(depth_values)
+                    print(f"Using surrounding pixels to get depth: {depth} m")
+                else:
+                    print("No valid depth values in surrounding pixels")
+                    return False, None
+            else:
+                return False, None
 
         fx = camera_info.K[0]
         fy = camera_info.K[4]
@@ -645,6 +720,6 @@ if __name__ == '__main__':
     # appliance_perception.turn_on("Start / 30 SEC button") # "bottom white fridge door" or "microwave"
     appliance_perception.turn_on("bottom white fridge door") # "bottom white fridge door" or "microwave"
     while True:
-        pose = appliance_perception.detect_sink_placement()
-        print("Sink placement pose:", pose)
+        pose = appliance_perception.detect_table_placement()
+        print("Table placement pose:", pose)
     rospy.spin()

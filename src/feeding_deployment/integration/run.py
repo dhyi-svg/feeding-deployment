@@ -67,6 +67,7 @@ from feeding_deployment.actions.base import (
     PlateAt,
     FoodHeated,
     SafeToNavigate,
+    TableSeen,
     GroundHighLevelAction,
     ResetHLA,
     pddl_plan_to_hla_plan,
@@ -98,6 +99,7 @@ from feeding_deployment.actions.stow_tool import StowToolHLA
 from feeding_deployment.actions.transfer_tool import TransferToolHLA
 from feeding_deployment.actions.emulate_transfer import EmulateTransferHLA
 from feeding_deployment.actions.acquisition import AcquireBiteHLA
+from feeding_deployment.actions.gaze_at_table import GazeAtTableHLA
 from feeding_deployment.interfaces.perception_interface import PerceptionInterface
 from feeding_deployment.interfaces.web_interface import WebInterface
 from feeding_deployment.interfaces.rviz_interface import RVizInterface
@@ -133,6 +135,7 @@ HLAS = {
     TransferToolHLA,
     EmulateTransferHLA,
     ResetHLA,
+    GazeAtTableHLA,
 }
 
 assert os.environ.get("PYTHONHASHSEED") == "0", \
@@ -262,6 +265,7 @@ class _Runner:
             PlateAt,
             FoodHeated,
             SafeToNavigate,
+            TableSeen,
         }
         self.types = {
             object_type,
@@ -384,7 +388,7 @@ class _Runner:
             GroundAtom(IsUtensil, [self.utensil]),
             GroundAtom(DoorClosed, [self.fridge]),
             GroundAtom(DoorClosed, [self.microwave]),
-            GroundAtom(InFrontOf, [self.sink]),
+            GroundAtom(InFrontOf, [self.table]),
             GroundAtom(PlateAt, [self.holder]),
             # GroundAtom(Holding, [self.plate]),
             GroundAtom(SafeToNavigate, []),
@@ -823,7 +827,13 @@ if __name__ == "__main__":
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromAppliance"], (runner.plate, runner.microwave)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.fridge,)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["TransferTool"], (runner.utensil,runner.table)))
-        runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateInSink"], (runner.plate, runner.sink)))
+        for i in range(3):
+            runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickTool"], (runner.utensil,runner.table)))
+            runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["StowTool"], (runner.utensil,runner.table)))
+        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateInSink"], (runner.plate, runner.sink)))
+        # for i in range(3):
+        #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateOnTable"], (runner.plate, runner.table)))
+        #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateOnHolder"], (runner.plate, runner.holder)))
     else:
         runner.run()
 

@@ -19,6 +19,7 @@ from feeding_deployment.actions.base import (
     InFrontOf,
     DoorOpen,
     PlateAt,
+    TableSeen,
 )
 
 class PlacePlateInApplianceHLA(HighLevelAction):
@@ -203,6 +204,7 @@ class PlacePlateOnTableHLA(HighLevelAction):
             preconditions={
                 LiftedAtom(Holding, [plate]),
                 LiftedAtom(InFrontOf, [table]),
+                LiftedAtom(TableSeen, []),
             },
             add_effects={
                 LiftedAtom(GripperFree, []),
@@ -210,6 +212,7 @@ class PlacePlateOnTableHLA(HighLevelAction):
             },
             delete_effects={
                 LiftedAtom(Holding, [plate]),
+                LiftedAtom(TableSeen, []),
             },
         )
 
@@ -230,3 +233,15 @@ class PlacePlateOnTableHLA(HighLevelAction):
     def place_plate_on_table(self, speed: str) -> None:
         # assert self.sim.held_object_name == "plate"
         print("Placing plate on table ...")
+
+        self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.table_plate_staging_pos)
+
+        placement_poses = self.perception_interface.get_perceived_table_placement_poses()
+
+        self.move_to_ee_pose(placement_poses["pre_table_placement_pose"])
+        self.move_to_ee_pose(placement_poses["table_placement_pose"])
+        self.close_gripper()
+        self.move_to_ee_pose(placement_poses["pre_table_placement_pose"])
+        self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.retract_pos)

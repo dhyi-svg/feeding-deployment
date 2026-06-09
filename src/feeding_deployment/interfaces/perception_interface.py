@@ -100,6 +100,7 @@ class PerceptionInterface:
         self.last_drink_poses = None
 
         self.last_handle_poses = None
+        self.last_table_placement_poses = None
         
         # set led brightness
         # self.set_led_brightness()
@@ -693,6 +694,48 @@ class PerceptionInterface:
 
         return sink_placement_poses
 
+    def perceive_table_placement_poses(self):
+
+        if self.simulation:
+            # load them from a pickle file
+            with open(self.log_dir / 'table_placement_poses.pkl', 'rb') as f:
+                table_placement_poses = pickle.load(f)
+
+        else:
+            self._appliance_perception.turn_on("table")
+            # Rajat Hack: Wait 1 second
+            time.sleep(1)
+            table_placement_pose = None
+            while table_placement_pose is None:
+                table_placement_pose = self._appliance_perception.detect_table_placement()
+            self._appliance_perception.turn_off()
+
+            offset = np.eye(4)
+            offset[:3, 3] = np.array([0.0, 0.075, -0.23]) # x axis is left, y axis is up, z axis is forward. 
+            table_placement_pose = self.matrix_to_pose(self.pose_to_matrix(table_placement_pose) @ offset)
+
+            offset_for_pre_place = np.eye(4)
+            offset_for_pre_place[:3, 3] = np.array([0.0, 0.1, 0.0])
+            pre_table_placement_pose = self.matrix_to_pose(self.pose_to_matrix(table_placement_pose) @ offset_for_pre_place)
+
+            table_placement_poses = {
+                "table_placement_pose": table_placement_pose,
+                "pre_table_placement_pose": pre_table_placement_pose,
+            }
+
+            self.last_table_placement_poses = table_placement_poses
+
+            with open(self.log_dir / 'table_placement_poses.pkl', 'wb') as f:
+                pickle.dump(table_placement_poses, f)
+
+        return table_placement_poses
+
+    def get_perceived_table_placement_poses(self):
+        if self.last_table_placement_poses is not None:
+            print("Using last table placement poses from perception cache")
+            return self.last_table_placement_poses
+        else:
+            raise ValueError("No last table placement poses found in perception cache. Please run perceive_table_placement_poses first to populate the cache.")
 
     def perceive_drink_pickup_poses(self):
 

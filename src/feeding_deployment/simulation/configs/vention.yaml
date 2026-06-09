@@ -89,6 +89,19 @@ sink_plate_staging_pose:
   type: "ee_pose"
   values: [0.37332677841186523, 1.584771234774962e-05, 0.5310782194137573, 0.49716828386220684, 0.5009973946876455, 0.4985405006687815, 0.5031731646002675]
 
+table_gaze_pos: 
+  description: "Gaze configuration, the table should be visible from this configuration"
+  type: "joint_positions"
+  values: [-2.9776942632552643, -1.0320159350864921, -2.6287490540537792, -0.9135500076842789, 1.0643195464769353, -1.1937869923422655, -2.919634954646556]
+table_plate_staging_pos: 
+  description: "Staging configuration, the robot should be in front of the table in this configuration"
+  type: "joint_positions"
+  values: [-1.5611519552232833, -1.1980677574784586, -3.136139032309529, -2.343054453373894, -0.012108860844372238, -0.4266282866185511, 1.5754833571553815]
+table_plate_staging_pose:
+  description: "Staging configuration, the robot should be in front of the table in this configuration"
+  type: "ee_pose"
+  values: [0.0014170326758176088, 0.1826012134552002, 0.5703349709510803, -0.0009756430171439222, 0.7051992859979599, 0.7090050961170583, 0.002188339258827599]
+
 # Fridge
 fridge_door_staging_pos:
   description: "Staging configuration, the robot should be in front of the fridge in this configuration"

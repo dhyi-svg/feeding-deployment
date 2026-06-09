@@ -88,6 +88,10 @@ class SceneDescription:
     sink_plate_staging_pos: JointPositions
     sink_plate_staging_pose: Pose
 
+    table_gaze_pos: JointPositions
+    table_plate_staging_pos: JointPositions
+    table_plate_staging_pose: Pose
+
     # Fridge
     fridge_door_staging_pos: JointPositions
     fridge_door_gaze_pos: JointPositions

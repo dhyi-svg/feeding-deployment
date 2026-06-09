@@ -100,6 +100,7 @@ ToolPrepared = Predicate("ToolPrepared", [tool_type])
 PlateInView = Predicate("PlateInView", [])
 ResetPos = Predicate("ResetPos", [])
 IsUtensil = Predicate("IsUtensil", [tool_type])
+TableSeen = Predicate("TableSeen", [])
 
 # Define high-level actions.
 class HighLevelAction(abc.ABC):

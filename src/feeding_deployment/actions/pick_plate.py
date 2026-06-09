@@ -205,3 +205,16 @@ class PickPlateFromTableHLA(HighLevelAction):
     def pick_plate_from_table(self, speed: str) -> None:
         assert self.sim.held_object_name is None
         print("Picking plate from table ...")
+
+        self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.table_plate_staging_pos)
+
+        placement_poses = self.perception_interface.get_perceived_table_placement_poses()
+
+        self.move_to_ee_pose(placement_poses["pre_table_placement_pose"])
+        self.close_gripper()
+        self.move_to_ee_pose(placement_poses["table_placement_pose"])
+        self.open_gripper()
+        self.move_to_ee_pose(placement_poses["pre_table_placement_pose"])
+        self.move_to_ee_pose(self.sim.scene_description.table_plate_staging_pose)
+        self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
