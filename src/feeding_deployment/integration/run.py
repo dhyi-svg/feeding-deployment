@@ -814,14 +814,14 @@ if __name__ == "__main__":
     if not args.use_interface:
         # for i in range(3):
         #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromHolder"], (runner.plate, runner.holder)))
-            runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateOnHolder"], (runner.plate, runner.holder)))
+            # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateOnHolder"], (runner.plate, runner.holder)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.fridge,)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromAppliance"], (runner.plate, runner.fridge)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateInAppliance"], (runner.plate, runner.microwave)))
-        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["CloseDoor"], (runner.microwave,)))
+        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["CloseDoor"], (runner.fridge,)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromAppliance"], (runner.plate, runner.microwave)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.fridge,)))
-        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["TransferTool"], (runner.utensil,runner.table)))
+        runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["TransferTool"], (runner.utensil,runner.table)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateInSink"], (runner.plate, runner.sink)))
     else:
         runner.run()

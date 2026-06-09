@@ -397,7 +397,10 @@ class AppliancePerception(TFInterface):
         # for handle_centroid take median in x, y and z to be more robust to outliers
 
         handle_centroid = np.median(cluster_points_3d, axis=0)
-        handle_centroid[1] = top_most_y - 0.04
+        if self.handle_type == "bottom white fridge door":
+            handle_centroid[1] = top_most_y - 0.07
+        else:
+            handle_centroid[1] = top_most_y - 0.04
         # handle_centroid[1] = top_most_y - 0.02 # 2 cm below the top most point in the cluster, which should be close to the center of the handle
 
         handle_centroid_3d = handle_centroid

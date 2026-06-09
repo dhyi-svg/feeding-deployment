@@ -462,6 +462,15 @@ class PerceptionInterface:
                 rotate_orientation=True,
             )
 
+            will_be_used_for_closing_waypoints = self._generate_door_arc_waypoints(
+                start_pose=grasp_pose,
+                hinge_position=hinge_pose.position,
+                arc_length_m=0.65,
+                waypoint_spacing_m=0.05,
+                direction=1, 
+                rotate_orientation=True,
+            )
+
             post_release_pose = copy.deepcopy(opening_waypoints[-1])
             offset = np.eye(4)
             offset[:3, 3] = np.array([0, 0.15, 0])
@@ -528,6 +537,44 @@ class PerceptionInterface:
                 waypoint_mat = self.pose_to_matrix(waypoint)
                 offset_closing_waypoints.append(self.matrix_to_pose(waypoint_mat @ offset))
 
+            temp = copy.deepcopy(second_waypoints[:-3])
+            temp.reverse()
+            pull_closing_waypoints = []
+            for waypoint in temp[:8]:
+                waypoint_mat = self.pose_to_matrix(waypoint)
+                waypoint_mat[:3, :3] = waypoint_mat[:3, :3] @ R.from_euler("y", -np.pi/2).as_matrix()
+                offset = np.eye(4)
+                offset[:3, 3] = np.array([0.01, -0.09, -0.14])
+                pull_closing_waypoints.append(self.matrix_to_pose(waypoint_mat @ offset))
+
+            pull_closing_waypoint = pull_closing_waypoints[0]
+
+            pre_pull_offset = np.eye(4)
+            pre_pull_offset[:3, 3] = np.array([0, 0.0, -0.1])
+            pre_pull_pose_mat = self.pose_to_matrix(pull_closing_waypoint) @ pre_pull_offset
+            pre_pull_pose = self.matrix_to_pose(pre_pull_pose_mat)
+
+            above_pull_closing_waypoint = pull_closing_waypoints[-1] # last 
+            offset = np.eye(4)
+            offset[:3, 3] = np.array([0, 0.24, 0])
+            above_pull_closing_waypoint_mat = self.pose_to_matrix(above_pull_closing_waypoint) @ offset
+            above_pull_closing_waypoint = self.matrix_to_pose(above_pull_closing_waypoint_mat)
+
+            push_closing_waypoints = []
+            for waypoint in will_be_used_for_closing_waypoints:
+                waypoint_mat = self.pose_to_matrix(waypoint)
+                waypoint_mat[:3, :3] = waypoint_mat[:3, :3] @ R.from_euler("y", -np.pi/2).as_matrix()
+                offset = np.eye(4)
+                offset[:3, 3] = np.array([0.02, 0.0, 0.0])
+                push_closing_waypoints.append(self.matrix_to_pose(waypoint_mat @ offset))
+            push_closing_waypoints.reverse()
+
+            above_push_closing_waypoint = push_closing_waypoints[0]
+            offset = np.eye(4)
+            offset[:3, 3] = np.array([0, 0.15, 0])
+            above_push_closing_waypoint_mat = self.pose_to_matrix(above_push_closing_waypoint) @ offset
+            above_push_closing_waypoint = self.matrix_to_pose(above_push_closing_waypoint_mat)
+
             # beginning_closing_waypoint = offset_closing_waypoints[0]
             # beginning_closing_waypoint_mat = self.pose_to_matrix(beginning_closing_waypoint)
             # offset = np.eye(4)
@@ -550,6 +597,14 @@ class PerceptionInterface:
                 "closing_waypoints": closing_waypoints,
                 # "beginning_closing_waypoint": beginning_closing_waypoint,
                 "offset_closing_waypoints": offset_closing_waypoints,
+                # "pull_pose": pull_pose,
+                # "pre_pull_pose": pre_pull_pose,
+                "pull_closing_waypoints": pull_closing_waypoints,
+                "pull_closing_waypoint": pull_closing_waypoint,
+                "pre_pull_pose": pre_pull_pose,
+                "above_pull_closing_waypoint": above_pull_closing_waypoint,
+                "above_push_closing_waypoint": above_push_closing_waypoint,
+                "push_closing_waypoints": push_closing_waypoints,
             }
 
         self.last_handle_poses = handle_poses

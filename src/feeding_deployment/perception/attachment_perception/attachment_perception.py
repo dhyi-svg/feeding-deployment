@@ -396,8 +396,9 @@ class AttachmentPerception(TFInterface):
 
         # lower = np.array([35, 50, 120])
         # upper = np.array([50, 140, 220])
-        lower = np.array([80, 177, 133])
-        upper = np.array([100, 237, 193])
+        lower = np.array([60, 137, 113])
+        upper = np.array([120, 255, 213])
+
 
         return cv2.inRange(hsv, lower, upper)
 

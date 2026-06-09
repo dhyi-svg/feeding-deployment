@@ -126,8 +126,8 @@ if __name__ == "__main__":
     # fridge_door_gaze_pos = [-0.980015584273823, 0.47420615883552164, -3.015619807706865, -2.207007668035523, 0.7286555882107023, 1.2561937782724737, 1.2283014269116377]
     # arm_client_interface.execute_command(JointCommand(fridge_door_gaze_pos))
 
-    # behind_back_retract_pos = [3.141592653589793, -1.8338532592607812, 3.1415681525077646, -2.5482659290666034, 1.0329455279146852e-05, -0.8727280092311087, 1.570780081512247]
-    # arm_client_interface.execute_command(JointCommand(behind_back_retract_pos))
+    behind_back_retract_pos = [3.141592653589793, -1.8338532592607812, 3.1415681525077646, -2.5482659290666034, 1.0329455279146852e-05, -0.8727280092311087, 1.570780081512247]
+    arm_client_interface.execute_command(JointCommand(behind_back_retract_pos))
 
     # left_retract_pos = [-1.57, -0.34903602299465675, -3.141591055693139, -2.0, 0.0, -0.872688061814757, 1.57075917569769]
     # arm_client_interface.execute_command(JointCommand(left_retract_pos))

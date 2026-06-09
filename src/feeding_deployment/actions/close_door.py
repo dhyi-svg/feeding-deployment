@@ -57,6 +57,23 @@ class CloseDoorHLA(HighLevelAction):
         assert self.sim.held_object_name is None
         print("Closing fridge door ...")
 
+        self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
+        self.open_gripper()
+
+        handle_closing_poses = self.perception_interface.perceive_handle_closing_poses("bottom white fridge door")
+
+        self.move_to_ee_pose(handle_closing_poses["pre_pull_pose"])
+        self.move_to_ee_pose(handle_closing_poses["pull_closing_waypoint"])
+        self.close_gripper()
+        self.move_to_ee_pose_trajectory(handle_closing_poses["pull_closing_waypoints"])
+        self.open_gripper()
+        self.move_to_ee_pose(handle_closing_poses["above_pull_closing_waypoint"])
+        self.move_to_ee_pose(handle_closing_poses["above_push_closing_waypoint"])
+        self.move_to_ee_pose(handle_closing_poses["push_closing_waypoints"][0])
+        self.move_to_ee_pose_trajectory(handle_closing_poses["push_closing_waypoints"])
+
+        self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
+
     def close_microwave(self, speed: str) -> None:
         del speed
         assert self.sim.held_object_name is None

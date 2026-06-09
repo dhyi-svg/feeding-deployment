@@ -73,6 +73,12 @@ class OpenDoorHLA(HighLevelAction):
         poses.append(handle_opening_poses["pre_push_pose"])
         poses.append(handle_opening_poses["push_pose"])
         poses.extend(handle_opening_poses["push_waypoints"])
+        poses.extend(handle_opening_poses["pull_closing_waypoints"])
+        poses.append(handle_opening_poses["pull_closing_waypoint"])
+        poses.append(handle_opening_poses["pre_pull_pose"])
+        poses.extend(handle_opening_poses["push_closing_waypoints"])
+        poses.append(handle_opening_poses["above_pull_closing_waypoint"])
+        poses.append(handle_opening_poses["above_push_closing_waypoint"])
         print(f"Visualizing {len(poses)} handle opening poses in RViz ...")
         self.rviz_interface.visualize_poses(poses, frame_id="arm_base_link", ns="handle_opening_poses")
 
