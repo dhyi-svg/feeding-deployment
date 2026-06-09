@@ -56,9 +56,11 @@ class PressMicrowaveButtonHLA(HighLevelAction):
         )
         return "press_microwave_button.yaml"
 
-    def press_microwave_button(self, speed: str) -> None:
+    def press_microwave_button(self, speed: str, duration: float) -> None:
         assert self.sim.held_object_name is None
-        print("Pressing microwave button ...")
+        # Each button press adds 30 seconds to the microwave timer.
+        num_presses = max(1, int(round(duration / 30.0)))
+        print(f"Pressing microwave button {num_presses} times (duration={duration}s) ...")
 
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.microwave_closeup_gaze_pos)
@@ -69,7 +71,7 @@ class PressMicrowaveButtonHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.fridge_door_staging_pos)
         self.close_gripper() # just in case the gripper is open
         self.move_to_ee_pose(press_button_poses["pre_press_pose"])
-        for i in range(3): # Change this to depend on predicted heating time
+        for i in range(num_presses):
             self.move_to_ee_pose(press_button_poses["press_pose"])
             self.move_to_ee_pose(press_button_poses["intermediate_pose"])
         self.move_to_ee_pose(press_button_poses["pre_press_pose"])

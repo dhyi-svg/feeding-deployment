@@ -421,6 +421,52 @@ class WebInterface:
         assert self.current_page == "adaptability", "Cannot update adaptability response when not on the adaptability page."
         self._send_message({"state": "adaptability_response", "status": response})
 
+    #### Preference Correction Pages ####
+
+    def get_preference_corrections(
+        self,
+        predicted_bundle: dict[str, str],
+        pref_options: dict[str, list[str]],
+    ) -> dict[str, str]:
+        """Send predicted preference bundle to the webapp and wait for user corrections.
+
+        Message contract (for frontend implementation):
+
+        Sent to webapp (on /ServerComm):
+            1. {"state": "preference_correction", "status": "jump"}
+            2. {
+                   "state": "preference_correction_data",
+                   "predicted_bundle": {"field": "value", ...},
+                   "options": {"field": ["opt1", "opt2", ...], ...}
+               }
+
+        Expected back from webapp (on WebAppComm):
+            {
+                "state": "preference_correction_response",
+                "bundle": {"field": "value", ...}
+            }
+            where "bundle" contains all fields with the user's final selections
+            (unchanged fields keep their predicted values).
+
+        Currently stubbed: returns predicted_bundle unchanged (no frontend yet).
+        """
+
+        self.current_page = "preference_correction"
+        self._send_message({"state": "preference_correction", "status": "jump"})
+        time.sleep(0.5)
+        self._send_message({
+            "state": "preference_correction_data",
+            "predicted_bundle": predicted_bundle,
+            "options": pref_options,
+        })
+        msg_dict = self.get_required_web_interface_message(
+            lambda msg_dict: msg_dict.get("state") == "preference_correction_response"
+        )
+        return msg_dict["bundle"]
+
+        # print("[STUB] Preference correction page not yet implemented; returning predicted bundle as-is.")
+        # return dict(predicted_bundle)
+
     #### Gesture Pages ####
 
     def get_gesture_type(self) -> None:
