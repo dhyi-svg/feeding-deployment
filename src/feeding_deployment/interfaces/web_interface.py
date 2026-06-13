@@ -341,6 +341,34 @@ class WebInterface:
             )
         )
 
+    #### Handle Detection Confirmation Page ####
+
+    def get_handle_detection_confirmation(self, vis_image=None) -> bool:
+        """Show the detected handle/hinge on the web app and ask the user to confirm.
+
+        The handle perception visualization (green dot = handle, blue dot = hinge)
+        is sent to the web app. Returns True if the user confirms the detection
+        looks correct, and False if the handle perception should be re-run.
+        """
+        self.current_page = "handle_confirmation"
+
+        # Jump to the handle confirmation page.
+        self._send_message({"state": "handle_confirmation", "status": "jump"})
+
+        # Wait for the web interface to be ready, then send the visualization image.
+        time.sleep(0.5)
+        if vis_image is not None:
+            self._send_image(vis_image)
+
+        # Wait until the user confirms or rejects the detection.
+        msg_dict = self.get_required_web_interface_message(
+            lambda msg_dict: (msg_dict["state"] == "handle_confirmation")
+        )
+
+        if msg_dict is None:
+            return False
+        return msg_dict["status"] == "confirm"
+
     #### Transparency Pages ####
 
     def get_transparency_request(self) -> None:

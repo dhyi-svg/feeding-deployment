@@ -1,8 +1,10 @@
 """An interface for perception (robot joints, human head poses, etc.)."""
 
+import os
 import threading
 import time
 from pathlib import Path
+import cv2
 import numpy as np
 from pybullet_helpers.geometry import Pose, Pose3D
 from pybullet_helpers.joint import JointPositions
@@ -418,7 +420,7 @@ class PerceptionInterface:
 
 
 
-    def perceive_handle_opening_poses(self, handle_type: str):
+    def perceive_handle_opening_poses(self, handle_type: str, web_interface=None):
 
         if self.last_handle_poses is not None:
             print("Using last handle opening poses from perception cache")
@@ -431,13 +433,31 @@ class PerceptionInterface:
             handle_poses = handle_opening_pos["last_handle_poses"]
 
         else:
-            self._appliance_perception.turn_on(handle_type)
-            # Rajat Hack: Wait 1 second
-            time.sleep(1)
-            handle_pose = None
-            while handle_pose is None:
-                handle_pose, hinge_pose, placement_pose = self._appliance_perception.detect_handle_and_placement()
-            self._appliance_perception.turn_off()
+            # Keep re-perceiving the handle/hinge/placement until the user confirms
+            # the detection looks correct on the web app. detect_handle_and_placement()
+            # writes a visualization to handle_hinge_pixels.png on each pass
+            # (green dot = handle centroid, blue dot = hinge).
+            while True:
+                self._appliance_perception.turn_on(handle_type)
+                # Rajat Hack: Wait 1 second
+                time.sleep(1)
+                handle_pose = None
+                while handle_pose is None:
+                    handle_pose, hinge_pose, placement_pose = self._appliance_perception.detect_handle_and_placement()
+                self._appliance_perception.turn_off()
+
+                # If no web interface is available (e.g. running headless), skip the
+                # confirmation and proceed with a single perception pass.
+                if web_interface is None:
+                    break
+                vis_image = cv2.imread(os.path.join(os.getcwd(), "handle_hinge_pixels.png"))
+                # The camera is mounted upside down, so rotate the visualization
+                # 180 degrees to show it right-side up to the user.
+                if vis_image is not None:
+                    vis_image = cv2.rotate(vis_image, cv2.ROTATE_180)
+                if web_interface.get_handle_detection_confirmation(vis_image):
+                    break
+                print("Handle detection rejected by user. Re-running handle perception ...")
 
             offset = np.eye(4)
             offset[:3, 3] = np.array([0, -0.06, 0.0]) # x axis is left, y axis is up, z axis is forward.

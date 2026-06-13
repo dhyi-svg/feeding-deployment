@@ -62,7 +62,7 @@ class OpenDoorHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.fridge_door_gaze_pos)
 
-        handle_opening_poses = self.perception_interface.perceive_handle_opening_poses("bottom white fridge door")
+        handle_opening_poses = self.perception_interface.perceive_handle_opening_poses("bottom white fridge door", web_interface=self.web_interface)
 
         # visualize on rviz
         poses = []
@@ -111,7 +111,7 @@ class OpenDoorHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
 
-        handle_opening_poses = self.perception_interface.perceive_handle_opening_poses("microwave")
+        handle_opening_poses = self.perception_interface.perceive_handle_opening_poses("microwave", web_interface=self.web_interface)
 
         # visualize on rviz
         poses = []
