@@ -60,6 +60,13 @@ from feeding_deployment.simulation.simulator import FeedingDeploymentPyBulletSim
 from feeding_deployment.simulation.state import FeedingDeploymentWorldState
 import feeding_deployment.perception.gestures_perception.static_gesture_detectors as static_gesture_detectors
 
+# Master switch for mid-skill manual takeover (the global "Take Over" button).
+# When True, execute_robot_command checks for a takeover request before/after
+# every move and hands control to the teleop screen. Relies on stop_action being
+# able to preempt a blocking move (verify on hardware); without preemption it
+# still works, just at the next move boundary. Set False to disable entirely.
+MID_SKILL_TAKEOVER_ENABLED = True
+
 # Things the robot can hold.
 object_type = Type("object")
 plate_type = Type("plate", parent=object_type)
@@ -396,6 +403,55 @@ class HighLevelAction(abc.ABC):
             self.wrist_interface.set_velocity_mode()
             self.wrist_interface.reset()
 
+    def run_manual_teleop_recovery(self, failure_context: str = None, session_id: str = None) -> None:
+        """Hand control to the user for manual recovery via the teleop screen.
+
+        User-initiated: the user opens this from the iPad to take over (e.g. the
+        robot is struggling or a joint is stuck). Routes the webapp to the teleop
+        page and blocks until the user taps Done, jogging the arm with bounded
+        relative steps in the meantime. Safety (force gating, velocity caps) is
+        enforced by the same controller/watchdog path as autonomy.
+
+        On exit it re-syncs the sim model (and RViz) to the arm's real joints so
+        downstream planning/visualization isn't left working from a stale pose.
+
+        No-op in simulation (no robot or web interface).
+        """
+        if self.robot_interface is None or self.web_interface is None:
+            print("Manual teleop recovery requested but robot/web interface is unavailable; skipping.")
+            return
+        from feeding_deployment.actions.teleop_recovery import TeleopRecoverySession
+        session = TeleopRecoverySession(
+            robot_interface=self.robot_interface,
+            web_interface=self.web_interface,
+            retract_joint_config=self.sim.scene_description.retract_pos,
+            joint_lower_limits=self.arm_joint_lower_limits,
+            joint_upper_limits=self.arm_joint_upper_limits,
+            log_dir=self.log_dir,
+            failure_context=failure_context,
+            session_id=session_id,
+        )
+        session.run()
+
+        # Fix #2: re-sync the sim (and RViz) to the arm's REAL joints after manual
+        # teleop. The end-effector pose follows from the joints via forward
+        # kinematics, so syncing joints syncs the pose too. Wrapped so a sync
+        # failure can never propagate back into the executive.
+        self.sync_sim_to_real_arm()
+
+    def sync_sim_to_real_arm(self) -> None:
+        """Push the real arm's current joint state into the sim model and RViz."""
+        if self.robot_interface is None or self.perception_interface is None:
+            return
+        try:
+            joints = self.perception_interface.get_robot_joints()
+            self.sim.set_robot_motors(joints)
+            if self.rviz_interface is not None:
+                self.rviz_interface.joint_state_update(joints)
+            print("Teleop: synced sim/RViz to the arm's current joints.")
+        except Exception as e:
+            print(f"Teleop: failed to sync sim/RViz to real joints: {e}")
+
     def pause(self, duration: float) -> None:
         time.sleep(duration)
 
@@ -414,14 +470,42 @@ class HighLevelAction(abc.ABC):
         """Execute the given commands on the robot."""
         if self.robot_interface is None:
             raise ValueError("Robot interface is not available to execute commands.")
-        
+
         if not self.no_waits:
             if tool_update is not None:
                 self.rviz_interface.tool_update(True, tool_update, Pose((0, 0, 0), (0, 0, 0, 1))) # pickup the drink
             if plan_viz is not None:
                 self.rviz_interface.visualize_plan(plan_viz)
             input("Execute next command?")
+
+        # Mid-skill takeover: if requested before this move, hand to the user and
+        # skip the move (we assume they teleop to the goal pose).
+        if self._maybe_handle_mid_skill_takeover():
+            return
+
+        # The move blocks until done; a takeover requested during it best-effort
+        # aborts it via stop_action so control returns here promptly.
         self.robot_interface.execute_command(robot_command)
+
+        # Takeover requested during this move: hand to the user, then skip the
+        # rest of this move and let the skill continue to its next step.
+        self._maybe_handle_mid_skill_takeover()
+
+    def _maybe_handle_mid_skill_takeover(self) -> bool:
+        """If the user requested a takeover, run teleop and route the iPad to the
+        'resuming' page on exit. Returns True if a takeover was handled."""
+        if not MID_SKILL_TAKEOVER_ENABLED or self.web_interface is None:
+            return False
+        if not self.web_interface.consume_takeover():
+            return False
+        print("Mid-skill takeover requested; handing control to the user.")
+        self.run_manual_teleop_recovery(failure_context="mid_skill_takeover")
+        # Generic 'resuming' page while autonomy continues the skill.
+        try:
+            self.web_interface._send_message({"state": "resuming", "status": "jump"})
+        except Exception as e:
+            print(f"Could not send resuming page jump: {e}")
+        return True
 
 
 @dataclass(frozen=True)

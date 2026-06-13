@@ -365,6 +365,26 @@ class ArmInterface:
             # Re-raise a simplified exception to avoid pickling issues
             raise Exception(f"Error in retract: {str(e)}") from None # suppress original exception
 
+    def stop_action(self):
+        """Abort the action currently executing without latching emergency stop.
+
+        Unlike emergency_stop(), this does NOT set emergency_stop_active, so the
+        arm keeps accepting commands afterward. Used to preempt the (long) move
+        to the default pose from the manual teleop recovery screen.
+        """
+        # save in log file
+        with open(self.log_file, "a") as f:
+            f.write("stop_action\n")
+
+        if self.in_compliant_mode:
+            print("stop_action ignored: arm is in compliant mode")
+            return
+        try:
+            self.arm.stop_action()
+        except Exception as e:
+            print(f"Error in stop_action: {e}")
+            raise Exception(f"Error in stop_action: {str(e)}") from None
+
     def emergency_stop(self):
         assert not self.emergency_stop_active, "Emergency stop is already active"
 

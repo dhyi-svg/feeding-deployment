@@ -239,6 +239,10 @@ class _Runner:
         else:
             self.web_interface = None
 
+        # Let a "Take Over" request best-effort abort the in-flight arm move.
+        if self.web_interface is not None and self.robot_interface is not None:
+            self.web_interface.register_takeover_stop(self.robot_interface.stop_action)
+
         # Create skills for high-level planning.
         hla_hyperparams = {"max_motion_planning_time": max_motion_planning_time}
         print("Creating HLAs...")
@@ -419,6 +423,17 @@ class _Runner:
         self.web_interface.ready_for_task_selection()
         last_task_type = None
         while self.active:
+            # Take-Over pressed while idle (no skill running): launch teleop here,
+            # then return to task selection. (Mid-skill takeovers are handled in
+            # execute_robot_command, not here.)
+            if self.web_interface is not None and self.web_interface.consume_takeover():
+                print("User-initiated takeover while idle; launching teleop ...")
+                try:
+                    self.hla_name_to_hla["Reset"].run_manual_teleop_recovery(failure_context="user_initiated_idle")
+                except Exception as e:
+                    print(f"Manual teleop recovery error: {e}")
+                self.web_interface.ready_for_task_selection()
+                continue
             if not continuous:
                 resp = input("Press 'y' to continue RUNNER, 'n' to stop: ")
                 while resp not in ["y", "n"]:
@@ -480,6 +495,16 @@ class _Runner:
                         else: # test
                             self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["EmulateTransfer"], (), {"test_mode": True} ))
                     last_task_type = task_type
+                elif task == "teleop":
+                    # User-initiated manual teleop recovery (between-tasks).
+                    # Blocks until the user taps Done on the teleop screen.
+                    print("Launching user-initiated manual teleop recovery ...")
+                    try:
+                        self.hla_name_to_hla["Reset"].run_manual_teleop_recovery(failure_context="user_initiated")
+                    except Exception as e:
+                        # Never let a teleop hiccup crash the executive loop.
+                        print(f"Manual teleop recovery error: {e}")
+                    last_task_type = None
                 else:
                     print(f"Invalid task selection: {task_selection_command}")
                     last_task_type = None
