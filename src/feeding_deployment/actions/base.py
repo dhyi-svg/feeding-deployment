@@ -106,6 +106,7 @@ EmulateTransferDone = Predicate("EmulateTransferDone", [])
 ToolPrepared = Predicate("ToolPrepared", [tool_type])
 PlateInView = Predicate("PlateInView", [])
 ResetPos = Predicate("ResetPos", [])
+HomePos = Predicate("HomePos", [])
 IsUtensil = Predicate("IsUtensil", [tool_type])
 TableSeen = Predicate("TableSeen", [])
 
@@ -485,7 +486,9 @@ class HighLevelAction(abc.ABC):
 
         # The move blocks until done; a takeover requested during it best-effort
         # aborts it via stop_action so control returns here promptly.
-        self.robot_interface.execute_command(robot_command)
+        success = self.robot_interface.execute_command(robot_command)
+        if not success:
+            print("Command execution failed")
 
         # Takeover requested during this move: hand to the user, then skip the
         # rest of this move and let the skill continue to its next step.
@@ -501,10 +504,10 @@ class HighLevelAction(abc.ABC):
         print("Mid-skill takeover requested; handing control to the user.")
         self.run_manual_teleop_recovery(failure_context="mid_skill_takeover")
         # Generic 'resuming' page while autonomy continues the skill.
-        try:
-            self.web_interface._send_message({"state": "resuming", "status": "jump"})
-        except Exception as e:
-            print(f"Could not send resuming page jump: {e}")
+        # try:
+        #     self.web_interface._send_message({"state": "resuming", "status": "jump"})
+        # except Exception as e:
+        #     print(f"Could not send resuming page jump: {e}")
         return True
 
 
@@ -579,6 +582,43 @@ class ResetHLA(HighLevelAction):
         assert self.sim.held_object_name is None
 
         self.move_to_joint_positions(self.sim.scene_description.retract_pos)
+
+        # set FLAIR preferences to None
+        if self.flair is not None:
+            self.flair.clear_preference()
+
+class HomeHLA(HighLevelAction):
+    """Move the robot to retract position without any tool."""
+
+    def get_name(self) -> str:
+        return "Home"
+
+    def get_operator(self) -> LiftedOperator:
+        return LiftedOperator(
+            self.get_name(),
+            parameters=[],
+            preconditions={LiftedAtom(GripperFree, [])},
+            add_effects={LiftedAtom(HomePos, [])},
+            delete_effects=set(),
+        )
+    
+    def get_behavior_tree_filename(
+        self,
+        objects: tuple[Object, ...],
+        params: dict[str, Any],
+    ) -> str:
+        # Behavior trees not used for this HLA
+        raise NotImplementedError
+
+    def execute_action(
+        self,
+        objects: tuple[Object, ...],
+        params: dict[str, Any],
+    ) -> None:
+        assert len(objects) == 0
+        assert self.sim.held_object_name is None
+
+        self.move_to_joint_positions(self.sim.scene_description.home_pos)
 
         # set FLAIR preferences to None
         if self.flair is not None:

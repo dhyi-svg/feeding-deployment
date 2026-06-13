@@ -236,11 +236,13 @@ class ArmInterface:
         print(f"Received joint pos command: {command_pos}")
 
         try:
-            self.arm.move_angular(command_pos)
+            success = self.arm.move_angular(command_pos)
         except Exception as e:
             print(f"Error in set_joint_position: {e}")
             # Re-raise a simplified exception to avoid pickling issues
             raise Exception(f"Error in set_joint_position: {str(e)}") from None # suppress original exception
+        
+        return success
 
     def set_joint_trajectory(self, trajectory_command):
 
@@ -252,11 +254,12 @@ class ArmInterface:
         )
 
         try:
-            self.arm.move_angular_trajectory(trajectory_command)
+            success = self.arm.move_angular_trajectory(trajectory_command)
         except Exception as e:
             print(f"Error in set_joint_trajectory: {e}")
             # Re-raise a simplified exception to avoid pickling issues
             raise Exception(f"Error in set_joint_trajectory: {str(e)}") from None # suppress original exception
+        return success
 
     def set_ee_pose(self, xyz, xyz_quat):
 
@@ -270,11 +273,12 @@ class ArmInterface:
         print(f"Received cartesian pose command: {xyz}, {xyz_quat}")
 
         try:
-            self.arm.move_cartesian(xyz, xyz_quat)
+            success = self.arm.move_cartesian(xyz, xyz_quat)
         except Exception as e:
             print(f"Error in set_ee_pose: {e}")
             # Re-raise a simplified exception to avoid pickling issues
             raise Exception(f"Error in set_ee_pose: {str(e)}") from None # suppress original exception
+        return success
         
     def set_cartesian_trajectory(self, trajectory_command):
 
@@ -286,11 +290,12 @@ class ArmInterface:
         )
 
         try:
-            self.arm.move_cartesian_trajectory(trajectory_command)
+            success = self.arm.move_cartesian_trajectory(trajectory_command)
         except Exception as e:
             print(f"Error in set_cartesian_trajectory: {e}")
             # Re-raise a simplified exception to avoid pickling issues
             raise Exception(f"Error in set_cartesian_trajectory: {str(e)}") from None # suppress original exception
+        return success
 
     def set_gripper(self, gripper_pos):
 

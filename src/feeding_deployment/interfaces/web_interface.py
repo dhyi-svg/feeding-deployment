@@ -107,6 +107,7 @@ class WebInterface:
     def _message_callback(self, msg: "String") -> None:
         """Callback for the web interface."""
         msg_dict = json.loads(msg.data)
+        print("Received message on WebAppComm: ", msg.data)
 
         # Teleop heartbeats arrive every few seconds; keep them out of the print
         # spam and the verbose received-messages log, but still enqueue them
@@ -122,12 +123,15 @@ class WebInterface:
         # Mid-skill manual takeover request: flag it (and best-effort abort the
         # in-flight move) so the executive hands control to the teleop screen.
         if msg_dict.get("state") == "teleop" and msg_dict.get("status") == "takeover":
+            print("Received takeover request from web interface!")
             self.takeover_event.set()
             if self._takeover_stop_fn is not None:
                 try:
                     self._takeover_stop_fn()
                 except Exception as e:
                     print("Error calling takeover stop function: ", e)
+            else:
+                print("No takeover stop function registered.")
             return
 
         self.task_selection_jump = False
