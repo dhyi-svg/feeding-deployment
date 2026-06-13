@@ -496,7 +496,7 @@ class HighLevelAction(abc.ABC):
 
     def _maybe_handle_mid_skill_takeover(self) -> bool:
         """If the user requested a takeover, run teleop and route the iPad to the
-        'resuming' page on exit. Returns True if a takeover was handled."""
+        'explanation' page on exit. Returns True if a takeover was handled."""
         if not MID_SKILL_TAKEOVER_ENABLED or self.web_interface is None:
             return False
         if not self.web_interface.consume_takeover():
@@ -504,10 +504,11 @@ class HighLevelAction(abc.ABC):
         print("Mid-skill takeover requested; handing control to the user.")
         self.run_manual_teleop_recovery(failure_context="mid_skill_takeover")
         # Generic 'resuming' page while autonomy continues the skill.
-        # try:
+        try:
+              self.web_interface.switch_to_explanation_page()
         #     self.web_interface._send_message({"state": "resuming", "status": "jump"})
-        # except Exception as e:
-        #     print(f"Could not send resuming page jump: {e}")
+        except Exception as e:
+            print(f"Could not send resuming page jump: {e}")
         return True
 
 
