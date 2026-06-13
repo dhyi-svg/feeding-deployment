@@ -71,8 +71,8 @@ UPDOWN_SIGN = +1.0
 ROTATION_SPEC = {
     "rotate.roll_right": (APPROACH_AXIS_INDEX, +1.0),
     "rotate.roll_left": (APPROACH_AXIS_INDEX, -1.0),
-    "rotate.tilt_up": (LATERAL_AXIS_INDEX, +1.0),
-    "rotate.tilt_down": (LATERAL_AXIS_INDEX, -1.0),
+    "rotate.tilt_up": (LATERAL_AXIS_INDEX, -1.0),
+    "rotate.tilt_down": (LATERAL_AXIS_INDEX, +1.0),
     "rotate.turn_left": (UPDOWN_AXIS_INDEX, +1.0),
     "rotate.turn_right": (UPDOWN_AXIS_INDEX, -1.0),
 }
