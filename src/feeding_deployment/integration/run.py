@@ -80,6 +80,7 @@ from feeding_deployment.actions.base import (
     NodeAdditionUserRequest,
     UserUpdateRequest,
     ParameterizedActionBehaviorTreeNode,
+    TeleopTakeoverException,
 )
 from feeding_deployment.actions.navigate import NavigateHLA
 from feeding_deployment.actions.open_door import OpenDoorHLA
@@ -588,7 +589,18 @@ class _Runner:
             assert operator.preconditions.issubset(self.current_atoms)
 
             # Execute the high-level plan in simulation
-            ground_hla.execute_action()
+            try:
+                ground_hla.execute_action()
+            except TeleopTakeoverException as e:
+                print(f"User took over control during {ground_hla}: {e}")
+                print(f"Skipping this HLA and continuing with next queued HLAs.")
+                continue
+            except RuntimeError as e:
+                print(f"HLA execution failed: {e}")
+                print(f"Aborting task and returning to task selection page.")
+                if self.web_interface is not None:
+                    self.web_interface.ready_for_task_selection()
+                return
 
             sim_state = self.sim.get_current_state()
 

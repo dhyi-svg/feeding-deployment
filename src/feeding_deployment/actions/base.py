@@ -21,6 +21,11 @@ import yaml
 import numpy as np
 import time
 
+
+class TeleopTakeoverException(Exception):
+    """Raised when user takes over control via teleoperation during skill execution."""
+    pass
+
 from pybullet_helpers.geometry import Pose, multiply_poses
 from pybullet_helpers.spaces import PoseSpace
 from pybullet_helpers.joint import JointPositions
@@ -174,7 +179,11 @@ class HighLevelAction(abc.ABC):
         objects: tuple[Object, ...],
         params: dict[str, Any],
     ) -> None:
-        """Execute the action on the robot."""
+        """Execute the action on the robot.
+
+        Raises TeleopTakeoverException if user takes over via teleoperation.
+        Raises RuntimeError if the action fails due to hardware constraints.
+        """
         bt_filename = self.get_behavior_tree_filename(objects, params)
         bt_filepath = self.behavior_tree_dir / bt_filename
         assert bt_filepath.exists()
@@ -346,8 +355,8 @@ class HighLevelAction(abc.ABC):
         return None, f"Invalid new node type {new_node_type}"
 
     def move_to_joint_positions(self, joint_positions: list[float]) -> None:
-        
-        plan = None 
+
+        plan = None
         # if not self.no_waits:
         #     plan = self.sim.plan_to_joint_positions(joint_positions)
         if self.robot_interface is None:
@@ -468,7 +477,11 @@ class HighLevelAction(abc.ABC):
                  break
 
     def execute_robot_command(self, robot_command: KinovaCommand, plan_viz: list[FeedingDeploymentWorldState] = None, tool_update: str = None) -> None:
-        """Execute the given commands on the robot."""
+        """Execute the given commands on the robot.
+
+        Raises TeleopTakeoverException if user takes over via teleoperation.
+        Raises RuntimeError if the command fails due to firmware/hardware constraints.
+        """
         if self.robot_interface is None:
             raise ValueError("Robot interface is not available to execute commands.")
 
@@ -482,7 +495,7 @@ class HighLevelAction(abc.ABC):
         # Mid-skill takeover: if requested before this move, hand to the user and
         # skip the move (we assume they teleop to the goal pose).
         if self._maybe_handle_mid_skill_takeover():
-            return
+            raise TeleopTakeoverException("User took over control before command execution")
 
         # The move blocks until done; a takeover requested during it best-effort
         # aborts it via stop_action so control returns here promptly.
@@ -492,7 +505,11 @@ class HighLevelAction(abc.ABC):
 
         # Takeover requested during this move: hand to the user, then skip the
         # rest of this move and let the skill continue to its next step.
-        self._maybe_handle_mid_skill_takeover()
+        if self._maybe_handle_mid_skill_takeover():
+            raise TeleopTakeoverException("User took over control during command execution")
+
+        if not success:
+            raise RuntimeError("Robot command failed to execute (joint limit or workspace reachability constraint)")
 
     def _maybe_handle_mid_skill_takeover(self) -> bool:
         """If the user requested a takeover, run teleop and route the iPad to the
@@ -693,7 +710,7 @@ class BehaviorTreeParameterizedPolicy(abc.ABC):
             assert parameter.space.contains(value), (
                 f"Value {value} invalid for parameter {parameter}")
             ordered_parameter_values.append(value)
-        
+
         print(f"Executing parameterized policy {self._name} with bindings:")
         for parameter, value in zip(parameters, ordered_parameter_values, strict=True):
             print(f"  {parameter.name} = {value}")
@@ -777,7 +794,7 @@ class ParameterizedActionBehaviorTreeNode(BehaviorTreeNode):
         self.log_start()
         self._policy.run(self._bindings)
         self.log_end()
-        return True  # assume this worked
+        return True
 
     def get_node(self, name: str) -> BehaviorTreeNode | None:
         if name == self.name:
@@ -834,7 +851,7 @@ class SequenceBehaviorTreeNode(BehaviorTreeNode):
         for child in self._children:
             child.tick()
         self.log_end()
-        return True  # assume everything worked
+        return True
 
     def get_node(self, name: str) -> BehaviorTreeNode | None:
         for child in self._children:
