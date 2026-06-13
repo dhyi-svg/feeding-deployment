@@ -629,7 +629,6 @@ class KinovaArm:
                 waypoint.cartesian_waypoint.blending_radius = 0.0
             else:
                 waypoint.cartesian_waypoint.blending_radius = 0.01
-            waypoint.cartesian_waypoint.duration = 0.5
 
         result = self.base.ValidateWaypointList(waypoints)
         if len(result.trajectory_error_report.trajectory_error_elements) != 0:
