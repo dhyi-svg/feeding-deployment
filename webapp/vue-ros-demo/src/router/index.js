@@ -177,6 +177,16 @@ const routes = [
     path: '/preparepickup2',
     name: 'preparepickup2',
     component: () => import(/* webpackChunkName: "about" */ '../views/PrepareBitePickup2.vue')
+  },
+  {
+    path: '/teleop',
+    name: 'teleop',
+    component: () => import(/* webpackChunkName: "about" */ '../views/Teleop.vue')
+  },
+  {
+    path: '/resuming',
+    name: 'resuming',
+    component: () => import(/* webpackChunkName: "about" */ '../views/Resuming.vue')
   }
 ]
 

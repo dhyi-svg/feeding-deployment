@@ -65,6 +65,13 @@ class WebInterface:
         self.active = True
 
         self.explanation_lock = threading.Lock() # Lock for generating continuous explanations
+
+        # Mid-skill manual takeover: set when the user taps the global "Take Over"
+        # button. Checked by the executive (idle loop) and by execute_robot_command
+        # (mid-skill). _takeover_stop_fn, if registered, is called immediately to
+        # best-effort abort whatever move is currently running.
+        self.takeover_event = threading.Event()
+        self._takeover_stop_fn = None
     
         # Start the thread for generating continuous explanations.
         self.transparency_continuous_thread = threading.Thread(target=self.provide_continuous_explanations)
@@ -99,14 +106,32 @@ class WebInterface:
 
     def _message_callback(self, msg: "String") -> None:
         """Callback for the web interface."""
-        print("Received message on WebAppComm: ", msg.data)
-        with open(self.webapp_received_messages_log, "a") as f:
-            f.write(msg.data + "\n")
-        
         msg_dict = json.loads(msg.data)
 
+        # Teleop heartbeats arrive every few seconds; keep them out of the print
+        # spam and the verbose received-messages log, but still enqueue them
+        # below so the teleop session sees them as keep-alive.
+        is_teleop_heartbeat = (
+            msg_dict.get("state") == "teleop" and msg_dict.get("status") == "heartbeat"
+        )
+        if not is_teleop_heartbeat:
+            print("Received message on WebAppComm: ", msg.data)
+            with open(self.webapp_received_messages_log, "a") as f:
+                f.write(msg.data + "\n")
+
+        # Mid-skill manual takeover request: flag it (and best-effort abort the
+        # in-flight move) so the executive hands control to the teleop screen.
+        if msg_dict.get("state") == "teleop" and msg_dict.get("status") == "takeover":
+            self.takeover_event.set()
+            if self._takeover_stop_fn is not None:
+                try:
+                    self._takeover_stop_fn()
+                except Exception as e:
+                    print("Error calling takeover stop function: ", e)
+            return
+
         self.task_selection_jump = False
-        
+
         if msg_dict["status"] == "finish_feeding":
             task_selected = {
                 "task": "reset",
@@ -144,6 +169,11 @@ class WebInterface:
                     "task": "personalization",
                     "type": "gesture",
                 }
+            elif msg_dict["status"] == "teleop_recovery":
+                task_selected = {
+                    "task": "teleop",
+                    "type": "manual_recovery",
+                }
             elif msg_dict["status"] == "jump":
                 self.task_selection_jump = True
                 return
@@ -161,6 +191,18 @@ class WebInterface:
             self.task_selection_queue.put(task_selected)
         else:
             self.received_web_interface_messages.put(msg_dict)
+
+    def register_takeover_stop(self, fn) -> None:
+        """Register a function (e.g. robot_interface.stop_action) called the moment
+        a takeover is requested, to best-effort abort the in-flight move."""
+        self._takeover_stop_fn = fn
+
+    def consume_takeover(self) -> bool:
+        """Return True (and clear) if a manual takeover has been requested."""
+        if self.takeover_event.is_set():
+            self.takeover_event.clear()
+            return True
+        return False
 
     def clear_received_messages(self) -> None:
         while not self.received_web_interface_messages.empty():

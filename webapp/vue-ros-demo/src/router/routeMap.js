@@ -119,6 +119,12 @@ const routeMap = {
   },
   robotbehavior: {
     jump: '/robotbehavior'
+  },
+  teleop: {
+    jump: '/teleop'
+  },
+  resuming: {
+    jump: '/resuming'
   }
 };
 

@@ -62,7 +62,16 @@ class ArmInterfaceClient:
 
     def get_state(self):
         return self._arm_interface.get_state()
-    
+
+    def stop_action(self):
+        """Abort the current arm action without latching emergency stop.
+
+        NOTE: this is issued on the same RPC connection as execute_command. If a
+        blocking move is in flight on this connection, the manager may serialize
+        this call behind it. See TELEOP_INTEGRATION.md (Default -> Stop).
+        """
+        return self._arm_interface.stop_action()
+
     def get_speed(self):
         return self._arm_interface.get_speed()
     
