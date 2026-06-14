@@ -6,6 +6,7 @@ import time
 import numpy as np
 from pathlib import Path
 import imageio.v2 as iio
+from types import SimpleNamespace
 
 import pybullet as p
 from pybullet_helpers.geometry import Pose, get_pose
@@ -205,3 +206,48 @@ class FeedingDeploymentPyBulletSimulator(FeedingDeploymentPyBulletWorld):
                 return source_to_target_frame
         except:
             raise NotImplementedError(f"{source_frame} to {target_frame} transform not implemented for simulation")
+
+class NullSimulator:
+    """Lightweight sim stub used when no_waits=True. Skips PyBullet entirely."""
+
+    # Kinova Gen3 7-DOF hardware limits (radians)
+    _JOINT_LOWER = [-2.41, -2.41, -2.66, -2.66, -2.66, -2.66, -2.66]
+    _JOINT_UPPER = [ 2.41,  2.41,  2.66,  2.66,  2.66,  2.66,  2.66]
+
+    def __init__(self, scene_description):
+        self.scene_description = scene_description
+        self._held_object_name = None
+        self.robot = SimpleNamespace(
+            joint_lower_limits=self._JOINT_LOWER,
+            joint_upper_limits=self._JOINT_UPPER,
+            open_fingers=lambda: None,
+            close_fingers=lambda: None,
+        )
+
+    @property
+    def held_object_name(self):
+        return self._held_object_name
+
+    def grasp_object(self, object_name):
+        self._held_object_name = object_name
+
+    def ungrasp_object(self):
+        self._held_object_name = None
+
+    def set_robot_motors(self, target_positions):
+        pass
+
+    def get_current_state(self):
+        return None
+
+    def sync(self, sim_state):
+        pass
+
+    def make_simulation_video(self, outfile, fps=20):
+        pass
+
+    def plan_to_ee_pose(self, *args, **kwargs):
+        raise RuntimeError("plan_to_ee_pose called on NullSimulator; must not be reached when no_waits=True")
+
+    def visualize_plan(self, *args, **kwargs):
+        pass

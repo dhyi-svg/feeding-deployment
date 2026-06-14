@@ -115,6 +115,7 @@ from feeding_deployment.simulation.scene_description import (
 from feeding_deployment.simulation.simulator import (
     FeedingDeploymentPyBulletSimulator,
     FeedingDeploymentWorldState,
+    NullSimulator,
 )
 from feeding_deployment.actions.flair.flair import FLAIR
 from feeding_deployment.transparency.query_llm import TransparencyQuery
@@ -235,7 +236,10 @@ class _Runner:
         else:
             self.rviz_interface = None
 
-        self.sim = FeedingDeploymentPyBulletSimulator(self.scene_description, use_gui=use_gui, ignore_user=True)
+        if self.no_waits:
+            self.sim = NullSimulator(self.scene_description)
+        else:
+            self.sim = FeedingDeploymentPyBulletSimulator(self.scene_description, use_gui=use_gui, ignore_user=True)
 
         if self.use_interface:
             # Initialize the web interface.
