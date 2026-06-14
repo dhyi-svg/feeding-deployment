@@ -179,9 +179,14 @@ const routes = [
     component: () => import(/* webpackChunkName: "about" */ '../views/PrepareBitePickup2.vue')
   },
   {
-    path: '/teleop',
-    name: 'teleop',
-    component: () => import(/* webpackChunkName: "about" */ '../views/Teleop.vue')
+    path: '/manipulation_teleop',
+    name: 'manipulation_teleop',
+    component: () => import(/* webpackChunkName: "about" */ '../views/ManipulationTeleop.vue')
+  },
+  {
+    path: '/navigation_teleop',
+    name: 'navigation_teleop',
+    component: () => import(/* webpackChunkName: "about" */ '../views/NavigationTeleop.vue')
   },
   {
     path: '/resuming',

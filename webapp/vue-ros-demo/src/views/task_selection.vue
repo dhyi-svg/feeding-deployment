@@ -70,10 +70,6 @@
         <img class="sub-button-icon" src="../assets/ges.png" alt="Adaptability Icon" />
         Gestures
       </button>
-      <button class="sub-button" @click="navigateToTeleop()">
-        <img class="sub-button-icon" src="../assets/ges.png" alt="Manual Control Icon" />
-        Manual Control
-      </button>
     </div>
   </div>
 </template>
@@ -147,10 +143,6 @@ export default {
       this.publishMessageA()
       this.$router.push('/fixedconfigurations');
     },
-    navigateToTeleop() {
-      this.publishMessageTeleop()
-      this.$router.push('/teleop');
-    },
     handleButtonClickR() {
       this.publishMessageD();
       this.$router.push('/swithtodrink');
@@ -216,15 +208,6 @@ export default {
         })
       })
 
-      this.publisher.publish(message);
-    },
-    publishMessageTeleop() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          state: 'task_selection',
-          status: 'teleop_recovery'
-        })
-      })
       this.publisher.publish(message);
     },
     initPublisher() {

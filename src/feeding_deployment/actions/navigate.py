@@ -141,7 +141,16 @@ class NavigateHLA(HighLevelAction):
             f"using {self._location_yaml()} ..."
         )
         client.send_goal(goal)
-        finished = client.wait_for_result(rospy.Duration(timeout_s))
+        # The base is now driving (via the shared_autonomy_manager). Enable the
+        # webapp's Robot Base Control button for the duration of this action so
+        # the user can take over mid-drive. The navigation page publishes
+        # /shared_autonomy/takeover, which the manager honors and still reports
+        # SUCCEEDED once the human signals done.
+        self._set_base_control_available(True)
+        try:
+            finished = client.wait_for_result(rospy.Duration(timeout_s))
+        finally:
+            self._set_base_control_available(False)
         if not finished:
             client.cancel_goal()
             raise TimeoutError(
@@ -155,6 +164,17 @@ class NavigateHLA(HighLevelAction):
             )
 
         print(f"Reached {location_name}.")
+
+    def _set_base_control_available(self, available: bool) -> None:
+        """Tell the webapp whether the Robot Base Control button should be enabled."""
+        if self.web_interface is None:
+            return
+        try:
+            self.web_interface._send_message(
+                {"state": "base_control", "status": "enabled" if available else "disabled"}
+            )
+        except Exception as e:
+            print(f"Could not signal base-control availability: {e}")
 
     def get_name(self) -> str:
         return "Navigate"

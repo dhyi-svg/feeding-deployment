@@ -159,13 +159,15 @@ export default {
       publisher: null,
       logPublisher: null,
       listener: null,
+      // Every joint is revolute, so each group uses the same convention:
+      // top button = counterclockwise (neg, ↺), bottom button = clockwise (pos, ↻).
       joints: [
-        { index: 1, label: 'Base rotate', neg: '&#8592;', pos: '&#8594;' },
-        { index: 2, label: 'Shoulder', neg: '&#8593;', pos: '&#8595;' },
+        { index: 1, label: 'Base rotate', neg: '&#8634;', pos: '&#8635;' },
+        { index: 2, label: 'Shoulder', neg: '&#8634;', pos: '&#8635;' },
         { index: 3, label: 'Arm twist', neg: '&#8634;', pos: '&#8635;' },
-        { index: 4, label: 'Elbow bend', neg: '&#8593;', pos: '&#8595;' },
+        { index: 4, label: 'Elbow bend', neg: '&#8634;', pos: '&#8635;' },
         { index: 5, label: 'Forearm twist', neg: '&#8634;', pos: '&#8635;' },
-        { index: 6, label: 'Wrist bend', neg: '&#8593;', pos: '&#8595;' },
+        { index: 6, label: 'Wrist bend', neg: '&#8634;', pos: '&#8635;' },
         { index: 7, label: 'Wrist twist', neg: '&#8634;', pos: '&#8635;' }
       ]
     }
@@ -415,7 +417,7 @@ export default {
   margin: 0 auto;
   font-family: Verdana, sans-serif;
   background: #fff;
-  padding: 12px 20px 16px;
+  padding: 8px 20px 10px;
   box-sizing: border-box;
 }
 
@@ -423,7 +425,7 @@ export default {
 .header {
   display: flex; align-items: center; gap: 12px;
   background: #eee; border-radius: 8px;
-  padding: 8px 14px; margin-bottom: 12px;
+  padding: 6px 14px; margin-bottom: 8px;
 }
 .header .user { width: 36px; height: 36px; }
 .header-title { font-size: 20px; font-weight: 700; color: #1f2937; }
@@ -435,9 +437,9 @@ export default {
 }
 
 /* Tab bar */
-.tabbar { display: flex; gap: 8px; margin-bottom: 12px; }
+.tabbar { display: flex; gap: 8px; margin-bottom: 8px; }
 .tab {
-  flex: 1; font-family: Verdana, sans-serif; font-size: 16px; padding: 14px 0;
+  flex: 1; font-family: Verdana, sans-serif; font-size: 16px; padding: 11px 0;
   color: #1f2937; background: #fff; border: 1px solid #ccc; border-radius: 8px;
   cursor: pointer;
 }
@@ -446,10 +448,10 @@ export default {
 }
 
 /* Step size */
-.stepsize { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.stepsize { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .stepsize-label { font-size: 14px; color: #6e7e8e; min-width: 70px; }
 .step {
-  flex: 1; font-family: Verdana, sans-serif; font-size: 14px; padding: 14px 0;
+  flex: 1; font-family: Verdana, sans-serif; font-size: 14px; padding: 11px 0;
   border: 1px solid #ccc; border-radius: 8px; background: #fff; color: #1f2937;
   cursor: pointer;
 }
@@ -459,18 +461,18 @@ export default {
 
 /* Status strip */
 .status {
-  font-size: 14px; padding: 9px 10px; border-radius: 8px; margin-bottom: 14px;
+  font-size: 14px; padding: 7px 10px; border-radius: 8px; margin-bottom: 8px;
   text-align: center;
 }
 .status.idle { background: #eee; color: #6e7e8e; }
 .status.moving { background: #FFE699; color: #6b5900; }
 .status.aborted { background: #ffd6d6; color: #c0392b; }
 
-.pad-label { font-size: 14px; font-weight: 700; margin: 0 0 8px; color: #6e7e8e; }
+.pad-label { font-size: 14px; font-weight: 700; margin: 0 0 6px; color: #6e7e8e; }
 
 /* Fixed-height tab area: keeps the Gripper / Retract / Done rows anchored at
    the same position whether Task space or Joint space is shown. */
-.tab-content { min-height: 404px; }
+.tab-content { min-height: 380px; }
 
 /* Move and Rotate pads side by side */
 .pads { display: flex; gap: 16px; }
@@ -480,7 +482,7 @@ export default {
   display: grid;
   grid-template-columns: 96px 1fr 96px;
   gap: 8px;
-  margin-bottom: 16px;
+  margin-bottom: 10px;
 }
 .move-grid { grid-template-rows: 84px 84px 84px 84px; }
 .rotate-grid { grid-template-rows: 84px 84px 84px 84px; }
@@ -510,8 +512,10 @@ export default {
 .rotate-grid .rturnright { grid-column: 3; grid-row: 2 / 4; }
 .rotate-grid .rtiltdown  { grid-column: 1 / 4; grid-row: 4; }
 
-/* Joints laid out horizontally: one column per joint */
-.joint-list { display: flex; gap: 8px; }
+/* Joints laid out horizontally: one column per joint. The list fills the same
+   fixed tab area as the task pads, and the two buttons in each column grow to
+   use that height, with large rotation icons. */
+.joint-list { display: flex; gap: 8px; height: 380px; }
 .joint-col {
   flex: 1;
   display: flex; flex-direction: column; gap: 8px;
@@ -519,34 +523,34 @@ export default {
 }
 .joint-col.moving { background: #fff4d6; }
 .joint-label {
-  font-size: 13px; color: #1f2937; text-align: center; line-height: 1.2;
+  font-size: 14px; color: #1f2937; text-align: center; line-height: 1.2;
   min-height: 40px; display: flex; align-items: center; justify-content: center;
 }
-.joint-col .jog { padding: 18px 0; font-size: 18px; }
+.joint-col .jog { flex: 1; padding: 0; font-size: 46px; line-height: 1; }
 
 /* Gripper */
-.gripper { margin-top: 16px; }
+.gripper { margin-top: 10px; }
 .gripper-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.gripper-row .jog { padding: 18px 0; min-height: 56px; }
+.gripper-row .jog { padding: 12px 0; min-height: 56px; }
 
 /* Bottom row */
 .bottom {
   display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
-  border-top: 1px solid #ddd; padding-top: 12px; margin-top: 16px;
+  border-top: 1px solid #ddd; padding-top: 10px; margin-top: 10px;
 }
 .retract {
   font-family: Verdana, sans-serif; font-size: 16px; font-weight: 700;
-  padding: 16px 0; border: none; border-radius: 8px;
+  padding: 12px 0; border: none; border-radius: 8px;
   background: #6e7e8e; color: #fff; cursor: pointer; min-height: 56px;
 }
 .stop {
   font-family: Verdana, sans-serif; font-size: 16px; font-weight: 700;
-  padding: 16px 0; border: none; border-radius: 8px;
+  padding: 12px 0; border: none; border-radius: 8px;
   background: #ff4d4f; color: #fff; cursor: pointer; min-height: 56px;
 }
 .done {
   font-family: Verdana, sans-serif; font-size: 16px; font-weight: 700;
-  padding: 16px 0; border: none; border-radius: 8px;
+  padding: 12px 0; border: none; border-radius: 8px;
   background: #28a745; color: #fff; cursor: pointer; min-height: 56px;
 }
 </style>

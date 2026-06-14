@@ -121,7 +121,10 @@ const routeMap = {
     jump: '/robotbehavior'
   },
   teleop: {
-    jump: '/teleop'
+    jump: '/manipulation_teleop'
+  },
+  navigation_teleop: {
+    jump: '/navigation_teleop'
   },
   resuming: {
     jump: '/resuming'
