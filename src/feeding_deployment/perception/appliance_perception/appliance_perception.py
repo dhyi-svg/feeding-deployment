@@ -1,4 +1,4 @@
-# Description: This script is used to detect ArUco markers and estimate their pose in the camera frame.
+# Description: This script is used to detect appliance handles and placement poses.
 
 # python imports
 import os, sys
@@ -7,28 +7,23 @@ import numpy as np
 import time
 import math
 from scipy.spatial.transform import Rotation
-from sklearn.cluster import DBSCAN   # <-- ADDED
-from feeding_deployment.actions.flair.inference_class import FOOD_MODELS_IMPORTS
+from sklearn.cluster import DBSCAN
 import open3d as o3d
 from pybullet_helpers.geometry import Pose, Pose3D
-from copy import deepcopy
-from threading import Lock
 
 # ros imports
 import rospy
-import message_filters
-from sensor_msgs.msg import Image, CameraInfo
-from cv_bridge import CvBridge, CvBridgeError
-import tf2_ros
+from sensor_msgs.msg import CameraInfo
 from geometry_msgs.msg import Point
 from visualization_msgs.msg import MarkerArray, Marker
 
 from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceClient
 from feeding_deployment.control.robot_controller.command_interface import CartesianCommand, JointCommand, CloseGripperCommand, OpenGripperCommand
-from geometry_msgs.msg import TransformStamped
 from collections import deque
 
 from feeding_deployment.perception.appliance_perception.remote_molmo import RemoteMolmo
+from feeding_deployment.perception.tf_interface import TFInterface
+from feeding_deployment.perception.grounded_sam import GroundedSAM
 
 from geometry_msgs.msg import Pose as pose_msg
 
@@ -36,115 +31,19 @@ import supervision as sv
 import torch
 import torch.nn.functional as F
 import torchvision
-import torchvision.transforms as transforms
-from groundingdino.util.inference import Model
-from segment_anything import sam_model_registry, SamPredictor
-PATH_TO_GROUNDED_SAM = '/home/isacc/Grounded-Segment-Anything'
-
-class TFInterface:
-    def __init__(self):
-        self.tfBuffer = tf2_ros.Buffer()  # Using default cache time of 10 secs
-        self.listener = tf2_ros.TransformListener(self.tfBuffer)
-        self.broadcaster = tf2_ros.TransformBroadcaster()
-        time.sleep(1.0)
-
-    def updateTF(self, source_frame, target_frame, pose):
-
-        t = TransformStamped()
-
-        t.header.stamp = rospy.Time.now()
-        t.header.frame_id = source_frame
-        t.child_frame_id = target_frame
-
-        t.transform.translation.x = pose[0][3]
-        t.transform.translation.y = pose[1][3]
-        t.transform.translation.z = pose[2][3]
-
-        R = Rotation.from_matrix(pose[:3, :3]).as_quat()
-        t.transform.rotation.x = R[0]
-        t.transform.rotation.y = R[1]
-        t.transform.rotation.z = R[2]
-        t.transform.rotation.w = R[3]
-
-        self.broadcaster.sendTransform(t)
-
-    def get_frame_to_frame_transform(self, camera_info_data, frame_A = "arm_base_link", target_frame = "camera_color_optical_frame"):
-        stamp = camera_info_data.header.stamp
-        try:
-            transform = self.tfBuffer.lookup_transform(
-                frame_A,
-                target_frame,
-                rospy.Time(secs=stamp.secs, nsecs=stamp.nsecs),
-            )
-            return transform
-        except Exception as e:
-            print("Exception finding transform between arm_base_link and", target_frame)
-            print("Error:", e)
-
-            return None
-
-    def make_homogeneous_transform(self, transform):
-        A_to_B = np.zeros((4, 4))
-        A_to_B[:3, :3] = Rotation.from_quat(
-            [
-                transform.transform.rotation.x,
-                transform.transform.rotation.y,
-                transform.transform.rotation.z,
-                transform.transform.rotation.w,
-            ]
-        ).as_matrix()
-        A_to_B[:3, 3] = np.array(
-            [
-                transform.transform.translation.x,
-                transform.transform.translation.y,
-                transform.transform.translation.z,
-            ]
-        ).reshape(1, 3)
-        A_to_B[3, 3] = 1
-
-        return A_to_B
-
-    def pose_to_matrix(self, pose):
-        position = pose[0]
-        orientation = pose[1]
-        pose_matrix = np.zeros((4, 4))
-        pose_matrix[:3, 3] = position
-        pose_matrix[:3, :3] = Rotation.from_quat(orientation).as_matrix()
-        pose_matrix[3, 3] = 1
-        return pose_matrix
-    
-    def matrix_to_pose(self, mat):
-        position = mat[:3, 3]
-        orientation = Rotation.from_matrix(mat[:3, :3]).as_quat()
-        return Pose(position, orientation) 
+import torchvision.transforms as transforms 
 
 
 class AppliancePerception(TFInterface):
-    def __init__(self, num_perception_samples=25):
+    def __init__(self, grounded_sam: GroundedSAM, num_perception_samples=25):
+        super().__init__()
 
-        self.DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-        # GroundingDINO config and checkpoint
-        self.GROUNDING_DINO_CONFIG_PATH = PATH_TO_GROUNDED_SAM + "/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
-        self.GROUNDING_DINO_CHECKPOINT_PATH = PATH_TO_GROUNDED_SAM + "/groundingdino_swint_ogc.pth"
-
-        print("Initializing Grounding Dino")        
-        # Building GroundingDINO inference model
-        self.grounding_dino_model = Model(model_config_path=self.GROUNDING_DINO_CONFIG_PATH, model_checkpoint_path=self.GROUNDING_DINO_CHECKPOINT_PATH)
+        self.grounding_dino_model = grounded_sam.grounding_dino_model
+        self.sam_predictor = grounded_sam.sam_predictor
 
         self.BOX_THRESHOLD = 0.3
         self.TEXT_THRESHOLD = 0.3
         self.NMS_THRESHOLD = 0.4
-
-        # Segment-Anything checkpoint
-        SAM_ENCODER_VERSION = "vit_h"
-        SAM_CHECKPOINT_PATH = PATH_TO_GROUNDED_SAM + "/sam_vit_h_4b8939.pth"
-
-        print("Initializing SAM")
-        # Building SAM Model and SAM Predictor
-        sam = sam_model_registry[SAM_ENCODER_VERSION](checkpoint=SAM_CHECKPOINT_PATH)
-        sam.to(device=self.DEVICE)
-        self.sam_predictor = SamPredictor(sam)
 
         print("Initializing molmo")
         self.molmo = RemoteMolmo(
@@ -152,82 +51,14 @@ class AppliancePerception(TFInterface):
             remote_dir="/home/rj277/molmo/sensor_msgs",
         )
 
-        self.turned_on = False
-        self.handle_type = None # "bottom white fridge door" or "microwave"
+        self.handle_type = None
         self.num_perception_samples = num_perception_samples
-        self.bridge = CvBridge()
 
-        self.color_image_sub = message_filters.Subscriber(
-            '/camera/color/image_raw', Image)
-        self.camera_info_sub = message_filters.Subscriber(
-            '/camera/color/camera_info', CameraInfo)
-        self.depth_image_sub = message_filters.Subscriber(
-            '/camera/aligned_depth_to_color/image_raw', Image)
-        
         self.handle_points_pub = rospy.Publisher("/handle_points", Marker, queue_size=1)
         self.handle_center_pub = rospy.Publisher("/handle_center", Marker, queue_size=1)
 
-        ts = message_filters.TimeSynchronizer(
-            [self.color_image_sub,
-             self.camera_info_sub,
-             self.depth_image_sub], 1)
-        ts.registerCallback(self.rgbdCallback)
-
-        self.camera_lock = Lock()
-        self.camera_header = None
-        self.camera_color_data = None
-        self.camera_info_data = None
-        self.camera_depth_data = None
-        self.camera_transform = None
-
-        super().__init__()
-
-    def turn_on(self, handle_type: str):
-        self.handle_type = handle_type
-        self.turned_on = True
-
-    def turn_off(self):
-        self.turned_on = False
-
-    def rgbdCallback(self, rgb_image_msg, camera_info_msg, depth_image_msg):
-
-        # if hasattr(self, "saved") and self.saved:
-            # return
-
-        if not self.turned_on or self.handle_type is None:
-            return
-
-        try:
-            rgb_image = self.bridge.imgmsg_to_cv2(
-                rgb_image_msg, "bgr8")
-            depth_image = self.bridge.imgmsg_to_cv2(
-                depth_image_msg, "32FC1")
-        except CvBridgeError as e:
-            print(e)
-            return
-        
+    def detect_start_button(self, rgb_image, camera_info_msg, depth_image):
         transform = self.get_frame_to_frame_transform(camera_info_msg)
-
-        with self.camera_lock:
-            self.camera_color_data = rgb_image
-            self.camera_info_data = camera_info_msg
-            self.camera_depth_data = depth_image
-            self.camera_header = rgb_image_msg.header
-            self.camera_transform = transform
-
-    def get_camera_data(self):
-        with self.camera_lock:
-            return (
-                deepcopy(self.camera_color_data),
-                deepcopy(self.camera_info_data),
-                deepcopy(self.camera_depth_data),
-                deepcopy(self.camera_header),
-                deepcopy(self.camera_transform),
-            )
-
-    def detect_start_button(self):
-
-        rgb_image, camera_info_msg, depth_image, header, transform = self.get_camera_data()
 
         file_path = os.path.dirname(__file__)
         print("Got images")
@@ -273,13 +104,12 @@ class AppliancePerception(TFInterface):
         print("Could not get transform between arm_base_link and camera_color_optical_frame")
         return None
 
-    def detect_handle_and_placement(self):
-
-        rgb_image, camera_info_msg, depth_image, header, transform = self.get_camera_data()
-
+    def detect_handle_and_placement(self, handle_type, rgb_image, camera_info_msg, depth_image):
         if rgb_image is None:
-            print("No camera data yet")
+            print("No camera data provided")
             return None, None, None
+
+        transform = self.get_frame_to_frame_transform(camera_info_msg)
 
         file_path = os.path.dirname(__file__)
         print("Got images")
@@ -287,7 +117,7 @@ class AppliancePerception(TFInterface):
         depth_mm = (depth_image * 1000.0).astype("uint16")
         cv2.imwrite(file_path + "/depth.png", depth_mm)
 
-        detection = self.detect_items(rgb_image, [self.handle_type])
+        detection = self.detect_items(rgb_image, [handle_type])
 
         if detection is None:
             print("No detection")
@@ -397,7 +227,7 @@ class AppliancePerception(TFInterface):
         # for handle_centroid take median in x, y and z to be more robust to outliers
 
         handle_centroid = np.median(cluster_points_3d, axis=0)
-        if self.handle_type == "bottom white fridge door":
+        if handle_type == "bottom white fridge door":
             handle_centroid[1] = top_most_y - 0.07
         else:
             handle_centroid[1] = top_most_y - 0.04
@@ -413,11 +243,7 @@ class AppliancePerception(TFInterface):
         print("Handle centroid pixel:", handle_centroid_pixel)
         cv2.circle(vis, (handle_centroid_pixel[0], handle_centroid_pixel[1]), 10, (0, 255, 0), -1)
 
-        # left most point in bounding_box_points_3d with the same y value as handle_centroid_3d is likely the hinge
-        # same_y = np.isclose(bounding_box_points_3d[:, 1], handle_centroid_3d[1], atol=0.02)
-        
-        if self.handle_type == "bottom white fridge door":
-            # take a strip of leftmost points on the plane_cloud (0.02 m wide)
+        if handle_type == "bottom white fridge door":
             print("Finding strip anchor point for fridge door handle")
             strip_anchor_point = np.min(plane_cloud.points, axis=0)
         else:
@@ -476,13 +302,12 @@ class AppliancePerception(TFInterface):
         print("Could not get transform between arm_base_link and camera_color_optical_frame")
         return None, None, None
 
-    def detect_sink_placement(self):
-
-        rgb_image, camera_info_msg, depth_image, header, transform = self.get_camera_data()
-
+    def detect_sink_placement(self, rgb_image, camera_info_msg, depth_image):
         if rgb_image is None:
-            print("No camera data yet")
+            print("No camera data provided")
             return None, None, None
+
+        transform = self.get_frame_to_frame_transform(camera_info_msg)
 
         file_path = os.path.dirname(__file__)
         print("Got images")
@@ -524,13 +349,12 @@ class AppliancePerception(TFInterface):
         print("Could not get transform between arm_base_link and camera_color_optical_frame")
         return None
 
-    def detect_table_placement(self):
-
-        rgb_image, camera_info_msg, depth_image, header, transform = self.get_camera_data()
-
+    def detect_table_placement(self, rgb_image, camera_info_msg, depth_image):
         if rgb_image is None:
-            print("No camera data yet")
+            print("No camera data provided")
             return None, None, None
+
+        transform = self.get_frame_to_frame_transform(camera_info_msg)
 
         file_path = os.path.dirname(__file__)
         print("Got images")
@@ -716,10 +540,6 @@ class AppliancePerception(TFInterface):
 
 if __name__ == '__main__':
     rospy.init_node('AppliancePerception')
-    appliance_perception = AppliancePerception()
-    # appliance_perception.turn_on("Start / 30 SEC button") # "bottom white fridge door" or "microwave"
-    appliance_perception.turn_on("bottom white fridge door") # "bottom white fridge door" or "microwave"
-    while True:
-        pose = appliance_perception.detect_table_placement()
-        print("Table placement pose:", pose)
+    grounded_sam = GroundedSAM()
+    appliance_perception = AppliancePerception(grounded_sam)
     rospy.spin()

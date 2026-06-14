@@ -1,4 +1,4 @@
-# Description: This script is used to detect ArUco markers and estimate their pose in the camera frame.
+# Description: This script is used to detect tool attachments.
 
 # python imports
 import os, sys
@@ -7,188 +7,38 @@ import numpy as np
 import time
 import math
 from scipy.spatial.transform import Rotation
-from sklearn.cluster import DBSCAN   # <-- ADDED
+from sklearn.cluster import DBSCAN
 import open3d as o3d
 from pybullet_helpers.geometry import Pose, Pose3D
-from copy import deepcopy
-from threading import Lock
 
 # ros imports
 import rospy
-import message_filters
-from sensor_msgs.msg import Image, CameraInfo
-from cv_bridge import CvBridge, CvBridgeError
-import tf2_ros
+from sensor_msgs.msg import CameraInfo
 from geometry_msgs.msg import Point
 from visualization_msgs.msg import MarkerArray, Marker
 
-from geometry_msgs.msg import TransformStamped
 from collections import deque
 
 from geometry_msgs.msg import Pose as pose_msg
 
-
-class TFInterface:
-    def __init__(self):
-        self.tfBuffer = tf2_ros.Buffer()  # Using default cache time of 10 secs
-        self.listener = tf2_ros.TransformListener(self.tfBuffer)
-        self.broadcaster = tf2_ros.TransformBroadcaster()
-        time.sleep(1.0)
-
-    def updateTF(self, source_frame, target_frame, pose):
-
-        t = TransformStamped()
-
-        t.header.stamp = rospy.Time.now()
-        t.header.frame_id = source_frame
-        t.child_frame_id = target_frame
-
-        t.transform.translation.x = pose[0][3]
-        t.transform.translation.y = pose[1][3]
-        t.transform.translation.z = pose[2][3]
-
-        R = Rotation.from_matrix(pose[:3, :3]).as_quat()
-        t.transform.rotation.x = R[0]
-        t.transform.rotation.y = R[1]
-        t.transform.rotation.z = R[2]
-        t.transform.rotation.w = R[3]
-
-        self.broadcaster.sendTransform(t)
-
-    def get_frame_to_frame_transform(self, camera_info_data, frame_A = "arm_base_link", target_frame = "camera_color_optical_frame"):
-        stamp = camera_info_data.header.stamp
-        try:
-            transform = self.tfBuffer.lookup_transform(
-                frame_A,
-                target_frame,
-                rospy.Time(secs=stamp.secs, nsecs=stamp.nsecs),
-            )
-            return transform
-        except (
-            tf2_ros.LookupException,
-            tf2_ros.ConnectivityException,
-            tf2_ros.ExtrapolationException,
-        ):
-            # print("Exexption finding transform between arm_base_link and", target_frame)
-            return None
-
-    def make_homogeneous_transform(self, transform):
-        A_to_B = np.zeros((4, 4))
-        A_to_B[:3, :3] = Rotation.from_quat(
-            [
-                transform.transform.rotation.x,
-                transform.transform.rotation.y,
-                transform.transform.rotation.z,
-                transform.transform.rotation.w,
-            ]
-        ).as_matrix()
-        A_to_B[:3, 3] = np.array(
-            [
-                transform.transform.translation.x,
-                transform.transform.translation.y,
-                transform.transform.translation.z,
-            ]
-        ).reshape(1, 3)
-        A_to_B[3, 3] = 1
-
-        return A_to_B
-
-    def pose_to_matrix(self, pose):
-        position = pose[0]
-        orientation = pose[1]
-        pose_matrix = np.zeros((4, 4))
-        pose_matrix[:3, 3] = position
-        pose_matrix[:3, :3] = Rotation.from_quat(orientation).as_matrix()
-        pose_matrix[3, 3] = 1
-        return pose_matrix
-    
-    def matrix_to_pose(self, mat):
-        position = mat[:3, 3]
-        orientation = Rotation.from_matrix(mat[:3, :3]).as_quat()
-        return Pose(position, orientation) 
+from feeding_deployment.perception.tf_interface import TFInterface 
 
 
 class AttachmentPerception(TFInterface):
     def __init__(self, num_perception_samples=25):
+        super().__init__()
 
-        self.turned_on = False
         self.num_perception_samples = num_perception_samples
-        self.bridge = CvBridge()
 
-        self.color_image_sub = message_filters.Subscriber(
-            '/camera/color/image_raw', Image)
-        self.camera_info_sub = message_filters.Subscriber(
-            '/camera/color/camera_info', CameraInfo)
-        self.depth_image_sub = message_filters.Subscriber(
-            '/camera/aligned_depth_to_color/image_raw', Image)
-        
         self.attachment_points_pub = rospy.Publisher("/attachment_points", Marker, queue_size=1)
         self.attachment_center_pub = rospy.Publisher("/attachment_center", Marker, queue_size=1)
 
-        ts = message_filters.TimeSynchronizer(
-            [self.color_image_sub,
-             self.camera_info_sub,
-             self.depth_image_sub], 1)
-        ts.registerCallback(self.rgbdCallback)
-
-        self.camera_lock = Lock()
-        self.camera_header = None
-        self.camera_color_data = None
-        self.camera_info_data = None
-        self.camera_depth_data = None
-        self.camera_transform = None
-
-        super().__init__()
-
-    def turn_on(self):
-        self.turned_on = True
-
-    def turn_off(self):
-        self.turned_on = False
-
-    def rgbdCallback(self, rgb_image_msg, camera_info_msg, depth_image_msg):
-
-        # if hasattr(self, "saved") and self.saved:
-            # return
-
-        if not self.turned_on:
-            return
-
-        try:
-            rgb_image = self.bridge.imgmsg_to_cv2(
-                rgb_image_msg, "bgr8")
-            depth_image = self.bridge.imgmsg_to_cv2(
-                depth_image_msg, "32FC1")
-        except CvBridgeError as e:
-            print(e)
-            return
+    def detect_attachment(self, rgb_image, camera_info_msg, depth_image):
+        if rgb_image is None:
+            print("No camera data provided.")
+            return None
 
         transform = self.get_frame_to_frame_transform(camera_info_msg)
-
-        with self.camera_lock:
-            self.camera_color_data = rgb_image
-            self.camera_info_data = camera_info_msg
-            self.camera_depth_data = depth_image
-            self.camera_header = rgb_image_msg.header
-            self.camera_transform = transform
-
-    def get_camera_data(self):
-        with self.camera_lock:
-            return (
-                deepcopy(self.camera_color_data),
-                deepcopy(self.camera_info_data),
-                deepcopy(self.camera_depth_data),
-                deepcopy(self.camera_header),
-                deepcopy(self.camera_transform),
-            )
-
-    def detect_attachment(self):
-
-        rgb_image, camera_info_msg, depth_image, header, transform = self.get_camera_data()
-
-        if rgb_image is None:
-            print("No camera data yet.")
-            return None
 
         file_path = os.path.dirname(__file__)
         print("Got images")

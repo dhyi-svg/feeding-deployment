@@ -154,8 +154,6 @@ def _main(
         robot_interface = None
         wrist_interface = None
 
-    flair = FLAIR(log_dir)
-
     if use_interface:
         task_selection_queue = queue.Queue()
         web_interface = WebInterface(task_selection_queue=task_selection_queue, log_dir=log_dir)
@@ -164,6 +162,9 @@ def _main(
 
     # Initialize the perceiver (e.g., get joint states or human head poses).
     perception_interface = PerceptionInterface(robot_interface=robot_interface, simulate_head_perception=simulate_head_perception, log_dir=log_dir)
+
+    grounded_sam = perception_interface._grounded_sam if hasattr(perception_interface, '_grounded_sam') else None
+    flair = FLAIR(log_dir, grounded_sam=grounded_sam)
 
     scene_config_path = Path(__file__).parent.parent / "simulation" / "configs" / f"{scene_config}.yaml"
     scene_description = create_scene_description_from_config(str(scene_config_path), transfer_type)

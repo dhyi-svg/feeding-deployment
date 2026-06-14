@@ -13,9 +13,9 @@ HOME_ORIENTATION = Rotation.from_quat([1/math.sqrt(2), 1/math.sqrt(2), 0, 0]).as
 DEFAULT_FORCE_THRESHOLD = [30.0, 30.0, 30.0, 30.0, 30.0, 30.0]
 
 class FLAIR:
-    def __init__(self, log_dir):
+    def __init__(self, log_dir, grounded_sam=None):
 
-        self.inference_server = BiteAcquisitionInference(mode='ours')
+        self.inference_server = BiteAcquisitionInference(mode='ours', grounded_sam=grounded_sam)
         print("inf server init")
 
         self.new_meal_parser = NewMealParser(log_dir)   

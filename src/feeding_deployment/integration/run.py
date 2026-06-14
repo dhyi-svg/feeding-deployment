@@ -227,7 +227,8 @@ class _Runner:
         else:
             print("Running in simulation mode.")
 
-        self.flair = FLAIR(self.log_dir)
+        grounded_sam = self.perception_interface._grounded_sam if hasattr(self.perception_interface, '_grounded_sam') else None
+        self.flair = FLAIR(self.log_dir, grounded_sam=grounded_sam)
 
         if self.run_on_robot:
             self.rviz_interface = RVizInterface(self.scene_description)

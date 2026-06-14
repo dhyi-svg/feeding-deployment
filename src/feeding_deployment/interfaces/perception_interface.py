@@ -25,6 +25,8 @@ try:
     from geometry_msgs.msg import WrenchStamped, Point, Pose as PoseMsg
     from netft_rdt_driver.srv import String_cmd
 
+    from feeding_deployment.interfaces.realsense_interface import RealSenseInterface
+    from feeding_deployment.perception.grounded_sam import GroundedSAM
     from feeding_deployment.perception.head_perception.ros_wrapper import HeadPerceptionROSWrapper
     from feeding_deployment.perception.drink_perception.drink_perception import DrinkPerception
     from feeding_deployment.perception.appliance_perception.appliance_perception import AppliancePerception
@@ -50,31 +52,34 @@ class PerceptionInterface:
             self._drink_perception = None
             self._appliance_perception = None
             self._attachment_perception = None
+            self._realsense = None
+            self._grounded_sam = None
         else:
             self.simulation = False
             self.tfBuffer = tf2_ros.Buffer()
             self.listener = tf2_ros.TransformListener(self.tfBuffer)
 
+            print("Initializing RealSense interface ...")
+            self._realsense = RealSenseInterface(record_goal_pose=record_goal_pose)
+            print("RealSense interface initialized")
+
+            print("Initializing shared GroundedSAM ...")
+            self._grounded_sam = GroundedSAM()
+            print("GroundedSAM initialized")
+
             print("Initializing head perception ROS wrapper ...")
             self._head_perception = HeadPerceptionROSWrapper(record_goal_pose)
             print("Head perception ROS wrapper initialized")
-            
-            # warm start head perception only if we're not recording the goal pose
-            if not record_goal_pose:
-                print("Setting tool to fork")
-                self._head_perception.set_tool("fork")
-                for _ in range(10):
-                    print("Warming up head perception ...")
-                    self._head_perception.run_head_perception()
 
             print("Initializing drink perception ...")
-            # Rajat ToDo: pass perception queues to all perception classes instead of having them use ros subscribers which spawn threads
             self._drink_perception = DrinkPerception()
             print("Initializing handle perception ...")
-            self._appliance_perception = AppliancePerception()
+            self._appliance_perception = AppliancePerception(self._grounded_sam)
             print("Initializing attachment perception ...")
             self._attachment_perception = AttachmentPerception()
             print("Perception interface initialized")
+
+            self._head_perception_warm_started = False
 
             self.speak_pub = rospy.Publisher('/speak', String, queue_size=1)
 
@@ -230,16 +235,47 @@ class PerceptionInterface:
             step_time = t_now - t_init
             if step_time >= 0.02:  # 50 Hz
                 if self._head_perception is not None and not self._simulate_head_perception:
-                    head_perception_data = self._head_perception.run_head_perception()
-                    # print("Head pose: ", head_perception_data["head_pose"])
+                    cam_data = self._realsense.get_camera_data()
+                    rgb_image = cam_data["rgb_image"]
+                    camera_info = cam_data["camera_info"]
+                    depth_image = cam_data["depth_image"]
+
+                    if rgb_image is not None and camera_info is not None and depth_image is not None:
+                        transform = self._head_perception.get_base_to_camera_transform(camera_info)
+                        if transform is not None:
+                            base_to_camera = np.zeros((4, 4))
+                            base_to_camera[:3, :3] = R.from_quat([
+                                transform.transform.rotation.x,
+                                transform.transform.rotation.y,
+                                transform.transform.rotation.z,
+                                transform.transform.rotation.w,
+                            ]).as_matrix()
+                            base_to_camera[:3, 3] = np.array([
+                                transform.transform.translation.x,
+                                transform.transform.translation.y,
+                                transform.transform.translation.z,
+                            ]).reshape(1, 3)
+                            base_to_camera[3, 3] = 1
+
+                            if not self._head_perception_warm_started:
+                                print("Warming up head perception ...")
+                                self._head_perception.set_tool(self.tool if hasattr(self, 'tool') else "fork")
+                                for _ in range(10):
+                                    self._head_perception.run_head_perception(rgb_image, camera_info, depth_image, base_to_camera, visualize=False)
+                                self._head_perception_warm_started = True
+
+                            head_perception_data = self._head_perception.run_head_perception(rgb_image, camera_info, depth_image, base_to_camera)
+                        else:
+                            head_perception_data = None
+                    else:
+                        head_perception_data = None
                 else:
                     try:
-                        # read from logged data
                         with open(self.log_dir / f'head_perception_data_{self.tool}.pkl', 'rb') as f:
                             head_perception_data = pickle.load(f)
                     except FileNotFoundError:
                         raise FileNotFoundError("No transfer logged data found for tool: ", self.tool)
-                    time.sleep(0.1) # Maintain 10 Hz rate that real perception would have
+                    time.sleep(0.1)
                 if self.log_head_perception:
                     self.log_head_perception_data.append((time.time(), head_perception_data))
                 with self.head_perception_data_lock:
@@ -384,23 +420,30 @@ class PerceptionInterface:
     def perceive_button_pressing_poses(self):
 
         if self.simulation:
-            # load them from a pickle file
             with open(self.log_dir / 'button_pressing_pose.pkl', 'rb') as f:
                 button_pressing_pose = pickle.load(f)
             handle_poses = button_pressing_pose["last_button_pressing_poses"]
 
         else:
-            self._appliance_perception.turn_on("microwave") # microwave and fridge have the same button, so we can just turn on microwave perception
-            # Rajat Hack: Wait 1 second
-            time.sleep(1)
             button_pose = None
-            while button_pose is None:
-                button_pose = self._appliance_perception.detect_start_button()
-            self._appliance_perception.turn_off()
+            for _ in range(20):
+                cam_data = self._realsense.get_camera_data()
+                rgb_image = cam_data["rgb_image"]
+                camera_info = cam_data["camera_info"]
+                depth_image = cam_data["depth_image"]
+
+                if rgb_image is not None and camera_info is not None and depth_image is not None:
+                    button_pose = self._appliance_perception.detect_start_button(rgb_image, camera_info, depth_image)
+                    if button_pose is not None:
+                        break
+                time.sleep(0.1)
+
+            if button_pose is None:
+                raise RuntimeError("Could not detect button pressing pose")
 
             button_transform = self.pose_to_matrix(button_pose)
             offset = np.eye(4)
-            offset[:3, 3] = np.array([0.005, 0.0, -0.055]) # x axis is left, y axis is up, z axis is forward. 
+            offset[:3, 3] = np.array([0.005, 0.0, -0.055])
             press_pose = self.matrix_to_pose(button_transform @ offset)
 
             pre_press_offset = np.eye(4)
@@ -410,7 +453,6 @@ class PerceptionInterface:
             intermediate_offset = np.eye(4)
             intermediate_offset[:3, 3] = np.array([0.005, 0.0, -0.08])
             intermediate_pose = self.matrix_to_pose(button_transform @ intermediate_offset)
-            
 
             return {
                 "press_pose": press_pose,
@@ -433,18 +475,22 @@ class PerceptionInterface:
             handle_poses = handle_opening_pos["last_handle_poses"]
 
         else:
-            # Keep re-perceiving the handle/hinge/placement until the user confirms
-            # the detection looks correct on the web app. detect_handle_and_placement()
-            # writes a visualization to handle_hinge_pixels.png on each pass
-            # (green dot = handle centroid, blue dot = hinge).
             while True:
-                self._appliance_perception.turn_on(handle_type)
-                # Rajat Hack: Wait 1 second
-                time.sleep(1)
                 handle_pose = None
-                while handle_pose is None:
-                    handle_pose, hinge_pose, placement_pose = self._appliance_perception.detect_handle_and_placement()
-                self._appliance_perception.turn_off()
+                for _ in range(20):
+                    cam_data = self._realsense.get_camera_data()
+                    rgb_image = cam_data["rgb_image"]
+                    camera_info = cam_data["camera_info"]
+                    depth_image = cam_data["depth_image"]
+
+                    if rgb_image is not None and camera_info is not None and depth_image is not None:
+                        handle_pose, hinge_pose, placement_pose = self._appliance_perception.detect_handle_and_placement(handle_type, rgb_image, camera_info, depth_image)
+                        if handle_pose is not None:
+                            break
+                    time.sleep(0.1)
+
+                if handle_pose is None:
+                    raise RuntimeError(f"Could not detect handle opening poses for {handle_type}")
 
                 # If no web interface is available (e.g. running headless), skip the
                 # confirmation and proceed with a single perception pass.
@@ -658,19 +704,28 @@ class PerceptionInterface:
     def perceive_attachment_poses(self):
 
         if self.simulation:
-            # load them from a pickle file
             with open(self.log_dir / 'attachment_poses.pkl', 'rb') as f:
                 attachment_poses = pickle.load(f)
 
         else:
-            self._attachment_perception.turn_on()
-            # Rajat Hack: Wait 1 second
-            time.sleep(1)
-            attachment_pose = self._attachment_perception.detect_attachment()
-            self._attachment_perception.turn_off()
+            attachment_pose = None
+            for _ in range(20):
+                cam_data = self._realsense.get_camera_data()
+                rgb_image = cam_data["rgb_image"]
+                camera_info = cam_data["camera_info"]
+                depth_image = cam_data["depth_image"]
+
+                if rgb_image is not None and camera_info is not None and depth_image is not None:
+                    attachment_pose = self._attachment_perception.detect_attachment(rgb_image, camera_info, depth_image)
+                    if attachment_pose is not None:
+                        break
+                time.sleep(0.1)
+
+            if attachment_pose is None:
+                raise RuntimeError("Could not detect attachment pose")
 
             offset = np.eye(4)
-            offset[:3, 3] = np.array([0, 0, -0.02]) # x axis is left, y axis is up, z axis is forward.
+            offset[:3, 3] = np.array([0, 0, -0.02])
             pickup_pose = self.matrix_to_pose(self.pose_to_matrix(attachment_pose) @ offset)
 
             offset[:3, 3] = np.array([0, 0.03, -0.12])
@@ -693,16 +748,24 @@ class PerceptionInterface:
                 sink_placement_poses = pickle.load(f)
 
         else:
-            self._appliance_perception.turn_on("sink")
-            # Rajat Hack: Wait 1 second
-            time.sleep(1)
             sink_placement_pose = None
-            while sink_placement_pose is None:
-                sink_placement_pose = self._appliance_perception.detect_sink_placement()
-            self._appliance_perception.turn_off()
+            for _ in range(20):
+                cam_data = self._realsense.get_camera_data()
+                rgb_image = cam_data["rgb_image"]
+                camera_info = cam_data["camera_info"]
+                depth_image = cam_data["depth_image"]
+
+                if rgb_image is not None and camera_info is not None and depth_image is not None:
+                    sink_placement_pose = self._appliance_perception.detect_sink_placement(rgb_image, camera_info, depth_image)
+                    if sink_placement_pose is not None:
+                        break
+                time.sleep(0.1)
+
+            if sink_placement_pose is None:
+                raise RuntimeError("Could not detect sink placement pose")
 
             offset = np.eye(4)
-            offset[:3, 3] = np.array([0.0, 0.12, -0.4]) # x axis is left, y axis is up, z axis is forward. 
+            offset[:3, 3] = np.array([0.0, 0.12, -0.4])
             sink_placement_pose = self.matrix_to_pose(self.pose_to_matrix(sink_placement_pose) @ offset)
 
             sink_placement_poses = {
@@ -722,16 +785,24 @@ class PerceptionInterface:
                 table_placement_poses = pickle.load(f)
 
         else:
-            self._appliance_perception.turn_on("table")
-            # Rajat Hack: Wait 1 second
-            time.sleep(1)
             table_placement_pose = None
-            while table_placement_pose is None:
-                table_placement_pose = self._appliance_perception.detect_table_placement()
-            self._appliance_perception.turn_off()
+            for _ in range(20):
+                cam_data = self._realsense.get_camera_data()
+                rgb_image = cam_data["rgb_image"]
+                camera_info = cam_data["camera_info"]
+                depth_image = cam_data["depth_image"]
+
+                if rgb_image is not None and camera_info is not None and depth_image is not None:
+                    table_placement_pose = self._appliance_perception.detect_table_placement(rgb_image, camera_info, depth_image)
+                    if table_placement_pose is not None:
+                        break
+                time.sleep(0.1)
+
+            if table_placement_pose is None:
+                raise RuntimeError("Could not detect table placement pose")
 
             offset = np.eye(4)
-            offset[:3, 3] = np.array([0.0, 0.075, -0.23]) # x axis is left, y axis is up, z axis is forward. 
+            offset[:3, 3] = np.array([0.0, 0.075, -0.23])
             table_placement_pose = self.matrix_to_pose(self.pose_to_matrix(table_placement_pose) @ offset)
 
             offset_for_pre_place = np.eye(4)
@@ -806,15 +877,28 @@ class PerceptionInterface:
             drink_poses = drink_pickup_pos["last_drink_poses"]
 
         else:
-            self._drink_perception.turn_on()
-            # Rajat Hack: Wait one second for the aruco mean to be correct, does this actually help though?
-            time.sleep(3)
+            aruco_pose_msg = None
+            for _ in range(100):
+                cam_data = self._realsense.get_camera_data()
+                rgb_image = cam_data["rgb_image"]
+                camera_info = cam_data["camera_info"]
+                depth_image = cam_data["depth_image"]
 
-            aruco_pose_msg = rospy.wait_for_message("/aruco_pose_0", PoseMsg)
+                if rgb_image is not None and camera_info is not None and depth_image is not None:
+                    self._drink_perception.update(rgb_image, camera_info, depth_image)
+
+                try:
+                    aruco_pose_msg = rospy.wait_for_message("/aruco_pose_0", PoseMsg, timeout=0.1)
+                    break
+                except rospy.ROSException:
+                    pass
+
+            if aruco_pose_msg is None:
+                raise RuntimeError("Could not detect drink pickup pose")
+
             position = (aruco_pose_msg.position.x, aruco_pose_msg.position.y, aruco_pose_msg.position.z)
             orientation = (aruco_pose_msg.orientation.x, aruco_pose_msg.orientation.y, aruco_pose_msg.orientation.z, aruco_pose_msg.orientation.w)
             self.aruco_pose = (position, orientation)
-            self._drink_perception.turn_off()
 
             drink_poses  = {}
             drink_poses['drink_pose'] = self.get_aruco_relative_pose(get_drink_transform(), "drink")
