@@ -4,9 +4,9 @@ import AboutView from '../components/OldTopBar(NoUsed).vue'
 
 const routes = [
   {
-    path: '/handleconfirmation',
-    name: 'handleconfirmation',
-    component: () => import(/* webpackChunkName: "about" */ '../views/handle_confirmation.vue')
+    path: '/detectconfirmation',
+    name: 'detectconfirmation',
+    component: () => import(/* webpackChunkName: "about" */ '../views/detect_confirmation.vue')
   },
   {
     path: '/acquirebite',

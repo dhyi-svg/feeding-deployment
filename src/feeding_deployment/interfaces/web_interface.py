@@ -387,28 +387,34 @@ class WebInterface:
             )
         )
 
-    #### Handle Detection Confirmation Page ####
+    #### Detection Confirmation Page ####
 
-    def get_handle_detection_confirmation(self, vis_image=None) -> bool:
-        """Show the detected handle/hinge on the web app and ask the user to confirm.
+    def get_detection_confirmation(self, detection_type: str, vis_image=None) -> bool:
+        """Show a detection visualization on the web app and ask the user to confirm.
 
-        The handle perception visualization (green dot = handle, blue dot = hinge)
-        is sent to the web app. Returns True if the user confirms the detection
-        looks correct, and False if the handle perception should be re-run.
+        This drives the generic detection-confirmation page. ``detection_type``
+        selects which copy is shown to the user (e.g. ``"handle"``, ``"button"``,
+        ``"plate"``) and the visualization image (if any) is sent to the web app.
+        Returns True if the user confirms the detection looks correct, and False
+        if the perception should be re-run.
         """
-        self.current_page = "handle_confirmation"
+        self.current_page = "detect_confirmation"
 
-        # Jump to the handle confirmation page.
-        self._send_message({"state": "handle_confirmation", "status": "jump"})
+        # Jump to the detection confirmation page.
+        self._send_message({"state": "detect_confirmation", "status": "jump", "detection_type": detection_type})
 
-        # Wait for the web interface to be ready, then send the visualization image.
+        # Wait for the web interface to be ready, then tell the (now-mounted)
+        # confirmation page which detection this is and send the visualization
+        # image. The "info" status is not in the frontend routeMap, so it only
+        # updates the page's copy without triggering a re-navigation.
         time.sleep(0.5)
+        self._send_message({"state": "detect_confirmation", "status": "info", "detection_type": detection_type})
         if vis_image is not None:
             self._send_image(vis_image)
 
         # Wait until the user confirms or rejects the detection.
         msg_dict = self.get_required_web_interface_message(
-            lambda msg_dict: (msg_dict["state"] == "handle_confirmation")
+            lambda msg_dict: (msg_dict["state"] == "detect_confirmation")
         )
 
         if msg_dict is None:

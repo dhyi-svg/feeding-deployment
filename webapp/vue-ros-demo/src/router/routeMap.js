@@ -54,8 +54,8 @@ const routeMap = {
   task_selection: {
     jump: '/task_selection'
   },
-  handle_confirmation: {
-    jump: '/handleconfirmation'
+  detect_confirmation: {
+    jump: '/detectconfirmation'
   },
   transparency: {
     jump: '/robotbehavior'

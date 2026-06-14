@@ -64,7 +64,7 @@ class PressMicrowaveButtonHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.microwave_closeup_gaze_pos)
 
         time.sleep(5.0) # wait for the robot to stabilize before perception
-        press_button_poses = self.perception_interface.perceive_button_pressing_poses()
+        press_button_poses = self.perception_interface.perceive_button_pressing_poses(web_interface=self.web_interface)
 
         self.move_to_joint_positions(self.sim.scene_description.fridge_door_staging_pos)
         self.close_gripper() # just in case the gripper is open

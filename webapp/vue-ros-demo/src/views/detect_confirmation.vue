@@ -4,20 +4,16 @@
       <img class="user" alt="User" src="https://c.animaapp.com/jvBoNEN4/img/user.svg">
       <div class="usertext">
         <div class="username">{{ username }}</div>
-        <div class="userslog">Please verify the detection.</div>
+        <div class="userslog">{{ currentSlog }}</div>
       </div>
     </div>
   </div>
 
   <div class="content">
-    <div class="instruction">
-      Does the robot's handle detection look correct? <br>
-      Green dot = handle, Blue dot = hinge. <br>
-      Click 'Looks Correct' to proceed, or 'Redo' to detect again.
-    </div>
+    <div class="instruction" v-html="currentInstruction"></div>
 
     <div class="image-container">
-      <img v-if="imageSrc" :src="imageSrc" class="detection-image" alt="Handle detection" />
+      <img v-if="imageSrc" :src="imageSrc" class="detection-image" alt="Detection visualization" />
       <div v-else class="waiting">Waiting for detection image...</div>
     </div>
 
@@ -32,15 +28,55 @@
 import ROSLIB from 'roslib'
 import routeMap from '@/router/routeMap';
 import { ROS_URL, USER } from '@/config/parameterConfig';
+
+// Per-detection-type copy shown on this generic confirmation page. The backend
+// tells us which detection is being confirmed via the "detection_type" field on
+// the /ServerComm message, and we look up the matching text here.
+const DETECTION_MESSAGES = {
+  handle: {
+    slog: 'Please verify the handle detection.',
+    instruction:
+      "Does the robot's handle detection look correct? <br>" +
+      "Green dot = handle, Blue dot = hinge. <br>" +
+      "Click 'Looks Correct' to proceed, or 'Redo' to detect again."
+  },
+  button: {
+    slog: 'Please verify the microwave button detection.',
+    instruction:
+      "Does the robot's microwave button detection look correct? <br>" +
+      "The marked point should be on the start / 30 secs button to press. <br>" +
+      "Click 'Looks Correct' to proceed, or 'Redo' to detect again."
+  },
+  plate: {
+    slog: 'Please verify the plate placement detection.',
+    instruction:
+      "Does the robot's plate placement detection look correct? <br>" +
+      "Red dot = where the plate will be placed on the table. <br>" +
+      "Click 'Looks Correct' to proceed, or 'Redo' to detect again."
+  }
+};
+
 export default {
   data () {
     return {
       username: USER,
+      detectionType: 'handle', // which detection we are confirming
       listener: null, // /ServerComm listener
       imageListener: null, // /camera/image/compressed listener
       publisher: null,
       imageSrc: null,
       subscribeTopic: '/ServerComm'
+    }
+  },
+  computed: {
+    currentMessage () {
+      return DETECTION_MESSAGES[this.detectionType] || DETECTION_MESSAGES.handle;
+    },
+    currentSlog () {
+      return this.currentMessage.slog;
+    },
+    currentInstruction () {
+      return this.currentMessage.instruction;
     }
   },
   mounted () {
@@ -70,6 +106,10 @@ export default {
     handleRosMessage (message) {
       try {
         const parsedMessage = JSON.parse(message.data);
+        // Update which detection we are confirming whenever the backend tells us.
+        if (parsedMessage.state === 'detect_confirmation' && parsedMessage.detection_type) {
+          this.detectionType = parsedMessage.detection_type;
+        }
         const route = routeMap[parsedMessage.state]?.[parsedMessage.status];
         if (route) {
           this.$router.push(route);
@@ -121,8 +161,9 @@ export default {
     publishResponse (status) {
       const message = new ROSLIB.Message({
         data: JSON.stringify({
-          state: 'handle_confirmation',
-          status: status
+          state: 'detect_confirmation',
+          status: status,
+          detection_type: this.detectionType
         })
       })
       this.publisher.publish(message);

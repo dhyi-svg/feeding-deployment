@@ -55,7 +55,7 @@ class GazeAtTableHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.table_gaze_pos)
 
-        placement_poses = self.perception_interface.perceive_table_placement_poses()
+        placement_poses = self.perception_interface.perceive_table_placement_poses(web_interface=self.web_interface)
         print("Table placement poses:", placement_poses)
 
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)

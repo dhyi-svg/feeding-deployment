@@ -1,6 +1,7 @@
 """An interface for perception (robot joints, human head poses, etc.)."""
 
 import os
+import inspect
 import threading
 import time
 from pathlib import Path
@@ -417,7 +418,7 @@ class PerceptionInterface:
 
         return waypoints
     
-    def perceive_button_pressing_poses(self):
+    def perceive_button_pressing_poses(self, web_interface=None):
 
         if self.simulation:
             with open(self.log_dir / 'button_pressing_pose.pkl', 'rb') as f:
@@ -425,21 +426,35 @@ class PerceptionInterface:
             handle_poses = button_pressing_pose["last_button_pressing_poses"]
 
         else:
-            button_pose = None
-            for _ in range(20):
-                cam_data = self._realsense.get_camera_data()
-                rgb_image = cam_data["rgb_image"]
-                camera_info = cam_data["camera_info"]
-                depth_image = cam_data["depth_image"]
+            while True:
+                button_pose = None
+                for _ in range(20):
+                    cam_data = self._realsense.get_camera_data()
+                    rgb_image = cam_data["rgb_image"]
+                    camera_info = cam_data["camera_info"]
+                    depth_image = cam_data["depth_image"]
 
-                if rgb_image is not None and camera_info is not None and depth_image is not None:
-                    button_pose = self._appliance_perception.detect_start_button(rgb_image, camera_info, depth_image)
-                    if button_pose is not None:
-                        break
-                time.sleep(0.1)
+                    if rgb_image is not None and camera_info is not None and depth_image is not None:
+                        button_pose = self._appliance_perception.detect_start_button(rgb_image, camera_info, depth_image)
+                        if button_pose is not None:
+                            break
+                    time.sleep(0.1)
 
-            if button_pose is None:
-                raise RuntimeError("Could not detect button pressing pose")
+                if button_pose is None:
+                    raise RuntimeError("Could not detect button pressing pose")
+
+                # If no web interface is available (e.g. running headless), skip the
+                # confirmation and proceed with a single perception pass.
+                if web_interface is None:
+                    break
+                # detect_start_button saves Molmo's keypoint visualization next to
+                # the appliance perception module. It is drawn on the flipped
+                # (already upright) image, so no extra rotation is needed.
+                appliance_dir = os.path.dirname(inspect.getfile(self._appliance_perception.__class__))
+                vis_image = cv2.imread(os.path.join(appliance_dir, "rgb_keypoint.png"))
+                if web_interface.get_detection_confirmation("button", vis_image):
+                    break
+                print("Button detection rejected by user. Re-running button perception ...")
 
             button_transform = self.pose_to_matrix(button_pose)
             offset = np.eye(4)
@@ -501,7 +516,7 @@ class PerceptionInterface:
                 # 180 degrees to show it right-side up to the user.
                 if vis_image is not None:
                     vis_image = cv2.rotate(vis_image, cv2.ROTATE_180)
-                if web_interface.get_handle_detection_confirmation(vis_image):
+                if web_interface.get_detection_confirmation("handle", vis_image):
                     break
                 print("Handle detection rejected by user. Re-running handle perception ...")
 
@@ -777,7 +792,7 @@ class PerceptionInterface:
 
         return sink_placement_poses
 
-    def perceive_table_placement_poses(self):
+    def perceive_table_placement_poses(self, web_interface=None):
 
         if self.simulation:
             # load them from a pickle file
@@ -785,21 +800,37 @@ class PerceptionInterface:
                 table_placement_poses = pickle.load(f)
 
         else:
-            table_placement_pose = None
-            for _ in range(20):
-                cam_data = self._realsense.get_camera_data()
-                rgb_image = cam_data["rgb_image"]
-                camera_info = cam_data["camera_info"]
-                depth_image = cam_data["depth_image"]
+            while True:
+                table_placement_pose = None
+                for _ in range(20):
+                    cam_data = self._realsense.get_camera_data()
+                    rgb_image = cam_data["rgb_image"]
+                    camera_info = cam_data["camera_info"]
+                    depth_image = cam_data["depth_image"]
 
-                if rgb_image is not None and camera_info is not None and depth_image is not None:
-                    table_placement_pose = self._appliance_perception.detect_table_placement(rgb_image, camera_info, depth_image)
-                    if table_placement_pose is not None:
-                        break
-                time.sleep(0.1)
+                    if rgb_image is not None and camera_info is not None and depth_image is not None:
+                        table_placement_pose = self._appliance_perception.detect_table_placement(rgb_image, camera_info, depth_image)
+                        if table_placement_pose is not None:
+                            break
+                    time.sleep(0.1)
 
-            if table_placement_pose is None:
-                raise RuntimeError("Could not detect table placement pose")
+                if table_placement_pose is None:
+                    raise RuntimeError("Could not detect table placement pose")
+
+                # If no web interface is available (e.g. running headless), skip the
+                # confirmation and proceed with a single perception pass.
+                if web_interface is None:
+                    break
+                # detect_table_placement saves the annotated frame (red dot = placement
+                # center, blue = surrounding pixels used for depth) to the cwd.
+                vis_image = cv2.imread(os.path.join(os.getcwd(), "table_placement_pixel.png"))
+                # The camera is mounted upside down, so rotate the visualization
+                # 180 degrees to show it right-side up to the user.
+                if vis_image is not None:
+                    vis_image = cv2.rotate(vis_image, cv2.ROTATE_180)
+                if web_interface.get_detection_confirmation("plate", vis_image):
+                    break
+                print("Table placement detection rejected by user. Re-running table placement perception ...")
 
             offset = np.eye(4)
             offset[:3, 3] = np.array([0.0, 0.075, -0.23])
@@ -1083,7 +1114,7 @@ class PerceptionInterface:
             # save in pickle file
             with open(self.log_dir / 'aruco_pose.pkl', 'wb') as f:
                 pickle.dump(aruco_pose_msg, f)
-            
+
             position = (aruco_pose_msg.position.x, aruco_pose_msg.position.y, aruco_pose_msg.position.z)
             orientation = (aruco_pose_msg.orientation.x, aruco_pose_msg.orientation.y, aruco_pose_msg.orientation.z, aruco_pose_msg.orientation.w)
             self.aruco_pose = (position, orientation)
