@@ -13,6 +13,11 @@
     <!-- Connection banner: red if the command link is unhealthy. -->
     <div class="banner" :class="{ bad: !connected }">{{ bannerText }}</div>
 
+    <!-- What the robot was doing when control was handed over. -->
+    <div class="hla-banner" v-if="currentHla">
+      Robot is currently: <b>{{ skillLabel(currentHla) }}</b>
+    </div>
+
     <div class="joystick-area">
       <div
         class="pad"
@@ -41,6 +46,7 @@
 import ROSLIB from 'roslib'
 import routeMap from '@/router/routeMap'
 import { ROS_URL } from '@/config/parameterConfig'
+import { skillLabel } from '@/config/skillLabels'
 
 // ---- tunables (mirror the reference design) ----
 const MAX_LIN = 0.30   // m/s at full forward/back
@@ -64,7 +70,11 @@ export default {
       cmdVelPub: null,
       takeoverPub: null,
       donePub: null,
-      listener: null
+      listener: null,
+      skillPlanListener: null,
+      // Snake_case name of the HLA the robot is executing (null if idle), from
+      // the latched /SkillPlan topic.
+      currentHla: null
     }
   },
   computed: {
@@ -73,6 +83,11 @@ export default {
     }
   },
   mounted () {
+    // Dev/testing hook: inject the current HLA via URL when running without a
+    // backend, e.g. /#/navigation_teleop?hla=navigate_to_table
+    if (this.$route.query.hla) {
+      this.currentHla = this.$route.query.hla
+    }
     this.ros = new ROSLIB.Ros({ url: ROS_URL })
     this.ros.on('connection', () => { this.connected = true })
     this.ros.on('close', () => this.setLinkHealthy(false))
@@ -86,6 +101,11 @@ export default {
     // Follow the executive's page jumps like every other page.
     this.listener = new ROSLIB.Topic({ ros: this.ros, name: '/ServerComm', messageType: 'std_msgs/String' })
     this.listener.subscribe((msg) => this.handleRosMessage(msg))
+    // Latched skill plan: tells us which HLA the robot is executing. Latching
+    // delivers the current value on connect, even though this screen mounts
+    // only after takeover (i.e. after the plan was published).
+    this.skillPlanListener = new ROSLIB.Topic({ ros: this.ros, name: '/SkillPlan', messageType: 'std_msgs/String' })
+    this.skillPlanListener.subscribe((msg) => this.handleSkillPlan(msg))
 
     // Announce takeover so the base manager switches out of autopilot.
     this.takeoverPub.publish(new ROSLIB.Message({}))
@@ -171,6 +191,19 @@ export default {
         console.error('NavigationTeleop: failed to parse message:', e)
       }
     },
+    handleSkillPlan (msg) {
+      try {
+        const parsed = JSON.parse(msg.data)
+        const plan = Array.isArray(parsed.plan) ? parsed.plan : []
+        const idx = parsed.current
+        this.currentHla = (typeof idx === 'number' && idx >= 0 && idx < plan.length) ? plan[idx] : null
+      } catch (e) {
+        console.error('NavigationTeleop: failed to parse /SkillPlan message:', e)
+      }
+    },
+    skillLabel (name) {
+      return skillLabel(name)
+    },
     finish () {
       // Stop the base, tell the manager the human has parked it, return to menu.
       this.center()
@@ -185,6 +218,7 @@ export default {
       window.removeEventListener('blur', this.center)
       document.removeEventListener('visibilitychange', this.onVisibility)
       if (this.listener) { this.listener.unsubscribe(); this.listener = null }
+      if (this.skillPlanListener) { this.skillPlanListener.unsubscribe(); this.skillPlanListener = null }
     }
   }
 }
@@ -198,7 +232,12 @@ export default {
   background: #fff;
   padding: 8px 20px 10px;
   box-sizing: border-box;
-  height: 100%;
+  /* Fill the viewport and never scroll; the joystick area flexes to absorb the
+     HLA banner so everything stays on one screen (e.g. the 1180x820 iPad). */
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 /* Header (matches the app's top bar) */
@@ -222,10 +261,15 @@ export default {
 }
 .banner.bad { color: #791f1f; background: #fcebeb; }
 
+.hla-banner {
+  text-align: center; font-size: 15px; padding: 8px; border-radius: 8px;
+  color: #2c5777; background: #e3edf7; margin-bottom: 8px;
+}
+
 .joystick-area {
   display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: 24px;
-  height: 78vh;
+  flex: 1; min-height: 0;
 }
 
 .pad {

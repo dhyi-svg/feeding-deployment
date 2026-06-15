@@ -11,6 +11,11 @@
       <button class="menu-btn" @click="backToMenu()">Back to Menu</button>
     </div>
 
+    <!-- What the robot was doing when control was handed over. -->
+    <div class="hla-banner" v-if="currentHla">
+      Robot is currently: <b>{{ skillLabel(currentHla) }}</b>
+    </div>
+
     <!-- Tab bar -->
     <div class="tabbar">
       <button
@@ -122,6 +127,7 @@
 import ROSLIB from 'roslib'
 import routeMap from '@/router/routeMap'
 import { ROS_URL, USER } from '@/config/parameterConfig'
+import { skillLabel } from '@/config/skillLabels'
 
 // Step increments. Translation in metres, rotation/joints in radians.
 const DEG = Math.PI / 180
@@ -159,6 +165,10 @@ export default {
       publisher: null,
       logPublisher: null,
       listener: null,
+      skillPlanListener: null,
+      // Snake_case name of the HLA the robot is executing (null if idle), from
+      // the latched /SkillPlan topic.
+      currentHla: null,
       // Every joint is revolute, so each group uses the same convention:
       // top button = counterclockwise (neg, ↺), bottom button = clockwise (pos, ↻).
       joints: [
@@ -174,6 +184,11 @@ export default {
   },
   mounted () {
     this.initRos()
+    // Dev/testing hook: inject the current HLA via URL when running without a
+    // backend, e.g. /#/manipulation_teleop?hla=acquire_bite
+    if (this.$route.query.hla) {
+      this.currentHla = this.$route.query.hla
+    }
     // failure_context is passed through the route query when the executive opens this screen
     this.failureContext = this.$route.query.failure || null
     // Liveness ping so the robot can detect an iPad disconnect and exit teleop.
@@ -191,6 +206,10 @@ export default {
     if (this.listener) {
       this.listener.unsubscribe()
       this.listener = null
+    }
+    if (this.skillPlanListener) {
+      this.skillPlanListener.unsubscribe()
+      this.skillPlanListener = null
     }
     if (this.publisher) {
       this.publisher.unadvertise()
@@ -221,6 +240,31 @@ export default {
         messageType: 'std_msgs/String'
       })
       this.listener.subscribe((msg) => this.handleRosMessage(msg))
+
+      // Latched skill plan: tells us which HLA the robot is executing. Latching
+      // means we get the current value immediately even though this screen only
+      // mounts after the takeover (i.e. after the plan was published).
+      this.skillPlanListener = new ROSLIB.Topic({
+        ros,
+        name: '/SkillPlan',
+        messageType: 'std_msgs/String'
+      })
+      this.skillPlanListener.subscribe((msg) => this.handleSkillPlan(msg))
+    },
+
+    handleSkillPlan (msg) {
+      try {
+        const parsed = JSON.parse(msg.data)
+        const plan = Array.isArray(parsed.plan) ? parsed.plan : []
+        const idx = parsed.current
+        this.currentHla = (typeof idx === 'number' && idx >= 0 && idx < plan.length) ? plan[idx] : null
+      } catch (e) {
+        console.error('Teleop: failed to parse /SkillPlan message:', e)
+      }
+    },
+
+    skillLabel (name) {
+      return skillLabel(name)
     },
 
     handleRosMessage (msg) {
@@ -419,6 +463,12 @@ export default {
   background: #fff;
   padding: 8px 20px 10px;
   box-sizing: border-box;
+  /* Fill the viewport and never scroll; the tab area flexes to absorb the
+     HLA banner so everything stays on one screen (e.g. the 1180x820 iPad). */
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 /* Header (matches the app's top bar) */
@@ -468,24 +518,31 @@ export default {
 .status.moving { background: #FFE699; color: #6b5900; }
 .status.aborted { background: #ffd6d6; color: #c0392b; }
 
+.hla-banner {
+  font-size: 15px; padding: 8px 10px; border-radius: 8px; margin-bottom: 8px;
+  text-align: center; background: #e3edf7; color: #2c5777;
+}
+
 .pad-label { font-size: 14px; font-weight: 700; margin: 0 0 6px; color: #6e7e8e; }
 
-/* Fixed-height tab area: keeps the Gripper / Retract / Done rows anchored at
-   the same position whether Task space or Joint space is shown. */
-.tab-content { min-height: 380px; }
+/* Flexible tab area: fills the leftover height and keeps the Gripper / Retract
+   / Done rows anchored whether Task space or Joint space is shown. */
+.tab-content { flex: 1; min-height: 0; }
 
 /* Move and Rotate pads side by side */
-.pads { display: flex; gap: 16px; }
-.pad { flex: 1; }
+.pads { display: flex; gap: 16px; height: 100%; }
+.pad { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 
 .grid {
   display: grid;
   grid-template-columns: 96px 1fr 96px;
   gap: 8px;
-  margin-bottom: 10px;
+  flex: 1;
+  min-height: 0;
 }
-.move-grid { grid-template-rows: 84px 84px 84px 84px; }
-.rotate-grid { grid-template-rows: 84px 84px 84px 84px; }
+/* Rows share the available height so the pads scale to fit the screen. */
+.move-grid { grid-template-rows: repeat(4, 1fr); }
+.rotate-grid { grid-template-rows: repeat(4, 1fr); }
 
 /* Action buttons use the app's yellow #FFE699 */
 .jog {
@@ -515,7 +572,7 @@ export default {
 /* Joints laid out horizontally: one column per joint. The list fills the same
    fixed tab area as the task pads, and the two buttons in each column grow to
    use that height, with large rotation icons. */
-.joint-list { display: flex; gap: 8px; height: 380px; }
+.joint-list { display: flex; gap: 8px; height: 100%; }
 .joint-col {
   flex: 1;
   display: flex; flex-direction: column; gap: 8px;

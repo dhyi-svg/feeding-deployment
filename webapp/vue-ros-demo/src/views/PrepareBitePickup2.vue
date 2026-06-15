@@ -68,6 +68,7 @@
 import ROSLIB from 'roslib'
 import routeMap from '@/router/routeMap';
 import { ROS_URL, USER} from '@/config/parameterConfig';
+import { skillLabel } from '@/config/skillLabels';
 
 export default {
   data () {
@@ -79,47 +80,13 @@ export default {
       speed: 'moderate',
       publishTopic: '/WebAppComm',
       listener: null,
+      skillPlanListener: null,
       subscribeTopic: '/ServerComm',
-      // Full ordered skill plan + index of the running skill, both set from
-      // the backend's /ServerComm "skill_plan" messages. The plan can contain
-      // any skill: navigation, fridge/microwave manipulation, plate handling,
-      // and the bite/drink/wipe steps.
+      // Full ordered skill plan + index of the running skill, both set from the
+      // latched /SkillPlan topic. The plan can contain any skill: navigation,
+      // fridge/microwave manipulation, plate handling, and bite/drink/wipe.
       skillPlan: [],
-      currentSkillIndex: -1,
-      // Human-readable labels for each skill (snake_case behavior-tree name ->
-      // display name). Any skill not listed falls back to a title-cased name.
-      skillLabels: {
-        navigate_to_table: 'Drive to Table',
-        navigate_to_fridge: 'Drive to Fridge',
-        navigate_to_microwave: 'Drive to Microwave',
-        navigate_to_sink: 'Drive to Sink',
-        open_fridge: 'Open Fridge',
-        close_fridge: 'Close Fridge',
-        open_microwave: 'Open Microwave',
-        close_microwave: 'Close Microwave',
-        press_microwave_button: 'Start Microwave',
-        pick_plate_from_fridge: 'Take Plate from Fridge',
-        pick_plate_from_microwave: 'Take Plate from Microwave',
-        pick_plate_from_table: 'Take Plate from Table',
-        pick_plate_from_holder: 'Take Plate from Holder',
-        place_plate_in_fridge: 'Put Plate in Fridge',
-        place_plate_in_microwave: 'Put Plate in Microwave',
-        place_plate_in_sink: 'Put Plate in Sink',
-        place_plate_on_table: 'Put Plate on Table',
-        place_plate_on_holder: 'Put Plate on Holder',
-        gaze_at_table: 'Look at Table',
-        emulate_transfer: 'Gesture Transfer',
-        pick_utensil: 'Pick Up Utensil',
-        acquire_bite: 'Acquire Bite',
-        transfer_utensil: 'Transfer to Mouth',
-        stow_utensil: 'Stow Utensil',
-        pick_drink: 'Pick Up Drink',
-        transfer_drink: 'Transfer Drink',
-        stow_drink: 'Stow Drink',
-        pick_wipe: 'Pick Up Wipe',
-        transfer_wipe: 'Transfer Wipe',
-        stow_wipe: 'Stow Wipe'
-      }
+      currentSkillIndex: -1
     }
   },
   computed: {
@@ -141,6 +108,12 @@ export default {
   mounted () {
     this.initSubscriber()
     this.initPublisher()
+    // Dev/testing hook: inject a plan via URL when running without a backend,
+    // e.g. /#/preparepickup2?plan=navigate_to_table,acquire_bite,stow_utensil&current=1
+    if (this.$route.query.plan) {
+      this.skillPlan = String(this.$route.query.plan).split(',')
+      this.currentSkillIndex = this.$route.query.current != null ? parseInt(this.$route.query.current, 10) : 0
+    }
     window.addEventListener('keydown', this.handleKeyDown) // notify caregiver
   },
   beforeUnmount () {
@@ -151,6 +124,11 @@ export default {
       console.log('Unsubscribing from listener...');
       this.listener.unsubscribe();
       this.listener = null;
+    }
+
+    if (this.skillPlanListener) {
+      this.skillPlanListener.unsubscribe();
+      this.skillPlanListener = null;
     }
 
     // 取消发布
@@ -178,16 +156,6 @@ export default {
       // 解析收到的JSON字符串
       try {
         const parsedMessage = JSON.parse(message.data);
-        // Skill-plan updates carry the ordered plan + index of the running
-        // skill. Update the highlighted skill and leave the explanation text
-        // untouched.
-        if (parsedMessage.state === 'skill_plan') {
-          if (Array.isArray(parsedMessage.plan) && typeof parsedMessage.current === 'number') {
-            this.skillPlan = parsedMessage.plan;
-            this.currentSkillIndex = parsedMessage.current;
-          }
-          return;
-        }
         if (parsedMessage.state === 'explanation' && parsedMessage.status) {
           this.displayedMessage = parsedMessage.status || 'No status available';
         } else {
@@ -206,14 +174,18 @@ export default {
       }
     },
     skillLabel(name) {
-      if (this.skillLabels[name]) {
-        return this.skillLabels[name];
+      return skillLabel(name);
+    },
+    handleSkillPlan(message) {
+      try {
+        const parsed = JSON.parse(message.data);
+        if (Array.isArray(parsed.plan) && typeof parsed.current === 'number') {
+          this.skillPlan = parsed.plan;
+          this.currentSkillIndex = parsed.current;
+        }
+      } catch (error) {
+        console.error('Failed to parse /SkillPlan message:', error);
       }
-      // Fallback: turn "pick_plate_from_table" into "Pick Plate From Table".
-      return name
-        .split('_')
-        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-        .join(' ');
     },
     toggleSettings() {
       const message = new ROSLIB.Message({
@@ -255,6 +227,14 @@ export default {
         name: '/ServerComm', // 订阅 /listener 话题
         messageType: 'std_msgs/String' // 订阅 std_msgs/String 类型的消息
       })
+
+      // Latched skill plan: drives the last / current / next skill bar.
+      this.skillPlanListener = new ROSLIB.Topic({
+        ros: ros,
+        name: '/SkillPlan',
+        messageType: 'std_msgs/String'
+      })
+      this.skillPlanListener.subscribe((message) => this.handleSkillPlan(message))
 
       this.listener.subscribe((msg) => {
         console.log('Received message on /listener:', msg.data);
@@ -467,7 +447,7 @@ export default {
   justify-content: center;
   align-items: center;
   gap: 12px;
-  padding: 16px 10px;
+  padding: 10px 10px;
 }
 
 .skill-step {
@@ -514,7 +494,9 @@ export default {
   display: flex;
   justify-content: center;
   align-items: center;
-  height: 70vh;
+  /* Leave room for the .top bar, the skill-plan bar and the footer so the page
+     fits one screen (e.g. the 1180x820 iPad) without scrolling. */
+  height: 60vh;
 }
 
 .message {
@@ -528,7 +510,7 @@ export default {
 .footer {
   display: flex;
   justify-content: center;
-  padding: 20px;
+  padding: 14px;
 }
 
 .succeed-button {

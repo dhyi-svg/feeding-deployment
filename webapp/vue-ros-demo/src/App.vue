@@ -83,6 +83,13 @@ export default {
 </script>
 
 <style>
+/* Reset the default body margin so full-height pages (height: 100vh, e.g. the
+   teleop screens) fit the viewport exactly without scrolling. */
+html, body {
+  margin: 0;
+  padding: 0;
+}
+
 #app {
   font-family: Avenir, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
