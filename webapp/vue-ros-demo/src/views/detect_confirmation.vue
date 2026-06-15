@@ -37,7 +37,7 @@ const DETECTION_MESSAGES = {
     slog: 'Please verify the handle detection.',
     instruction:
       "Does the robot's handle detection look correct? <br>" +
-      "Green dot = handle, Blue dot = hinge. <br>" +
+      "Green dot = handle, Blue dot = hinge. Red dot = where to place plate. <br>" +
       "Click 'Looks Correct' to proceed, or 'Redo' to detect again."
   },
   button: {

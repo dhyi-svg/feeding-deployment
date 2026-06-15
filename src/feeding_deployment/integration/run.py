@@ -202,7 +202,7 @@ class _Runner:
         if run_on_robot:
             self.robot_interface = ArmInterfaceClient()  # type: ignore  # pylint: disable=no-member
             self.wrist_interface = WristInterface()
-            self.robot_interface.set_speed("high")
+            self.robot_interface.set_speed("medium")
         else:
             self.robot_interface = None
             self.wrist_interface = None
@@ -402,11 +402,11 @@ class _Runner:
             GroundAtom(IsUtensil, [self.utensil]),
             GroundAtom(DoorClosed, [self.fridge]),
             GroundAtom(DoorClosed, [self.microwave]),
-            GroundAtom(InFrontOf, [self.table]),
+            GroundAtom(InFrontOf, [self.microwave]),
             GroundAtom(PlateAt, [self.holder]),
             # GroundAtom(Holding, [self.plate]),
             GroundAtom(SafeToNavigate, []),
-            GroundAtom(FoodHeated, []),
+            # GroundAtom(FoodHeated, []),
         }
 
         self.transparency_query = TransparencyQuery(self.log_dir)
@@ -866,17 +866,17 @@ if __name__ == "__main__":
         # for i in range(3):
         #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromHolder"], (runner.plate, runner.holder)))
             # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateOnHolder"], (runner.plate, runner.holder)))
-        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.fridge,)))
+        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.microwave,)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromAppliance"], (runner.plate, runner.fridge)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateInAppliance"], (runner.plate, runner.microwave)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["CloseDoor"], (runner.fridge,)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromAppliance"], (runner.plate, runner.microwave)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.fridge,)))
-        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["TransferTool"], (runner.utensil,runner.table)))
+        runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["TransferTool"], (runner.utensil,runner.table)))
         
-        for i in range(10):
-            runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["Reset"], ()))
-            runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["Home"], ()))
+        # for i in range(10):
+        #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["Reset"], ()))
+        #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["Home"], ()))
         #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickTool"], (runner.utensil,runner.table)))
         #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["StowTool"], (runner.utensil,runner.table)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateInSink"], (runner.plate, runner.sink)))

@@ -501,14 +501,14 @@ class HighLevelAction(abc.ABC):
         # aborts it via stop_action so control returns here promptly.
         success = self.robot_interface.execute_command(robot_command)
         if not success:
-            print("Command execution failed")
+            print("Command execution failed for robot command:", robot_command)
 
         # Takeover requested during this move: hand to the user, then skip the
         # rest of this move and let the skill continue to its next step.
         if self._maybe_handle_mid_skill_takeover():
             raise TeleopTakeoverException("User took over control during command execution")
 
-        if not success:
+        if not success and not isinstance(robot_command, (OpenGripperCommand, CloseGripperCommand)):
             raise RuntimeError("Robot command failed to execute (joint limit or workspace reachability constraint)")
 
     def _maybe_handle_mid_skill_takeover(self) -> bool:

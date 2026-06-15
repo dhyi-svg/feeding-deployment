@@ -107,9 +107,6 @@ class PerceptionInterface:
         self.last_plate_poses = None
         self.last_drink_poses = None
 
-        self.last_handle_poses = None
-        self.last_table_placement_poses = None
-        
         # set led brightness
         # self.set_led_brightness()
 
@@ -479,9 +476,9 @@ class PerceptionInterface:
 
     def perceive_handle_opening_poses(self, handle_type: str, web_interface=None):
 
-        if self.last_handle_poses is not None:
-            print("Using last handle opening poses from perception cache")
-            return self.last_handle_poses
+        # if self.last_handle_poses is not None:
+        #     print("Using last handle opening poses from perception cache")
+        #     return self.last_handle_poses
 
         if self.simulation:
             # load them from a pickle file
@@ -693,7 +690,7 @@ class PerceptionInterface:
                 "push_closing_waypoints": push_closing_waypoints,
             }
 
-        self.last_handle_poses = handle_poses
+        # self.last_handle_poses = handle_poses
         # Save in temp pickle file just for testing, we can remove this later if we don't need it
         if self.log_dir is not None:
             with open(self.log_dir / 'handle_opening_pos.pkl', 'wb') as f:
@@ -703,7 +700,13 @@ class PerceptionInterface:
         return handle_poses
 
     def get_perceived_poses(self):
-        return self.last_handle_poses
+        if self.log_dir is not None:
+            with open(self.log_dir / 'handle_opening_pos.pkl', 'rb') as f:
+                handle_opening_pos = pickle.load(f)
+            handle_poses = handle_opening_pos["last_handle_poses"]
+        else:
+            raise ValueError("No log directory provided, cannot load handle opening poses to compute closing poses. Please provide a log directory or run perceive_handle_opening_poses first to save the opening poses.")
+        return handle_poses
 
     def perceive_handle_closing_poses(self, handle_type: str):
         assert handle_type in ["bottom white fridge door", "microwave"]
@@ -853,11 +856,12 @@ class PerceptionInterface:
         return table_placement_poses
 
     def get_perceived_table_placement_poses(self):
-        if self.last_table_placement_poses is not None:
-            print("Using last table placement poses from perception cache")
-            return self.last_table_placement_poses
+        if self.log_dir is not None:
+            with open(self.log_dir / 'table_placement_poses.pkl', 'rb') as f:
+                table_placement_poses = pickle.load(f)
+            return table_placement_poses
         else:
-            raise ValueError("No last table placement poses found in perception cache. Please run perceive_table_placement_poses first to populate the cache.")
+            raise ValueError("No log directory provided, cannot load table placement poses. Please provide a log directory or run perceive_table_placement_poses first to save the poses.")
 
     def perceive_drink_pickup_poses(self):
 

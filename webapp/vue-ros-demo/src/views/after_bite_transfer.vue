@@ -84,8 +84,8 @@ export default {
   data () {
     return {
       username: USER,
-      countdown: 15,
-      countdownText: "Auto Executing in 00:15 seconds",
+      countdown: 1000,
+      countdownText: "Auto Executing in 1000 seconds",
       showSettings: false,
       speed: 'moderate',
       countdownInterval: null,

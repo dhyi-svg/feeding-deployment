@@ -196,7 +196,7 @@ export default {
       username: USER,
       countdownInterval: null,
       countdownText: "Auto Executing in 00:15 seconds",
-      countdown: 15,
+      countdown: 1000,
       Pwidth: 0,
       Pheight: 0,
       BoxWRatio: 0,
