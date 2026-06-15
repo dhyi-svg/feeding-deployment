@@ -18,7 +18,7 @@ from pathlib import Path
 try:
     import rospy
     from sensor_msgs.msg import CompressedImage
-    from std_msgs.msg import String
+    from std_msgs.msg import String, Empty
     from cv_bridge import CvBridge
 
 except ModuleNotFoundError:
@@ -53,6 +53,18 @@ class WebInterface:
         self.image_bridge = CvBridge()
         self.user_preference = None
         self.web_interface_sub = rospy.Subscriber("WebAppComm", String, self._message_callback, queue_size=100)
+        self.base_takeover_sub = rospy.Subscriber(
+            "/shared_autonomy/takeover",
+            Empty,
+            self._on_base_takeover,
+            queue_size=1,
+        )
+        self.base_done_sub = rospy.Subscriber(
+            "/shared_autonomy/done",
+            Empty,
+            self._on_base_done,
+            queue_size=1,
+        )
         time.sleep(1.0)  # Wait for the subscriber to connect
 
         self.current_page = "task_selection" # task_selection, transparency, adaptability
@@ -195,6 +207,12 @@ class WebInterface:
             self.task_selection_queue.put(task_selected)
         else:
             self.received_web_interface_messages.put(msg_dict)
+
+    def _on_base_takeover(self, _msg: "Empty") -> None:
+        print("User took over robot base control via web app.")
+
+    def _on_base_done(self, _msg: "Empty") -> None:
+        print("User finished robot base control teleoperation.")
 
     def register_takeover_stop(self, fn) -> None:
         """Register a function (e.g. robot_interface.stop_action) called the moment
