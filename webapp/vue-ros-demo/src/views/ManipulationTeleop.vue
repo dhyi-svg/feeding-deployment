@@ -100,7 +100,7 @@
     </div>
 
     <!-- Bottom row -->
-    <div class="bottom">
+    <div class="bottom" :class="{ 'three-col': currentHla }">
       <button
         v-if="!retractRunning"
         id="retract-btn"
@@ -114,10 +114,27 @@
         class="stop"
         @click="stopRetract()"
       >Stop</button>
+
+      <!-- Mid-skill takeover: let the user choose what happens after they finish.
+           "Redo" re-runs the interrupted skill; "Continue" treats it as done and
+           advances to the next skill. -->
+      <template v-if="currentHla">
+        <button
+          class="done redo"
+          :disabled="busy"
+          @click="finishTeleop('redo')"
+        >Done — Redo Skill</button>
+        <button
+          class="done"
+          :disabled="busy"
+          @click="finishTeleop('next')"
+        >Done — Next Skill</button>
+      </template>
       <button
+        v-else
         class="done"
         :disabled="busy"
-        @click="cmd('done')"
+        @click="finishTeleop()"
       >Done</button>
     </div>
   </div>
@@ -304,6 +321,16 @@ export default {
       this.$router.push('/task_selection')
     },
 
+    // End the teleop session. On a mid-skill takeover, postAction ("redo" |
+    // "next") tells the executive whether to re-run the interrupted skill or
+    // advance to the next one. Routing is driven by the executive, like Done.
+    finishTeleop (postAction = null) {
+      this.logEvent('tap', 'done', { post_action: postAction })
+      const msg = { state: 'teleop', status: 'done' }
+      if (postAction) msg.post_action = postAction
+      this.publish(msg)
+    },
+
     setTab (tab) {
       if (this.busy) return
       this.tab = tab
@@ -329,8 +356,7 @@ export default {
       // executive; it drives navigation to the correct next page (like every
       // other page in this app), so we do NOT route locally here.
       if (control === 'done') {
-        this.logEvent('tap', 'done', {})
-        this.publish({ state: 'teleop', status: 'done' })
+        this.finishTeleop()
         return
       }
 
@@ -595,6 +621,11 @@ export default {
   display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
   border-top: 1px solid #ddd; padding-top: 10px; margin-top: 10px;
 }
+/* Mid-skill takeover adds a second Done button (redo vs. next). */
+.bottom.three-col { grid-template-columns: 1fr 1fr 1fr; }
+/* "Redo" is the app's slate secondary so it reads distinct from the green
+   "next" Done. */
+.done.redo { background: #6e7e8e; }
 .retract {
   font-family: Verdana, sans-serif; font-size: 16px; font-weight: 700;
   padding: 12px 0; border: none; border-radius: 8px;

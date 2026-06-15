@@ -128,12 +128,19 @@ class TeleopRecoverySession:
 
         self._restore_speed = None
 
+        # What the executive should do after this session, chosen by the user via
+        # the Done button on a mid-skill takeover: "redo" the interrupted skill or
+        # continue to the "next" skill. Defaults to "next" (also used for idle /
+        # between-task teleop, where there is no skill to redo).
+        self.post_teleop_action = "next"
+
     # -- public entry point ----------------------------------------------------
 
-    def run(self) -> None:
+    def run(self) -> str:
         """Run the manual recovery loop until the user taps Done.
 
         Blocks the caller (the failed skill) until the user finishes recovery.
+        Returns the user's post-teleop choice ("redo" or "next").
         """
         if self.robot_interface is None or self.web_interface is None:
             raise RuntimeError(
@@ -145,6 +152,7 @@ class TeleopRecoverySession:
             self._loop()
         finally:
             self._exit()
+        return self.post_teleop_action
 
     # -- setup / teardown ------------------------------------------------------
 
@@ -187,7 +195,10 @@ class TeleopRecoverySession:
 
             status = msg.get("status")
             if status == "done":
-                self._log({"event": "done"})
+                # "post_action" (redo/next) rides on the Done message from a
+                # mid-skill takeover; absent for plain Done (defaults to "next").
+                self.post_teleop_action = msg.get("post_action") or "next"
+                self._log({"event": "done", "post_action": self.post_teleop_action})
                 active = False
             elif status == "halt":
                 # Only meaningful while a Retract move is running; handled inside
