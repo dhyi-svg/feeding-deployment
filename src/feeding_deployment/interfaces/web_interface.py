@@ -104,6 +104,17 @@ class WebInterface:
         # rostopic pub -1 /ServerComm std_msgs/String "data: '{\"state\":\"preparepickup2\",\"status\":\"jump\"}'"
         self.web_interface_publisher.publish(String(json.dumps({"state": "preparepickup2", "status": "jump"})))
 
+    def publish_skill_plan(self, plan_names: list, current_index: int) -> None:
+        """Publish the ordered skill plan and the index of the skill currently
+        executing, so the web interface can show the last / current / next
+        skill with the current one highlighted."""
+        self._send_message({
+            "state": "skill_plan",
+            "status": "",
+            "plan": plan_names,
+            "current": current_index,
+        })
+
     def _send_message(self, msg_dict: dict[str, Any], explanation=False) -> None:
         self.web_interface_publisher.publish(String(json.dumps(msg_dict)))
         if explanation and msg_dict["status"] != "":

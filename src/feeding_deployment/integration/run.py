@@ -586,8 +586,22 @@ class _Runner:
         if isinstance(user_command, GroundHighLevelAction):
             plan_hlas.append(user_command)
 
-        for ground_hla in plan_hlas:
+        # Build the ordered list of skill names (snake_case behavior-tree names,
+        # e.g. "acquire_bite") so the web interface can show last/current/next.
+        skill_plan_names = []
+        for gh in plan_hlas:
+            try:
+                skill_plan_names.append(
+                    gh.hla.get_behavior_tree_filename(gh.objects, gh.params).removesuffix(".yaml")
+                )
+            except Exception:
+                skill_plan_names.append(gh.hla.get_name())
+
+        for i, ground_hla in enumerate(plan_hlas):
             print(f"Refining {ground_hla}")
+            # Tell the web interface which skill is now executing.
+            if self.web_interface is not None:
+                self.web_interface.publish_skill_plan(skill_plan_names, i)
             operator = ground_hla.get_operator()
 
             # import ipdb; ipdb.set_trace()
