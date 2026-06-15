@@ -457,7 +457,13 @@ class WebInterface:
 
         if msg_dict is None:
             return False
-        return msg_dict["status"] == "confirm"
+        confirmed = msg_dict["status"] == "confirm"
+        if confirmed:
+            # Detection accepted: move the iPad off the (now-stale) detection image
+            # to the explanation page while the skill continues. On "redo" we leave
+            # the page in place so perception can re-run and re-show the image.
+            self.switch_to_explanation_page()
+        return confirmed
 
     #### Transparency Pages ####
 

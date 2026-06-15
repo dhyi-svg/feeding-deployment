@@ -8,7 +8,6 @@
           <div class="subtitle">Review the robot's predicted preferences</div>
         </div>
       </div>
-      <button class="back-button" @click="goToTaskSelection">Task Selection</button>
     </header>
 
     <main class="content">
@@ -129,6 +128,7 @@ export default {
   mounted() {
     this.initPublisher()
     this.initSubscriber()
+    this.maybeLoadFromUrl()
   },
   beforeUnmount() {
     this.teardownRos()
@@ -199,6 +199,37 @@ export default {
         console.error('Failed to parse ROS message:', error)
       }
     },
+    // Dev/testing hook: when the backend hasn't sent data, seed predicted
+    // preferences + options from the URL so the page can be exercised without
+    // ROS. Each query param is a field; its comma-separated values are the
+    // options, and the FIRST value is the robot's predicted choice. Examples:
+    //   /#/preference_correction?bite_size=medium,small,large&distance_to_mouth=near,far
+    //   /#/preference_correction?data=<url-encoded backend JSON payload>
+    maybeLoadFromUrl() {
+      if (this.fieldEntries.length > 0) return
+      const q = this.$route.query
+      if (q.data) {
+        try {
+          this.loadPreferenceData(JSON.parse(q.data))
+          return
+        } catch (e) {
+          console.error('preference_correction: bad ?data= JSON:', e)
+        }
+      }
+      const toList = (v) => String(v ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+      const predicted = {}
+      const options = {}
+      Object.keys(q).forEach((field) => {
+        if (field === 'data') return
+        const list = toList(q[field])
+        if (!list.length) return
+        predicted[field] = list[0]
+        options[field] = list
+      })
+      if (Object.keys(predicted).length) {
+        this.loadPreferenceData({ predicted_bundle: predicted, options })
+      }
+    },
     loadPreferenceData(message) {
       const predictedBundle = message.predicted_bundle ?? {}
       const options = message.options ?? {}
@@ -235,6 +266,8 @@ export default {
       })
 
       this.publisher.publish(message)
+      // Preferences confirmed: continue the meal workflow at bite prep.
+      this.$router.push('/preparepickup2')
     },
     goToTaskSelection() {
       if (this.publisher) {

@@ -116,7 +116,8 @@ export default {
     },
     handleButtonClick() {
       this.publishMessage();
-      this.$router.push('/preparepickup');
+      // Start of the meal workflow: collect meal context first.
+      this.$router.push('/preference_context');
     },
     handleKeyDown (event) { // jump tonotify caregiver
       if (event.key === 'e' || event.key === 'E') {
