@@ -100,10 +100,12 @@ class PickPlateFromApplianceHLA(HighLevelAction):
         print("Picking plate from microwave ...")
 
         perceived_poses = self.perception_interface.get_perceived_poses()
+        behind_placement_pose = perceived_poses["behind_placement_pose"]
         placement_pose = perceived_poses["placement_pose"]
 
         self.close_gripper()
         self.move_to_joint_positions(self.sim.scene_description.microwave_plate_staging_pos)
+        self.move_to_ee_pose(behind_placement_pose)
         self.move_to_ee_pose(placement_pose)
         self.open_gripper()
         self.move_to_ee_pose(self.sim.scene_description.microwave_plate_staging_pose)
@@ -159,6 +161,7 @@ class PickPlateFromHolderHLA(HighLevelAction):
         self.move_to_ee_pose(self.sim.scene_description.inside_plate_holder_pose)
         self.open_gripper()
         self.move_to_ee_pose(self.sim.scene_description.above_plate_holder_pose)
+        self.move_to_ee_pose(self.sim.scene_description.intermediate_plate_holder_pose)
         self.move_to_joint_positions(self.sim.scene_description.behind_intermediate_pos)
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
 

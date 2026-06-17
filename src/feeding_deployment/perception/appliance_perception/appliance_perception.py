@@ -233,15 +233,25 @@ class AppliancePerception(TFInterface):
             handle_centroid[1] = top_most_y - 0.04
         # handle_centroid[1] = top_most_y - 0.02 # 2 cm below the top most point in the cluster, which should be close to the center of the handle
 
+        # find top of the plane_cloud (not handle) just above handle
+        top_of_appliance = handle_centroid.copy()
+        top_of_appliance[1] = np.max(np.asarray(plane_cloud.points)[:, 1])
+        top_of_appliance_pixel = self.world2Pixel(camera_info_msg, top_of_appliance[0], top_of_appliance[1], top_of_appliance[2])
+
         handle_centroid_3d = handle_centroid
         handle_centroid_pixel = self.world2Pixel(camera_info_msg, handle_centroid[0], handle_centroid[1], handle_centroid[2])
 
         vis = rgb_image.copy()
-        for u, v in cluster_pixels:
-            vis[v, u] = (0, 255, 255)
+        # for u, v in cluster_pixels:
+        #     vis[v, u] = (0, 255, 255)
+
         # draw large green circle at handle_centroid_pixel
         print("Handle centroid pixel:", handle_centroid_pixel)
         cv2.circle(vis, (handle_centroid_pixel[0], handle_centroid_pixel[1]), 10, (0, 255, 0), -1)
+
+        # draw large orange circle at top_of_appliance_pixel
+        print("Top of plane pixel:", top_of_appliance_pixel)
+        cv2.circle(vis, (top_of_appliance_pixel[0], top_of_appliance_pixel[1]), 10, (0, 165, 255), -1)
 
         if handle_type == "bottom white fridge door":
             print("Finding strip anchor point for fridge door handle")
@@ -297,10 +307,16 @@ class AppliancePerception(TFInterface):
             base_to_placement = np.dot(base_to_camera, camera_to_placement)
             base_to_placement[:3, :3] = Rotation.from_quat([-0.5, 0.5, 0.5, -0.5]).as_matrix()
 
-            return self.matrix_to_pose(base_to_handle), self.matrix_to_pose(base_to_hinge), self.matrix_to_pose(base_to_placement)
+            camera_to_top_of_appliance = np.eye(4)
+            camera_to_top_of_appliance[:3, 3] = top_of_appliance
+            camera_to_top_of_appliance[3, 3] = 1
+            base_to_top_of_appliance = np.dot(base_to_camera, camera_to_top_of_appliance)
+            base_to_top_of_appliance[:3, :3] = Rotation.from_quat([-0.5, 0.5, 0.5, -0.5]).as_matrix()
+
+            return self.matrix_to_pose(base_to_handle), self.matrix_to_pose(base_to_hinge), self.matrix_to_pose(base_to_placement), self.matrix_to_pose(base_to_top_of_appliance)
         
         print("Could not get transform between arm_base_link and camera_color_optical_frame")
-        return None, None, None
+        return None, None, None, None
 
     def detect_sink_placement(self, rgb_image, camera_info_msg, depth_image):
         if rgb_image is None:

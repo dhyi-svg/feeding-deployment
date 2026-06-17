@@ -136,6 +136,8 @@ class SceneDescription:
     inside_plate_holder_pose: Pose
     above_plate_holder_pose: Pose
     above_plate_holder_pos: JointPositions
+    intermediate_plate_holder_pos: JointPositions
+    intermediate_plate_holder_pose: Pose
 
     # Plate constants
     plate_staging_pos: JointPositions

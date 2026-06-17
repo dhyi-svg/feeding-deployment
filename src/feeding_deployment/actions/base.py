@@ -354,6 +354,11 @@ class HighLevelAction(abc.ABC):
 
         return None, f"Invalid new node type {new_node_type}"
 
+    def get_joint_positions(self) -> list[float]:
+        if self.robot_interface is None:
+            raise ValueError("Robot interface is not available to get joint positions.")
+        return np.asarray(self.robot_interface.get_state()["position"], dtype=float)
+
     def move_to_joint_positions(self, joint_positions: list[float]) -> None:
 
         plan = None

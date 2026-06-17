@@ -872,8 +872,12 @@ if __name__ == "__main__":
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["CloseDoor"], (runner.fridge,)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromAppliance"], (runner.plate, runner.microwave)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.fridge,)))
-        runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["TransferTool"], (runner.utensil,runner.table)))
+        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["TransferTool"], (runner.utensil,runner.table)))
         
+        for i in range(3):
+            input("Press Enter to execute open and close the microwave door ...")
+            runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.microwave,)))
+            runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["CloseDoor"], (runner.microwave,)))
         # for i in range(10):
         #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["Reset"], ()))
         #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["Home"], ()))
