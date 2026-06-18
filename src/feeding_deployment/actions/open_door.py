@@ -62,7 +62,7 @@ class OpenDoorHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.fridge_door_gaze_pos)
 
-        handle_opening_poses = self.perception_interface.perceive_handle_opening_poses("bottom white fridge door", web_interface=self.web_interface)
+        handle_opening_poses = self.perception_interface.perceive_handle_opening_poses("bottom fridge door", web_interface=self.web_interface)
 
         # visualize on rviz
         poses = []
@@ -101,6 +101,9 @@ class OpenDoorHLA(HighLevelAction):
         self.move_to_ee_pose(handle_opening_poses["pre_push_pose"])
         self.move_to_ee_pose(handle_opening_poses["push_pose"])
         self.move_to_ee_pose_trajectory(handle_opening_poses["push_waypoints"])
+
+        time.sleep(3)
+        self.move_to_ee_pose(handle_opening_poses["push_waypoints"][-3])
 
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         

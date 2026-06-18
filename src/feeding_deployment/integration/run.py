@@ -401,9 +401,9 @@ class _Runner:
             GroundAtom(ToolPrepared, [self.drink]),
             GroundAtom(IsUtensil, [self.utensil]),
             GroundAtom(DoorClosed, [self.fridge]),
-            GroundAtom(DoorClosed, [self.microwave]),
-            GroundAtom(InFrontOf, [self.sink]),
-            GroundAtom(PlateAt, [self.holder]),
+            GroundAtom(DoorClosed, [self.fridge]),
+            GroundAtom(InFrontOf, [self.fridge]),
+            GroundAtom(PlateAt, [self.fridge]),
             # GroundAtom(Holding, [self.plate]),
             GroundAtom(SafeToNavigate, []),
             GroundAtom(FoodHeated, []),
@@ -883,7 +883,8 @@ if __name__ == "__main__":
     # Handle Ctrl+C gracefully
     signal.signal(signal.SIGINT, runner.signal_handler)
 
-    runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateInSink"], (runner.plate, runner.sink)))
+    runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.fridge,)))
+    runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["CloseDoor"], (runner.fridge,)))
 
     if not args.use_interface:
         # for i in range(3):
