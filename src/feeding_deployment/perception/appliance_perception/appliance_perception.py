@@ -345,9 +345,9 @@ class AppliancePerception(TFInterface):
         cv2.imwrite("detection_mask.png", mask)
 
         # Hack, take a point with x as center of bounding box and y as 40 pixels above the top of the bounding box 
-        center_pixel = ((x1 + x2) // 2, y1 - 50)
+        center_pixel = ((x1 + x2) // 2 + 140, y1 - 50)
         cv2.circle(rgb_image, center_pixel, 10, (0, 0, 255), -1)
-        cv2.imwrite("sink_back_pixel.png", rgb_image)
+        cv2.imwrite("sink_back_pixel.png", cv2.rotate(rgb_image, cv2.ROTATE_180))
 
         ok, center_3d = self.pixel2World(camera_info_msg, center_pixel[0], center_pixel[1], depth_image)
         if not ok:

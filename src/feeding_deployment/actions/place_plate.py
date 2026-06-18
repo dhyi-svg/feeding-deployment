@@ -181,7 +181,7 @@ class PlacePlateInSinkHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.right_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.sink_gaze_pos)
 
-        placement_poses = self.perception_interface.perceive_sink_placement_poses()
+        placement_poses = self.perception_interface.perceive_sink_placement_poses(web_interface=self.web_interface)
 
         self.move_to_joint_positions(self.sim.scene_description.sink_plate_staging_pos)
         self.move_to_ee_pose(placement_poses["sink_placement_pose"])

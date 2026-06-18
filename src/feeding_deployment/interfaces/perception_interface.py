@@ -816,7 +816,7 @@ class PerceptionInterface:
 
         return attachment_poses
 
-    def perceive_sink_placement_poses(self):
+    def perceive_sink_placement_poses(self, web_interface=None):
 
         if self.simulation:
             # load them from a pickle file
@@ -824,24 +824,34 @@ class PerceptionInterface:
                 sink_placement_poses = pickle.load(f)
 
         else:
-            sink_placement_pose = None
-            for _ in range(20):
-                cam_data = self._realsense.get_camera_data()
-                rgb_image = cam_data["rgb_image"]
-                camera_info = cam_data["camera_info"]
-                depth_image = cam_data["depth_image"]
+            while True:
+                sink_placement_pose = None
+                for _ in range(20):
+                    cam_data = self._realsense.get_camera_data()
+                    rgb_image = cam_data["rgb_image"]
+                    camera_info = cam_data["camera_info"]
+                    depth_image = cam_data["depth_image"]
 
-                if rgb_image is not None and camera_info is not None and depth_image is not None:
-                    sink_placement_pose = self._appliance_perception.detect_sink_placement(rgb_image, camera_info, depth_image)
-                    if sink_placement_pose is not None:
-                        break
-                time.sleep(0.1)
+                    if rgb_image is not None and camera_info is not None and depth_image is not None:
+                        sink_placement_pose = self._appliance_perception.detect_sink_placement(rgb_image, camera_info, depth_image)
+                        if sink_placement_pose is not None:
+                            break
+                    time.sleep(0.1)
 
-            if sink_placement_pose is None:
-                raise RuntimeError("Could not detect sink placement pose")
+                if sink_placement_pose is None:
+                    raise RuntimeError("Could not detect sink placement pose")
+
+                # If no web interface is available (e.g. running headless), skip the
+                # confirmation and proceed with a single perception pass.
+                if web_interface is None:
+                    break
+                vis_image = cv2.imread(os.path.join(os.getcwd(), "sink_back_pixel.png"))
+                if web_interface.get_detection_confirmation("sink", vis_image):
+                    break
+                print("Sink placement detection rejected by user. Re-running sink placement perception ...")
 
             offset = np.eye(4)
-            offset[:3, 3] = np.array([0.0, 0.12, -0.4])
+            offset[:3, 3] = np.array([0.0, 0.15, -0.45])
             sink_placement_pose = self.matrix_to_pose(self.pose_to_matrix(sink_placement_pose) @ offset)
 
             sink_placement_poses = {

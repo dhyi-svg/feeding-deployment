@@ -17,6 +17,9 @@ module.exports = defineConfig({
     });
   },
   devServer: {
+    host: '192.168.1.2',
+    allowedHosts: 'all',
+    server: 'https',
     client: {
       overlay: false,  // 禁用开发模式下的错误覆盖显示
     }

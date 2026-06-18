@@ -31,7 +31,14 @@
       &nbsp;&nbsp; presses detected: <b>{{ count }}</b>
     </div>
 
-    <div class="row"><button @click="maxSeen = 0">reset max</button></div>
+    <div class="row">
+      <button @click="maxSeen = 0">reset max</button>
+      &nbsp;<button @click="logs = []">clear log</button>
+    </div>
+
+    <div class="log-panel">
+      <div v-for="(line, i) in logs" :key="i" :class="line.type">{{ line.msg }}</div>
+    </div>
 
     <p class="hint">
       Tip: tap near the iPad's built-in mic vs. press the button to see which the
@@ -56,6 +63,7 @@ export default {
       threshold: 0.02,
       count: 0,
       pressActive: false,
+      logs: [],
       _analyser: null,
       _data: null,
       _prevAbove: false,
@@ -103,6 +111,10 @@ export default {
           '  (NotAllowed/undefined usually means you are NOT on HTTPS)'
       }
     },
+    addLog (type, msg) {
+      this.logs.unshift({ type, msg })
+      if (this.logs.length > 80) this.logs.pop()
+    },
     loop () {
       this._analyser.getFloatTimeDomainData(this._data)
       let p = 0
@@ -113,12 +125,16 @@ export default {
       this.peak = p
       if (p > this.maxSeen) this.maxSeen = p
 
+      // Log peaks above 0.01 so you can see what the button actually produces
+      if (p > 0.01) this.addLog('peak', 'peak: ' + p.toFixed(4) + ' | threshold: ' + this.threshold.toFixed(4))
+
       const above = p > this.threshold
       const now = Date.now()
       if (above && !this._prevAbove && (now - this._lastHit) > 1500) { // rising edge + 1.5s debounce
         this._lastHit = now
         this.count++
         this.pressActive = true
+        this.addLog('press', 'PRESS #' + this.count + ' — peak: ' + p.toFixed(4) + ' | threshold: ' + this.threshold.toFixed(4))
         setTimeout(() => { this.pressActive = false }, 500)
       }
       this._prevAbove = above
@@ -138,4 +154,7 @@ export default {
 .press { font-size: 1.6rem; font-weight: 700; color: #bbb; }
 .press.hit { color: #e53935; }
 button { font-size: 1.1rem; padding: .6rem 1rem; border-radius: 8px; }
+.log-panel { margin-top: .8rem; max-width: 40rem; height: 220px; overflow-y: auto; background: #1e1e1e; color: #ccc; font-family: monospace; font-size: .8rem; padding: .5rem; border-radius: 8px; }
+.log-panel .press { color: #f44336; font-weight: 700; }
+.log-panel .peak  { color: #aaa; }
 </style>
