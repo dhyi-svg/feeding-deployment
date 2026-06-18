@@ -1,5 +1,10 @@
 <template>
   <div id="app">
+    <!-- One-time gesture to start the physical takeover button's mic listener.
+         iOS requires a user tap before getUserMedia; hidden once enabled. -->
+    <button v-if="!takeoverMicEnabled" class="enable-takeover-btn" @click="enableTakeoverMic">
+      🎙 Enable takeover button
+    </button>
     <!-- Global manual-control buttons: let the user grab control at any time,
          including in the middle of a skill. Hidden on the teleop/resuming pages.
          Anchored as a group whose right edge clears the page's Finish Feeding
@@ -21,6 +26,7 @@
 <script>
 import ROSLIB from 'roslib'
 import { ROS_URL } from '@/config/parameterConfig'
+import { categoryOf } from '@/config/skillCategories'
 
 export default {
   name: 'app',
@@ -30,7 +36,17 @@ export default {
       serverListener: null,
       // Set by the executive while the base is autonomously driving, so the
       // user can take over mid-drive (Robot Base Control is otherwise menu-only).
-      baseControlEnabled: false
+      baseControlEnabled: false,
+      // --- context-aware physical takeover button (read via Web Audio) ---
+      takeoverMicEnabled: false,
+      takeoverThreshold: 0.1,   // tuned on the iPad (normalized peak, 0..1)
+      skillPlan: [],            // latched /SkillPlan: ordered skill names
+      skillCurrent: -1,         // index of executing skill; -1 == idle
+      _analyser: null,
+      _audioBuf: null,
+      _prevAbove: false,
+      _lastHit: 0,
+      _raf: null
     }
   },
   computed: {
@@ -63,6 +79,24 @@ export default {
         }
       } catch (e) { /* ignore non-JSON */ }
     })
+    // Track which skill is executing so the physical takeover button can route
+    // to the matching teleop. /SkillPlan is latched: { plan, current }, where
+    // current === -1 means idle (no skill running).
+    this.skillPlanListener = new ROSLIB.Topic({
+      ros,
+      name: '/SkillPlan',
+      messageType: 'std_msgs/String'
+    })
+    this.skillPlanListener.subscribe((msg) => {
+      try {
+        const parsed = JSON.parse(msg.data)
+        this.skillPlan = parsed.plan || []
+        this.skillCurrent = (typeof parsed.current === 'number') ? parsed.current : -1
+      } catch (e) { /* ignore non-JSON */ }
+    })
+  },
+  beforeUnmount () {
+    if (this._raf) cancelAnimationFrame(this._raf)
   },
   methods: {
     controlArm () {
@@ -77,6 +111,54 @@ export default {
     controlBase () {
       // The navigation page itself announces the base takeover on mount.
       this.$router.push('/navigation_teleop')
+    },
+
+    // ---- context-aware physical takeover button (Web Audio) ----
+    async enableTakeoverMic () {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+        })
+        const ctx = new (window.AudioContext || window.webkitAudioContext)()
+        await ctx.resume() // iOS needs resume() after the user gesture
+        const src = ctx.createMediaStreamSource(stream)
+        this._analyser = ctx.createAnalyser()
+        this._analyser.fftSize = 2048
+        this._audioBuf = new Float32Array(this._analyser.fftSize)
+        src.connect(this._analyser)
+        this.takeoverMicEnabled = true
+        this.audioLoop()
+      } catch (e) {
+        alert('Could not start the takeover button mic: ' + e.name + ' — ' + e.message +
+          '\n(The webapp must be served over HTTPS for the iPad to allow the mic.)')
+      }
+    },
+    audioLoop () {
+      this._analyser.getFloatTimeDomainData(this._audioBuf)
+      let peak = 0
+      for (let i = 0; i < this._audioBuf.length; i++) {
+        const a = Math.abs(this._audioBuf[i])
+        if (a > peak) peak = a
+      }
+      const above = peak > this.takeoverThreshold
+      const now = Date.now()
+      if (above && !this._prevAbove && (now - this._lastHit) > 1500) { // rising edge + 1.5s debounce
+        this._lastHit = now
+        this.onTakeoverButton()
+      }
+      this._prevAbove = above
+      this._raf = requestAnimationFrame(this.audioLoop)
+    },
+    onTakeoverButton () {
+      // Idle: no skill running -> open the chooser page, nothing else.
+      if (this.skillCurrent < 0) {
+        if (this.$route.path !== '/idle_takeover') this.$router.push('/idle_takeover')
+        return
+      }
+      // Executing: route to the teleop matching the current skill's category.
+      const skill = this.skillPlan[this.skillCurrent]
+      if (categoryOf(skill) === 'navigation') this.controlBase()
+      else this.controlArm()
     }
   }
 }
@@ -149,4 +231,19 @@ nav a.router-link-exact-active {
 .global-btn.arm:active { background: #e8602c; }
 .global-btn.base { background: #378add; }
 .global-btn.base:active { background: #2f6fb0; }
+.enable-takeover-btn {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  z-index: 1100;
+  font-size: 14px;
+  font-weight: 700;
+  padding: 8px 14px;
+  border: none;
+  border-radius: 8px;
+  background: #6a1b9a;
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+}
 </style>

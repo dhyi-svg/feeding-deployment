@@ -197,6 +197,11 @@ const routes = [
     path: '/mictest',
     name: 'mictest',
     component: () => import(/* webpackChunkName: "about" */ '../views/MicTest.vue')
+  },
+  {
+    path: '/idle_takeover',
+    name: 'idle_takeover',
+    component: () => import(/* webpackChunkName: "about" */ '../views/IdleTakeover.vue')
   }
 ]
 
