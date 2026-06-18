@@ -455,7 +455,7 @@ class PerceptionInterface:
 
             button_transform = self.pose_to_matrix(button_pose)
             offset = np.eye(4)
-            offset[:3, 3] = np.array([0.005, 0.0, -0.055])
+            offset[:3, 3] = np.array([0.005, 0.0, -0.051])
             press_pose = self.matrix_to_pose(button_transform @ offset)
 
             pre_press_offset = np.eye(4)
@@ -746,34 +746,47 @@ class PerceptionInterface:
         return handle_poses
         # return self.last_handle_poses
 
-    def perceive_attachment_poses(self):
+    def perceive_attachment_poses(self, web_interface=None):
 
         if self.simulation:
             with open(self.log_dir / 'attachment_poses.pkl', 'rb') as f:
                 attachment_poses = pickle.load(f)
 
         else:
-            attachment_pose = None
-            for _ in range(20):
-                cam_data = self._realsense.get_camera_data()
-                rgb_image = cam_data["rgb_image"]
-                camera_info = cam_data["camera_info"]
-                depth_image = cam_data["depth_image"]
+            while True:
+                attachment_pose = None
+                for _ in range(20):
+                    cam_data = self._realsense.get_camera_data()
+                    rgb_image = cam_data["rgb_image"]
+                    camera_info = cam_data["camera_info"]
+                    depth_image = cam_data["depth_image"]
 
-                if rgb_image is not None and camera_info is not None and depth_image is not None:
-                    attachment_pose = self._attachment_perception.detect_attachment(rgb_image, camera_info, depth_image)
-                    if attachment_pose is not None:
-                        break
-                time.sleep(0.1)
+                    if rgb_image is not None and camera_info is not None and depth_image is not None:
+                        attachment_pose = self._attachment_perception.detect_attachment(rgb_image, camera_info, depth_image)
+                        if attachment_pose is not None:
+                            break
+                    time.sleep(0.1)
 
-            if attachment_pose is None:
-                raise RuntimeError("Could not detect attachment pose")
+                if attachment_pose is None:
+                    raise RuntimeError("Could not detect attachment pose")
+
+                # If no web interface is available (e.g. running headless), skip the
+                # confirmation and proceed with a single perception pass.
+                if web_interface is None:
+                    break
+                attachment_dir = os.path.dirname(inspect.getfile(self._attachment_perception.__class__))
+                vis_image = cv2.imread(os.path.join(attachment_dir, "attachment_corners.png"))
+                if web_interface.get_detection_confirmation("attachment", vis_image):
+                    break
+                print("Attachment detection rejected by user. Re-running attachment perception ...")
 
             offset = np.eye(4)
-            offset[:3, 3] = np.array([0, 0, -0.02])
+            # offset[:3, 3] = np.array([0, 0, -0.02])
+            offset[:3, 3] = np.array([0, 0.009, -0.01])
             pickup_pose = self.matrix_to_pose(self.pose_to_matrix(attachment_pose) @ offset)
 
-            offset[:3, 3] = np.array([0, 0.03, -0.12])
+            # offset[:3, 3] = np.array([0, 0.03, -0.12])
+            offset[:3, 3] = np.array([0, 0.009, -0.11])
             pre_pickup_pose = self.matrix_to_pose(self.pose_to_matrix(attachment_pose) @ offset)
 
             attachment_poses = {

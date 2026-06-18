@@ -76,7 +76,7 @@ class PickPlateFromApplianceHLA(HighLevelAction):
 
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.fridge_contents_gaze_pos)
-        attachment_poses = self.perception_interface.perceive_attachment_poses()
+        attachment_poses = self.perception_interface.perceive_attachment_poses(web_interface=self.web_interface)
 
         pickup_pose = attachment_poses["pickup_pose"]
         pre_pickup_pose = attachment_poses["pre_pickup_pose"]
@@ -98,17 +98,38 @@ class PickPlateFromApplianceHLA(HighLevelAction):
     def pick_plate_from_microwave(self, speed: str) -> None:
         assert self.sim.held_object_name is None
         print("Picking plate from microwave ...")
+        
+        self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.right_back_retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.microwave_inside_gaze_pos)
 
-        perceived_poses = self.perception_interface.get_perceived_poses()
-        behind_placement_pose = perceived_poses["behind_placement_pose"]
-        placement_pose = perceived_poses["placement_pose"]
+        time.sleep(2.0)
+        attachment_poses = self.perception_interface.perceive_attachment_poses(web_interface=self.web_interface)
+        pickup_pose = attachment_poses["pickup_pose"]
+        pre_pickup_pose = attachment_poses["pre_pickup_pose"]
+
+        self.move_to_joint_positions(self.sim.scene_description.right_back_retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
 
         self.close_gripper()
         self.move_to_joint_positions(self.sim.scene_description.microwave_plate_staging_pos)
-        self.move_to_ee_pose(behind_placement_pose)
-        self.move_to_ee_pose(placement_pose)
+        self.move_to_ee_pose(pre_pickup_pose)
+        self.move_to_ee_pose(pickup_pose)
+        # input("Press Enter to open gripper and pick up the plate ...")
         self.open_gripper()
         self.move_to_ee_pose(self.sim.scene_description.microwave_plate_staging_pose)
+        self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
+
+        # perceived_poses = self.perception_interface.get_perceived_poses()
+        # behind_placement_pose = perceived_poses["behind_placement_pose"]
+        # placement_pose = perceived_poses["placement_pose"]
+
+        # self.close_gripper()
+        # self.move_to_joint_positions(self.sim.scene_description.microwave_plate_staging_pos)
+        # self.move_to_ee_pose(behind_placement_pose)
+        # self.move_to_ee_pose(placement_pose)
+        # self.open_gripper()
+        # self.move_to_ee_pose(self.sim.scene_description.microwave_plate_staging_pose)
 
 
 class PickPlateFromHolderHLA(HighLevelAction):

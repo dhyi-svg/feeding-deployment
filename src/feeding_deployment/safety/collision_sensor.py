@@ -44,6 +44,7 @@ class CollisionSensor:
         )
 
         self._recent_max_errors = collections.deque()  # (timestamp, max_error) pairs
+        self._last_print_time = 0.0
 
         self._disable_collision_sensor = False
         self._disable_collision_sensor_sub = rospy.Subscriber(
@@ -129,7 +130,9 @@ class CollisionSensor:
             self._recent_max_errors.popleft()
         peak_10s = max(e for _, e in self._recent_max_errors)
 
-        print(f"Max Force Detected: {max_error:.3f}  |  Peak (last 10s): {peak_10s:.3f}")
+        if now - self._last_print_time >= 1.0:
+            print(f"Max Force Detected: {max_error:.3f}  |  Peak (last 10s): {peak_10s:.3f}")
+            self._last_print_time = now
 
         # Very high error means collision, otherwise model error
         if max_error > self.COLLISION_THRESHOLD:

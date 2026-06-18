@@ -246,8 +246,8 @@ class AttachmentPerception(TFInterface):
 
         # lower = np.array([35, 50, 120])
         # upper = np.array([50, 140, 220])
-        lower = np.array([60, 137, 113])
-        upper = np.array([120, 255, 213])
+        lower = np.array([44, 25, 110])
+        upper = np.array([70, 110, 210])
 
 
         return cv2.inRange(hsv, lower, upper)
@@ -371,10 +371,18 @@ class AttachmentPerception(TFInterface):
 
 
 if __name__ == '__main__':
-    rospy.init_node('AttachmentPerception')
-    attachment_perception = AttachmentPerception()
-    attachment_perception.turn_on()
-    while not rospy.is_shutdown():
-        attachment_pose = attachment_perception.detect_attachment()
-        time.sleep(0.1)
-    rospy.spin()
+    file_path = os.path.dirname(__file__)
+    rgb_path = os.path.join(file_path, "rgb.png")
+    bgr = cv2.imread(rgb_path)
+    if bgr is None:
+        print(f"Could not load {rgb_path}")
+        sys.exit(1)
+
+    ap = AttachmentPerception.__new__(AttachmentPerception)
+    mask = ap.detect_attachment_color(bgr)
+
+    vis = bgr.copy()
+    vis[mask > 0] = (0, 0, 255)
+    out_path = os.path.join(file_path, "color_test.png")
+    cv2.imwrite(out_path, vis)
+    print(f"Mask pixels: {np.count_nonzero(mask)}  →  saved {out_path}")

@@ -202,7 +202,7 @@ class _Runner:
         if run_on_robot:
             self.robot_interface = ArmInterfaceClient()  # type: ignore  # pylint: disable=no-member
             self.wrist_interface = WristInterface()
-            self.robot_interface.set_speed("medium")
+            self.robot_interface.set_speed("high")
         else:
             self.robot_interface = None
             self.wrist_interface = None

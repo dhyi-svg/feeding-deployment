@@ -190,9 +190,11 @@ if __name__ == "__main__":
     ee_pose = state["ee_pos"]
     joint_positions = state["position"]
 
-    arm_client_interface.execute_command(JointCommand(config.right_back_retract_pos))
-    arm_client_interface.execute_command(JointCommand(config.microwave_inside_gaze_pos))
-    arm_client_interface.execute_command(JointCommand(config.right_back_retract_pos))
+    # arm_client_interface.execute_command(JointCommand(config.left_back_retract_pos))
+    arm_client_interface.execute_command(JointCommand(config.behind_back_retract_pos))
+    # arm_client_interface.execute_command(JointCommand(config.right_back_retract_pos))
+    # arm_client_interface.execute_command(JointCommand(config.microwave_inside_gaze_pos))
+    # arm_client_interface.execute_command(JointCommand(config.right_back_retract_pos))
     # arm_client_interface.execute_command(JointCommand(joint_positions))
     # arm_client_interface.execute_command(JointCommand(config.microwave_closeup_gaze_pos))
 

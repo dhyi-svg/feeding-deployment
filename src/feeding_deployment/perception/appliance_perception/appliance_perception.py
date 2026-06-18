@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 import time
 import math
+import requests
 from scipy.spatial.transform import Rotation
 from sklearn.cluster import DBSCAN
 import open3d as o3d
@@ -21,7 +22,6 @@ from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceC
 from feeding_deployment.control.robot_controller.command_interface import CartesianCommand, JointCommand, CloseGripperCommand, OpenGripperCommand
 from collections import deque
 
-from feeding_deployment.perception.appliance_perception.remote_molmo import RemoteMolmo
 from feeding_deployment.perception.tf_interface import TFInterface
 from feeding_deployment.perception.grounded_sam import GroundedSAM
 
@@ -45,11 +45,7 @@ class AppliancePerception(TFInterface):
         self.TEXT_THRESHOLD = 0.3
         self.NMS_THRESHOLD = 0.4
 
-        print("Initializing molmo")
-        self.molmo = RemoteMolmo(
-            ssh_host="rj277@bhattacharjee-compute-02.coecis.cornell.edu",
-            remote_dir="/home/rj277/molmo/sensor_msgs",
-        )
+        self.molmo_url = "https://ace7-128-84-97-177.ngrok-free.app/predict"
 
         self.handle_type = None
         self.num_perception_samples = num_perception_samples
@@ -69,11 +65,16 @@ class AppliancePerception(TFInterface):
         rgb_image_flipped = cv2.flip(rgb_image.copy(), -1)
         cv2.imwrite(file_path + "/rgb_flipped.png", rgb_image_flipped)
 
-        vis_image, pixel_coords, response = self.molmo.query(
-            image_path=file_path + "/rgb_flipped.png",
-            prompt="Point to the center of the start / 30 secs button which has a triangle symbol on it.",
-            save_response_image_to=file_path + "/rgb_keypoint.png",
-        )
+        with open(file_path + "/rgb_flipped.png", "rb") as img_file:
+            http_response = requests.post(
+                self.molmo_url,
+                files={"image": img_file},
+                data={"prompt": "Point to the center of the start / 30 secs button. Right one out of two rectangular buttons at the bottom row of the microwave control panel."},
+            )
+        http_response.raise_for_status()
+        response = http_response.json()
+        print("Molmo HTTP response:", response)
+        pixel_coords = response.get("pixel_coords", [])
 
         print("Pixel coords from molmo:", pixel_coords)
         # Flip pixel coords back since we flipped the image before sending to molmo
