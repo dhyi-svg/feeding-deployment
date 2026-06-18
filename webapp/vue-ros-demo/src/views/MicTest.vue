@@ -1,0 +1,141 @@
+<template>
+  <div class="mic-test">
+    <h2>iPad button mic test</h2>
+    <p class="hint">
+      Confirms (1) the mic works over HTTPS on this iPad, (2) your button's
+      audio adapter is the active input, and (3) the detection threshold to use
+      in the real takeover component.
+    </p>
+
+    <div class="row">
+      <button @click="enableMic">Enable mic</button>
+      <span class="status">{{ status }}</span>
+    </div>
+
+    <div class="row">Active input device: <b>{{ device }}</b></div>
+    <div class="row">
+      Live peak (0–1): <b>{{ peak.toFixed(3) }}</b>
+      &nbsp;&nbsp; max seen: <b>{{ maxSeen.toFixed(3) }}</b>
+    </div>
+    <div class="meter-wrap"><div class="meter" :style="{ width: meterWidth + '%' }"></div></div>
+
+    <div class="row">
+      Threshold:
+      <input type="range" min="0" max="0.3" step="0.001" v-model.number="threshold" />
+      <b>{{ threshold.toFixed(3) }}</b>
+    </div>
+
+    <div class="row">
+      Detector:
+      <span class="press" :class="{ hit: pressActive }">{{ pressActive ? 'PRESS!' : '— idle —' }}</span>
+      &nbsp;&nbsp; presses detected: <b>{{ count }}</b>
+    </div>
+
+    <div class="row"><button @click="maxSeen = 0">reset max</button></div>
+
+    <p class="hint">
+      Tip: tap near the iPad's built-in mic vs. press the button to see which the
+      meter responds to — that tells you whether the adapter is the active input.
+      Then set the threshold so idle stays quiet but every press fires, and note
+      that value.
+    </p>
+  </div>
+</template>
+
+<script>
+// Standalone Web Audio test — no ROS. Mirrors button.py's rising-edge + debounce
+// logic, but on normalized float samples in [-1, 1] instead of int16.
+export default {
+  name: 'MicTest',
+  data () {
+    return {
+      status: '— not started —',
+      device: '—',
+      peak: 0,
+      maxSeen: 0,
+      threshold: 0.02,
+      count: 0,
+      pressActive: false,
+      _analyser: null,
+      _data: null,
+      _prevAbove: false,
+      _lastHit: 0,
+      _raf: null
+    }
+  },
+  computed: {
+    meterWidth () { return Math.min(100, this.peak * 100 / 0.3) }
+  },
+  beforeUnmount () {
+    if (this._raf) cancelAnimationFrame(this._raf)
+  },
+  methods: {
+    async enableMic () {
+      try {
+        // Disable processing so the button's transient isn't filtered away.
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+        })
+        this.status = 'mic granted'
+
+        // Report which input iOS actually selected.
+        try {
+          const track = stream.getAudioTracks()[0]
+          let label = track && track.label
+          if (!label) {
+            const devs = await navigator.mediaDevices.enumerateDevices()
+            const inp = devs.find(d => d.kind === 'audioinput')
+            label = inp && inp.label
+          }
+          this.device = label || 'unknown (label hidden until permission)'
+        } catch (e) { this.device = 'enumerate failed' }
+
+        const ctx = new (window.AudioContext || window.webkitAudioContext)()
+        await ctx.resume() // iOS requires resume() after the user gesture
+        const src = ctx.createMediaStreamSource(stream)
+        this._analyser = ctx.createAnalyser()
+        this._analyser.fftSize = 2048
+        this._data = new Float32Array(this._analyser.fftSize)
+        src.connect(this._analyser)
+        this.loop()
+      } catch (e) {
+        this.status = 'ERROR: ' + e.name + ' — ' + e.message +
+          '  (NotAllowed/undefined usually means you are NOT on HTTPS)'
+      }
+    },
+    loop () {
+      this._analyser.getFloatTimeDomainData(this._data)
+      let p = 0
+      for (let i = 0; i < this._data.length; i++) {
+        const a = Math.abs(this._data[i])
+        if (a > p) p = a
+      }
+      this.peak = p
+      if (p > this.maxSeen) this.maxSeen = p
+
+      const above = p > this.threshold
+      const now = Date.now()
+      if (above && !this._prevAbove && (now - this._lastHit) > 1500) { // rising edge + 1.5s debounce
+        this._lastHit = now
+        this.count++
+        this.pressActive = true
+        setTimeout(() => { this.pressActive = false }, 500)
+      }
+      this._prevAbove = above
+      this._raf = requestAnimationFrame(this.loop)
+    }
+  }
+}
+</script>
+
+<style scoped>
+.mic-test { font-family: -apple-system, system-ui, sans-serif; margin: 1.2rem; line-height: 1.4; }
+.hint { color: #666; max-width: 40rem; }
+.row { margin: .9rem 0; }
+.status { margin-left: .5rem; }
+.meter-wrap { width: 100%; max-width: 40rem; height: 44px; background: #eee; border-radius: 8px; overflow: hidden; }
+.meter { height: 100%; background: #4caf50; }
+.press { font-size: 1.6rem; font-weight: 700; color: #bbb; }
+.press.hit { color: #e53935; }
+button { font-size: 1.1rem; padding: .6rem 1rem; border-radius: 8px; }
+</style>
