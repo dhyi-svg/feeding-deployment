@@ -150,6 +150,12 @@ export default {
       this._raf = requestAnimationFrame(this.audioLoop)
     },
     onTakeoverButton () {
+      // Ignore presses while we're already in a teleop / recovery / chooser
+      // context (showTakeOver is false on the teleop + resuming pages). Otherwise
+      // repeated presses keep publishing {teleop,takeover}, which re-latches the
+      // robot-side takeover_event and re-triggers takeover when the skill
+      // resumes — the "have to tap redo twice" symptom.
+      if (!this.showTakeOver || this.$route.path === '/idle_takeover') return
       // Idle: no skill running -> open the chooser page, nothing else.
       if (this.skillCurrent < 0) {
         if (this.$route.path !== '/idle_takeover') this.$router.push('/idle_takeover')
