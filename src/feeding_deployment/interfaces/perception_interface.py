@@ -529,9 +529,9 @@ class PerceptionInterface:
             handle_transform = self.pose_to_matrix(handle_pose)
             offset = np.eye(4)
             if handle_type == "bottom white fridge door":
-                offset[:3, 3] = np.array([0.01, 0.0, -0.04]) # x axis is left, y axis is up, z axis is forward. 
+                offset[:3, 3] = np.array([0.01, 0.0, -0.045]) # x axis is left, y axis is up, z axis is forward. 
             else:
-                offset[:3, 3] = np.array([0.0, 0.0, -0.04]) # x axis is left, y axis is up, z axis is forward. 
+                offset[:3, 3] = np.array([0.0, 0.0, -0.045]) # x axis is left, y axis is up, z axis is forward. 
             grasp_pose = self.matrix_to_pose(handle_transform @ offset)
 
             pre_grasp_offset = np.eye(4)
@@ -579,6 +579,11 @@ class PerceptionInterface:
             else:
                 push_pose_mat[:3, :3] = push_pose_mat[:3, :3] @ R.from_euler("y", np.pi/2).as_matrix()
             push_pose = self.matrix_to_pose(push_pose_mat)
+
+            push_pose = Pose(
+                position=(push_pose.position[0], push_pose.position[1], top_of_appliance_pose.position[2]  - 0.03),  
+                orientation=push_pose.orientation,
+            )
             
             second_waypoints = self._generate_door_arc_waypoints(
                 start_pose=push_pose,
@@ -593,6 +598,13 @@ class PerceptionInterface:
             len_push_waypoints = len(push_waypoints)
             print("Number of push waypoints: ", len_push_waypoints)
 
+            # set z of push_waypoints to top_of_appliance_pose.position[2]  - 0.03
+            for i in range(len(push_waypoints)):
+                push_waypoints[i] = Pose(
+                    position=(push_waypoints[i].position[0], push_waypoints[i].position[1], top_of_appliance_pose.position[2]  - 0.03),
+                    orientation=push_waypoints[i].orientation,
+                )
+
             # pre_push_offset = np.eye(4)
             # pre_push_offset[:3, 3] = np.array([0, 0.15, 0])
             # pre_push_pose_mat = self.pose_to_matrix(push_pose) @ pre_push_offset
@@ -605,6 +617,12 @@ class PerceptionInterface:
             closing_waypoints = copy.deepcopy(second_waypoints)
             print("Number of closing waypoints: ", len(closing_waypoints))
             closing_waypoints.reverse()
+
+            for i in range(len(closing_waypoints)):
+                closing_waypoints[i] = Pose(
+                    position=(closing_waypoints[i].position[0], closing_waypoints[i].position[1], top_of_appliance_pose.position[2]  - 0.03),
+                    orientation=closing_waypoints[i].orientation,
+                )
 
             closing_waypoint = closing_waypoints[0]
 
