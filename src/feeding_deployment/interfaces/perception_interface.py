@@ -455,7 +455,7 @@ class PerceptionInterface:
 
             button_transform = self.pose_to_matrix(button_pose)
             offset = np.eye(4)
-            offset[:3, 3] = np.array([0.005, 0.0, -0.055])
+            offset[:3, 3] = np.array([0.005, 0.0, -0.051])
             press_pose = self.matrix_to_pose(button_transform @ offset)
 
             pre_press_offset = np.eye(4)
@@ -496,7 +496,7 @@ class PerceptionInterface:
                     depth_image = cam_data["depth_image"]
 
                     if rgb_image is not None and camera_info is not None and depth_image is not None:
-                        handle_pose, hinge_pose, placement_pose = self._appliance_perception.detect_handle_and_placement(handle_type, rgb_image, camera_info, depth_image)
+                        handle_pose, hinge_pose, placement_pose, top_of_appliance_pose = self._appliance_perception.detect_handle_and_placement(handle_type, rgb_image, camera_info, depth_image)
                         if handle_pose is not None:
                             break
                     time.sleep(0.1)
@@ -518,15 +518,20 @@ class PerceptionInterface:
                 print("Handle detection rejected by user. Re-running handle perception ...")
 
             offset = np.eye(4)
-            offset[:3, 3] = np.array([0, -0.06, 0.0]) # x axis is left, y axis is up, z axis is forward.
+            offset[:3, 3] = np.array([0, -0.055, 0.0]) # x axis is left, y axis is up, z axis is forward.
             placement_pose = self.matrix_to_pose(self.pose_to_matrix(placement_pose) @ offset)
+
+            # behind placement pose
+            offset = np.eye(4)
+            offset[:3, 3] = np.array([0, 0, -0.05]) # x axis is left, y axis is up, z axis is forward.
+            behind_placement_pose = self.matrix_to_pose(self.pose_to_matrix(placement_pose) @ offset)
 
             handle_transform = self.pose_to_matrix(handle_pose)
             offset = np.eye(4)
             if handle_type == "bottom white fridge door":
-                offset[:3, 3] = np.array([0.01, 0.0, -0.04]) # x axis is left, y axis is up, z axis is forward. 
+                offset[:3, 3] = np.array([0.01, 0.0, -0.045]) # x axis is left, y axis is up, z axis is forward. 
             else:
-                offset[:3, 3] = np.array([0.0, 0.0, -0.04]) # x axis is left, y axis is up, z axis is forward. 
+                offset[:3, 3] = np.array([0.0, 0.0, -0.045]) # x axis is left, y axis is up, z axis is forward. 
             grasp_pose = self.matrix_to_pose(handle_transform @ offset)
 
             pre_grasp_offset = np.eye(4)
@@ -554,12 +559,17 @@ class PerceptionInterface:
                 rotate_orientation=True,
             )
 
-            post_release_pose = copy.deepcopy(opening_waypoints[-1])
-            offset = np.eye(4)
-            offset[:3, 3] = np.array([0, 0.15, 0])
-            post_release_pose_mat = self.pose_to_matrix(post_release_pose)
-            post_release_pose_mat = post_release_pose_mat @ offset
-            post_release_pose = self.matrix_to_pose(post_release_pose_mat)
+            # set z of post_release_pose to top_of_appliance to avoid collision with the microwave handle
+            post_release_pose = Pose(
+                position=(opening_waypoints[-1].position[0], opening_waypoints[-1].position[1], top_of_appliance_pose.position[2] + 0.05),
+                orientation=opening_waypoints[-1].orientation,
+            )
+            # copy.deepcopy(opening_waypoints[-1])
+            # offset = np.eye(4)
+            # offset[:3, 3] = np.array([0, 0.15, 0])
+            # post_release_pose_mat = self.pose_to_matrix(post_release_pose)
+            # post_release_pose_mat = post_release_pose_mat @ offset
+            # post_release_pose = self.matrix_to_pose(post_release_pose_mat)
 
             # rotate the sixth-to-last (assuming thickness is 35cm) opening waypoint by 180 degrees so that the gripper can push the door open instead of pulling it
             push_pose = copy.deepcopy(opening_waypoints[-6])
@@ -569,6 +579,11 @@ class PerceptionInterface:
             else:
                 push_pose_mat[:3, :3] = push_pose_mat[:3, :3] @ R.from_euler("y", np.pi/2).as_matrix()
             push_pose = self.matrix_to_pose(push_pose_mat)
+
+            push_pose = Pose(
+                position=(push_pose.position[0], push_pose.position[1], top_of_appliance_pose.position[2]  - 0.03),  
+                orientation=push_pose.orientation,
+            )
             
             second_waypoints = self._generate_door_arc_waypoints(
                 start_pose=push_pose,
@@ -583,30 +598,55 @@ class PerceptionInterface:
             len_push_waypoints = len(push_waypoints)
             print("Number of push waypoints: ", len_push_waypoints)
 
-            pre_push_offset = np.eye(4)
-            pre_push_offset[:3, 3] = np.array([0, 0.15, 0])
-            pre_push_pose_mat = self.pose_to_matrix(push_pose) @ pre_push_offset
-            pre_push_pose = self.matrix_to_pose(pre_push_pose_mat)
+            # set z of push_waypoints to top_of_appliance_pose.position[2]  - 0.03
+            for i in range(len(push_waypoints)):
+                push_waypoints[i] = Pose(
+                    position=(push_waypoints[i].position[0], push_waypoints[i].position[1], top_of_appliance_pose.position[2]  - 0.03),
+                    orientation=push_waypoints[i].orientation,
+                )
+
+            # pre_push_offset = np.eye(4)
+            # pre_push_offset[:3, 3] = np.array([0, 0.15, 0])
+            # pre_push_pose_mat = self.pose_to_matrix(push_pose) @ pre_push_offset
+            # pre_push_pose = self.matrix_to_pose(pre_push_pose_mat)
+            pre_push_pose = Pose(
+                position=(push_pose.position[0], push_pose.position[1], top_of_appliance_pose.position[2] + 0.05),
+                orientation=push_pose.orientation,
+            )
 
             closing_waypoints = copy.deepcopy(second_waypoints)
             print("Number of closing waypoints: ", len(closing_waypoints))
             closing_waypoints.reverse()
 
+            for i in range(len(closing_waypoints)):
+                closing_waypoints[i] = Pose(
+                    position=(closing_waypoints[i].position[0], closing_waypoints[i].position[1], top_of_appliance_pose.position[2]  - 0.03),
+                    orientation=closing_waypoints[i].orientation,
+                )
+
             closing_waypoint = closing_waypoints[0]
 
-            last_push = push_waypoints[-1]
-            last_push = self.pose_to_matrix(last_push)
-            offset = np.eye(4)
-            offset[:3, 3] = np.array([0, 0.15, 0])
-            last_push = last_push @ offset
-            last_push = self.matrix_to_pose(last_push)
+            last_push = Pose(
+                position=(push_waypoints[-1].position[0], push_waypoints[-1].position[1], top_of_appliance_pose.position[2] + 0.05),
+                orientation=push_waypoints[-1].orientation,
+            )
+            # last_push = push_waypoints[-1]
+            # last_push = self.pose_to_matrix(last_push)
+            # offset = np.eye(4)
+            # offset[:3, 3] = np.array([0, 0.15, 0])
+            # last_push = last_push @ offset
+            # last_push = self.matrix_to_pose(last_push)
 
-            above_closing_waypoint = closing_waypoint
-            above_closing_waypoint_mat = self.pose_to_matrix(above_closing_waypoint)
-            offset = np.eye(4)
-            offset[:3, 3] = np.array([0, 0.15, 0])
-            above_closing_waypoint_mat = above_closing_waypoint_mat @ offset
-            above_closing_waypoint = self.matrix_to_pose(above_closing_waypoint_mat)
+            above_closing_waypoint = Pose(
+                position=(closing_waypoint.position[0], closing_waypoint.position[1], top_of_appliance_pose.position[2] + 0.05),
+                orientation=closing_waypoint.orientation,
+            )
+            # above_closing_waypoint = closing_waypoint
+            # above_closing_waypoint_mat = self.pose_to_matrix(above_closing_waypoint)
+            # offset = np.eye(4)
+            # offset[:3, 3] = np.array([0, 0.15, 0])
+            # above_closing_waypoint_mat = above_closing_waypoint_mat @ offset
+            # above_closing_waypoint = self.matrix_to_pose(above_closing_waypoint_mat)
 
             more_closing_waypoints = copy.deepcopy(opening_waypoints[:-2])
             more_closing_waypoints.reverse()
@@ -652,11 +692,15 @@ class PerceptionInterface:
                 push_closing_waypoints.append(self.matrix_to_pose(waypoint_mat @ offset))
             push_closing_waypoints.reverse()
 
-            above_push_closing_waypoint = push_closing_waypoints[0]
-            offset = np.eye(4)
-            offset[:3, 3] = np.array([0, 0.15, 0])
-            above_push_closing_waypoint_mat = self.pose_to_matrix(above_push_closing_waypoint) @ offset
-            above_push_closing_waypoint = self.matrix_to_pose(above_push_closing_waypoint_mat)
+            above_push_closing_waypoint = Pose(
+                position=(push_closing_waypoints[0].position[0], push_closing_waypoints[0].position[1], top_of_appliance_pose.position[2] + 0.05),
+                orientation=push_closing_waypoints[0].orientation,
+            )
+            # above_push_closing_waypoint = push_closing_waypoints[0]
+            # offset = np.eye(4)
+            # offset[:3, 3] = np.array([0, 0.15, 0])
+            # above_push_closing_waypoint_mat = self.pose_to_matrix(above_push_closing_waypoint) @ offset
+            # above_push_closing_waypoint = self.matrix_to_pose(above_push_closing_waypoint_mat)
 
             # beginning_closing_waypoint = offset_closing_waypoints[0]
             # beginning_closing_waypoint_mat = self.pose_to_matrix(beginning_closing_waypoint)
@@ -667,6 +711,7 @@ class PerceptionInterface:
 
             handle_poses = {
                 "placement_pose": placement_pose,
+                "behind_placement_pose": behind_placement_pose,
                 "pre_grasp_pose": pre_grasp_pose,
                 "grasp_pose": grasp_pose,
                 "opening_waypoints": opening_waypoints,
@@ -719,34 +764,47 @@ class PerceptionInterface:
         return handle_poses
         # return self.last_handle_poses
 
-    def perceive_attachment_poses(self):
+    def perceive_attachment_poses(self, web_interface=None):
 
         if self.simulation:
             with open(self.log_dir / 'attachment_poses.pkl', 'rb') as f:
                 attachment_poses = pickle.load(f)
 
         else:
-            attachment_pose = None
-            for _ in range(20):
-                cam_data = self._realsense.get_camera_data()
-                rgb_image = cam_data["rgb_image"]
-                camera_info = cam_data["camera_info"]
-                depth_image = cam_data["depth_image"]
+            while True:
+                attachment_pose = None
+                for _ in range(20):
+                    cam_data = self._realsense.get_camera_data()
+                    rgb_image = cam_data["rgb_image"]
+                    camera_info = cam_data["camera_info"]
+                    depth_image = cam_data["depth_image"]
 
-                if rgb_image is not None and camera_info is not None and depth_image is not None:
-                    attachment_pose = self._attachment_perception.detect_attachment(rgb_image, camera_info, depth_image)
-                    if attachment_pose is not None:
-                        break
-                time.sleep(0.1)
+                    if rgb_image is not None and camera_info is not None and depth_image is not None:
+                        attachment_pose = self._attachment_perception.detect_attachment(rgb_image, camera_info, depth_image)
+                        if attachment_pose is not None:
+                            break
+                    time.sleep(0.1)
 
-            if attachment_pose is None:
-                raise RuntimeError("Could not detect attachment pose")
+                if attachment_pose is None:
+                    raise RuntimeError("Could not detect attachment pose")
+
+                # If no web interface is available (e.g. running headless), skip the
+                # confirmation and proceed with a single perception pass.
+                if web_interface is None:
+                    break
+                attachment_dir = os.path.dirname(inspect.getfile(self._attachment_perception.__class__))
+                vis_image = cv2.imread(os.path.join(attachment_dir, "attachment_corners.png"))
+                if web_interface.get_detection_confirmation("attachment", vis_image):
+                    break
+                print("Attachment detection rejected by user. Re-running attachment perception ...")
 
             offset = np.eye(4)
-            offset[:3, 3] = np.array([0, 0, -0.02])
+            # offset[:3, 3] = np.array([0, 0, -0.02])
+            offset[:3, 3] = np.array([0, 0.009, -0.01])
             pickup_pose = self.matrix_to_pose(self.pose_to_matrix(attachment_pose) @ offset)
 
-            offset[:3, 3] = np.array([0, 0.03, -0.12])
+            # offset[:3, 3] = np.array([0, 0.03, -0.12])
+            offset[:3, 3] = np.array([0, 0.009, -0.11])
             pre_pickup_pose = self.matrix_to_pose(self.pose_to_matrix(attachment_pose) @ offset)
 
             attachment_poses = {
@@ -758,7 +816,7 @@ class PerceptionInterface:
 
         return attachment_poses
 
-    def perceive_sink_placement_poses(self):
+    def perceive_sink_placement_poses(self, web_interface=None):
 
         if self.simulation:
             # load them from a pickle file
@@ -766,24 +824,34 @@ class PerceptionInterface:
                 sink_placement_poses = pickle.load(f)
 
         else:
-            sink_placement_pose = None
-            for _ in range(20):
-                cam_data = self._realsense.get_camera_data()
-                rgb_image = cam_data["rgb_image"]
-                camera_info = cam_data["camera_info"]
-                depth_image = cam_data["depth_image"]
+            while True:
+                sink_placement_pose = None
+                for _ in range(20):
+                    cam_data = self._realsense.get_camera_data()
+                    rgb_image = cam_data["rgb_image"]
+                    camera_info = cam_data["camera_info"]
+                    depth_image = cam_data["depth_image"]
 
-                if rgb_image is not None and camera_info is not None and depth_image is not None:
-                    sink_placement_pose = self._appliance_perception.detect_sink_placement(rgb_image, camera_info, depth_image)
-                    if sink_placement_pose is not None:
-                        break
-                time.sleep(0.1)
+                    if rgb_image is not None and camera_info is not None and depth_image is not None:
+                        sink_placement_pose = self._appliance_perception.detect_sink_placement(rgb_image, camera_info, depth_image)
+                        if sink_placement_pose is not None:
+                            break
+                    time.sleep(0.1)
 
-            if sink_placement_pose is None:
-                raise RuntimeError("Could not detect sink placement pose")
+                if sink_placement_pose is None:
+                    raise RuntimeError("Could not detect sink placement pose")
+
+                # If no web interface is available (e.g. running headless), skip the
+                # confirmation and proceed with a single perception pass.
+                if web_interface is None:
+                    break
+                vis_image = cv2.imread(os.path.join(os.getcwd(), "sink_back_pixel.png"))
+                if web_interface.get_detection_confirmation("sink", vis_image):
+                    break
+                print("Sink placement detection rejected by user. Re-running sink placement perception ...")
 
             offset = np.eye(4)
-            offset[:3, 3] = np.array([0.0, 0.12, -0.4])
+            offset[:3, 3] = np.array([0.0, 0.15, -0.45])
             sink_placement_pose = self.matrix_to_pose(self.pose_to_matrix(sink_placement_pose) @ offset)
 
             sink_placement_poses = {

@@ -80,9 +80,9 @@ class SceneDescription:
     retract_utensil_forward_pos: JointPositions
 
     microwave_closeup_gaze_pos: JointPositions
-
     microwave_plate_staging_pos: JointPositions
     microwave_plate_staging_pose: Pose
+    microwave_inside_gaze_pos: JointPositions
 
     sink_gaze_pos: JointPositions
     sink_plate_staging_pos: JointPositions
@@ -136,6 +136,8 @@ class SceneDescription:
     inside_plate_holder_pose: Pose
     above_plate_holder_pose: Pose
     above_plate_holder_pos: JointPositions
+    intermediate_plate_holder_pos: JointPositions
+    intermediate_plate_holder_pose: Pose
 
     # Plate constants
     plate_staging_pos: JointPositions

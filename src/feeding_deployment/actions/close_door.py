@@ -1,4 +1,5 @@
 from typing import Any
+import time
 
 from relational_structs import (
     LiftedAtom,
@@ -81,6 +82,8 @@ class CloseDoorHLA(HighLevelAction):
         print("Closing microwave door ...")
 
         # self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
+        self.open_gripper()
 
         handle_closing_poses = self.perception_interface.perceive_handle_closing_poses("microwave")
 
@@ -88,6 +91,9 @@ class CloseDoorHLA(HighLevelAction):
         self.move_to_ee_pose(handle_closing_poses["above_closing_waypoint"])
         self.move_to_ee_pose(handle_closing_poses["closing_waypoint"])
         self.move_to_ee_pose_trajectory(handle_closing_poses["closing_waypoints"])
+
+        time.sleep(1.0) # wait for the door to be fully closed before moving the arm away
+        self.move_to_ee_pose(handle_closing_poses["closing_waypoints"][-2])
 
         self.close_gripper()
         self.move_to_ee_pose(handle_closing_poses["offset_closing_waypoints"][0])

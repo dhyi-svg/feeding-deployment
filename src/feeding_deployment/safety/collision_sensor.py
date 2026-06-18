@@ -11,6 +11,8 @@ except ModuleNotFoundError:
 
 import os
 import math
+import time
+import collections
 import numpy as np
 import argparse
 from pathlib import Path
@@ -21,7 +23,7 @@ class CollisionSensor:
     """See docstring above."""
 
     # Threshold for collision detection
-    COLLISION_THRESHOLD = 40.0
+    COLLISION_THRESHOLD = 25.0
 
     def __init__(self):
 
@@ -40,6 +42,9 @@ class CollisionSensor:
         self._joint_state_sub = rospy.Subscriber(
             "/robot_joint_states", JointState, self._joint_state_callback
         )
+
+        self._recent_max_errors = collections.deque()  # (timestamp, max_error) pairs
+        self._last_print_time = 0.0
 
         self._disable_collision_sensor = False
         self._disable_collision_sensor_sub = rospy.Subscriber(
@@ -119,7 +124,15 @@ class CollisionSensor:
         error = np.abs(torque_reading - torque_model)
         max_error = np.max(error)
 
-        # print("Max Force Detected: ", max_error)
+        now = time.time()
+        self._recent_max_errors.append((now, max_error))
+        while self._recent_max_errors and now - self._recent_max_errors[0][0] > 10.0:
+            self._recent_max_errors.popleft()
+        peak_10s = max(e for _, e in self._recent_max_errors)
+
+        if now - self._last_print_time >= 1.0:
+            print(f"Max Force Detected: {max_error:.3f}  |  Peak (last 10s): {peak_10s:.3f}")
+            self._last_print_time = now
 
         # Very high error means collision, otherwise model error
         if max_error > self.COLLISION_THRESHOLD:

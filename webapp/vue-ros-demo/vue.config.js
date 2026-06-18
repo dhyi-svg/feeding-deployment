@@ -17,11 +17,9 @@ module.exports = defineConfig({
     });
   },
   devServer: {
-    host: '0.0.0.0',        // serve on the LAN so the iPad can reach it
+    host: '192.168.1.2',
     allowedHosts: 'all',
-    server: 'https',        // HTTPS so iOS exposes navigator.mediaDevices (mic).
-                            // Auto self-signed cert -> accept the Safari warning on the iPad.
-                            // (For a warning-free cert, use mkcert instead; see chat.)
+    server: 'https',
     client: {
       overlay: false,  // 禁用开发模式下的错误覆盖显示
     }

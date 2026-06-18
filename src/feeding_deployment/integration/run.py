@@ -402,11 +402,11 @@ class _Runner:
             GroundAtom(IsUtensil, [self.utensil]),
             GroundAtom(DoorClosed, [self.fridge]),
             GroundAtom(DoorClosed, [self.microwave]),
-            GroundAtom(InFrontOf, [self.microwave]),
+            GroundAtom(InFrontOf, [self.sink]),
             GroundAtom(PlateAt, [self.holder]),
             # GroundAtom(Holding, [self.plate]),
             GroundAtom(SafeToNavigate, []),
-            # GroundAtom(FoodHeated, []),
+            GroundAtom(FoodHeated, []),
         }
 
         self.transparency_query = TransparencyQuery(self.log_dir)
@@ -883,6 +883,8 @@ if __name__ == "__main__":
     # Handle Ctrl+C gracefully
     signal.signal(signal.SIGINT, runner.signal_handler)
 
+    runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateInSink"], (runner.plate, runner.sink)))
+
     if not args.use_interface:
         # for i in range(3):
         #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromHolder"], (runner.plate, runner.holder)))
@@ -893,8 +895,12 @@ if __name__ == "__main__":
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["CloseDoor"], (runner.fridge,)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromAppliance"], (runner.plate, runner.microwave)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.fridge,)))
-        runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["TransferTool"], (runner.utensil,runner.table)))
+        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["TransferTool"], (runner.utensil,runner.table)))
         
+        for i in range(3):
+            input("Press Enter to execute open and close the microwave door ...")
+            runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.microwave,)))
+            runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["CloseDoor"], (runner.microwave,)))
         # for i in range(10):
         #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["Reset"], ()))
         #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["Home"], ()))

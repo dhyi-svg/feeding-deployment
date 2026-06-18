@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 import time
 import math
+import requests
 from scipy.spatial.transform import Rotation
 from sklearn.cluster import DBSCAN
 import open3d as o3d
@@ -21,7 +22,6 @@ from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceC
 from feeding_deployment.control.robot_controller.command_interface import CartesianCommand, JointCommand, CloseGripperCommand, OpenGripperCommand
 from collections import deque
 
-from feeding_deployment.perception.appliance_perception.remote_molmo import RemoteMolmo
 from feeding_deployment.perception.tf_interface import TFInterface
 from feeding_deployment.perception.grounded_sam import GroundedSAM
 
@@ -45,11 +45,7 @@ class AppliancePerception(TFInterface):
         self.TEXT_THRESHOLD = 0.3
         self.NMS_THRESHOLD = 0.4
 
-        print("Initializing molmo")
-        self.molmo = RemoteMolmo(
-            ssh_host="rj277@bhattacharjee-compute-02.coecis.cornell.edu",
-            remote_dir="/home/rj277/molmo/sensor_msgs",
-        )
+        self.molmo_url = "https://ace7-128-84-97-177.ngrok-free.app/predict"
 
         self.handle_type = None
         self.num_perception_samples = num_perception_samples
@@ -69,11 +65,16 @@ class AppliancePerception(TFInterface):
         rgb_image_flipped = cv2.flip(rgb_image.copy(), -1)
         cv2.imwrite(file_path + "/rgb_flipped.png", rgb_image_flipped)
 
-        vis_image, pixel_coords, response = self.molmo.query(
-            image_path=file_path + "/rgb_flipped.png",
-            prompt="Point to the center of the start / 30 secs button which has a triangle symbol on it.",
-            save_response_image_to=file_path + "/rgb_keypoint.png",
-        )
+        with open(file_path + "/rgb_flipped.png", "rb") as img_file:
+            http_response = requests.post(
+                self.molmo_url,
+                files={"image": img_file},
+                data={"prompt": "Point to the center of the start / 30 secs button. Right one out of two rectangular buttons at the bottom row of the microwave control panel."},
+            )
+        http_response.raise_for_status()
+        response = http_response.json()
+        print("Molmo HTTP response:", response)
+        pixel_coords = response.get("pixel_coords", [])
 
         print("Pixel coords from molmo:", pixel_coords)
         # Flip pixel coords back since we flipped the image before sending to molmo
@@ -233,15 +234,25 @@ class AppliancePerception(TFInterface):
             handle_centroid[1] = top_most_y - 0.04
         # handle_centroid[1] = top_most_y - 0.02 # 2 cm below the top most point in the cluster, which should be close to the center of the handle
 
+        # find top of the plane_cloud (not handle) just above handle
+        top_of_appliance = handle_centroid.copy()
+        top_of_appliance[1] = np.max(np.asarray(plane_cloud.points)[:, 1])
+        top_of_appliance_pixel = self.world2Pixel(camera_info_msg, top_of_appliance[0], top_of_appliance[1], top_of_appliance[2])
+
         handle_centroid_3d = handle_centroid
         handle_centroid_pixel = self.world2Pixel(camera_info_msg, handle_centroid[0], handle_centroid[1], handle_centroid[2])
 
         vis = rgb_image.copy()
-        for u, v in cluster_pixels:
-            vis[v, u] = (0, 255, 255)
+        # for u, v in cluster_pixels:
+        #     vis[v, u] = (0, 255, 255)
+
         # draw large green circle at handle_centroid_pixel
         print("Handle centroid pixel:", handle_centroid_pixel)
         cv2.circle(vis, (handle_centroid_pixel[0], handle_centroid_pixel[1]), 10, (0, 255, 0), -1)
+
+        # draw large orange circle at top_of_appliance_pixel
+        print("Top of plane pixel:", top_of_appliance_pixel)
+        cv2.circle(vis, (top_of_appliance_pixel[0], top_of_appliance_pixel[1]), 10, (0, 165, 255), -1)
 
         if handle_type == "bottom white fridge door":
             print("Finding strip anchor point for fridge door handle")
@@ -297,10 +308,16 @@ class AppliancePerception(TFInterface):
             base_to_placement = np.dot(base_to_camera, camera_to_placement)
             base_to_placement[:3, :3] = Rotation.from_quat([-0.5, 0.5, 0.5, -0.5]).as_matrix()
 
-            return self.matrix_to_pose(base_to_handle), self.matrix_to_pose(base_to_hinge), self.matrix_to_pose(base_to_placement)
+            camera_to_top_of_appliance = np.eye(4)
+            camera_to_top_of_appliance[:3, 3] = top_of_appliance
+            camera_to_top_of_appliance[3, 3] = 1
+            base_to_top_of_appliance = np.dot(base_to_camera, camera_to_top_of_appliance)
+            base_to_top_of_appliance[:3, :3] = Rotation.from_quat([-0.5, 0.5, 0.5, -0.5]).as_matrix()
+
+            return self.matrix_to_pose(base_to_handle), self.matrix_to_pose(base_to_hinge), self.matrix_to_pose(base_to_placement), self.matrix_to_pose(base_to_top_of_appliance)
         
         print("Could not get transform between arm_base_link and camera_color_optical_frame")
-        return None, None, None
+        return None, None, None, None
 
     def detect_sink_placement(self, rgb_image, camera_info_msg, depth_image):
         if rgb_image is None:
@@ -328,9 +345,9 @@ class AppliancePerception(TFInterface):
         cv2.imwrite("detection_mask.png", mask)
 
         # Hack, take a point with x as center of bounding box and y as 40 pixels above the top of the bounding box 
-        center_pixel = ((x1 + x2) // 2, y1 - 50)
+        center_pixel = ((x1 + x2) // 2 + 140, y1 - 50)
         cv2.circle(rgb_image, center_pixel, 10, (0, 0, 255), -1)
-        cv2.imwrite("sink_back_pixel.png", rgb_image)
+        cv2.imwrite("sink_back_pixel.png", cv2.rotate(rgb_image, cv2.ROTATE_180))
 
         ok, center_3d = self.pixel2World(camera_info_msg, center_pixel[0], center_pixel[1], depth_image)
         if not ok:
