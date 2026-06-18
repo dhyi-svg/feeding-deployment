@@ -61,7 +61,7 @@ class CloseDoorHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.open_gripper()
 
-        handle_closing_poses = self.perception_interface.perceive_handle_closing_poses("bottom fridge door")
+        handle_closing_poses = self.perception_interface.perceive_handle_closing_poses("bottom textured fridge door")
 
         print("moving to pre-pull pose: ", handle_closing_poses["pre_pull_pose"])
         self.move_to_ee_pose(handle_closing_poses["pre_pull_pose"])
@@ -76,6 +76,9 @@ class CloseDoorHLA(HighLevelAction):
         self.move_to_ee_pose(handle_closing_poses["above_push_closing_waypoint"])
         self.move_to_ee_pose(handle_closing_poses["push_closing_waypoints"][0])
         self.move_to_ee_pose_trajectory(handle_closing_poses["push_closing_waypoints"])
+
+        time.sleep(1.0)
+        self.move_to_ee_pose(handle_closing_poses["push_closing_waypoints"][-3])
 
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)

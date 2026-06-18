@@ -526,6 +526,11 @@ class PerceptionInterface:
                     break
                 print("Handle detection rejected by user. Re-running handle perception ...")
 
+            if handle_type == "microwave":
+                top_offset = 0.03
+            elif handle_type == "bottom textured fridge door":
+                top_offset = 0.05
+
             offset = np.eye(4)
             offset[:3, 3] = np.array([0, -0.055, 0.0]) # x axis is left, y axis is up, z axis is forward.
             placement_pose = self.matrix_to_pose(self.pose_to_matrix(placement_pose) @ offset)
@@ -537,14 +542,14 @@ class PerceptionInterface:
 
             handle_transform = self.pose_to_matrix(handle_pose)
             offset = np.eye(4)
-            if handle_type == "bottom fridge door":
-                offset[:3, 3] = np.array([0.01, 0.0, -0.045]) # x axis is left, y axis is up, z axis is forward. 
+            if handle_type == "bottom textured fridge door":
+                offset[:3, 3] = np.array([0.01, 0.0, -0.035]) # x axis is left, y axis is up, z axis is forward. 
             else:
                 offset[:3, 3] = np.array([0.0, 0.0, -0.045]) # x axis is left, y axis is up, z axis is forward. 
             grasp_pose = self.matrix_to_pose(handle_transform @ offset)
 
             pre_grasp_offset = np.eye(4)
-            if handle_type == "bottom fridge door":
+            if handle_type == "bottom textured fridge door":
                 pre_grasp_offset[:3, 3] = np.array([0.01, 0.0, -0.12]) # x axis is left, y axis is up, z axis is forward. 
             else:
                 pre_grasp_offset[:3, 3] = np.array([0.0, 0.0, -0.12])
@@ -555,7 +560,7 @@ class PerceptionInterface:
                 hinge_position=hinge_pose.position,
                 arc_length_m=0.55 if handle_type == "microwave" else 0.35,
                 waypoint_spacing_m=0.05,
-                direction=1 if handle_type == "bottom fridge door" else -1, # microwave is left hinged
+                direction=1 if handle_type == "bottom textured fridge door" else -1, # microwave is left hinged
                 rotate_orientation=True,
             )
 
@@ -583,14 +588,14 @@ class PerceptionInterface:
             # rotate the sixth-to-last (assuming thickness is 35cm) opening waypoint by 180 degrees so that the gripper can push the door open instead of pulling it
             push_pose = copy.deepcopy(opening_waypoints[-6])
             push_pose_mat = self.pose_to_matrix(push_pose)
-            if handle_type == "bottom fridge door":
+            if handle_type == "bottom textured fridge door":
                 push_pose_mat[:3, :3] = push_pose_mat[:3, :3] @ R.from_euler("y", -np.pi/2).as_matrix()
             else:
                 push_pose_mat[:3, :3] = push_pose_mat[:3, :3] @ R.from_euler("y", np.pi/2).as_matrix()
             push_pose = self.matrix_to_pose(push_pose_mat)
 
             push_pose = Pose(
-                position=(push_pose.position[0], push_pose.position[1], top_of_appliance_pose.position[2]  - 0.03),  
+                position=(push_pose.position[0], push_pose.position[1], top_of_appliance_pose.position[2]  - top_offset),  
                 orientation=push_pose.orientation,
             )
             
@@ -599,7 +604,7 @@ class PerceptionInterface:
                 hinge_position=hinge_pose.position,
                 arc_length_m=0.5 if handle_type == "microwave" else 0.85, # the microwave is already partially open at the push waypoint
                 waypoint_spacing_m=0.05,
-                direction=1 if handle_type == "bottom fridge door" else -1, # microwave is left hinged
+                direction=1 if handle_type == "bottom textured fridge door" else -1, # microwave is left hinged
                 rotate_orientation=True,
             )
             print("Number of second waypoints: ", len(second_waypoints))
@@ -607,10 +612,10 @@ class PerceptionInterface:
             len_push_waypoints = len(push_waypoints)
             print("Number of push waypoints: ", len_push_waypoints)
 
-            # set z of push_waypoints to top_of_appliance_pose.position[2]  - 0.03
+            # set z of push_waypoints to top_of_appliance_pose.position[2]  - top_offset 
             for i in range(len(push_waypoints)):
                 push_waypoints[i] = Pose(
-                    position=(push_waypoints[i].position[0], push_waypoints[i].position[1], top_of_appliance_pose.position[2]  - 0.03),
+                    position=(push_waypoints[i].position[0], push_waypoints[i].position[1], top_of_appliance_pose.position[2]  - top_offset),
                     orientation=push_waypoints[i].orientation,
                 )
 
@@ -629,7 +634,7 @@ class PerceptionInterface:
 
             for i in range(len(closing_waypoints)):
                 closing_waypoints[i] = Pose(
-                    position=(closing_waypoints[i].position[0], closing_waypoints[i].position[1], top_of_appliance_pose.position[2]  - 0.03),
+                    position=(closing_waypoints[i].position[0], closing_waypoints[i].position[1], top_of_appliance_pose.position[2]  - top_offset),
                     orientation=closing_waypoints[i].orientation,
                 )
 
@@ -676,7 +681,7 @@ class PerceptionInterface:
                 waypoint_mat = self.pose_to_matrix(waypoint)
                 waypoint_mat[:3, :3] = waypoint_mat[:3, :3] @ R.from_euler("y", -np.pi/2).as_matrix()
                 offset = np.eye(4)
-                offset[:3, 3] = np.array([0.01, -0.09, -0.14])
+                offset[:3, 3] = np.array([0.03, -0.09, -0.14])
                 pull_closing_waypoints.append(self.matrix_to_pose(waypoint_mat @ offset))
 
             pull_closing_waypoint = pull_closing_waypoints[0]
@@ -688,7 +693,7 @@ class PerceptionInterface:
 
             behind_pull_closing_waypoint = pull_closing_waypoints[-1]
             offset = np.eye(4)
-            offset[:3, 3] = np.array([0, 0.0, -0.02])
+            offset[:3, 3] = np.array([0, 0.0, -0.03])
             behind_pull_closing_waypoint_mat = self.pose_to_matrix(behind_pull_closing_waypoint) @ offset
             behind_pull_closing_waypoint = self.matrix_to_pose(behind_pull_closing_waypoint_mat)
 
@@ -770,7 +775,7 @@ class PerceptionInterface:
         return handle_poses
 
     def perceive_handle_closing_poses(self, handle_type: str):
-        assert handle_type in ["bottom fridge door", "microwave"]
+        assert handle_type in ["bottom textured fridge door", "microwave"]
         if self.log_dir is not None:
             with open(self.log_dir / 'handle_opening_pos.pkl', 'rb') as f:
                 handle_opening_pos = pickle.load(f)

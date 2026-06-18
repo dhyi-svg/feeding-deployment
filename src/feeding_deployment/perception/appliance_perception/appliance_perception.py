@@ -89,7 +89,7 @@ class AppliancePerception(TFInterface):
 
         if not ok:
             print("Could not get valid 3D point for button")
-            return
+            return None
 
         if transform is not None:   
             print("Got transform between arm_base_link and camera_color_optical_frame")
@@ -108,7 +108,7 @@ class AppliancePerception(TFInterface):
     def detect_handle_and_placement(self, handle_type, rgb_image, camera_info_msg, depth_image):
         if rgb_image is None:
             print("No camera data provided")
-            return None, None, None
+            return None, None, None, None
 
         transform = self.get_frame_to_frame_transform(camera_info_msg)
 
@@ -122,7 +122,7 @@ class AppliancePerception(TFInterface):
 
         if detection is None:
             print("No detection")
-            return None, None, None
+            return None, None, None, None
 
         # create mask using detection
         x1, y1, x2, y2 = detection.astype(int)
@@ -149,7 +149,7 @@ class AppliancePerception(TFInterface):
         if len(bounding_box_points_3d) == 0:
             print("-------------- ERROR: No valid 3D points from mask.")
             # rospy.logwarn("No valid 3D points from mask.")
-            return
+            return None, None, None, None
 
         bounding_box_points_3d = np.array(bounding_box_points_3d)
         pixels = np.array(pixels)
@@ -213,7 +213,7 @@ class AppliancePerception(TFInterface):
 
         if not np.any(valid):
             # rospy.logwarn("DBSCAN found no clusters.")
-            return
+            return None, None, None, None
 
         unique, counts = np.unique(labels[valid], return_counts=True)
         main_label = unique[np.argmax(counts)]
@@ -228,7 +228,7 @@ class AppliancePerception(TFInterface):
         # for handle_centroid take median in x, y and z to be more robust to outliers
 
         handle_centroid = np.median(cluster_points_3d, axis=0)
-        if handle_type == "bottom fridge door":
+        if handle_type == "bottom textured fridge door":
             handle_centroid[1] = top_most_y - 0.07
         else:
             handle_centroid[1] = top_most_y - 0.04
@@ -254,7 +254,7 @@ class AppliancePerception(TFInterface):
         print("Top of plane pixel:", top_of_appliance_pixel)
         cv2.circle(vis, (top_of_appliance_pixel[0], top_of_appliance_pixel[1]), 10, (0, 165, 255), -1)
 
-        if handle_type == "bottom fridge door":
+        if handle_type == "bottom textured fridge door":
             print("Finding strip anchor point for fridge door handle")
             strip_anchor_point = np.min(plane_cloud.points, axis=0)
         else:
@@ -283,7 +283,7 @@ class AppliancePerception(TFInterface):
         ok, center_3d = self.pixel2World(camera_info_msg, center_pixel[0], center_pixel[1], depth_image, depth=plane_depth)
         if not ok:
             print("Could not get valid 3D point for center pixel")
-            return
+            return None, None, None, None
 
         transform = self.get_frame_to_frame_transform(camera_info_msg)
 
@@ -322,7 +322,7 @@ class AppliancePerception(TFInterface):
     def detect_sink_placement(self, rgb_image, camera_info_msg, depth_image):
         if rgb_image is None:
             print("No camera data provided")
-            return None, None, None
+            return None
 
         transform = self.get_frame_to_frame_transform(camera_info_msg)
 
@@ -336,7 +336,7 @@ class AppliancePerception(TFInterface):
 
         if detection is None:
             print("No detection")
-            return None, None, None
+            return None
 
         # create mask using detection
         x1, y1, x2, y2 = detection.astype(int)
@@ -369,7 +369,7 @@ class AppliancePerception(TFInterface):
     def detect_table_placement(self, rgb_image, camera_info_msg, depth_image):
         if rgb_image is None:
             print("No camera data provided")
-            return None, None, None
+            return None
 
         transform = self.get_frame_to_frame_transform(camera_info_msg)
 
@@ -383,7 +383,7 @@ class AppliancePerception(TFInterface):
 
         if detection is None:
             print("No detection")
-            return None, None, None
+            return None
 
         # create mask using detection
         x1, y1, x2, y2 = detection.astype(int)
@@ -408,6 +408,7 @@ class AppliancePerception(TFInterface):
         ok, center_3d = self.pixel2World(camera_info_msg, center_pixel[0], center_pixel[1], depth_image, use_surrounding_pixels=True)
         if not ok:
             print("Could not get valid 3D point for table placement")
+            return None
 
         if transform is not None:   
             base_to_camera = self.make_homogeneous_transform(transform)
@@ -562,7 +563,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--handle_type', type=str, default='microwave handle',
-                        help='Handle type to detect (e.g. "microwave handle", "bottom fridge door")')
+                        help='Handle type to detect (e.g. "microwave handle", "bottom textured fridge door")')
     args = parser.parse_args()
 
     rospy.init_node('AppliancePerception')

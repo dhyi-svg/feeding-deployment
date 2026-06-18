@@ -62,7 +62,7 @@ class OpenDoorHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.fridge_door_gaze_pos)
 
-        handle_opening_poses = self.perception_interface.perceive_handle_opening_poses("bottom fridge door", web_interface=self.web_interface)
+        handle_opening_poses = self.perception_interface.perceive_handle_opening_poses("bottom textured fridge door", web_interface=self.web_interface)
 
         # visualize on rviz
         poses = []
