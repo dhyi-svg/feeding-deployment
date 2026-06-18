@@ -36,6 +36,23 @@
     </div>
   </div>
 
+  <div class="skill-plan" v-if="planSlots.current">
+    <div class="skill-step past" v-if="planSlots.last">
+      <span class="step-label">Previous</span>
+      <span class="step-name">{{ skillLabel(planSlots.last) }}</span>
+    </div>
+    <div class="skill-arrow" v-if="planSlots.last">&#8594;</div>
+    <div class="skill-step current">
+      <span class="step-label">Now</span>
+      <span class="step-name">{{ skillLabel(planSlots.current) }}</span>
+    </div>
+    <div class="skill-arrow" v-if="planSlots.next">&#8594;</div>
+    <div class="skill-step upcoming" v-if="planSlots.next">
+      <span class="step-label">Next</span>
+      <span class="step-name">{{ skillLabel(planSlots.next) }}</span>
+    </div>
+  </div>
+
   <div class="content">
     <div class="message">
       {{ displayedMessage }}
@@ -51,6 +68,7 @@
 import ROSLIB from 'roslib'
 import routeMap from '@/router/routeMap';
 import { ROS_URL, USER} from '@/config/parameterConfig';
+import { skillLabel } from '@/config/skillLabels';
 
 export default {
   data () {
@@ -62,12 +80,40 @@ export default {
       speed: 'moderate',
       publishTopic: '/WebAppComm',
       listener: null,
-      subscribeTopic: '/ServerComm'
+      skillPlanListener: null,
+      subscribeTopic: '/ServerComm',
+      // Full ordered skill plan + index of the running skill, both set from the
+      // latched /SkillPlan topic. The plan can contain any skill: navigation,
+      // fridge/microwave manipulation, plate handling, and bite/drink/wipe.
+      skillPlan: [],
+      currentSkillIndex: -1
+    }
+  },
+  computed: {
+    // The last / current / next skill to display, taken directly from the
+    // backend-provided plan.
+    planSlots () {
+      const plan = this.skillPlan
+      const idx = this.currentSkillIndex
+      if (idx < 0 || idx >= plan.length) {
+        return { last: null, current: null, next: null }
+      }
+      return {
+        last: idx > 0 ? plan[idx - 1] : null,
+        current: plan[idx],
+        next: idx < plan.length - 1 ? plan[idx + 1] : null
+      }
     }
   },
   mounted () {
     this.initSubscriber()
     this.initPublisher()
+    // Dev/testing hook: inject a plan via URL when running without a backend,
+    // e.g. /#/preparepickup2?plan=navigate_to_table,acquire_bite,stow_utensil&current=1
+    if (this.$route.query.plan) {
+      this.skillPlan = String(this.$route.query.plan).split(',')
+      this.currentSkillIndex = this.$route.query.current != null ? parseInt(this.$route.query.current, 10) : 0
+    }
     window.addEventListener('keydown', this.handleKeyDown) // notify caregiver
   },
   beforeUnmount () {
@@ -78,6 +124,11 @@ export default {
       console.log('Unsubscribing from listener...');
       this.listener.unsubscribe();
       this.listener = null;
+    }
+
+    if (this.skillPlanListener) {
+      this.skillPlanListener.unsubscribe();
+      this.skillPlanListener = null;
     }
 
     // 取消发布
@@ -122,6 +173,20 @@ export default {
         console.error('Failed to parse ROS message:', error);
       }
     },
+    skillLabel(name) {
+      return skillLabel(name);
+    },
+    handleSkillPlan(message) {
+      try {
+        const parsed = JSON.parse(message.data);
+        if (Array.isArray(parsed.plan) && typeof parsed.current === 'number') {
+          this.skillPlan = parsed.plan;
+          this.currentSkillIndex = parsed.current;
+        }
+      } catch (error) {
+        console.error('Failed to parse /SkillPlan message:', error);
+      }
+    },
     toggleSettings() {
       const message = new ROSLIB.Message({
         data: JSON.stringify({ // 将消息内容转换为JSON字符串
@@ -162,6 +227,14 @@ export default {
         name: '/ServerComm', // 订阅 /listener 话题
         messageType: 'std_msgs/String' // 订阅 std_msgs/String 类型的消息
       })
+
+      // Latched skill plan: drives the last / current / next skill bar.
+      this.skillPlanListener = new ROSLIB.Topic({
+        ros: ros,
+        name: '/SkillPlan',
+        messageType: 'std_msgs/String'
+      })
+      this.skillPlanListener.subscribe((message) => this.handleSkillPlan(message))
 
       this.listener.subscribe((msg) => {
         console.log('Received message on /listener:', msg.data);
@@ -369,11 +442,61 @@ export default {
   font-size: 14px;
 }
 
+.skill-plan {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 10px;
+}
+
+.skill-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 140px;
+  padding: 10px 18px;
+  border-radius: 10px;
+  background: #eee;
+  color: #6e7e8e;
+  border: 2px solid transparent;
+}
+
+.skill-step.current {
+  background: #6e7e8e;
+  color: white;
+  border-color: #3d4a57;
+  transform: scale(1.08);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+}
+
+.skill-step .step-label {
+  font-family: Verdana;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  opacity: 0.8;
+}
+
+.skill-step .step-name {
+  font-family: Verdana;
+  font-size: 18px;
+  font-weight: bold;
+  margin-top: 4px;
+}
+
+.skill-arrow {
+  font-size: 26px;
+  color: #6e7e8e;
+}
+
 .content {
   display: flex;
   justify-content: center;
   align-items: center;
-  height: 70vh;
+  /* Leave room for the .top bar, the skill-plan bar and the footer so the page
+     fits one screen (e.g. the 1180x820 iPad) without scrolling. */
+  height: 60vh;
 }
 
 .message {
@@ -387,7 +510,7 @@ export default {
 .footer {
   display: flex;
   justify-content: center;
-  padding: 20px;
+  padding: 14px;
 }
 
 .succeed-button {

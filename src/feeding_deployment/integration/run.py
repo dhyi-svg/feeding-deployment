@@ -586,26 +586,47 @@ class _Runner:
         if isinstance(user_command, GroundHighLevelAction):
             plan_hlas.append(user_command)
 
-        for ground_hla in plan_hlas:
+        # Build the ordered list of skill names (snake_case behavior-tree names,
+        # e.g. "acquire_bite") so the web interface can show last/current/next.
+        skill_plan_names = []
+        for gh in plan_hlas:
+            try:
+                skill_plan_names.append(
+                    gh.hla.get_behavior_tree_filename(gh.objects, gh.params).removesuffix(".yaml")
+                )
+            except Exception:
+                skill_plan_names.append(gh.hla.get_name())
+
+        for i, ground_hla in enumerate(plan_hlas):
             print(f"Refining {ground_hla}")
+            # Tell the web interface which skill is now executing.
+            if self.web_interface is not None:
+                self.web_interface.publish_skill_plan(skill_plan_names, i)
             operator = ground_hla.get_operator()
 
             # import ipdb; ipdb.set_trace()
             assert operator.preconditions.issubset(self.current_atoms)
 
-            # Execute the high-level plan in simulation
-            try:
-                ground_hla.execute_action()
-            except TeleopTakeoverException as e:
-                print(f"User took over control during {ground_hla}: {e}")
-                print(f"Skipping this HLA and continuing with next queued HLAs.")
-                continue
-            except RuntimeError as e:
-                print(f"HLA execution failed: {e}")
-                print(f"Aborting task and returning to task selection page.")
-                if self.web_interface is not None:
-                    self.web_interface.ready_for_task_selection()
-                return
+            # Execute the high-level plan in simulation. On a mid-skill takeover
+            # the user chooses, via the teleop Done button, whether to redo this
+            # skill (re-run it) or continue to the next (treat it as done, so we
+            # fall through and apply its effects below).
+            while True:
+                try:
+                    ground_hla.execute_action()
+                    break
+                except TeleopTakeoverException as e:
+                    if e.redo_current:
+                        print(f"User chose to redo {ground_hla} after teleop; re-running the skill.")
+                        continue
+                    print(f"User chose to continue past {ground_hla} after teleop; treating it as done.")
+                    break
+                except RuntimeError as e:
+                    print(f"HLA execution failed: {e}")
+                    print(f"Aborting task and returning to task selection page.")
+                    if self.web_interface is not None:
+                        self.web_interface.ready_for_task_selection()
+                    return
 
             sim_state = self.sim.get_current_state()
 

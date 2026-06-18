@@ -23,8 +23,14 @@ import time
 
 
 class TeleopTakeoverException(Exception):
-    """Raised when user takes over control via teleoperation during skill execution."""
-    pass
+    """Raised when user takes over control via teleoperation during skill execution.
+
+    redo_current: if True, the user asked to re-run the interrupted skill after
+    teleop; if False, they asked to treat it as done and continue to the next.
+    """
+    def __init__(self, message: str = "", redo_current: bool = False) -> None:
+        super().__init__(message)
+        self.redo_current = redo_current
 
 from pybullet_helpers.geometry import Pose, multiply_poses
 from pybullet_helpers.spaces import PoseSpace
@@ -434,7 +440,7 @@ class HighLevelAction(abc.ABC):
         """
         if self.robot_interface is None or self.web_interface is None:
             print("Manual teleop recovery requested but robot/web interface is unavailable; skipping.")
-            return
+            return None
         from feeding_deployment.actions.teleop_recovery import TeleopRecoverySession
         session = TeleopRecoverySession(
             robot_interface=self.robot_interface,
@@ -446,13 +452,16 @@ class HighLevelAction(abc.ABC):
             failure_context=failure_context,
             session_id=session_id,
         )
-        session.run()
+        # The user's post-teleop choice on a mid-skill takeover: "redo" or "next".
+        post_action = session.run()
 
         # Fix #2: re-sync the sim (and RViz) to the arm's REAL joints after manual
         # teleop. The end-effector pose follows from the joints via forward
         # kinematics, so syncing joints syncs the pose too. Wrapped so a sync
         # failure can never propagate back into the executive.
         self.sync_sim_to_real_arm()
+
+        return post_action
 
     def sync_sim_to_real_arm(self) -> None:
         """Push the real arm's current joint state into the sim model and RViz."""
@@ -499,8 +508,12 @@ class HighLevelAction(abc.ABC):
 
         # Mid-skill takeover: if requested before this move, hand to the user and
         # skip the move (we assume they teleop to the goal pose).
-        if self._maybe_handle_mid_skill_takeover():
-            raise TeleopTakeoverException("User took over control before command execution")
+        choice = self._maybe_handle_mid_skill_takeover()
+        if choice is not None:
+            raise TeleopTakeoverException(
+                "User took over control before command execution",
+                redo_current=(choice == "redo"),
+            )
 
         # The move blocks until done; a takeover requested during it best-effort
         # aborts it via stop_action so control returns here promptly.
@@ -510,28 +523,33 @@ class HighLevelAction(abc.ABC):
 
         # Takeover requested during this move: hand to the user, then skip the
         # rest of this move and let the skill continue to its next step.
-        if self._maybe_handle_mid_skill_takeover():
-            raise TeleopTakeoverException("User took over control during command execution")
+        choice = self._maybe_handle_mid_skill_takeover()
+        if choice is not None:
+            raise TeleopTakeoverException(
+                "User took over control during command execution",
+                redo_current=(choice == "redo"),
+            )
 
         if not success and not isinstance(robot_command, (OpenGripperCommand, CloseGripperCommand)):
             raise RuntimeError("Robot command failed to execute (joint limit or workspace reachability constraint)")
 
-    def _maybe_handle_mid_skill_takeover(self) -> bool:
+    def _maybe_handle_mid_skill_takeover(self):
         """If the user requested a takeover, run teleop and route the iPad to the
-        'explanation' page on exit. Returns True if a takeover was handled."""
+        'explanation' page on exit. Returns the user's post-teleop choice
+        ("redo" or "next") if a takeover was handled, else None."""
         if not MID_SKILL_TAKEOVER_ENABLED or self.web_interface is None:
-            return False
+            return None
         if not self.web_interface.consume_takeover():
-            return False
+            return None
         print("Mid-skill takeover requested; handing control to the user.")
-        self.run_manual_teleop_recovery(failure_context="mid_skill_takeover")
+        post_action = self.run_manual_teleop_recovery(failure_context="mid_skill_takeover") or "next"
         # Generic 'resuming' page while autonomy continues the skill.
         try:
               self.web_interface.switch_to_explanation_page()
         #     self.web_interface._send_message({"state": "resuming", "status": "jump"})
         except Exception as e:
             print(f"Could not send resuming page jump: {e}")
-        return True
+        return post_action
 
 
 @dataclass(frozen=True)

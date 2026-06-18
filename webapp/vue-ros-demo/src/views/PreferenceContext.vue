@@ -8,7 +8,6 @@
           <div class="subtitle">Tell the robot about this meal before we begin.</div>
         </div>
       </div>
-      <button class="back-button" @click="goToTaskSelection">Task Selection</button>
     </header>
 
     <main class="content">
@@ -142,6 +141,7 @@ export default {
   mounted() {
     this.initPublisher()
     this.initSubscriber()
+    this.maybeLoadFromUrl()
   },
   beforeUnmount() {
     this.teardownRos()
@@ -200,6 +200,31 @@ export default {
         console.error('Failed to parse ROS message:', error)
       }
     },
+    // Dev/testing hook: when the backend hasn't sent options, seed them from the
+    // URL so the page can be exercised without ROS. Examples:
+    //   /#/preference_context?meals=Pasta,Salad,Soup&settings=Home,Restaurant&times=Breakfast,Lunch,Dinner&meal=Pasta
+    //   /#/preference_context?data=<url-encoded backend JSON payload>
+    maybeLoadFromUrl() {
+      if (this.hasOptions) return
+      const q = this.$route.query
+      if (q.data) {
+        try {
+          this.loadOptions(JSON.parse(q.data))
+          return
+        } catch (e) {
+          console.error('preference_context: bad ?data= JSON:', e)
+        }
+      }
+      const toList = (v) => String(v ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+      if (q.meals || q.settings || q.times) {
+        this.loadOptions({
+          meals: toList(q.meals),
+          settings: toList(q.settings),
+          time_of_day: toList(q.times),
+          defaults: { meal: q.meal || '', setting: q.setting || '', time_of_day: q.time || '' }
+        })
+      }
+    },
     loadOptions(message) {
       const meals = Array.isArray(message.meals) ? message.meals : []
       const settings = Array.isArray(message.settings) ? message.settings : []
@@ -230,6 +255,8 @@ export default {
       })
 
       this.publisher.publish(message)
+      // Advance the workflow to the predicted-preference review.
+      this.$router.push('/preference_correction')
     },
     goToTaskSelection() {
       if (this.publisher) {

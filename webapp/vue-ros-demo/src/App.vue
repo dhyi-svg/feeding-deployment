@@ -83,6 +83,13 @@ export default {
 </script>
 
 <style>
+/* Reset the default body margin so full-height pages (height: 100vh, e.g. the
+   teleop screens) fit the viewport exactly without scrolling. */
+html, body {
+  margin: 0;
+  padding: 0;
+}
+
 #app {
   font-family: Avenir, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -108,13 +115,21 @@ nav a.router-link-exact-active {
 /* Global control buttons, fixed top-right as a group. The group's RIGHT edge is
    pinned at right:240px so it always clears the page's ~220px-wide "Finish
    Feeding" button (which occupies the rightmost ~225px); the buttons grow
-   leftward and the 10px gap keeps them apart. */
+   leftward and the 10px gap keeps them apart. The group spans the same 9vh top
+   band as the page header and centers its buttons, so they line up with the
+   "Finish Feeding" button at any viewport height. */
 .global-controls {
   position: fixed;
-  top: 14px;
+  top: 0;
   right: 240px;
+  /* Match the header bar's FULL rendered height: its 9vh content height plus
+     its 5px top/bottom padding (content-box). Centering within this band lines
+     the buttons up with the "Finish Feeding" button, which is centered in the
+     same bar. */
+  height: calc(9vh + 10px);
   z-index: 1000;
   display: flex;
+  align-items: center;
   gap: 10px;
 }
 .global-btn {

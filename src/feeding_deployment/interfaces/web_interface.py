@@ -49,6 +49,9 @@ class WebInterface:
         
         # Create a publisher for communication with the web interface.
         self.web_interface_publisher = rospy.Publisher("/ServerComm", String, queue_size=10)
+        # Latched so a page that subscribes mid-skill (e.g. the teleop screens,
+        # which only mount after takeover) immediately receives the current plan.
+        self.skill_plan_publisher = rospy.Publisher("/SkillPlan", String, queue_size=1, latch=True)
         self.web_interface_image_publisher = rospy.Publisher("/camera/image/compressed", CompressedImage, queue_size=10)
         self.image_bridge = CvBridge()
         self.user_preference = None
@@ -103,6 +106,20 @@ class WebInterface:
     def switch_to_explanation_page(self) -> None:
         # rostopic pub -1 /ServerComm std_msgs/String "data: '{\"state\":\"preparepickup2\",\"status\":\"jump\"}'"
         self.web_interface_publisher.publish(String(json.dumps({"state": "preparepickup2", "status": "jump"})))
+
+    def publish_skill_plan(self, plan_names: list, current_index: int) -> None:
+        """Publish (latched) the ordered skill plan and the index of the skill
+        currently executing, so the web interface can show the last / current /
+        next skill with the current one highlighted. Latching lets late
+        subscribers (e.g. the teleop screens) get the current skill on connect."""
+        self.skill_plan_publisher.publish(String(json.dumps({
+            "plan": plan_names,
+            "current": current_index,
+        })))
+
+    def clear_skill_plan(self) -> None:
+        """Clear the skill plan (no skill executing, e.g. idle at task selection)."""
+        self.skill_plan_publisher.publish(String(json.dumps({"plan": [], "current": -1})))
 
     def _send_message(self, msg_dict: dict[str, Any], explanation=False) -> None:
         self.web_interface_publisher.publish(String(json.dumps(msg_dict)))
@@ -240,6 +257,9 @@ class WebInterface:
         """Moves the web interface to the task selection page."""
 
         self.current_page = "task_selection"
+
+        # No skill is executing while idle at task selection.
+        self.clear_skill_plan()
 
         print("Sending message to web interface to move to task selection page with last task type: ", last_task_type)
 
@@ -437,7 +457,13 @@ class WebInterface:
 
         if msg_dict is None:
             return False
-        return msg_dict["status"] == "confirm"
+        confirmed = msg_dict["status"] == "confirm"
+        if confirmed:
+            # Detection accepted: move the iPad off the (now-stale) detection image
+            # to the explanation page while the skill continues. On "redo" we leave
+            # the page in place so perception can re-run and re-show the image.
+            self.switch_to_explanation_page()
+        return confirmed
 
     #### Transparency Pages ####
 
