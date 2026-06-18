@@ -153,14 +153,16 @@ class WebInterface:
         # in-flight move) so the executive hands control to the teleop screen.
         if msg_dict.get("state") == "teleop" and msg_dict.get("status") == "takeover":
             print("Received takeover request from web interface!")
+            already_requested = self.takeover_event.is_set()
             self.takeover_event.set()
-            if self._takeover_stop_fn is not None:
-                try:
-                    self._takeover_stop_fn()
-                except Exception as e:
-                    print("Error calling takeover stop function: ", e)
-            else:
-                print("No takeover stop function registered.")
+            if not already_requested:
+                if self._takeover_stop_fn is not None:
+                    try:
+                        self._takeover_stop_fn()
+                    except Exception as e:
+                        print("Error calling takeover stop function: ", e)
+                else:
+                    print("No takeover stop function registered.")
             return
 
         self.task_selection_jump = False
