@@ -192,6 +192,11 @@ const routes = [
     path: '/resuming',
     name: 'resuming',
     component: () => import(/* webpackChunkName: "about" */ '../views/Resuming.vue')
+  },
+  {
+    path: '/mictest',
+    name: 'mictest',
+    component: () => import(/* webpackChunkName: "about" */ '../views/MicTest.vue')
   }
 ]
 
