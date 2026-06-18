@@ -19,7 +19,15 @@ module.exports = defineConfig({
   devServer: {
     host: '192.168.1.2',
     allowedHosts: 'all',
-    server: 'https',
+    // Bohan: [Jun 18, 2026] replace the server: 'https' with the trusted cert so the page also loads warning-free
+    server: {
+              type: 'https',
+              options: {
+                key:  '/home/isacc/certs/192.168.1.2-key.pem',
+                cert: '/home/isacc/certs/192.168.1.2.pem'
+              }
+            },
+
     client: {
       overlay: false,  // 禁用开发模式下的错误覆盖显示
     }

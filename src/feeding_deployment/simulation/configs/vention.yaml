@@ -126,7 +126,8 @@ fridge_door_staging_pos:
 fridge_door_gaze_pos:
   description: "Gaze configuration, the fridge door should be visible from this configuration"
   type: "joint_positions"
-  values: [-0.980015584273823, 0.47420615883552164, -3.015619807706865, -2.207007668035523, 0.7286555882107023, 1.2561937782724737, 1.2283014269116377]
+  # values: [-0.980015584273823, 0.47420615883552164, -3.015619807706865, -2.207007668035523, 0.7286555882107023, 1.2561937782724737, 1.2283014269116377]
+  values: [-0.91463604, -0.00615297, -2.99599417, -2.1717048, 1.05234604, 0.95046814, 0.77005549]
 fridge_contents_gaze_pos:
   description: "Gaze configuration, the inside of fridge should be visible from this configuration"
   type: "joint_positions"

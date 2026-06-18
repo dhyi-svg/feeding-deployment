@@ -192,7 +192,7 @@ if __name__ == "__main__":
 
     # arm_client_interface.execute_command(JointCommand(config.left_back_retract_pos))
     # arm_client_interface.execute_command(JointCommand(config.behind_back_retract_pos))
-    arm_client_interface.execute_command(JointCommand(config.right_back_retract_pos))
+    # arm_client_interface.execute_command(JointCommand(config.right_back_retract_pos))
     # arm_client_interface.execute_command(JointCommand(config.microwave_inside_gaze_pos))
     # arm_client_interface.execute_command(JointCommand(config.right_back_retract_pos))
     # arm_client_interface.execute_command(JointCommand(joint_positions))

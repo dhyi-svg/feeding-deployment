@@ -228,7 +228,7 @@ class AppliancePerception(TFInterface):
         # for handle_centroid take median in x, y and z to be more robust to outliers
 
         handle_centroid = np.median(cluster_points_3d, axis=0)
-        if handle_type == "bottom white fridge door":
+        if handle_type == "bottom fridge door":
             handle_centroid[1] = top_most_y - 0.07
         else:
             handle_centroid[1] = top_most_y - 0.04
@@ -254,7 +254,7 @@ class AppliancePerception(TFInterface):
         print("Top of plane pixel:", top_of_appliance_pixel)
         cv2.circle(vis, (top_of_appliance_pixel[0], top_of_appliance_pixel[1]), 10, (0, 165, 255), -1)
 
-        if handle_type == "bottom white fridge door":
+        if handle_type == "bottom fridge door":
             print("Finding strip anchor point for fridge door handle")
             strip_anchor_point = np.min(plane_cloud.points, axis=0)
         else:
@@ -455,6 +455,7 @@ class AppliancePerception(TFInterface):
         detections.xyxy = detections.xyxy[nms_idx]
         detections.confidence = detections.confidence[nms_idx]
         detections.class_id = detections.class_id[nms_idx]
+        labels = [labels[i] for i in nms_idx]
         #print(f"After NMS: {len(detections.xyxy)} boxes")
 
         annotated_frame = box_annotator.annotate(scene=image.copy(), detections=detections, labels=labels)
@@ -556,7 +557,42 @@ class AppliancePerception(TFInterface):
 
 
 if __name__ == '__main__':
+    import argparse
+    from feeding_deployment.interfaces.realsense_interface import RealSenseInterface
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--handle_type', type=str, default='microwave handle',
+                        help='Handle type to detect (e.g. "microwave handle", "bottom fridge door")')
+    args = parser.parse_args()
+
     rospy.init_node('AppliancePerception')
     grounded_sam = GroundedSAM()
     appliance_perception = AppliancePerception(grounded_sam)
-    rospy.spin()
+
+    print("Waiting for camera data...")
+    realsense = RealSenseInterface()
+
+    camera_data = None
+    rate = rospy.Rate(10)
+    while not rospy.is_shutdown():
+        camera_data = realsense.get_camera_data()
+        if camera_data['rgb_image'] is not None:
+            break
+        rate.sleep()
+
+    print(f"Running detect_handle_and_placement loop with handle_type='{args.handle_type}' (Ctrl-C to stop)")
+    rate = rospy.Rate(1)
+    while not rospy.is_shutdown():
+        camera_data = realsense.get_camera_data()
+        if camera_data['rgb_image'] is None:
+            print("No camera data, waiting...")
+            rate.sleep()
+            continue
+        result = appliance_perception.detect_handle_and_placement(
+            args.handle_type,
+            camera_data['rgb_image'],
+            camera_data['camera_info'],
+            camera_data['depth_image'],
+        )
+        print("Result:", result)
+        rate.sleep()

@@ -415,6 +415,18 @@ class PerceptionInterface:
 
         return waypoints
     
+    def _terminal_confirmation(self, detection_type: str, vis_image=None) -> bool:
+        if vis_image is not None:
+            display = vis_image.copy()
+            cv2.putText(display, "Press 'y' to confirm, any other key to redo",
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            cv2.imshow(f"{detection_type} detection", display)
+            key = cv2.waitKey(0) & 0xFF
+            cv2.destroyAllWindows()
+            return key == ord('y')
+        response = input(f"Is the {detection_type} detection correct? [y/N]: ").strip().lower()
+        return response == "y"
+
     def perceive_button_pressing_poses(self, web_interface=None):
 
         if self.simulation:
@@ -440,16 +452,13 @@ class PerceptionInterface:
                 if button_pose is None:
                     raise RuntimeError("Could not detect button pressing pose")
 
-                # If no web interface is available (e.g. running headless), skip the
-                # confirmation and proceed with a single perception pass.
-                if web_interface is None:
-                    break
-                # detect_start_button saves Molmo's keypoint visualization next to
-                # the appliance perception module. It is drawn on the flipped
-                # (already upright) image, so no extra rotation is needed.
                 appliance_dir = os.path.dirname(inspect.getfile(self._appliance_perception.__class__))
                 vis_image = cv2.imread(os.path.join(appliance_dir, "rgb_keypoint.png"))
-                if web_interface.get_detection_confirmation("button", vis_image):
+                if web_interface is None:
+                    confirmed = self._terminal_confirmation("button", vis_image)
+                else:
+                    confirmed = web_interface.get_detection_confirmation("button", vis_image)
+                if confirmed:
                     break
                 print("Button detection rejected by user. Re-running button perception ...")
 
@@ -504,16 +513,16 @@ class PerceptionInterface:
                 if handle_pose is None:
                     raise RuntimeError(f"Could not detect handle opening poses for {handle_type}")
 
-                # If no web interface is available (e.g. running headless), skip the
-                # confirmation and proceed with a single perception pass.
-                if web_interface is None:
-                    break
                 vis_image = cv2.imread(os.path.join(os.getcwd(), "handle_hinge_pixels.png"))
                 # The camera is mounted upside down, so rotate the visualization
                 # 180 degrees to show it right-side up to the user.
                 if vis_image is not None:
                     vis_image = cv2.rotate(vis_image, cv2.ROTATE_180)
-                if web_interface.get_detection_confirmation("handle", vis_image):
+                if web_interface is None:
+                    confirmed = self._terminal_confirmation("handle", vis_image)
+                else:
+                    confirmed = web_interface.get_detection_confirmation("handle", vis_image)
+                if confirmed:
                     break
                 print("Handle detection rejected by user. Re-running handle perception ...")
 
@@ -528,14 +537,14 @@ class PerceptionInterface:
 
             handle_transform = self.pose_to_matrix(handle_pose)
             offset = np.eye(4)
-            if handle_type == "bottom white fridge door":
+            if handle_type == "bottom fridge door":
                 offset[:3, 3] = np.array([0.01, 0.0, -0.045]) # x axis is left, y axis is up, z axis is forward. 
             else:
                 offset[:3, 3] = np.array([0.0, 0.0, -0.045]) # x axis is left, y axis is up, z axis is forward. 
             grasp_pose = self.matrix_to_pose(handle_transform @ offset)
 
             pre_grasp_offset = np.eye(4)
-            if handle_type == "bottom white fridge door":
+            if handle_type == "bottom fridge door":
                 pre_grasp_offset[:3, 3] = np.array([0.01, 0.0, -0.12]) # x axis is left, y axis is up, z axis is forward. 
             else:
                 pre_grasp_offset[:3, 3] = np.array([0.0, 0.0, -0.12])
@@ -546,7 +555,7 @@ class PerceptionInterface:
                 hinge_position=hinge_pose.position,
                 arc_length_m=0.55 if handle_type == "microwave" else 0.35,
                 waypoint_spacing_m=0.05,
-                direction=1 if handle_type == "bottom white fridge door" else -1, # microwave is left hinged
+                direction=1 if handle_type == "bottom fridge door" else -1, # microwave is left hinged
                 rotate_orientation=True,
             )
 
@@ -574,7 +583,7 @@ class PerceptionInterface:
             # rotate the sixth-to-last (assuming thickness is 35cm) opening waypoint by 180 degrees so that the gripper can push the door open instead of pulling it
             push_pose = copy.deepcopy(opening_waypoints[-6])
             push_pose_mat = self.pose_to_matrix(push_pose)
-            if handle_type == "bottom white fridge door":
+            if handle_type == "bottom fridge door":
                 push_pose_mat[:3, :3] = push_pose_mat[:3, :3] @ R.from_euler("y", -np.pi/2).as_matrix()
             else:
                 push_pose_mat[:3, :3] = push_pose_mat[:3, :3] @ R.from_euler("y", np.pi/2).as_matrix()
@@ -590,7 +599,7 @@ class PerceptionInterface:
                 hinge_position=hinge_pose.position,
                 arc_length_m=0.5 if handle_type == "microwave" else 0.85, # the microwave is already partially open at the push waypoint
                 waypoint_spacing_m=0.05,
-                direction=1 if handle_type == "bottom white fridge door" else -1, # microwave is left hinged
+                direction=1 if handle_type == "bottom fridge door" else -1, # microwave is left hinged
                 rotate_orientation=True,
             )
             print("Number of second waypoints: ", len(second_waypoints))
@@ -677,9 +686,15 @@ class PerceptionInterface:
             pre_pull_pose_mat = self.pose_to_matrix(pull_closing_waypoint) @ pre_pull_offset
             pre_pull_pose = self.matrix_to_pose(pre_pull_pose_mat)
 
+            behind_pull_closing_waypoint = pull_closing_waypoints[-1]
+            offset = np.eye(4)
+            offset[:3, 3] = np.array([0, 0.0, -0.02])
+            behind_pull_closing_waypoint_mat = self.pose_to_matrix(behind_pull_closing_waypoint) @ offset
+            behind_pull_closing_waypoint = self.matrix_to_pose(behind_pull_closing_waypoint_mat)
+
             above_pull_closing_waypoint = pull_closing_waypoints[-1] # last 
             offset = np.eye(4)
-            offset[:3, 3] = np.array([0, 0.24, 0])
+            offset[:3, 3] = np.array([0, 0.24, -0.02])
             above_pull_closing_waypoint_mat = self.pose_to_matrix(above_pull_closing_waypoint) @ offset
             above_pull_closing_waypoint = self.matrix_to_pose(above_pull_closing_waypoint_mat)
 
@@ -730,6 +745,7 @@ class PerceptionInterface:
                 "pull_closing_waypoints": pull_closing_waypoints,
                 "pull_closing_waypoint": pull_closing_waypoint,
                 "pre_pull_pose": pre_pull_pose,
+                "behind_pull_closing_waypoint": behind_pull_closing_waypoint,
                 "above_pull_closing_waypoint": above_pull_closing_waypoint,
                 "above_push_closing_waypoint": above_push_closing_waypoint,
                 "push_closing_waypoints": push_closing_waypoints,
@@ -754,7 +770,7 @@ class PerceptionInterface:
         return handle_poses
 
     def perceive_handle_closing_poses(self, handle_type: str):
-        assert handle_type in ["bottom white fridge door", "microwave"]
+        assert handle_type in ["bottom fridge door", "microwave"]
         if self.log_dir is not None:
             with open(self.log_dir / 'handle_opening_pos.pkl', 'rb') as f:
                 handle_opening_pos = pickle.load(f)
@@ -788,13 +804,13 @@ class PerceptionInterface:
                 if attachment_pose is None:
                     raise RuntimeError("Could not detect attachment pose")
 
-                # If no web interface is available (e.g. running headless), skip the
-                # confirmation and proceed with a single perception pass.
-                if web_interface is None:
-                    break
                 attachment_dir = os.path.dirname(inspect.getfile(self._attachment_perception.__class__))
                 vis_image = cv2.imread(os.path.join(attachment_dir, "attachment_corners.png"))
-                if web_interface.get_detection_confirmation("attachment", vis_image):
+                if web_interface is None:
+                    confirmed = self._terminal_confirmation("attachment", vis_image)
+                else:
+                    confirmed = web_interface.get_detection_confirmation("attachment", vis_image)
+                if confirmed:
                     break
                 print("Attachment detection rejected by user. Re-running attachment perception ...")
 
@@ -841,12 +857,12 @@ class PerceptionInterface:
                 if sink_placement_pose is None:
                     raise RuntimeError("Could not detect sink placement pose")
 
-                # If no web interface is available (e.g. running headless), skip the
-                # confirmation and proceed with a single perception pass.
-                if web_interface is None:
-                    break
                 vis_image = cv2.imread(os.path.join(os.getcwd(), "sink_back_pixel.png"))
-                if web_interface.get_detection_confirmation("sink", vis_image):
+                if web_interface is None:
+                    confirmed = self._terminal_confirmation("sink", vis_image)
+                else:
+                    confirmed = web_interface.get_detection_confirmation("sink", vis_image)
+                if confirmed:
                     break
                 print("Sink placement detection rejected by user. Re-running sink placement perception ...")
 
@@ -888,10 +904,6 @@ class PerceptionInterface:
                 if table_placement_pose is None:
                     raise RuntimeError("Could not detect table placement pose")
 
-                # If no web interface is available (e.g. running headless), skip the
-                # confirmation and proceed with a single perception pass.
-                if web_interface is None:
-                    break
                 # detect_table_placement saves the annotated frame (red dot = placement
                 # center, blue = surrounding pixels used for depth) to the cwd.
                 vis_image = cv2.imread(os.path.join(os.getcwd(), "table_placement_pixel.png"))
@@ -899,7 +911,11 @@ class PerceptionInterface:
                 # 180 degrees to show it right-side up to the user.
                 if vis_image is not None:
                     vis_image = cv2.rotate(vis_image, cv2.ROTATE_180)
-                if web_interface.get_detection_confirmation("plate", vis_image):
+                if web_interface is None:
+                    confirmed = self._terminal_confirmation("plate", vis_image)
+                else:
+                    confirmed = web_interface.get_detection_confirmation("plate", vis_image)
+                if confirmed:
                     break
                 print("Table placement detection rejected by user. Re-running table placement perception ...")
 
