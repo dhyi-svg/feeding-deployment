@@ -72,6 +72,9 @@ class LocalizationMeasurer:
         self.rate_hz = float(args.rate)
         self.lookup_timeout = float(args.lookup_timeout_s)
         self.duration = float(args.duration) if args.duration > 0 else None
+        self.mode: str = args.mode  # "static" or "moving"
+        self.settled_window_s = float(args.settled_window)
+        self.settled_speed_m_s = float(args.settled_speed)
 
         self.out_path = self._resolve_out_path(args)
 
@@ -158,18 +161,33 @@ class LocalizationMeasurer:
     def _print_live(self, elapsed: float, mb: Tuple[float, float, float]) -> None:
         arr = np.asarray(self.rows["map2base"], dtype=float)
         x, y, yaw = arr[:, 1], arr[:, 2], arr[:, 3]
-        xy_p2p = float(np.hypot(x - x.mean(), y - y.mean()).max() * 2.0)
-        yaw_dev = np.array([angle_diff(v, circular_mean(yaw)) for v in yaw])
-        yaw_p2p = float(yaw_dev.max() - yaw_dev.min())
-        # \r keeps it on one line; summary is printed at the end.
-        print(
-            f"\r[{elapsed:6.1f}s] map->base x={mb[0]:+.4f} y={mb[1]:+.4f} "
-            f"yaw={math.degrees(mb[2]):+7.2f}deg | running p2p: "
-            f"xy~{xy_p2p*100:5.2f}cm yaw~{math.degrees(yaw_p2p):5.2f}deg "
-            f"(n={len(arr)})   ",
-            end="",
-            flush=True,
-        )
+        n = len(arr)
+        if self.mode == "moving":
+            path_m = float(np.sum(np.hypot(np.diff(x), np.diff(y)))) if n >= 2 else 0.0
+            if n >= 2:
+                dt = arr[-1, 0] - arr[-2, 0]
+                speed_cm_s = math.hypot(x[-1] - x[-2], y[-1] - y[-2]) / max(dt, 1e-6) * 100
+            else:
+                speed_cm_s = 0.0
+            print(
+                f"\r[{elapsed:6.1f}s] map->base x={mb[0]:+.4f} y={mb[1]:+.4f} "
+                f"yaw={math.degrees(mb[2]):+7.2f}deg | "
+                f"path={path_m:.2f}m  speed={speed_cm_s:.1f}cm/s  (n={n})   ",
+                end="",
+                flush=True,
+            )
+        else:
+            xy_p2p = float(np.hypot(x - x.mean(), y - y.mean()).max() * 2.0)
+            yaw_dev = np.array([angle_diff(v, circular_mean(yaw)) for v in yaw])
+            yaw_p2p = float(yaw_dev.max() - yaw_dev.min())
+            print(
+                f"\r[{elapsed:6.1f}s] map->base x={mb[0]:+.4f} y={mb[1]:+.4f} "
+                f"yaw={math.degrees(mb[2]):+7.2f}deg | running p2p: "
+                f"xy~{xy_p2p*100:5.2f}cm yaw~{math.degrees(yaw_p2p):5.2f}deg "
+                f"(n={n})   ",
+                end="",
+                flush=True,
+            )
 
     # ------------------------------------------------------------------ #
     # Reporting
@@ -177,7 +195,10 @@ class LocalizationMeasurer:
     def _finish(self) -> None:
         print()  # close the live line
         self._write_csv()
-        self._print_summary()
+        if self.mode == "moving":
+            self._print_summary_moving()
+        else:
+            self._print_summary_static()
 
     def _write_csv(self) -> None:
         header = ["t"]
@@ -235,9 +256,9 @@ class LocalizationMeasurer:
             "yaw_jump_p99": float(np.percentile(d_yaw, 99)),
         }
 
-    def _print_summary(self) -> None:
+    def _print_summary_static(self) -> None:
         print("\n" + "=" * 72)
-        print("LOCALIZATION QUALITY SUMMARY")
+        print("LOCALIZATION QUALITY SUMMARY  [STATIC]")
         print("=" * 72)
         labels = {
             "map2base": "map -> base   (what the goal-check uses)",
@@ -283,6 +304,95 @@ class LocalizationMeasurer:
             )
         print("=" * 72)
 
+    @staticmethod
+    def _find_settled_tail(
+        rows: List[Tuple[float, float, float, float]],
+        min_duration_s: float,
+        speed_thresh_m_s: float,
+    ) -> List[Tuple[float, float, float, float]]:
+        """Trailing slice of rows where speed stayed below speed_thresh_m_s."""
+        if len(rows) < 2:
+            return []
+        arr = np.asarray(rows, dtype=float)
+        t, x, y = arr[:, 0], arr[:, 1], arr[:, 2]
+        dt = np.diff(t)
+        speed = np.where(dt > 1e-6, np.hypot(np.diff(x), np.diff(y)) / dt, 0.0)
+        # speed[i] = speed between rows[i] and rows[i+1]; scan backwards.
+        settled_from = len(speed)
+        for i in range(len(speed) - 1, -1, -1):
+            if speed[i] < speed_thresh_m_s:
+                settled_from = i
+            else:
+                break
+        if settled_from >= len(speed):
+            return []
+        settled = rows[settled_from:]
+        if len(settled) < 2 or settled[-1][0] - settled[0][0] < min_duration_s:
+            return []
+        return settled
+
+    def _print_summary_moving(self) -> None:
+        print("\n" + "=" * 72)
+        print("LOCALIZATION QUALITY SUMMARY  [MOVING]")
+        print("=" * 72)
+
+        labels = {
+            "map2base": "map -> base   (what the goal-check uses)",
+            "map2odom": "map -> odom   (Cartographer correction)",
+            "odom2base": "odom -> base  (ZED VIO odometry)",
+        }
+        for link in LINKS:
+            s = self._link_stats(self.rows[link])
+            print(f"\n{labels[link]}")
+            if not s:
+                print("  (insufficient samples)")
+                continue
+            print(f"  samples={s['n']}  duration={s['dur']:.1f}s")
+            if link == "map2base":
+                arr = np.asarray(self.rows[link], dtype=float)
+                path_m = float(np.sum(np.hypot(np.diff(arr[:, 1]), np.diff(arr[:, 2]))))
+                print(f"  path length: {path_m:.2f} m  (p2p/std not meaningful for moving run)")
+            print(
+                f"  jump: xy max={s['xy_jump_max']*100:.2f}cm (p99 "
+                f"{s['xy_jump_p99']*100:.2f})  yaw max="
+                f"{math.degrees(s['yaw_jump_max']):.2f}deg (p99 "
+                f"{math.degrees(s['yaw_jump_p99']):.2f})"
+            )
+
+        # Settled-at-goal window.
+        print("\n" + "-" * 72)
+        settled = self._find_settled_tail(
+            self.rows["map2base"],
+            min_duration_s=self.settled_window_s,
+            speed_thresh_m_s=self.settled_speed_m_s,
+        )
+        if settled:
+            dur = settled[-1][0] - settled[0][0]
+            ss = self._link_stats(settled)
+            print(f"SETTLED AT GOAL  (last {dur:.1f}s while stationary, n={ss['n']})")
+            print(
+                f"  xy  : std={ss['x_std']*100:.2f}/{ss['y_std']*100:.2f}cm  "
+                f"peak-to-peak={ss['xy_p2p']*100:.2f}cm"
+            )
+            print(
+                f"  yaw : std={math.degrees(ss['yaw_std']):.2f}deg  "
+                f"peak-to-peak={math.degrees(ss['yaw_p2p']):.2f}deg"
+            )
+            print(
+                f"\n  Suggested accept_tol:\n"
+                f"    xy_goal_tolerance  > {ss['xy_p2p']*100:.1f} cm\n"
+                f"    yaw_goal_tolerance > {math.degrees(ss['yaw_p2p']):.1f} deg "
+                f"({ss['yaw_p2p']:.3f} rad)"
+            )
+        else:
+            print(
+                f"SETTLED AT GOAL  — not detected\n"
+                f"  (need >={self.settled_window_s:.0f}s stationary at end; "
+                f"speed threshold={self.settled_speed_m_s*100:.1f} cm/s)\n"
+                f"  Tip: stop the robot for a few seconds before Ctrl-C."
+            )
+        print("=" * 72)
+
     def request_stop(self, *_a: Any) -> None:
         self._stop = True
 
@@ -294,6 +404,25 @@ def main() -> None:
         type=str,
         default="run",
         help="Tag for this run (used in the CSV filename), e.g. fridge_static.",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["static", "moving"],
+        default="static",
+        help="static: robot held still (reports p2p/std → tight_tol). "
+             "moving: robot driving (reports jump stats + settled-at-goal → accept_tol).",
+    )
+    parser.add_argument(
+        "--settled-window",
+        type=float,
+        default=5.0,
+        help="[moving mode] min seconds of stillness at end to report settled-at-goal stats (default: 5).",
+    )
+    parser.add_argument(
+        "--settled-speed",
+        type=float,
+        default=0.01,
+        help="[moving mode] speed threshold (m/s) to consider robot stationary (default: 0.01 = 1 cm/s).",
     )
     parser.add_argument("--map-frame", type=str, default="map")
     parser.add_argument("--odom-frame", type=str, default="odom")

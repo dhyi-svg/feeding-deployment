@@ -245,6 +245,6 @@ class PlacePlateOnTableHLA(HighLevelAction):
         self.move_to_ee_pose(placement_poses["pre_table_placement_pose"])
         self.move_to_ee_pose(placement_poses["table_placement_pose"])
         self.close_gripper()
-        self.move_to_ee_pose(placement_poses["pre_table_placement_pose"])
+        self.move_to_ee_pose(placement_poses["behind_table_placement_pose"])
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.retract_pos)

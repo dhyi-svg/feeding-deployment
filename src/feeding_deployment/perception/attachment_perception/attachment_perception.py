@@ -244,8 +244,8 @@ class AttachmentPerception(TFInterface):
     def detect_attachment_color(self, bgr_image):
         hsv = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV)
 
-        lower = np.array([70, 30, 150])
-        upper = np.array([96, 120, 240])
+        lower = np.array([77, 30, 59])
+        upper = np.array([87, 80, 109])
 
         return cv2.inRange(hsv, lower, upper)
 

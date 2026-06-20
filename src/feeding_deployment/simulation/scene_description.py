@@ -79,6 +79,8 @@ class SceneDescription:
     back_retract_pos: JointPositions
     retract_utensil_forward_pos: JointPositions
 
+    table_gaze_pos: JointPositions
+
     microwave_closeup_gaze_pos: JointPositions
     microwave_plate_staging_pos: JointPositions
     microwave_plate_staging_pose: Pose
@@ -89,6 +91,8 @@ class SceneDescription:
     sink_plate_staging_pose: Pose
 
     table_gaze_pos: JointPositions
+    table_intermediate_pos: JointPositions
+    table_intermediate_pose: Pose
     table_plate_staging_pos: JointPositions
     table_plate_staging_pose: Pose
 
@@ -99,7 +103,6 @@ class SceneDescription:
     fridge_contents_gaze_pos: JointPositions
     fridge_inside_intermediate_pos: JointPositions
     fridge_inside_intermediate_pose: Pose
-    fridge_another_inside_intermediate_pose: Pose
     fridge_above_intermediate_pos: JointPositions
     fridge_above_intermediate_pose: Pose
 

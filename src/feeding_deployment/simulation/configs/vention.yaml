@@ -106,6 +106,14 @@ table_gaze_pos:
   description: "Gaze configuration, the table should be visible from this configuration"
   type: "joint_positions"
   values: [-2.9776942632552643, -1.0320159350864921, -2.6287490540537792, -0.9135500076842789, 1.0643195464769353, -1.1937869923422655, -2.919634954646556]
+table_intermediate_pos:
+  description: "Intermediate configuration for going in front of the table" 
+  type: "joint_positions"
+  values: [-2.00192669, -1.83247161, -2.35472443, -1.4590634, 0.46550525, -1.53568148, 2.42467901]
+table_intermediate_pose:
+  description: "Intermediate configuration for going in front of the table" 
+  type: "ee_pose"
+  values: [4.18696910e-01, -7.17068240e-02, 3.86909962e-01, 2.39095829e-03, 7.04148357e-01, 7.10048846e-01, 1.01523585e-04]
 table_plate_staging_pos: 
   description: "Staging configuration, the robot should be in front of the table in this configuration"
   type: "joint_positions"
@@ -131,31 +139,32 @@ fridge_door_gaze_pos:
 fridge_contents_gaze_pos:
   description: "Gaze configuration, the inside of fridge should be visible from this configuration"
   type: "joint_positions"
-  values: [-2.1760412298284084, 0.563137862775351, 2.71337286190381, -2.4594899867610303, -0.9522223025055379, 1.6603493795065551, 1.836221075785971]
+  values: [-0.83248338, -1.05986887, 1.88532377, -2.49672631, -0.58686536, 0.24041978, 1.15699529]
 fridge_inside_intermediate_pos:
   description: "Intermediate configuration for going inside the fridge"
   type: "joint_positions"
-  values: [2.300764254211763, -1.6941960264325902, -1.93227570366684, -1.8381923476248474, 0.6430000051753475, -0.6125052127972861, 2.4240739390046113]
-fridge_inside_intermediate_pose:
+  values: [2.4423845, -1.41119095, -2.18516442, -1.84408459, 0.45124991, -0.68355995, 2.19618951]
+fridge_inside_intermediate_pose: 
   description: "Intermediate configuration for going inside the fridge"
   type: "ee_pose"
-  values: [-0.27264952659606934, 0.45902228355407715, 0.35478997230529785, -0.4997596650153075, 0.5013910903477508, 0.5002481495947093, -0.4985970723648011]
-fridge_another_inside_intermediate_pose:
-  description: "Another intermediate configuration for going inside the fridge"
-  type: "ee_pose"
-  values: [-0.047114498913288116, 0.4568903148174286, 0.3556099832057953, -0.4993227648346084, 0.5006220611002768, 0.5011876851825641, -0.4988639420513131]
+  values: [-0.21847457, 0.39304167, 0.51665926, -0.49968364, 0.50032641, 0.50080136, -0.49918709]
 fridge_above_intermediate_pos:
   description: "Intermediate configuration for going above the fridge"
   type: "joint_positions"
-  values: [-3.1399148621030433, -1.6540834940938165, -3.1407652094391056, -2.4261370899010957, -0.002468750330502978, -0.8149885462693183, 1.57272552068855]
+  values: [2.98986837, -1.71539798, -2.52675558, -2.15631839, 0.24347616, -1.0345241, 2.05910542]
 fridge_above_intermediate_pose:
   description: "Intermediate configuration for going above the fridge"
   type: "ee_pose"
-  values: [-0.08530566096305847, 0.000523008406162262, 0.4735228419303894, -0.5053744744642887, 0.49691096451778954, 0.5021637159852019, -0.4954873724424042]
+  values: [-0.03583413, 0.19728903, 0.46653149, -0.50020068, 0.49865486, 0.5023382, -0.4987975]
 fridge_door_intermediate_restract_pos:
   description: "Intermediate retract configuration of the robot for fridge door opening"
   type: "joint_positions"
   values: [0.9720466073439787, -1.8305038015577884, 3.1415657556627834, -2.5482749838143097, 4.621619302645493e-06, -0.8727317376566344, 1.5708057810167664]
+
+table_gaze_pos:
+  description: "Gaze configuration, the table should be visible from this configuration"
+  type: "joint_positions"
+  values: [-1.55741767, -1.22157974, -0.87836379, -2.34686703, 0.86278483, 0.96886992, 2.23393263]
 
 # Feeding task constants
 plate_gaze_pos:

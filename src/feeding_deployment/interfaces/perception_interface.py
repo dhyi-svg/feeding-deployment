@@ -75,7 +75,7 @@ class PerceptionInterface:
             print("Initializing drink perception ...")
             self._drink_perception = DrinkPerception()
             print("Initializing handle perception ...")
-            self._appliance_perception = AppliancePerception(self._grounded_sam)
+            self._appliance_perception = AppliancePerception(self._grounded_sam, log_dir=self.log_dir)
             print("Initializing attachment perception ...")
             self._attachment_perception = AttachmentPerception()
             print("Perception interface initialized")
@@ -785,7 +785,7 @@ class PerceptionInterface:
         return handle_poses
         # return self.last_handle_poses
 
-    def perceive_attachment_poses(self, web_interface=None):
+    def perceive_attachment_poses(self, handle_type: str, web_interface=None):
 
         if self.simulation:
             with open(self.log_dir / 'attachment_poses.pkl', 'rb') as f:
@@ -821,11 +821,17 @@ class PerceptionInterface:
 
             offset = np.eye(4)
             # offset[:3, 3] = np.array([0, 0, -0.02])
-            offset[:3, 3] = np.array([0, 0.009, -0.01])
+            if handle_type == "microwave":
+                offset[:3, 3] = np.array([0, 0.009, -0.01])
+            else:
+                offset[:3, 3] = np.array([0, -0.003, 0.0])
             pickup_pose = self.matrix_to_pose(self.pose_to_matrix(attachment_pose) @ offset)
 
             # offset[:3, 3] = np.array([0, 0.03, -0.12])
-            offset[:3, 3] = np.array([0, 0.009, -0.11])
+            if handle_type == "microwave":
+                offset[:3, 3] = np.array([0, 0.009, -0.11])
+            else:
+                offset[:3, 3] = np.array([0, 0.0, -0.11])
             pre_pickup_pose = self.matrix_to_pose(self.pose_to_matrix(attachment_pose) @ offset)
 
             attachment_poses = {
@@ -932,9 +938,15 @@ class PerceptionInterface:
             offset_for_pre_place[:3, 3] = np.array([0.0, 0.1, 0.0])
             pre_table_placement_pose = self.matrix_to_pose(self.pose_to_matrix(table_placement_pose) @ offset_for_pre_place)
 
+            # behind table placement pose
+            offset_for_behind = np.eye(4)
+            offset_for_behind[:3, 3] = np.array([0.0, 0.0, -0.1])
+            behind_table_placement_pose = self.matrix_to_pose(self.pose_to_matrix(table_placement_pose) @ offset_for_behind)
+
             table_placement_poses = {
                 "table_placement_pose": table_placement_pose,
                 "pre_table_placement_pose": pre_table_placement_pose,
+                "behind_table_placement_pose": behind_table_placement_pose
             }
 
             self.last_table_placement_poses = table_placement_poses

@@ -4,6 +4,7 @@
 import os, sys
 import cv2
 import numpy as np
+from pathlib import Path
 import time
 import math
 import requests
@@ -35,7 +36,7 @@ import torchvision.transforms as transforms
 
 
 class AppliancePerception(TFInterface):
-    def __init__(self, grounded_sam: GroundedSAM, num_perception_samples=25):
+    def __init__(self, grounded_sam: GroundedSAM, num_perception_samples=25, log_dir=None):
         super().__init__()
 
         self.grounding_dino_model = grounded_sam.grounding_dino_model
@@ -53,17 +54,32 @@ class AppliancePerception(TFInterface):
         self.handle_points_pub = rospy.Publisher("/handle_points", Marker, queue_size=1)
         self.handle_center_pub = rospy.Publisher("/handle_center", Marker, queue_size=1)
 
+        self._log_counters = {}
+        if log_dir is not None:
+            self._appliance_log_dir = Path(log_dir) / "appliance_detection_log"
+            os.makedirs(self._appliance_log_dir, exist_ok=True)
+        else:
+            self._appliance_log_dir = None
+
+    def _log_image(self, path, image):
+        cv2.imwrite(path, image)
+        if self._appliance_log_dir is not None:
+            name = os.path.splitext(os.path.basename(path))[0]
+            count = self._log_counters.get(name, 0)
+            self._log_counters[name] = count + 1
+            cv2.imwrite(str(self._appliance_log_dir / f"{name}_{count}.png"), image)
+
     def detect_start_button(self, rgb_image, camera_info_msg, depth_image):
         transform = self.get_frame_to_frame_transform(camera_info_msg)
 
         file_path = os.path.dirname(__file__)
         print("Got images")
-        cv2.imwrite(file_path + "/rgb.png", rgb_image)
+        self._log_image(file_path + "/rgb.png", rgb_image)
         depth_mm = (depth_image * 1000.0).astype("uint16")
-        cv2.imwrite(file_path + "/depth.png", depth_mm)
+        self._log_image(file_path + "/depth.png", depth_mm)
 
         rgb_image_flipped = cv2.flip(rgb_image.copy(), -1)
-        cv2.imwrite(file_path + "/rgb_flipped.png", rgb_image_flipped)
+        self._log_image(file_path + "/rgb_flipped.png", rgb_image_flipped)
 
         with open(file_path + "/rgb_flipped.png", "rb") as img_file:
             http_response = requests.post(
@@ -83,7 +99,7 @@ class AppliancePerception(TFInterface):
         # visualize button pixel on original rgb image
         vis_image = rgb_image.copy()
         cv2.circle(vis_image, button_pixel, 10, (0, 0, 255), -1)
-        cv2.imwrite(file_path + "/rgb_button_pixel.png", vis_image)
+        self._log_image(file_path + "/rgb_button_pixel.png", vis_image)
 
         ok, button_3d = self.pixel2World(camera_info_msg, button_pixel[0], button_pixel[1], depth_image)
 
@@ -114,9 +130,9 @@ class AppliancePerception(TFInterface):
 
         file_path = os.path.dirname(__file__)
         print("Got images")
-        cv2.imwrite(file_path + "/rgb.png", rgb_image)
+        self._log_image(file_path + "/rgb.png", rgb_image)
         depth_mm = (depth_image * 1000.0).astype("uint16")
-        cv2.imwrite(file_path + "/depth.png", depth_mm)
+        self._log_image(file_path + "/depth.png", depth_mm)
 
         detection = self.detect_items(rgb_image, [handle_type])
 
@@ -128,7 +144,7 @@ class AppliancePerception(TFInterface):
         x1, y1, x2, y2 = detection.astype(int)
         mask = np.zeros(rgb_image.shape[:2], dtype=np.uint8)
         mask[y1:y2, x1:x2] = 255
-        cv2.imwrite("detection_mask.png", mask)
+        self._log_image("detection_mask.png", mask)
 
         center_pixel = ((x1 + x2) // 2, (y1 + y2) // 2)
 
@@ -173,12 +189,12 @@ class AppliancePerception(TFInterface):
         vis = rgb_image.copy()
         for u, v in pixels[inliers]:
             vis[v, u] = (255, 0, 0)
-        cv2.imwrite("plane_pixels.png", vis)
+        self._log_image("plane_pixels.png", vis)
 
         vis = rgb_image.copy()
         for u, v in pixels[outliers]:
             vis[v, u] = (0, 0, 255)
-        cv2.imwrite("possible_handle_pixels.png", vis)
+        self._log_image("possible_handle_pixels.png", vis)
 
         plane_depth = np.median(np.asarray(plane_cloud.points)[:, 2])
         print("Plane depth in m:", plane_depth)
@@ -196,7 +212,7 @@ class AppliancePerception(TFInterface):
         vis = rgb_image.copy()
         for u, v in handle_pixels:
             vis[v, u] = (0, 255, 0)
-        cv2.imwrite("handle_pixels.png", vis)
+        self._log_image("handle_pixels.png", vis)
 
         # -----------------------------
         # DBSCAN clustering (7 cm)
@@ -278,7 +294,7 @@ class AppliancePerception(TFInterface):
         # update center pixel x is average of handle_centroid_pixel and hinge_pixel
         center_pixel = ((handle_centroid_pixel[0] + hinge_pixel[0]) // 2, center_pixel[1])
         cv2.circle(vis, (center_pixel[0], center_pixel[1]), 10, (0, 0, 255), -1)
-        cv2.imwrite("handle_hinge_pixels.png", vis)
+        self._log_image("handle_hinge_pixels.png", vis)
 
         ok, center_3d = self.pixel2World(camera_info_msg, center_pixel[0], center_pixel[1], depth_image, depth=plane_depth)
         if not ok:
@@ -328,9 +344,9 @@ class AppliancePerception(TFInterface):
 
         file_path = os.path.dirname(__file__)
         print("Got images")
-        cv2.imwrite(file_path + "/rgb.png", rgb_image)
+        self._log_image(file_path + "/rgb.png", rgb_image)
         depth_mm = (depth_image * 1000.0).astype("uint16")
-        cv2.imwrite(file_path + "/depth.png", depth_mm)
+        self._log_image(file_path + "/depth.png", depth_mm)
 
         detection = self.detect_items(rgb_image, ["sink basin tap"])
 
@@ -342,12 +358,12 @@ class AppliancePerception(TFInterface):
         x1, y1, x2, y2 = detection.astype(int)
         mask = np.zeros(rgb_image.shape[:2], dtype=np.uint8)
         mask[y1:y2, x1:x2] = 255
-        cv2.imwrite("detection_mask.png", mask)
+        self._log_image("detection_mask.png", mask)
 
-        # Hack, take a point with x as center of bounding box and y as 40 pixels above the top of the bounding box 
+        # Hack, take a point with x as center of bounding box and y as 40 pixels above the top of the bounding box
         center_pixel = ((x1 + x2) // 2 + 140, y1 - 50)
         cv2.circle(rgb_image, center_pixel, 10, (0, 0, 255), -1)
-        cv2.imwrite("sink_back_pixel.png", cv2.rotate(rgb_image, cv2.ROTATE_180))
+        self._log_image("sink_back_pixel.png", cv2.rotate(rgb_image, cv2.ROTATE_180))
 
         ok, center_3d = self.pixel2World(camera_info_msg, center_pixel[0], center_pixel[1], depth_image)
         if not ok:
@@ -375,11 +391,11 @@ class AppliancePerception(TFInterface):
 
         file_path = os.path.dirname(__file__)
         print("Got images")
-        cv2.imwrite(file_path + "/rgb.png", rgb_image)
+        self._log_image(file_path + "/rgb.png", rgb_image)
         depth_mm = (depth_image * 1000.0).astype("uint16")
-        cv2.imwrite(file_path + "/depth.png", depth_mm)
+        self._log_image(file_path + "/depth.png", depth_mm)
 
-        detection = self.detect_items(rgb_image, ["white circle on table"])
+        detection = self.detect_items(rgb_image, ["blue square on table"])
 
         if detection is None:
             print("No detection")
@@ -389,21 +405,21 @@ class AppliancePerception(TFInterface):
         x1, y1, x2, y2 = detection.astype(int)
         mask = np.zeros(rgb_image.shape[:2], dtype=np.uint8)
         mask[y1:y2, x1:x2] = 255
-        cv2.imwrite("detection_mask.png", mask)
+        self._log_image("detection_mask.png", mask)
 
         center_pixel = ((x1 + x2) // 2, (y1 + y2) // 2)
 
         # mark all "surrounding pixels" which will be used for depth estimation as well
-        pixel_range = 70
-        for dy in range(-pixel_range, pixel_range + 1):
-                for dx in range(-pixel_range, pixel_range + 1):
-                    new_y = center_pixel[1] + dy
-                    new_x = center_pixel[0] + dx
-                    if 0 <= new_x < rgb_image.shape[1] and 0 <= new_y < rgb_image.shape[0]:
-                        cv2.circle(rgb_image, (new_x, new_y), 2, (255, 0, 0), -1)
+        # pixel_range = 70
+        # for dy in range(-pixel_range, pixel_range + 1):
+        #         for dx in range(-pixel_range, pixel_range + 1):
+        #             new_y = center_pixel[1] + dy
+        #             new_x = center_pixel[0] + dx
+        #             if 0 <= new_x < rgb_image.shape[1] and 0 <= new_y < rgb_image.shape[0]:
+        #                 cv2.circle(rgb_image, (new_x, new_y), 2, (255, 0, 0), -1)
 
         cv2.circle(rgb_image, center_pixel, 10, (0, 0, 255), -1)
-        cv2.imwrite("table_placement_pixel.png", rgb_image)
+        self._log_image("table_placement_pixel.png", rgb_image)
 
         ok, center_3d = self.pixel2World(camera_info_msg, center_pixel[0], center_pixel[1], depth_image, use_surrounding_pixels=True)
         if not ok:
@@ -460,7 +476,7 @@ class AppliancePerception(TFInterface):
         #print(f"After NMS: {len(detections.xyxy)} boxes")
 
         annotated_frame = box_annotator.annotate(scene=image.copy(), detections=detections, labels=labels)
-        cv2.imwrite("detections_flipped.png", annotated_frame)
+        self._log_image("detections_flipped.png", annotated_frame)
 
         print("Image size:", image.shape)
         print("Detections (flipped):")
@@ -475,7 +491,7 @@ class AppliancePerception(TFInterface):
             detections.xyxy[i] = [image.shape[1] - x2, image.shape[0] - y2, image.shape[1] - x1, image.shape[0] - y1]
 
         annotated_frame = box_annotator.annotate(scene=image.copy(), detections=detections, labels=labels)
-        cv2.imwrite("detections_original.png", annotated_frame)
+        self._log_image("detections_original.png", annotated_frame)
 
         print("Image size:", image.shape)
         print("Detections:")

@@ -1,4 +1,6 @@
+import math
 import os
+from collections import deque
 from pathlib import Path
 from typing import Any, Tuple
 
@@ -7,6 +9,7 @@ import yaml
 try:
     import actionlib
     import rospy
+    import tf2_ros
     from actionlib_msgs.msg import GoalStatus
     from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 
@@ -34,6 +37,26 @@ class NavigateHLA(HighLevelAction):
     """Navigate from one target to another."""
 
     _VALID_TARGETS = ("fridge", "microwave", "sink", "table")
+
+    # Frames used for the post-nav refinement window.
+    _MAP_FRAME = "map"
+    _BASE_FRAME = "vention_base_link"
+
+    # Set to False to skip the refinement window entirely.
+    _USE_REFINEMENT_WINDOW: bool = True
+
+    # How long to monitor after move_base declares SUCCEEDED.
+    _REFINEMENT_TIMEOUT_S = 5.0
+    _REFINEMENT_RATE_HZ = 10.0
+    # Sliding-window length for averaging (smooths out localization jitter).
+    _REFINEMENT_WINDOW_S = 1.0
+    # Don't check divergence until this many seconds in (lets best establish).
+    _REFINEMENT_WARMUP_S = 1.0
+    # Stop early if windowed avg rises this much above the rolling minimum.
+    _DIVERGENCE_MARGIN_M = 0.02      # 2 cm
+    _DIVERGENCE_MARGIN_RAD = 0.005   # ~0.3 deg
+    # Success thresholds are derived from move_base params at runtime (see
+    # _refinement_window), defaulting to half of xy/yaw_goal_tolerance.
 
     def _default_location_yaml(self) -> Path:
         return Path(__file__).resolve().parents[3] / "config" / "nav_named_locations.yaml"
@@ -164,6 +187,114 @@ class NavigateHLA(HighLevelAction):
             )
 
         print(f"Reached {location_name}.")
+        self._refinement_window(pose)
+
+    @staticmethod
+    def _yaw_from_quat(qx: float, qy: float, qz: float, qw: float) -> float:
+        return math.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+
+    def _refinement_window(self, pose: dict) -> None:
+        """Monitor convergence for up to _REFINEMENT_TIMEOUT_S after move_base succeeds.
+
+        Tracks a sliding-window average of xy and yaw error vs the goal pose.
+        Stops early on convergence (below success thresholds) or divergence
+        (windowed average rises above rolling minimum + margin) — same logic
+        as ML early stopping: keep going while improving, quit when it gets worse.
+        """
+        if not self._USE_REFINEMENT_WINDOW or not ROS_NAV_IMPORTED:
+            return
+
+        # Success thresholds: half of the move_base goal tolerances so we stop
+        # refining once we're comfortably inside what the controller required.
+        xy_tol = rospy.get_param("move_base/xy_goal_tolerance", 0.07)
+        yaw_tol = rospy.get_param("move_base/yaw_goal_tolerance", 0.015)
+        success_xy_m = xy_tol * 0.5
+        success_yaw_rad = yaw_tol * 0.5
+
+        tf_buffer = tf2_ros.Buffer(cache_time=rospy.Duration(5.0))
+        _listener = tf2_ros.TransformListener(tf_buffer)
+
+        gx = pose["x"]
+        gy = pose["y"]
+        goal_yaw = self._yaw_from_quat(pose["qx"], pose["qy"], pose["qz"], pose["qw"])
+
+        rate = rospy.Rate(self._REFINEMENT_RATE_HZ)
+        start = rospy.Time.now()
+        window: deque = deque()  # (elapsed_s, err_xy, err_yaw)
+        best_xy = float("inf")
+        best_yaw = float("inf")
+
+        print("Refinement window: monitoring convergence...")
+
+        while not rospy.is_shutdown():
+            elapsed_s = (rospy.Time.now() - start).to_sec()
+            if elapsed_s >= self._REFINEMENT_TIMEOUT_S:
+                print(f"\n  Refinement: timed out after {self._REFINEMENT_TIMEOUT_S:.0f}s.")
+                break
+
+            try:
+                tf = tf_buffer.lookup_transform(
+                    self._MAP_FRAME, self._BASE_FRAME,
+                    rospy.Time(0), rospy.Duration(0.1),
+                )
+            except (
+                tf2_ros.LookupException,
+                tf2_ros.ConnectivityException,
+                tf2_ros.ExtrapolationException,
+                tf2_ros.TimeoutException,
+            ):
+                rate.sleep()
+                continue
+
+            tr = tf.transform.translation
+            q = tf.transform.rotation
+            cur_yaw = self._yaw_from_quat(q.x, q.y, q.z, q.w)
+            err_xy = math.hypot(tr.x - gx, tr.y - gy)
+            err_yaw = abs(math.atan2(
+                math.sin(cur_yaw - goal_yaw), math.cos(cur_yaw - goal_yaw)
+            ))
+
+            window.append((elapsed_s, err_xy, err_yaw))
+            while window and elapsed_s - window[0][0] > self._REFINEMENT_WINDOW_S:
+                window.popleft()
+
+            if len(window) < 3:
+                rate.sleep()
+                continue
+
+            avg_xy = sum(w[1] for w in window) / len(window)
+            avg_yaw = sum(w[2] for w in window) / len(window)
+
+            best_xy = min(best_xy, avg_xy)
+            best_yaw = min(best_yaw, avg_yaw)
+
+            print(
+                f"\r  [{elapsed_s:4.1f}s] xy={avg_xy*100:.1f}cm "
+                f"(best {best_xy*100:.1f})  "
+                f"yaw={math.degrees(avg_yaw):.2f}deg "
+                f"(best {math.degrees(best_yaw):.2f})   ",
+                end="", flush=True,
+            )
+
+            if avg_xy < success_xy_m and avg_yaw < success_yaw_rad:
+                print(
+                    f"\n  Converged: xy={avg_xy*100:.1f}cm "
+                    f"yaw={math.degrees(avg_yaw):.2f}deg"
+                )
+                break
+
+            if elapsed_s >= self._REFINEMENT_WARMUP_S:
+                xy_diverging = avg_xy > best_xy + self._DIVERGENCE_MARGIN_M
+                yaw_diverging = avg_yaw > best_yaw + self._DIVERGENCE_MARGIN_RAD
+                if xy_diverging or yaw_diverging:
+                    print(
+                        f"\n  Stopped: diverging — "
+                        f"xy={avg_xy*100:.1f}cm vs best {best_xy*100:.1f}cm, "
+                        f"yaw={math.degrees(avg_yaw):.2f}deg vs best {math.degrees(best_yaw):.2f}deg"
+                    )
+                    break
+
+            rate.sleep()
 
     def _set_base_control_available(self, available: bool) -> None:
         """Tell the webapp whether the Robot Base Control button should be enabled."""

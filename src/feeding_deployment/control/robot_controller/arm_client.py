@@ -190,48 +190,30 @@ if __name__ == "__main__":
     ee_pose = state["ee_pos"]
     joint_positions = state["position"]
 
-    # arm_client_interface.execute_command(JointCommand(config.left_back_retract_pos))
-    # arm_client_interface.execute_command(JointCommand(config.behind_back_retract_pos))
-    # arm_client_interface.execute_command(JointCommand(config.right_back_retract_pos))
-    # arm_client_interface.execute_command(JointCommand(config.microwave_inside_gaze_pos))
-    # arm_client_interface.execute_command(JointCommand(config.right_back_retract_pos))
-    # arm_client_interface.execute_command(JointCommand(joint_positions))
-    # arm_client_interface.execute_command(JointCommand(config.microwave_closeup_gaze_pos))
+    def pick_plate_from_fridge():
+        arm_client_interface.execute_command(JointCommand(config.left_back_retract_pos))
+        arm_client_interface.execute_command(JointCommand(config.fridge_contents_gaze_pos))
+        arm_client_interface.execute_command(JointCommand(config.left_back_retract_pos))
+        arm_client_interface.execute_command(JointCommand(config.behind_back_retract_pos))
+        arm_client_interface.execute_command(JointCommand(config.fridge_inside_intermediate_pos))
+        arm_client_interface.execute_command(CartesianCommand(config.fridge_inside_intermediate_pose[:3], config.fridge_inside_intermediate_pose[3:]))
+        arm_client_interface.execute_command(CartesianCommand(config.fridge_above_intermediate_pose[:3], config.fridge_above_intermediate_pose[3:]))
+        arm_client_interface.execute_command(JointCommand(config.behind_back_retract_pos))
 
-    # move up by 1 cm in z
-    # new_ee_pose = ee_pose.copy()
-    # new_ee_pose[2] += 0.1
-    # new_ee_pose[0] += 0.00
-
-    # arm_client_interface.execute_command(CartesianCommand(new_ee_pose[:3], new_ee_pose[3:]))
+    # joint_positions = [2.45761645, -1.51664894, -1.86802135, -2.26435991, 0.66374883, -0.25456571, 2.22414458]
+    # arm_client_interface.execute_command(JointCommand(config.fridge_inside_intermediate_pos))
     # arm_client_interface.execute_command(CartesianCommand(ee_pose[:3], ee_pose[3:]))
+    # arm_client_interface.execute_command(CartesianCommand(config.fridge_above_intermediate_pose[:3], config.fridge_above_intermediate_pose[3:]))
+    # arm_client_interface.execute_command(JointCommand(config.behind_back_retract_pos))
+    # arm_client_interface.execute_command(JointCommand(joint_positions))
+    # arm_client_interface.execute_command(JointCommand(config.behind_back_retract_pos))
+    # pick_plate_from_fridge()
 
-    # arm_client_interface.execute_command(CartesianCommand(new_ee_pose[:3], new_ee_pose[3:]))
-    # state = arm_client_interface.get_state()
-    # print("Current joint positions:", state["position"])
-    # print("Current end-effector pose:", state["ee_pos"])
+    def pick_plate_from_table():
+        arm_client_interface.execute_command(JointCommand(config.back_retract_pos))
+        arm_client_interface.execute_command(JointCommand(config.table_gaze_pos))
+        arm_client_interface.execute_command(JointCommand(config.table_plate_staging_pos))
 
-    # for i in range(3):
-    #     arm_client_interface.execute_command(CloseGripperCommand())
-    #     arm_client_interface.execute_command(CartesianCommand(new_ee_pose[:3], new_ee_pose[3:]))
-    #     arm_client_interface.execute_command(CartesianCommand(ee_pose[:3], ee_pose[3:]))
-    #     arm_client_interface.execute_command(OpenGripperCommand())
-    #     arm_client_interface.execute_command(CartesianCommand(new_ee_pose[:3], new_ee_pose[3:]))
-    #     arm_client_interface.execute_command(CartesianCommand(ee_pose[:3], ee_pose[3:]))
+    # pick_plate_from_table()
 
-    # arm_client_interface.execute_command(JointCommand(config.above_plate_holder_pos))
-    # arm_client_interface.execute_command(CloseGripperCommand())
-    # arm_client_interface.execute_command(CartesianCommand(config.inside_plate_holder_pose[:3], config.inside_plate_holder_pose[3:]))
-
-    # above_test_pose = test_pose.copy()
-    # above_test_pose[2] += 0.1
-
-    # for i in range(3):
-    #     arm_client_interface.execute_command(CartesianCommand(above_test_pose[:3], above_test_pose[3:]))
-    #     arm_client_interface.execute_command(CartesianCommand(test_pose[:3], test_pose[3:]))
-
-
-    # arm_client_interface.execute_command(CartesianCommand(config.inside_plate_holder_pose[:3], config.inside_plate_holder_pose[3:]))
-    # for i in range(3):
-    #     pick_plate_from_holder()
-    #     place_plate_in_holder()
+    arm_client_interface.execute_command(JointCommand(config.table_gaze_pos))
