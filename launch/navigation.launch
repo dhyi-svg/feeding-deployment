@@ -37,11 +37,14 @@
         output="screen"
         cwd="node">
     
-    <!-- conservative defaults; tune these -->
+    <!-- conservative defaults; tune these. linear_scale is kept low on purpose:
+         autonomous nav stays slow, which helps localization. -->
     <param name="linear_scale" value="800.0"/>
     <param name="angular_scale" value="600.0"/>
     <param name="max_speed_units" value="2500"/>
     <param name="cmd_timeout" value="0.3"/>
-    <!-- <param name="min_rot_units" value="250"/> -->
+    <!-- Ratio-preserving stiction floor (units); scales both wheels together so
+         slow commands still move without flattening arcs. 0 disables. -->
+    <param name="min_move_units" value="250"/>
   </node>
 </launch>

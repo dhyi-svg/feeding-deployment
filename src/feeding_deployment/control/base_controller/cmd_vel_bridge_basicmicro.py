@@ -5,10 +5,19 @@ cmd_vel_bridge_basicmicro.py
 ROS1 node that converts geometry_msgs/Twist on /cmd_vel into differential-drive
 left/right motor commands for the Vention base (BasicMicro + Arduino bridge).
 
-Fixes "wiggling" by:
-  1) Always mixing linear+angular into left/right (no rotate-or-translate switching)
-  2) Adding angular deadband near zero
-  3) Avoiding a forced minimum rotation command
+Used by BOTH autonomous nav (move_base/TEB -> /cmd_vel) and the shared-autonomy
+Xbox teleop, so it must faithfully reproduce whatever (v, w) it is handed.
+
+Keeps combined translate+turn intact by:
+  1) Mixing linear+angular into left/right, then clamping each wheel symmetrically
+     to +/-max_speed_units.
+  2) Angular deadband near zero to avoid sign-flip jitter.
+  3) Overcoming motor stiction with a RATIO-PRESERVING floor: when the dominant
+     wheel is below min_move_units, both wheels are scaled up by the same factor.
+     This keeps the robot moving at slow speeds (important for autonomous nav /
+     localization) WITHOUT distorting the curvature. NOTE: the previous per-wheel
+     minimum did distort it -- it snapped any gentle arc to pure-straight or
+     pure-spin, so the base could only ever translate OR rotate, never both.
 """
 
 import math
@@ -67,13 +76,14 @@ class CmdVelBridgeBasicmicro:
         # max_speed_units should match what your controller expects safely.
         self.max_speed_units = int(rospy.get_param("~max_speed_units", 800))
 
-        # Minimum linear command (units) when v != 0 to overcome stiction.
-        # Set to 0 if you don't want any minimum.
-        self.min_lin_units = int(rospy.get_param("~min_lin_units", 250))
-
-        # Minimum rotational component (units) when w != 0.
-        # IMPORTANT: keep this 0 to prevent "forced rotation" wiggle.
-        self.min_rot_units = int(rospy.get_param("~min_rot_units", 0))
+        # Ratio-preserving stiction floor (units). When a command is nonzero but
+        # the dominant wheel falls below this, BOTH wheels are scaled up by the
+        # same factor so the robot moves while the left/right ratio (hence the
+        # commanded curvature) is preserved. Set to 0 to disable.
+        # IMPORTANT: do NOT reintroduce a per-wheel minimum here -- forcing each
+        # wheel up independently snaps gentle arcs to pure-straight/pure-spin,
+        # which is the "translate OR rotate, never both" bug this replaced.
+        self.min_move_units = int(rospy.get_param("~min_move_units", 250))
 
         # If your wiring is flipped, you can invert left/right or swap outputs:
         self.invert_left = bool(rospy.get_param("~invert_left", False))
@@ -100,20 +110,11 @@ class CmdVelBridgeBasicmicro:
         rospy.loginfo("cmd_vel bridge running. Waiting for %s...", self.cmd_vel_topic)
 
     @staticmethod
-    def _sign(x: int) -> int:
-        return 1 if x > 0 else -1
-
-    def _clamp_with_min(self, x: int, min_abs: int, max_abs: int) -> int:
-        """Clamp integer x to [-max_abs, max_abs] and enforce |x| >= min_abs if x != 0."""
-        if x == 0:
-            return 0
-        s = self._sign(x)
-        ax = abs(x)
-        if min_abs > 0 and ax < min_abs:
-            ax = min_abs
-        if max_abs > 0 and ax > max_abs:
-            ax = max_abs
-        return s * ax
+    def _clamp(x: int, max_abs: int) -> int:
+        """Symmetric clamp of integer x to [-max_abs, max_abs]."""
+        if max_abs <= 0:
+            return x
+        return max(-max_abs, min(max_abs, x))
 
     def _apply_output_mapping(self, right: int, left: int):
         """Optional swapping/inverting to match your motor wiring."""
@@ -152,21 +153,23 @@ class CmdVelBridgeBasicmicro:
         lin_units = int(v * self.linear_scale)
         rot_units = int(w * self.angular_scale)
 
-        # Optional min clamp on the *rotation component* only if you really need it
-        # (default 0 to avoid wiggling).
-        rot_units = self._clamp_with_min(rot_units, self.min_rot_units, self.max_speed_units)
-
-        # Differential drive mix:
-        # right = lin + rot, left = lin - rot
+        # Differential drive mix: right = lin + rot, left = lin - rot
         right = lin_units + rot_units
         left = lin_units - rot_units
 
-        # Enforce minimum linear command only when we're trying to move (lin_units != 0).
-        # This avoids forcing motion when v is essentially 0.
-        min_lin = self.min_lin_units if lin_units != 0 else 0
+        # Ratio-preserving stiction floor: if the command is nonzero but the
+        # dominant wheel is below min_move_units, scale BOTH wheels up by the
+        # same factor. This keeps the robot moving at slow speeds without
+        # distorting the curvature (the left/right ratio is preserved), unlike a
+        # per-wheel minimum which would snap gentle arcs to pure-straight/spin.
+        peak = max(abs(right), abs(left))
+        if self.min_move_units > 0 and 0 < peak < self.min_move_units:
+            scale = self.min_move_units / float(peak)
+            right = int(round(right * scale))
+            left = int(round(left * scale))
 
-        right = self._clamp_with_min(right, min_lin, self.max_speed_units)
-        left = self._clamp_with_min(left, min_lin, self.max_speed_units)
+        right = self._clamp(right, self.max_speed_units)
+        left = self._clamp(left, self.max_speed_units)
 
         right, left = self._apply_output_mapping(right, left)
 
