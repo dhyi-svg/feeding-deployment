@@ -161,7 +161,7 @@ fridge_door_intermediate_restract_pos:
   type: "joint_positions"
   values: [0.9720466073439787, -1.8305038015577884, 3.1415657556627834, -2.5482749838143097, 4.621619302645493e-06, -0.8727317376566344, 1.5708057810167664]
 
-table_gaze_pos:
+table_plate_gaze_pos:
   description: "Gaze configuration, the table should be visible from this configuration"
   type: "joint_positions"
   values: [-1.55741767, -1.22157974, -0.87836379, -2.34686703, 0.86278483, 0.96886992, 2.23393263]

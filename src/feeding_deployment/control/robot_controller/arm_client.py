@@ -216,4 +216,4 @@ if __name__ == "__main__":
 
     # pick_plate_from_table()
 
-    arm_client_interface.execute_command(JointCommand(config.table_gaze_pos))
+    arm_client_interface.execute_command(JointCommand(config.left_back_retract_pos))
