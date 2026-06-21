@@ -1,0 +1,40 @@
+# Custom (non-planner) navigation parameters, loaded directly by
+# feeding_deployment/actions/navigate.py (not by move_base).
+#
+# Post-nav refinement window: after move_base reports SUCCEEDED it has only
+# driven to within its goal tolerance and then stopped. This window optionally
+# runs a slow go-to-pose controller for up to `timeout_s` to close the last
+# gap to the exact goal, then stops.
+#
+# Hardware reality (see cmd_vel_bridge_basicmicro): linear commands are floored
+# at ~0.31 m/s (min_lin_units/linear_scale), so fine LINEAR nudges overshoot —
+# linear drive only engages past `lin_engage_dist_m`. Rotation has no such floor,
+# so HEADING is what this refines smoothly. Keep that in mind when tuning.
+refinement:
+  # --- master switches -------------------------------------------------------
+  enabled: true          # run the refinement window at all
+  actuate: true          # true: actively drive to refine; false: monitor only (old behavior)
+
+  # --- timing ----------------------------------------------------------------
+  timeout_s: 5.0         # max duration of the window
+  rate_hz: 10.0          # control/sample rate (must exceed cmd_vel bridge cmd_timeout)
+  window_s: 1.0          # sliding-average window over the error (smooths jitter)
+  warmup_s: 1.0          # delay before the divergence safety check arms
+
+  # --- stop-when-good thresholds --------------------------------------------
+  # null => use half the active planner's goal tolerance (move_base/TEB).
+  success_xy_m: null
+  success_yaw_rad: null
+
+  # --- divergence safety (stop if clearly getting worse) ---------------------
+  divergence_margin_m: 0.03      # stop if avg xy rises this far above its best
+  divergence_margin_rad: 0.02    # stop if avg yaw rises this far above its best (~1.1 deg)
+
+  # --- go-to-pose controller (only used when actuate: true) ------------------
+  cmd_vel_topic: /cmd_vel
+  k_ang: 1.2             # proportional gain on heading error -> angular vel
+  max_ang_rps: 0.4       # clamp on angular velocity (rad/s)
+  k_lin: 0.8             # proportional gain on distance -> linear vel
+  max_lin_mps: 0.08      # clamp on linear velocity (m/s)
+  lin_engage_dist_m: 0.04  # only drive linearly if xy error exceeds this (stiction floor)
+  face_goal_tol_rad: 0.35  # must be within this heading-to-goal before driving forward
