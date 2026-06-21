@@ -203,7 +203,26 @@ class LocalizationMeasurer:
     def _write_csv(self) -> None:
         header = ["t"]
         for link in LINKS:
-            header += [f"{link}_x", f"{link}_y", f"{link}_yaw"]
+            header += [f"{link}_x", f"{link}_y", f"{link}_yaw",
+                       f"{link}_speed_m_s", f"{link}_vyaw_rad_s"]
+
+        # Pre-compute per-link instantaneous velocity from consecutive samples.
+        # First sample in each link gets NaN (no previous point).
+        vel: Dict[str, List[Optional[Tuple[float, float]]]] = {}
+        for link in LINKS:
+            link_rows = self.rows[link]
+            v: List[Optional[Tuple[float, float]]] = [None]
+            for i in range(1, len(link_rows)):
+                t0, x0, y0, yaw0 = link_rows[i - 1]
+                t1, x1, y1, yaw1 = link_rows[i]
+                dt = t1 - t0
+                if dt > 1e-6:
+                    speed = math.hypot(x1 - x0, y1 - y0) / dt
+                    vyaw = angle_diff(yaw1, yaw0) / dt
+                else:
+                    speed = vyaw = float("nan")
+                v.append((speed, vyaw))
+            vel[link] = v
 
         # Align rows by index (all links sampled together each tick, but a
         # failed lookup can desync counts -- pad short links with NaN).
@@ -220,11 +239,16 @@ class LocalizationMeasurer:
                             cells.append(f"{t:.4f}")
                             t_written = True
                         cells += [f"{x:.6f}", f"{y:.6f}", f"{yaw:.6f}"]
+                        v_entry = vel[link][i]
+                        if v_entry is not None:
+                            cells += [f"{v_entry[0]:.6f}", f"{v_entry[1]:.6f}"]
+                        else:
+                            cells += ["nan", "nan"]
                     else:
                         if not t_written:
                             cells.append("nan")
                             t_written = True
-                        cells += ["nan", "nan", "nan"]
+                        cells += ["nan", "nan", "nan", "nan", "nan"]
                 f.write(",".join(cells) + "\n")
         rospy.loginfo("Wrote %d samples to %s", n, self.out_path)
 

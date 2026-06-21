@@ -883,9 +883,10 @@ if __name__ == "__main__":
     # Handle Ctrl+C gracefully
     signal.signal(signal.SIGINT, runner.signal_handler)
 
-    for i in range(5):
-        runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateOnTable"], (runner.plate, runner.table)))
-        runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateOnHolder"], (runner.plate, runner.holder)))
+    runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateInSink"], (runner.plate, runner.sink)))
+    # for i in range(5):
+    #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateOnTable"], (runner.plate, runner.table)))
+    #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateOnHolder"], (runner.plate, runner.holder)))
 
     # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromAppliance"], (runner.plate, runner.fridge)))
     # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.fridge,)))
