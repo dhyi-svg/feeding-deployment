@@ -24,6 +24,14 @@ estimate itself jitters. A large single-step jump on map->odom is the signal
 that goal-checking needs pose smoothing.
 
 A full CSV is also written so the same run can be re-analyzed offline.
+
+All three links are sampled at a single common TF time per tick (the latest
+time the full map->base chain is available), not at independent rospy.Time(0)
+per link. This keeps the decomposition exact (map->base == map->odom o
+odom->base every row); sampling each link at Time(0) instead desyncs them at
+transform-update boundaries and fabricates one-sample "jump" spikes that
+inflate max-jump and peak-to-peak. Ticks where TF has not advanced are skipped
+so duplicate rows / fake zero-jumps don't enter the stats.
 """
 
 from __future__ import annotations
@@ -86,6 +94,7 @@ class LocalizationMeasurer:
             link: [] for link in LINKS
         }
         self._start_wall: Optional[float] = None
+        self._last_when: Optional["rospy.Time"] = None
         self._stop = False
 
     def _resolve_out_path(self, args: argparse.Namespace) -> Path:
@@ -100,14 +109,35 @@ class LocalizationMeasurer:
     # ------------------------------------------------------------------ #
     # Acquisition
     # ------------------------------------------------------------------ #
+    def _common_time(self) -> Optional["rospy.Time"]:
+        """Latest TF time at which the full map->base chain is available.
+
+        All three links are then looked up at THIS single time so the
+        decomposition is temporally consistent (map->base == map->odom o
+        odom->base exactly). Using rospy.Time(0) per-link instead lets each
+        lookup grab a different stamp, which desyncs the links at every
+        transform-update boundary and manufactures one-sample "jump" spikes.
+        """
+        try:
+            return self.tf_buffer.get_latest_common_time(
+                self.map_frame, self.base_frame
+            )
+        except (
+            tf2_ros.LookupException,
+            tf2_ros.ConnectivityException,
+            tf2_ros.ExtrapolationException,
+        ) as exc:
+            rospy.logwarn_throttle(2.0, "TF common-time lookup failed: %s", exc)
+            return None
+
     def _lookup(
-        self, target: str, source: str
+        self, target: str, source: str, when: "rospy.Time"
     ) -> Optional[Tuple[float, float, float]]:
         try:
             tf = self.tf_buffer.lookup_transform(
                 target_frame=target,
                 source_frame=source,
-                time=rospy.Time(0),
+                time=when,
                 timeout=rospy.Duration(self.lookup_timeout),
             )
         except (
@@ -133,15 +163,26 @@ class LocalizationMeasurer:
             self.rate_hz,
         )
         while not rospy.is_shutdown() and not self._stop:
-            now = rospy.Time.now().to_sec()
+            when = self._common_time()
+            if when is None or when == rospy.Time(0):
+                rate.sleep()
+                continue
+            # Skip ticks where TF has not advanced: re-logging the same stamp
+            # would inject duplicate rows and fake zero-jumps into the stats.
+            if self._last_when is not None and when == self._last_when:
+                rate.sleep()
+                continue
+            self._last_when = when
+
+            now = when.to_sec()  # timestamp by transform time, not wall clock
             if self._start_wall is None:
                 self._start_wall = now
             elapsed = now - self._start_wall
 
             samples = {
-                "map2base": self._lookup(self.map_frame, self.base_frame),
-                "map2odom": self._lookup(self.map_frame, self.odom_frame),
-                "odom2base": self._lookup(self.odom_frame, self.base_frame),
+                "map2base": self._lookup(self.map_frame, self.base_frame, when),
+                "map2odom": self._lookup(self.map_frame, self.odom_frame, when),
+                "odom2base": self._lookup(self.odom_frame, self.base_frame, when),
             }
             for link, s in samples.items():
                 if s is not None:
