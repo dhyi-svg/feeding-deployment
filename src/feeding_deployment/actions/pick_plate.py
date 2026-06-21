@@ -230,17 +230,18 @@ class PickPlateFromTableHLA(HighLevelAction):
         print("Picking plate from table ...")
 
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
-        self.move_to_joint_positions(self.sim.scene_description.table_gaze_pos)
+        self.move_to_joint_positions(self.sim.scene_description.table_plate_gaze_pos)
 
-        attachment_poses = self.perception_interface.perceive_attachment_poses(handle_type="microwave", web_interface=self.web_interface)
+        attachment_poses = self.perception_interface.perceive_attachment_poses(handle_type="table", web_interface=self.web_interface, handle_orientation="left")
         pickup_pose = attachment_poses["pickup_pose"]
         pre_pickup_pose = attachment_poses["pre_pickup_pose"]
+        above_pickup_pose = attachment_poses["above_pickup_pose"]
 
         self.move_to_joint_positions(self.sim.scene_description.table_intermediate_pos)
         self.move_to_ee_pose(pre_pickup_pose)
         self.close_gripper()
         self.move_to_ee_pose(pickup_pose)
         self.open_gripper()
-        self.move_to_ee_pose(pre_pickup_pose)
+        self.move_to_ee_pose(above_pickup_pose)
         self.move_to_ee_pose(self.sim.scene_description.table_intermediate_pose)
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)

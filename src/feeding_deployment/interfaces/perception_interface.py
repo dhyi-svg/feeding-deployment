@@ -785,7 +785,7 @@ class PerceptionInterface:
         return handle_poses
         # return self.last_handle_poses
 
-    def perceive_attachment_poses(self, handle_type: str, web_interface=None):
+    def perceive_attachment_poses(self, handle_type: str, handle_orientation: str = "front", web_interface=None):
 
         if self.simulation:
             with open(self.log_dir / 'attachment_poses.pkl', 'rb') as f:
@@ -801,7 +801,7 @@ class PerceptionInterface:
                     depth_image = cam_data["depth_image"]
 
                     if rgb_image is not None and camera_info is not None and depth_image is not None:
-                        attachment_pose = self._attachment_perception.detect_attachment(rgb_image, camera_info, depth_image)
+                        attachment_pose = self._attachment_perception.detect_attachment(rgb_image, camera_info, depth_image, handle_orientation)
                         if attachment_pose is not None:
                             break
                     time.sleep(0.1)
@@ -823,20 +823,34 @@ class PerceptionInterface:
             # offset[:3, 3] = np.array([0, 0, -0.02])
             if handle_type == "microwave":
                 offset[:3, 3] = np.array([0, 0.009, -0.01])
-            else:
+            elif handle_type == "bottom textured fridge door":
                 offset[:3, 3] = np.array([0, -0.003, 0.0])
+            elif handle_type == "table":
+                offset[:3, 3] = np.array([0, -0.008, 0.0])
+            else:
+                raise ValueError(f"Unknown handle type: {handle_type}")
             pickup_pose = self.matrix_to_pose(self.pose_to_matrix(attachment_pose) @ offset)
 
             # offset[:3, 3] = np.array([0, 0.03, -0.12])
             if handle_type == "microwave":
                 offset[:3, 3] = np.array([0, 0.009, -0.11])
+            elif handle_type == "bottom textured fridge door":
+                offset[:3, 3] = np.array([0, -0.003, -0.11])
+            elif handle_type == "table":
+                offset[:3, 3] = np.array([0, -0.008, -0.11])
             else:
-                offset[:3, 3] = np.array([0, 0.0, -0.11])
+                raise ValueError(f"Unknown handle type: {handle_type}")
+
             pre_pickup_pose = self.matrix_to_pose(self.pose_to_matrix(attachment_pose) @ offset)
+
+            offset_for_above = np.eye(4)
+            offset_for_above[:3, 3] = np.array([0, 0.1, 0.0])
+            above_pickup_pose = self.matrix_to_pose(self.pose_to_matrix(pickup_pose) @ offset_for_above)
 
             attachment_poses = {
                 "pickup_pose": pickup_pose,
                 "pre_pickup_pose": pre_pickup_pose,
+                "above_pickup_pose": above_pickup_pose,
             }
             with open(self.log_dir / 'attachment_poses.pkl', 'wb') as f:
                 pickle.dump(attachment_poses, f)

@@ -33,7 +33,7 @@ class AttachmentPerception(TFInterface):
         self.attachment_points_pub = rospy.Publisher("/attachment_points", Marker, queue_size=1)
         self.attachment_center_pub = rospy.Publisher("/attachment_center", Marker, queue_size=1)
 
-    def detect_attachment(self, rgb_image, camera_info_msg, depth_image):
+    def detect_attachment(self, rgb_image, camera_info_msg, depth_image, handle_orientation="front"):
         if rgb_image is None:
             print("No camera data provided.")
             return None
@@ -232,8 +232,11 @@ class AttachmentPerception(TFInterface):
             # base to tag homogeneous transform and update tf
             base_to_tag = np.dot(base_to_camera, camera_to_tag)
 
-            # Rajat Hack: Override rotation to fix handle facing the robot
-            base_to_tag[:3, :3] = Rotation.from_quat([-0.5, 0.5, 0.5, -0.5]).as_matrix()
+            if handle_orientation == "front":
+                # Rajat Hack: Override rotation to fix handle facing the robot
+                base_to_tag[:3, :3] = Rotation.from_quat([-0.5, 0.5, 0.5, -0.5]).as_matrix()
+            elif handle_orientation == "left": # convention of quaternion is (x, y, z, w)
+                base_to_tag[:3, :3] = Rotation.from_quat([0.0, 0.7071, 0.7071, 0.0]).as_matrix()
 
             self.updateTF("arm_base_link", "attachment", base_to_tag)
             return self.matrix_to_pose(base_to_tag)
