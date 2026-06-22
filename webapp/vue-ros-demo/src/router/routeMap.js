@@ -128,6 +128,9 @@ const routeMap = {
   },
   resuming: {
     jump: '/resuming'
+  },
+  color_correction: {
+    jump: '/color_correction'
   }
 };
 

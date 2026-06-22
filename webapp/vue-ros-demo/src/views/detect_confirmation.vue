@@ -20,6 +20,7 @@
     <div class="buttons">
       <button class="continue-button" @click="confirmDetection">Looks Correct</button>
       <button class="retry-button" @click="redoDetection">Redo</button>
+      <button v-if="detectionType === 'attachment'" class="color-button" @click="correctColor">Correct Color</button>
     </div>
   </div>
 </template>
@@ -53,6 +54,13 @@ const DETECTION_MESSAGES = {
       "Does the robot's plate placement detection look correct? <br>" +
       "Red dot = where the plate will be placed on the table. <br>" +
       "Click 'Looks Correct' to proceed, or 'Redo' to detect again."
+  },
+  attachment: {
+    slog: 'Please verify the attachment detection.',
+    instruction:
+      "Does the robot's attachment detection look correct? <br>" +
+      "The highlighted region shows the detected attachment point. <br>" +
+      "Click 'Looks Correct' to proceed, 'Redo' to detect again, or 'Correct Color' to adjust the color filter."
   }
 };
 
@@ -175,6 +183,9 @@ export default {
       this.imageSrc = null;
       this.publishResponse('redo');
     },
+    correctColor () {
+      this.publishResponse('correct_color');
+    },
     handleKeyDown (event) {
       if (event.key === 'e' || event.key === 'E') {
         this.$router.push({ name: 'physical' })
@@ -260,7 +271,8 @@ export default {
   margin-top: 10px;
 }
 .continue-button,
-.retry-button {
+.retry-button,
+.color-button {
   border: none;
   color: black;
   cursor: pointer;
@@ -278,5 +290,8 @@ export default {
   line-height: 24px;
   text-align: center;
   padding: 10px;
+}
+.color-button {
+  background-color: #B3D9FF;
 }
 </style>

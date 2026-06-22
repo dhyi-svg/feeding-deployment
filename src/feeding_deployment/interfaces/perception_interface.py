@@ -785,75 +785,196 @@ class PerceptionInterface:
         return handle_poses
         # return self.last_handle_poses
 
-    def perceive_attachment_poses(self, handle_type: str, handle_orientation: str = "front", web_interface=None):
+    @staticmethod
+    def _rgb_to_hsv_color(r: int, g: int, b: int) -> list:
+        """Convert RGB (0-255) to OpenCV HSV [H:0-179, S:0-255, V:0-255]."""
+        bgr = np.array([[[b, g, r]]], dtype=np.uint8)
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+        return hsv[0, 0].tolist()
+
+    def _interactive_color_correction(
+        self,
+        web_interface,
+        rgb_image,
+        camera_info,
+        depth_image,
+        initial_color,
+        initial_range: float,
+        handle_orientation: str,
+        attachment_dir: str,
+        initial_attachment_pose,
+    ):
+        """Run the interactive color correction loop on the web interface.
+
+        Returns (confirmed, color, color_range, attachment_pose).
+        confirmed=False means the user pressed Back; caller should redo detection.
+        """
+        current_color = list(initial_color) if hasattr(initial_color, '__iter__') else initial_color
+        current_range = float(initial_range)
+        last_attachment_pose = initial_attachment_pose
+
+        vis_image = cv2.imread(os.path.join(attachment_dir, "attachment_corners.png"))
+        web_interface.start_color_correction(
+            rgb_image,
+            initial_vis_image=None,
+            initial_color_range=current_range,
+        )
+
+        while True:
+            msg = web_interface.wait_for_color_correction_message()
+            if msg is None:
+                return False, initial_color, initial_range, initial_attachment_pose
+
+            status = msg.get("status", "")
+
+            if status in ("rerun", "confirm"):
+                r = int(msg.get("r", 0))
+                g = int(msg.get("g", 0))
+                b = int(msg.get("b", 0))
+                current_color = self._rgb_to_hsv_color(r, g, b)
+                current_range = float(msg.get("color_range", current_range))
+
+                # Use a fresh camera frame so the TF lookup timestamp is current.
+                # Reusing the original camera_info.header.stamp causes TF
+                # extrapolation errors once the user has spent >10 s on the page.
+                fresh_cam = self._realsense.get_camera_data()
+                fresh_rgb   = fresh_cam.get("rgb_image")
+                fresh_info  = fresh_cam.get("camera_info")
+                fresh_depth = fresh_cam.get("depth_image")
+                if fresh_rgb is None or fresh_info is None or fresh_depth is None:
+                    fresh_rgb, fresh_info, fresh_depth = rgb_image, camera_info, depth_image
+
+                new_pose = self._attachment_perception.detect_attachment(
+                    fresh_rgb, fresh_info, fresh_depth, handle_orientation,
+                    handle_color=current_color, color_range=current_range,
+                )
+                if new_pose is not None:
+                    last_attachment_pose = new_pose
+
+                result_vis = cv2.imread(os.path.join(attachment_dir, "attachment_corners.png"))
+                web_interface.send_color_correction_result(result_vis, new_pose is not None)
+
+                if status == "confirm":
+                    if last_attachment_pose is not None:
+                        web_interface.switch_to_explanation_page()
+                        return True, current_color, current_range, last_attachment_pose
+                    # No pose yet (rerun failed) — stay in loop so user can adjust
+                    print("Confirm pressed but no valid detection — ask user to adjust and rerun.")
+
+            elif status == "back":
+                return False, initial_color, initial_range, initial_attachment_pose
+
+    def perceive_attachment_poses(self, handle_type: str, handle_color, color_range, handle_orientation: str = "front", web_interface=None):
 
         if self.simulation:
             with open(self.log_dir / 'attachment_poses.pkl', 'rb') as f:
                 attachment_poses = pickle.load(f)
+            # Ensure keys are present for callers that read them.
+            attachment_poses.setdefault(
+                "handle_color",
+                list(handle_color) if hasattr(handle_color, '__iter__') else handle_color,
+            )
+            attachment_poses.setdefault("color_range", float(color_range))
+            return attachment_poses
 
-        else:
-            while True:
-                attachment_pose = None
-                for _ in range(20):
-                    cam_data = self._realsense.get_camera_data()
-                    rgb_image = cam_data["rgb_image"]
-                    camera_info = cam_data["camera_info"]
-                    depth_image = cam_data["depth_image"]
+        current_color = list(handle_color) if hasattr(handle_color, '__iter__') else handle_color
+        current_range = float(color_range)
 
-                    if rgb_image is not None and camera_info is not None and depth_image is not None:
-                        attachment_pose = self._attachment_perception.detect_attachment(rgb_image, camera_info, depth_image, handle_orientation)
-                        if attachment_pose is not None:
-                            break
-                    time.sleep(0.1)
+        while True:
+            attachment_pose = None
+            last_rgb_image = None
+            last_camera_info = None
+            last_depth_image = None
+            for _ in range(20):
+                cam_data = self._realsense.get_camera_data()
+                rgb_image = cam_data["rgb_image"]
+                camera_info = cam_data["camera_info"]
+                depth_image = cam_data["depth_image"]
 
-                if attachment_pose is None:
-                    raise RuntimeError("Could not detect attachment pose")
+                if rgb_image is not None and camera_info is not None and depth_image is not None:
+                    attachment_pose = self._attachment_perception.detect_attachment(
+                        rgb_image, camera_info, depth_image, handle_orientation,
+                        handle_color=current_color, color_range=current_range,
+                    )
+                    if attachment_pose is not None:
+                        last_rgb_image = rgb_image
+                        last_camera_info = camera_info
+                        last_depth_image = depth_image
+                        break
+                time.sleep(0.1)
 
-                attachment_dir = os.path.dirname(inspect.getfile(self._attachment_perception.__class__))
-                vis_image = cv2.imread(os.path.join(attachment_dir, "attachment_corners.png"))
-                if web_interface is None:
-                    confirmed = self._terminal_confirmation("attachment", vis_image)
-                else:
-                    confirmed = web_interface.get_detection_confirmation("attachment", vis_image)
+            if attachment_pose is None:
+                raise RuntimeError("Could not detect attachment pose")
+
+            attachment_dir = os.path.dirname(inspect.getfile(self._attachment_perception.__class__))
+            vis_image = cv2.imread(os.path.join(attachment_dir, "attachment_corners.png"))
+
+            if web_interface is None:
+                confirmed = self._terminal_confirmation("attachment", vis_image)
                 if confirmed:
                     break
                 print("Attachment detection rejected by user. Re-running attachment perception ...")
+                continue
 
-            offset = np.eye(4)
-            # offset[:3, 3] = np.array([0, 0, -0.02])
-            if handle_type == "microwave":
-                offset[:3, 3] = np.array([0, 0.009, -0.01])
-            elif handle_type == "bottom textured fridge door":
-                offset[:3, 3] = np.array([0, -0.003, 0.0])
-            elif handle_type == "table":
-                offset[:3, 3] = np.array([0, -0.008, 0.0])
-            else:
-                raise ValueError(f"Unknown handle type: {handle_type}")
-            pickup_pose = self.matrix_to_pose(self.pose_to_matrix(attachment_pose) @ offset)
+            action = web_interface.get_attachment_detection_action("attachment", vis_image)
 
-            # offset[:3, 3] = np.array([0, 0.03, -0.12])
-            if handle_type == "microwave":
-                offset[:3, 3] = np.array([0, 0.009, -0.11])
-            elif handle_type == "bottom textured fridge door":
-                offset[:3, 3] = np.array([0, -0.003, -0.11])
-            elif handle_type == "table":
-                offset[:3, 3] = np.array([0, -0.008, -0.11])
-            else:
-                raise ValueError(f"Unknown handle type: {handle_type}")
+            if action == "confirm":
+                web_interface.switch_to_explanation_page()
+                break
+            elif action == "redo":
+                print("Attachment detection rejected by user. Re-running attachment perception ...")
+                continue
+            elif action == "correct_color":
+                confirmed, current_color, current_range, attachment_pose = self._interactive_color_correction(
+                    web_interface,
+                    last_rgb_image,
+                    last_camera_info,
+                    last_depth_image,
+                    current_color,
+                    current_range,
+                    handle_orientation,
+                    attachment_dir,
+                    attachment_pose,
+                )
+                if confirmed:
+                    break
+                print("Color correction cancelled. Re-running attachment perception ...")
 
-            pre_pickup_pose = self.matrix_to_pose(self.pose_to_matrix(attachment_pose) @ offset)
+        offset = np.eye(4)
+        if handle_type == "microwave":
+            offset[:3, 3] = np.array([0, 0.009, -0.01])
+        elif handle_type == "bottom textured fridge door":
+            offset[:3, 3] = np.array([0, -0.003, 0.0])
+        elif handle_type == "table":
+            offset[:3, 3] = np.array([0, -0.008, 0.0])
+        else:
+            raise ValueError(f"Unknown handle type: {handle_type}")
+        pickup_pose = self.matrix_to_pose(self.pose_to_matrix(attachment_pose) @ offset)
 
-            offset_for_above = np.eye(4)
-            offset_for_above[:3, 3] = np.array([0, 0.1, 0.0])
-            above_pickup_pose = self.matrix_to_pose(self.pose_to_matrix(pickup_pose) @ offset_for_above)
+        if handle_type == "microwave":
+            offset[:3, 3] = np.array([0, 0.009, -0.11])
+        elif handle_type == "bottom textured fridge door":
+            offset[:3, 3] = np.array([0, -0.003, -0.11])
+        elif handle_type == "table":
+            offset[:3, 3] = np.array([0, -0.008, -0.11])
+        else:
+            raise ValueError(f"Unknown handle type: {handle_type}")
 
-            attachment_poses = {
-                "pickup_pose": pickup_pose,
-                "pre_pickup_pose": pre_pickup_pose,
-                "above_pickup_pose": above_pickup_pose,
-            }
-            with open(self.log_dir / 'attachment_poses.pkl', 'wb') as f:
-                pickle.dump(attachment_poses, f)
+        pre_pickup_pose = self.matrix_to_pose(self.pose_to_matrix(attachment_pose) @ offset)
+
+        offset_for_above = np.eye(4)
+        offset_for_above[:3, 3] = np.array([0, 0.1, 0.0])
+        above_pickup_pose = self.matrix_to_pose(self.pose_to_matrix(pickup_pose) @ offset_for_above)
+
+        attachment_poses = {
+            "pickup_pose": pickup_pose,
+            "pre_pickup_pose": pre_pickup_pose,
+            "above_pickup_pose": above_pickup_pose,
+            "handle_color": current_color,
+            "color_range": current_range,
+        }
+        with open(self.log_dir / 'attachment_poses.pkl', 'wb') as f:
+            pickle.dump(attachment_poses, f)
 
         return attachment_poses
 

@@ -194,6 +194,11 @@ const routes = [
     component: () => import(/* webpackChunkName: "about" */ '../views/Resuming.vue')
   },
   {
+    path: '/color_correction',
+    name: 'color_correction',
+    component: () => import(/* webpackChunkName: "about" */ '../views/color_correction.vue')
+  },
+  {
     path: '/mictest',
     name: 'mictest',
     component: () => import(/* webpackChunkName: "about" */ '../views/MicTest.vue')

@@ -33,7 +33,7 @@ class AttachmentPerception(TFInterface):
         self.attachment_points_pub = rospy.Publisher("/attachment_points", Marker, queue_size=1)
         self.attachment_center_pub = rospy.Publisher("/attachment_center", Marker, queue_size=1)
 
-    def detect_attachment(self, rgb_image, camera_info_msg, depth_image, handle_orientation="front"):
+    def detect_attachment(self, rgb_image, camera_info_msg, depth_image, handle_orientation="front", handle_color=None, color_range=0.1):
         if rgb_image is None:
             print("No camera data provided.")
             return None
@@ -49,7 +49,7 @@ class AttachmentPerception(TFInterface):
         # -----------------------------
         # Color mask
         # -----------------------------
-        mask = self.detect_attachment_color(rgb_image)
+        mask = self.detect_attachment_color(rgb_image, handle_color=handle_color, color_range=color_range)
         # mask = self.clean_mask(mask)
 
         # -----------------------------
@@ -244,12 +244,14 @@ class AttachmentPerception(TFInterface):
         print("Could not find transform between arm_base_link and camera_color_optical_frame.")
         return None
 
-    def detect_attachment_color(self, bgr_image):
+    def detect_attachment_color(self, bgr_image, handle_color=None, color_range=0.1):
         hsv = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV)
-
-        lower = np.array([77, 30, 59])
-        upper = np.array([87, 80, 109])
-
+        if handle_color is None:
+            handle_color = np.array([82, 55, 84])
+        handle_color = np.asarray(handle_color)
+        delta = (float(color_range) * np.array([179, 255, 255])).astype(int)
+        lower = np.clip(handle_color - delta, [0, 0, 0], [179, 255, 255]).astype(np.uint8)
+        upper = np.clip(handle_color + delta, [0, 0, 0], [179, 255, 255]).astype(np.uint8)
         return cv2.inRange(hsv, lower, upper)
 
     def clean_mask(self, mask):

@@ -46,7 +46,7 @@ class AppliancePerception(TFInterface):
         self.TEXT_THRESHOLD = 0.3
         self.NMS_THRESHOLD = 0.4
 
-        self.molmo_url = "https://ace7-128-84-97-177.ngrok-free.app/predict"
+        self.molmo_url = "https://4a2d-128-84-97-177.ngrok-free.app/predict"        
 
         self.handle_type = None
         self.num_perception_samples = num_perception_samples

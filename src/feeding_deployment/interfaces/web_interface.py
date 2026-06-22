@@ -467,6 +467,63 @@ class WebInterface:
             self.switch_to_explanation_page()
         return confirmed
 
+    def get_attachment_detection_action(self, detection_type: str, vis_image=None) -> str:
+        """Like get_detection_confirmation but also supports 'correct_color' action.
+
+        Returns 'confirm', 'redo', or 'correct_color'.
+        """
+        self.current_page = "detect_confirmation"
+        self._send_message({"state": "detect_confirmation", "status": "jump", "detection_type": detection_type})
+        time.sleep(0.5)
+        self._send_message({"state": "detect_confirmation", "status": "info", "detection_type": detection_type})
+        if vis_image is not None:
+            self._send_image(vis_image)
+
+        msg_dict = self.get_required_web_interface_message(
+            lambda msg_dict: (msg_dict["state"] == "detect_confirmation")
+        )
+        if msg_dict is None:
+            return "redo"
+        return msg_dict.get("status", "redo")
+
+    #### Color Correction Page ####
+
+    def start_color_correction(self, raw_bgr_image, initial_vis_image=None, initial_color_range: float = 0.1) -> None:
+        """Navigate to the color correction page and send images.
+
+        raw_bgr_image: the raw BGR camera frame for pixel color picking.
+        initial_vis_image: the detection corners vis to pre-populate the result panel.
+        """
+        self.current_page = "color_correction"
+        self._send_message({"state": "color_correction", "status": "jump"})
+        time.sleep(0.5)
+        self._send_message({"state": "color_correction", "status": "info",
+                            "initial_color_range": initial_color_range})
+        if raw_bgr_image is not None:
+            self._send_image(raw_bgr_image)
+        # Pre-populate the result panel with the initial detection visualization.
+        if initial_vis_image is not None:
+            time.sleep(0.1)
+            self._send_message({"state": "color_correction", "status": "detection_success"})
+            time.sleep(0.1)
+            self._send_image(initial_vis_image)
+
+    def wait_for_color_correction_message(self) -> dict:
+        """Block until the color correction page sends a message."""
+        return self.get_required_web_interface_message(
+            lambda msg_dict: (msg_dict.get("state") == "color_correction")
+        )
+
+    def send_color_correction_result(self, vis_image, success: bool) -> None:
+        """Send a detection result image (or failure notice) to the color correction page."""
+        if success:
+            self._send_message({"state": "color_correction", "status": "detection_success"})
+            time.sleep(0.1)
+            if vis_image is not None:
+                self._send_image(vis_image)
+        else:
+            self._send_message({"state": "color_correction", "status": "detection_failed"})
+
     #### Transparency Pages ####
 
     def get_transparency_request(self) -> None:

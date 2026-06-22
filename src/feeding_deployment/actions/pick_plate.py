@@ -70,16 +70,24 @@ class PickPlateFromApplianceHLA(HighLevelAction):
 
         return f"pick_plate_from_{appliance.name}.yaml"
     
-    def pick_plate_from_fridge(self, speed: str) -> None:
+    def pick_plate_from_fridge(self, speed: str, handle_color, color_range) -> None:
         assert self.sim.held_object_name is None
         print("Picking plate from fridge ...")
 
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.fridge_contents_gaze_pos)
-        attachment_poses = self.perception_interface.perceive_attachment_poses(handle_type="bottom textured fridge door", web_interface=self.web_interface)
+        result = self.perception_interface.perceive_attachment_poses(handle_type="bottom textured fridge door", handle_color=handle_color, color_range=color_range, web_interface=self.web_interface)
 
-        pickup_pose = attachment_poses["pickup_pose"]
-        pre_pickup_pose = attachment_poses["pre_pickup_pose"]
+        pickup_pose = result["pickup_pose"]
+        pre_pickup_pose = result["pre_pickup_pose"]
+
+        new_color = result["handle_color"]
+        new_range = result["color_range"]
+        orig_color = list(handle_color) if hasattr(handle_color, '__iter__') else handle_color
+        if new_color != orig_color or abs(new_range - float(color_range)) > 1e-9:
+            objects = (Object("plate", plate_type), Object("fridge", appliance_type))
+            self.process_behavior_tree_parameter_update(objects, {}, "PickPlateFromAppliance", "HandleColor", new_color)
+            self.process_behavior_tree_parameter_update(objects, {}, "PickPlateFromAppliance", "ColorRange", new_range)
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.fridge_inside_intermediate_pos)
@@ -94,18 +102,26 @@ class PickPlateFromApplianceHLA(HighLevelAction):
         self.move_to_ee_pose(self.sim.scene_description.fridge_above_intermediate_pose)
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
 
-    def pick_plate_from_microwave(self, speed: str) -> None:
+    def pick_plate_from_microwave(self, speed: str, handle_color, color_range) -> None:
         assert self.sim.held_object_name is None
         print("Picking plate from microwave ...")
-        
+
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.right_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.microwave_inside_gaze_pos)
 
         time.sleep(2.0)
-        attachment_poses = self.perception_interface.perceive_attachment_poses(handle_type="microwave", web_interface=self.web_interface)
-        pickup_pose = attachment_poses["pickup_pose"]
-        pre_pickup_pose = attachment_poses["pre_pickup_pose"]
+        result = self.perception_interface.perceive_attachment_poses(handle_type="microwave", handle_color=handle_color, color_range=color_range, web_interface=self.web_interface)
+        pickup_pose = result["pickup_pose"]
+        pre_pickup_pose = result["pre_pickup_pose"]
+
+        new_color = result["handle_color"]
+        new_range = result["color_range"]
+        orig_color = list(handle_color) if hasattr(handle_color, '__iter__') else handle_color
+        if new_color != orig_color or abs(new_range - float(color_range)) > 1e-9:
+            objects = (Object("plate", plate_type), Object("microwave", appliance_type))
+            self.process_behavior_tree_parameter_update(objects, {}, "PickPlateFromAppliance", "HandleColor", new_color)
+            self.process_behavior_tree_parameter_update(objects, {}, "PickPlateFromAppliance", "ColorRange", new_range)
 
         self.move_to_joint_positions(self.sim.scene_description.right_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
@@ -225,17 +241,25 @@ class PickPlateFromTableHLA(HighLevelAction):
         assert table.name == "table"
         return "pick_plate_from_table.yaml"
 
-    def pick_plate_from_table(self, speed: str) -> None:
+    def pick_plate_from_table(self, speed: str, handle_color, color_range) -> None:
         assert self.sim.held_object_name is None
         print("Picking plate from table ...")
 
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.table_plate_gaze_pos)
 
-        attachment_poses = self.perception_interface.perceive_attachment_poses(handle_type="table", web_interface=self.web_interface, handle_orientation="left")
-        pickup_pose = attachment_poses["pickup_pose"]
-        pre_pickup_pose = attachment_poses["pre_pickup_pose"]
-        above_pickup_pose = attachment_poses["above_pickup_pose"]
+        result = self.perception_interface.perceive_attachment_poses(handle_type="table", handle_color=handle_color, color_range=color_range, web_interface=self.web_interface, handle_orientation="left")
+        pickup_pose = result["pickup_pose"]
+        pre_pickup_pose = result["pre_pickup_pose"]
+        above_pickup_pose = result["above_pickup_pose"]
+
+        new_color = result["handle_color"]
+        new_range = result["color_range"]
+        orig_color = list(handle_color) if hasattr(handle_color, '__iter__') else handle_color
+        if new_color != orig_color or abs(new_range - float(color_range)) > 1e-9:
+            objects = (Object("plate", plate_type), Object("table", table_type))
+            self.process_behavior_tree_parameter_update(objects, {}, "PickPlateFromTable", "HandleColor", new_color)
+            self.process_behavior_tree_parameter_update(objects, {}, "PickPlateFromTable", "ColorRange", new_range)
 
         self.move_to_joint_positions(self.sim.scene_description.table_intermediate_pos)
         self.move_to_ee_pose(pre_pickup_pose)

@@ -377,13 +377,9 @@ class TeleopRecoverySession:
 
         q = np.asarray(self._current_joints(), dtype=float).copy()
         before = q[idx]
-        q[idx] = float(
-            np.clip(
-                q[idx] + sign * step,
-                self.joint_lower_limits[idx],
-                self.joint_upper_limits[idx],
-            )
-        )
+        # No software clipping: command the requested position straight through
+        # and let the robot's own firmware enforce its hardware joint limits.
+        q[idx] = float(q[idx] + sign * step)
         self.robot_interface.execute_command(JointCommand(pos=q))
         achieved = abs(self._current_joints()[idx] - before)
         self._complete(cmd_id, control, commanded=step, achieved=achieved)
