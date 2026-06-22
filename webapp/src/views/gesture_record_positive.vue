@@ -8,24 +8,6 @@
       </div>
     </div>
     <div class="right">
-      <div class="setting-container">
-
-        <div v-if="showSettings" class="settings-panel">
-          <h3>Speed:</h3>
-          <div>
-            <input type="radio" id="slow" name="speed" value="slow" v-model="speed" />
-            <label for="slow">Slow</label>
-          </div>
-          <div>
-            <input type="radio" id="moderate" name="speed" value="moderate" v-model="speed" checked />
-            <label for="moderate">Moderate</label>
-          </div>
-          <div>
-            <input type="radio" id="fast" name="speed" value="fast" v-model="speed" />
-            <label for="fast">Fast</label>
-          </div>
-        </div>
-      </div>
       <button class="finish-button">
         <img class="icon" alt="food" src="../assets/finish.png">
         <span class="finish-button-text" @click="redirectToChangeItemF">Finish Feeding</span>
@@ -70,11 +52,7 @@ export default {
   data() {
     return {
       username: USER,
-      showSettings: false,
-      speed: 'moderate',
-      publishTopic: '/webapp_to_robot',
       listener: null,
-      subscribeTopic: '/robot_to_webapp',
       mediaRecorder: null,
       recordedChunks: [],
       recordedVideos: [],
@@ -98,10 +76,8 @@ export default {
     this.initRosConnection() 
     
     this.initROS();
-    window.addEventListener('keydown', this.handleKeyDown) 
   },
   beforeUnmount() {
-    window.removeEventListener('keydown', this.handleKeyDown) 
   },
   beforeRouteLeave(to, from, next) {
     if (this.listener) {
@@ -227,31 +203,9 @@ export default {
             this.$router.push(route); 
           }
         }
-        if (parsedMessage.state === 'emergency_stop' && parsedMessage.status === 'completed') {
-          this.$router.push({name: 'emergency_stop'});
-        }
         
       } catch (error) {
       }
-    },
-    toggleSettings() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({ 
-          state: 'task_selection',
-          status: 'jump' 
-        })
-      })
-      this.publisher.publish(message)
-      this.$router.push('/task_selection')
-    },
-    publishSpeedSetting() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          command: 'set_speed',
-          value: this.speed
-        })
-      })
-      this.publisher.publish(message)
     },
     initPublisher() {
 
@@ -290,11 +244,6 @@ export default {
       });
 
     },
-    handleKeyDown(event) { 
-      if (event.key === 'e' || event.key === 'E') {
-        this.$router.push({name: 'emergency_stop'})
-      }
-    },
 
     redirectToChangeItem() {
       this.$router.push('/gesture_setup')
@@ -319,14 +268,6 @@ export default {
   margin-bottom: 1vh;
 }
 .option-container {
-  //max-height: 36vh; 
-  ////overflow-x: auto;  
-  //padding-right: 10px; 
-  //display: flex;
-  ////align-items: flex-start;
-  //justify-content: space-between;
-  //flex-flow: column;
-  //padding: 0px;
   width: 100%;
   height: 20vh; 
   display: flex;
@@ -351,14 +292,6 @@ export default {
 }
 
 .recorder-container {
-  //flex: 1;
-  //position: relative;
-  //display: flex;
-  //flex-direction: column;
-  //align-items: center;
-  //border: 1px solid #ccc;
-  //padding: 10px;
-  //border-radius: 8px;
   flex: 1;
   position: relative;
   display: flex;
@@ -372,8 +305,6 @@ export default {
 }
 
 .recorder-container video {
-  //width: 100%;
-  //border-radius: 8px;
   width: 100%;
   height: auto;
   max-height: 80vh; 
@@ -462,13 +393,6 @@ button:disabled {
   cursor: pointer;
   width: 40%; 
   text-align: center;
-  //padding: 5px 10px;
-  //background-color: #ff4d4f;
-  //color: white;
-  //border: none;
-  //border-radius: 4px;
-  //cursor: pointer;
-  //font-size: 12px;
   height: 30%;
 }
 
@@ -487,13 +411,6 @@ button:disabled {
   width: 40%; 
   text-align: center;
   height: 30%;
-  //padding: 5px 10px;
-  //background-color: #28a745;
-  //color: white;
-  //border: none;
-  //border-radius: 4px;
-  //cursor: pointer;
-  //font-size: 12px;
 }
 
 .ros-button:hover {

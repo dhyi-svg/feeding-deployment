@@ -41,12 +41,8 @@ export default {
     return {
       ros: null,
       username: USER,
-      showSettings: false,
-      speed: 'moderate',
       receivedMessage: '', 
-      inputMessage: '', 
-      subscribeTopic: '/robot_to_webapp', 
-      publishTopic: '/talker', 
+      inputMessage: '',   
       listener: null, 
       publisher: null, 
     }
@@ -55,10 +51,6 @@ export default {
     this.ros = new ROSLIB.Ros({ url: ROS_URL })
     this.initSubscriber()
     this.initPublisher()
-    window.addEventListener('keydown', this.handleKeyDown) 
-  },
-  beforeUnmount () {
-    window.removeEventListener('keydown', this.handleKeyDown) 
   },
   beforeRouteLeave (to, from, next) {
     if (this.listener) {
@@ -99,33 +91,15 @@ export default {
           }
         }
 
-        if (parsedMessage.state === 'emergency_stop' && parsedMessage.status === 'completed') {
-          this.$router.push({ name: 'emergency_stop' });
-        }
       } catch (error) {
       }
     },
     handleButtonClick() {
       this.publishMessage();
-      this.$router.push('/drink_executing');
-    },
-    handleKeyDown (event) { 
-      if (event.key === 'e' || event.key === 'E') {
-        this.$router.push({ name: 'emergency_stop' })
-      }
-    },
-    toggleSettings() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({ 
-          state: 'task_selection',
-          status: 'jump' 
-        })
-      })
-      this.publisher.publish(message)
-      this.$router.push('/task_selection')
+      this.$router.push('/robot_executing');
     },
     redirectToChangeItem () {
-      this.$router.push('/drink_executing')
+      this.$router.push('/robot_executing')
     },
     redirectToChangeItemF () {
       this.$router.push('/notify_caregiver')
@@ -346,16 +320,13 @@ export default {
 
 .continue-button,
 .retry-button {
-  //background-color: #fce69e;
   border: none;
   border-radius: 8px;
   color: black;
   padding: 10px 20px;
   cursor: pointer;
-  //font-size: 16px;
   display: flex;
   align-items: center;
-  //height: 40px;
   background-color: #FFE699;
   border-radius: 20px;
   width: 20vw;

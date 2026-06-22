@@ -64,8 +64,6 @@ export default {
       ros: null,
       username: USER,
       isActiveMouth: false,
-      showSettings: false,
-      speed: 'moderate',
       countdownInterval: null
     }
   },
@@ -74,10 +72,8 @@ export default {
     this.initSubscriber()
     this.initPublisher()
     
-    window.addEventListener('keydown', this.handleKeyDown) 
   },
   beforeUnmount () {
-    window.removeEventListener('keydown', this.handleKeyDown) 
     if (this.countdownInterval) {
       clearInterval(this.countdownInterval); 
     }
@@ -122,15 +118,15 @@ export default {
     },
     handleButtonClickR() {
       this.publishMessageD();
-      this.$router.push('/switch_to_drink');
+      this.$router.push('/robot_executing');
     },
     handleButtonClick() {
       this.publishMessageR();
-      this.$router.push('/skill_explanation');
+      this.$router.push('/robot_executing');
     },
     handleButtonClickMouth() {
       this.publishMessagePhysical();
-      this.$router.push('/wipe_preparing');
+      this.$router.push('/robot_executing');
     },
     publishMessageG() {
       const message = new ROSLIB.Message({
@@ -206,69 +202,7 @@ export default {
         this.publisher = null;
       }
 
-      next(); 
-    },
-
-    publishResumeFeeding() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          state: 'emergency_stop',
-          status: 'back'
-        })
-      });
-      this.publisher.publish(message);
-    },
-    publishSpeedSetting() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          command: 'set_speed',
-          value: this.speed 
-        }) 
-      })
-      this.publisher.publish(message);
-    },
-    toggleSettings() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({ 
-          state: 'task_selection',
-          status: 'jump' 
-        })
-      })
-      this.publisher.publish(message)
-      this.$router.push('/task_selection')
-    },
-    handleKeyDown (event) { 
-      if (event.key === 'e' || event.key === 'E') {
-        this.$router.go(-1)
-      }
-    },
-    publishCallCaregiver() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          status: 'call_caregiver'
-        })
-      });
-      this.publisher.publish(message);
-    },
-    publishCallNext() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          status: 'mouth_wiping'
-        })
-      });
-      this.publisher.publish(message);
-    },
-    redirectToChangeItem () {
-      this.publishCallCaregiver();
-      this.$router.push('/switch_to_drink')
-    },
-    redirectToChangeItemBack () {
-      this.publishResumeFeeding();
-      this.$router.go(-1)
-    },
-    redirectToChangeItemNext () {
-      this.publishCallNext();
-      this.$router.push('/wipe_preparing')
+      next();
     },
     redirectToChangeItemF () {
       this.$router.push('/notify_caregiver')
@@ -296,7 +230,6 @@ export default {
   padding: 10px 20px;
   font-family: Verdana;
   font-size: 3vw;
-  //font-weight: bold;
   cursor: pointer;
   display: flex;
   align-items: center;

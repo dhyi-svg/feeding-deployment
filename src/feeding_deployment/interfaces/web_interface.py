@@ -104,7 +104,7 @@ class WebInterface:
             print("Error stopping gesture listener thread: ", e)
 
     def switch_to_explanation_page(self) -> None:
-        self.web_interface_publisher.publish(String(json.dumps({"state": "skill_explanation", "status": "jump"})))
+        self.web_interface_publisher.publish(String(json.dumps({"state": "robot_executing", "status": "jump"})))
 
     def publish_skill_plan(self, plan_names: list, current_index: int) -> None:
         """Publish (latched) the ordered skill plan and the index of the skill

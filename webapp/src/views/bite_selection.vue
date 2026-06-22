@@ -209,8 +209,6 @@ export default {
       selectedOption: 1,
       selectedBox: 0,
       selectedPosition: { x: 0, y: 0 },
-      showSettings: false,
-      speed: 'moderate',
       items: [
         {
           name: 'Waiting',
@@ -261,9 +259,7 @@ export default {
       maxMarkers: 1,
 
       receivedMessage: '', 
-      inputMessage: '', 
-      subscribeTopic: '/robot_to_webapp', 
-      publishTopic: '/webapp_to_robot', 
+      inputMessage: '',   
       listener: null, 
       publisher: null, 
       imageReceived: false,
@@ -307,7 +303,6 @@ export default {
     this.initSubscriber()
     this.startCountdown();
     this.publishMessageOnLoad()
-    window.addEventListener('keydown', this.handleKeyDown)
     window.addEventListener('resize', this.getImageDimensions)
     this.activeIndex = 0
   },
@@ -318,7 +313,6 @@ export default {
     }
     
     window.removeEventListener('resize', this.getImageDimensions)
-    window.removeEventListener('keydown', this.handleKeyDown)
   },
   beforeRouteLeave (to, from, next) {
     if (this.countdownInterval) {
@@ -396,18 +390,6 @@ export default {
         }
       }, 500);
     },
-    getImageDimensions2() {
-      setTimeout(() => {
-        const container = this.$refs.imageMarkerContainer;
-        if (container) {
-          const containerRect = container.getBoundingClientRect();
-          this.imageWidth2 = containerRect.width;
-          this.imageHeight2 = containerRect.height;
-
-        } else {
-        }
-      }, 500);
-    },
     publishMessageOnLoad() {
       const message = new ROSLIB.Message({
         data: JSON.stringify({
@@ -446,25 +428,7 @@ export default {
         }
       } catch (error) {
       }
-    },
-    toggleSettings() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({ 
-          state: 'task_selection',
-          status: 'jump' 
-        })
-      })
-      this.publisher.publish(message)
       this.$router.push('/task_selection')
-    },
-    publishSpeedSetting() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          command: 'set_speed',
-          value: this.speed
-        })
-      })
-      this.publisher.publish(message)
     },
     async updateItemsAndCurrentItem(data) {
       try {
@@ -594,11 +558,11 @@ export default {
     },
     handleButtonClick() {
       this.publishMessageDrink();
-      this.$router.push('/switch_to_drink');
+      this.$router.push('/robot_executing');
     },
     handleButtonClickMouth() {
       this.publishMessagePhysical();
-      this.$router.push('/wipe_preparing');
+      this.$router.push('/robot_executing');
     },
     handleBoxClick(index) {
       
@@ -614,11 +578,6 @@ export default {
     setActive (index) {
       this.activeIndex = index;
       this.maxMarkers = (index === 1) ? 2 : 1;
-    },
-    handleKeyDown (event) { 
-      if (event.key === 'e' || event.key === 'E') {
-        this.$router.push({ name: 'emergency_stop' })
-      }
     },
     resetMarkers(){
       this.markers = [];
@@ -665,21 +624,21 @@ export default {
     redirectToChangeItem () {
       
       this.publishAcquireFood();
-      this.$router.push('/bite_acquiring')
+      this.$router.push('/robot_executing')
     },
     redirectForConfirButton() {
       
       if (this.markers.length === this.maxMarkers) {
         
         this.publishMessageFoodPosition(this.activeIndex, this.markers); 
-        this.$router.push('/bite_acquiring');
+        this.$router.push('/robot_executing');
       } else {
         
         alert(`Please select ${this.maxMarkers} marker(s) before confirming.`);
       }
     },
     redirectToChangeItemdrink () {
-      this.$router.push('/switch_to_drink')
+      this.$router.push('/robot_executing')
     },
     redirectToChangeItemF () {
       this.$router.push('/notify_caregiver')
@@ -767,15 +726,6 @@ export default {
       this.publisher.publish(message);
     },
     initSubscriber () {
-      ros.on('connection', function() {
-      });
-
-      ros.on('error', function(error) {
-      });
-
-      ros.on('close', function() {
-      });
-
       const imageListener = new ROSLIB.Topic({
         ros: this.ros,
         name: '/camera/image/compressed', 
@@ -894,10 +844,6 @@ export default {
   width: 3vw;
   height: 6vh;
   margin: 0.5vh;
-  //object-fit: cover;
-  //height: 13vh;
-  //top: 210px;
-  //left: 716px;
   gap: 0px;
   opacity: 0px;
   border-radius: 20px;
@@ -915,7 +861,6 @@ export default {
 }
 .option{
   display: flex;
-  //align-items: flex-start;
   justify-content: space-between;
   flex-flow: column;
   padding: 0px;
@@ -968,9 +913,7 @@ export default {
   width: 100%; 
 }
 .responsive-image1 {
-  //width: 100%; 
   width: 43vw;
-  //height: auto; 
   object-fit: cover;
   display: block;
 }
@@ -997,14 +940,6 @@ export default {
   justify-content: center;
 }
 .current-bite {
-  //border: 1px solid #ddd;
-  //padding: 10px;
-  //margin-bottom: 20px;
-  //display: flex;
-  //align-items: center;
-  //gap: 10px;
-  //width: 300px; 
-  //height: 150px; 
   display: flex;
   align-items: center;
   padding: 10px;
@@ -1052,8 +987,6 @@ export default {
 }
 
 .food-image {
-  //width:15vw;
-  //height: 23vh;
   border-radius: 8px;
   object-fit: cover;
   margin-right: 15px;
@@ -1065,14 +998,12 @@ export default {
 }
 
 .food-name {
-  //font-size: 18px;
   font-weight: bold;
   margin: 0;
   color: #333;
   font-family: Verdana;
   font-size: 24px;
   font-weight: 700;
-  //line-height: 29.17px;
   line-height: 1.2em;
   text-align: left;
   word-break: break-word;
@@ -1117,8 +1048,6 @@ export default {
   text-align: center;
   transition: all 0.15s ease-in-out;
   cursor: pointer;
-  //width: 120px;
-  //height: 160px;
   box-sizing: border-box;
   box-shadow: 0 0 5px rgba(0, 0, 0, 0.1);
   display: flex;
@@ -1305,8 +1234,6 @@ export default {
 .box{
   height: 18vh;
   width: 14vw;
-  //top: 200px;
-  //left: 707px;
   display: flex;
   flex-flow: column;
   align-items: center;
@@ -1332,7 +1259,6 @@ export default {
 }
 .option{
   display: flex;
-  //align-items: flex-start;
   justify-content: space-between;
   flex-flow: column;
   padding: 0px;
@@ -1357,7 +1283,6 @@ export default {
 }
 .otheroption{
   display: flex;
-  //align-items: flex-start;
   justify-content: space-between;
   flex-flow: column;
   padding: 0px;
@@ -1455,16 +1380,12 @@ export default {
 }
 .content{
   display: flex;
-  //align-items: center;
   justify-content: center;
   flex-flow: column;
 }
 .content-body {
   display: flex;
-  //align-items: flex-start;
-  //align-items: center;
   justify-content: space-evenly;
-  //padding: 20px;
   margin-top: 0px;
   .left{
     display: flex;
@@ -1481,7 +1402,6 @@ export default {
 }
 .threeboxes{
   display: flex;
-  //align-items: flex-start;
   align-items: center;
   justify-content: space-between;
 }
@@ -1584,7 +1504,6 @@ export default {
   background-color: #708090; 
   border-radius: 12px;
   padding: 20px;
-  //max-width: 900px; 
   margin: auto;
   text-align: left;
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
@@ -1746,7 +1665,6 @@ export default {
   position: absolute;
   width: 60px;
   height: 60px;
-  //background-image: url('../assets/mouselogo.png'); 
   background-size: contain;
   background-repeat: no-repeat;
   pointer-events: none; 
@@ -1777,8 +1695,6 @@ export default {
 }
 
 .image-container {
-  //position: relative;
-  //display: inline-block;
   display: flex;
   justify-content: flex-start;
   align-items: flex-start;
@@ -1791,12 +1707,10 @@ export default {
 .image-container clickimg {
   width: 80%;
   height: 100%;
-  //object-fit: contain; 
 }
 .image-container cimg {
   width: 80%;
   height: 100%;
-  //object-fit: contain; 
 }
 </style>
 

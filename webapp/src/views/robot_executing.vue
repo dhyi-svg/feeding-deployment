@@ -8,13 +8,27 @@
       </div>
     </div>
     <div class="right">
-      <div class="setting-container">
-
-      </div>
       <button class="finish-button">
         <img class = "icon" alt="food" src="../assets/finish.png">
         <span class = "finish-button-text" @click ="redirectToChangeItemF">Finish Feeding</span>
       </button>
+    </div>
+  </div>
+
+  <div class="skill-plan" v-if="planSlots.current">
+    <div class="skill-step past" v-if="planSlots.last">
+      <span class="step-label">Previous</span>
+      <span class="step-name">{{ skillLabel(planSlots.last) }}</span>
+    </div>
+    <div class="skill-arrow" v-if="planSlots.last">&#8594;</div>
+    <div class="skill-step current">
+      <span class="step-label">Now</span>
+      <span class="step-name">{{ skillLabel(planSlots.current) }}</span>
+    </div>
+    <div class="skill-arrow" v-if="planSlots.next">&#8594;</div>
+    <div class="skill-step upcoming" v-if="planSlots.next">
+      <span class="step-label">Next</span>
+      <span class="step-name">{{ skillLabel(planSlots.next) }}</span>
     </div>
   </div>
 
@@ -24,42 +38,60 @@
     </div>
   </div>
 
-  <div class="footer">
-    <button class="succeed-button" @click="redirectToChangeItem">Next</button>
-  </div>
 </template>
 
 <script>
 import ROSLIB from 'roslib'
-import routeMap from '@/router/routeMap'
+import routeMap from '@/router/routeMap';
 import { ROS_URL, USER} from '@/config/parameterConfig';
+import { skillLabel } from '@/config/skillLabels';
 
 export default {
   data () {
     return {
       ros: null,
       username: USER,
-      defaultMessage: '',
       displayedMessage: '',
-      showSettings: false,
-      speed: 'moderate',
-      publishTopic: '/webapp_to_robot',
-      listener: null
+      listener: null,
+      skillPlanListener: null,
+      skillPlan: [],
+      currentSkillIndex: -1
+    }
+  },
+  computed: {
+
+    planSlots () {
+      const plan = this.skillPlan
+      const idx = this.currentSkillIndex
+      if (idx < 0 || idx >= plan.length) {
+        return { last: null, current: null, next: null }
+      }
+      return {
+        last: idx > 0 ? plan[idx - 1] : null,
+        current: plan[idx],
+        next: idx < plan.length - 1 ? plan[idx + 1] : null
+      }
     }
   },
   mounted () {
     this.ros = new ROSLIB.Ros({ url: ROS_URL })
     this.initSubscriber()
     this.initPublisher()
-    window.addEventListener('keydown', this.handleKeyDown) 
-  },
-  beforeUnmount () {
-    window.removeEventListener('keydown', this.handleKeyDown) 
+
+    if (this.$route.query.plan) {
+      this.skillPlan = String(this.$route.query.plan).split(',')
+      this.currentSkillIndex = this.$route.query.current != null ? parseInt(this.$route.query.current, 10) : 0
+    }
   },
   beforeRouteLeave (to, from, next) {
     if (this.listener) {
       this.listener.unsubscribe();
       this.listener = null;
+    }
+
+    if (this.skillPlanListener) {
+      this.skillPlanListener.unsubscribe();
+      this.skillPlanListener = null;
     }
 
     if (this.publisher) {
@@ -71,15 +103,13 @@ export default {
   },
   methods: {
     handleRosMessage(message) {
-      
+
       try {
         const parsedMessage = JSON.parse(message.data);
-        if (parsedMessage.state === 'explanation' && parsedMessage.status) {
-          this.displayedMessage = parsedMessage.status || 'No status available';
-        } else {
-          this.displayedMessage = this.defaultMessage;
-        }
         const route = routeMap[parsedMessage.state]?.[parsedMessage.status];
+        if (!route && parsedMessage.status) {
+          this.displayedMessage = parsedMessage.status;
+        }
         if (route) {
           if (typeof route === 'string') {
             this.$router.push(route); 
@@ -87,32 +117,21 @@ export default {
             this.$router.push(route); 
           }
         }
-        
-        if (parsedMessage.state === 'emergency_stop' && parsedMessage.status === 'completed') {
-          this.$router.push({ name: 'emergency_stop' });
-        }
-
       } catch (error) {
       }
     },
-    toggleSettings() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({ 
-          state: 'task_selection',
-          status: 'jump' 
-        })
-      })
-      this.publisher.publish(message)
-      this.$router.push('/task_selection')
+    skillLabel(name) {
+      return skillLabel(name);
     },
-    publishSpeedSetting() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          command: 'set_speed',
-          value: this.speed
-        })
-      })
-      this.publisher.publish(message)
+    handleSkillPlan(message) {
+      try {
+        const parsed = JSON.parse(message.data);
+        if (Array.isArray(parsed.plan) && typeof parsed.current === 'number') {
+          this.skillPlan = parsed.plan;
+          this.currentSkillIndex = parsed.current;
+        }
+      } catch (error) {
+      }
     },
     initPublisher() {
 
@@ -130,33 +149,21 @@ export default {
         messageType: 'std_msgs/String' 
       })
 
-      this.listener.subscribe((msg) => {
-
-        try {
-          const parsedData = JSON.parse(msg.data);
-          if (parsedData.state === 'confirm' && parsedData.status === 'completed') {
-            this.$router.push('/after_drink');
-          }
-        } catch (error) {
-        }
+      this.skillPlanListener = new ROSLIB.Topic({
+        ros: this.ros,
+        name: '/skill_plan',
+        messageType: 'std_msgs/String'
       })
+      this.skillPlanListener.subscribe((message) => this.handleSkillPlan(message))
+
       this.listener.subscribe((message) => {
         this.handleRosMessage(message);
       });
     },
 
-    beforeUnmount() {
-      if (this.listener) {
-        this.listener.unsubscribe(); 
-      }
-    },
-
-    redirectToChangeItem () {
-      this.$router.push('/after_drink')
-    },
     redirectToChangeItemF () {
       this.$router.push('/notify_caregiver')
-    }
+    },
   }
 }
 </script>
@@ -170,26 +177,10 @@ export default {
   justify-content: space-between;
   padding: 5px;
   margin-bottom: 5px;
-  .food {
-    width: 500px;
-    height: 200px;
-    top: 179px;
-    left: 68px;
-    gap: 0px;
-    opacity: 0px;
-  }
   .right {
     display: flex;
     justify-content: center;
     align-items: center;
-    .settings-button-text{
-      font-family: Verdana;
-      font-size: 18px;
-      font-weight: 400;
-      line-height: 24px;
-      letter-spacing: 0.17499999701976776px;
-      text-align: left;
-    }
     .finish-button-text{
       font-family: Verdana;
       font-size: 18px;
@@ -198,10 +189,6 @@ export default {
       letter-spacing: 0.17499999701976776px;
       text-align: left;
     }
-    .setting-container {
-      position: relative;
-    }
-    .settings-button,
     .finish-button {
       background-color: #6e7e8e;
       border: none;
@@ -215,30 +202,8 @@ export default {
       align-items: center;
       height: 50px;
     }
-    .settings-button span,
     .finish-button span {
       margin-left: 5px;
-    }
-    .settings-panel {
-      position: absolute;
-      top: 120%;
-      left: 50%;
-      transform: translateX(-50%);
-      width: calc(90%); 
-      max-width: 200px; 
-      background-color: #6e7e8e;
-      border-radius: 8px;
-      color: white;
-      padding: 15px;
-      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-      text-align: left;
-    }
-    .settings-panel h3 {
-      margin-top: 0;
-    }
-    .settings-panel label {
-      margin-left: 5px;
-      font-size: 14px;
     }
   }
   .left {
@@ -281,11 +246,6 @@ export default {
   align-items: center;
 }
 
-.setting-container {
-  position: relative;
-}
-
-.settings-button,
 .finish-button {
   background-color: #6e7e8e;
   border: none;
@@ -300,40 +260,64 @@ export default {
   height: 50px;
 }
 
-.settings-button span,
 .finish-button span {
   margin-left: 5px;
 }
 
-.settings-panel {
-  position: absolute;
-  top: 120%;
-  left: 50%;
-  transform: translateX(-50%);
-  width: calc(90%);
-  max-width: 200px;
-  background-color: #6e7e8e;
-  border-radius: 8px;
+.skill-plan {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 10px;
+}
+
+.skill-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 140px;
+  padding: 10px 18px;
+  border-radius: 10px;
+  background: #eee;
+  color: #6e7e8e;
+  border: 2px solid transparent;
+}
+
+.skill-step.current {
+  background: #6e7e8e;
   color: white;
-  padding: 15px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-  text-align: left;
+  border-color: #3d4a57;
+  transform: scale(1.08);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
 }
 
-.settings-panel h3 {
-  margin-top: 0;
+.skill-step .step-label {
+  font-family: Verdana;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  opacity: 0.8;
 }
 
-.settings-panel label {
-  margin-left: 5px;
-  font-size: 14px;
+.skill-step .step-name {
+  font-family: Verdana;
+  font-size: 18px;
+  font-weight: bold;
+  margin-top: 4px;
+}
+
+.skill-arrow {
+  font-size: 26px;
+  color: #6e7e8e;
 }
 
 .content {
   display: flex;
   justify-content: center;
   align-items: center;
-  height: 70vh;
+  
+  height: 60vh;
 }
 
 .message {
@@ -344,22 +328,5 @@ export default {
   text-align: center;
 }
 
-.footer {
-  display: flex;
-  justify-content: center;
-  padding: 20px;
-}
 
-.succeed-button {
-  background-color:rgb(179, 181, 184);
-  border: none;
-  border-radius: 8px;
-  color: white;
-  padding: 10px 20px;
-  cursor: pointer;
-  font-size: 16px;
-  display: flex;
-  align-items: center;
-  height: 50px;
-}
 </style>

@@ -8,24 +8,6 @@
       </div>
     </div>
     <div class="right">
-      <div class="setting-container">
-
-        <div v-if="showSettings" class="settings-panel">
-          <h3>Speed:</h3>
-          <div>
-            <input type="radio" id="slow" name="speed" value="slow" v-model="speed" />
-            <label for="slow">Slow</label>
-          </div>
-          <div>
-            <input type="radio" id="moderate" name="speed" value="moderate" v-model="speed" checked />
-            <label for="moderate">Moderate</label>
-          </div>
-          <div>
-            <input type="radio" id="fast" name="speed" value="fast" v-model="speed" />
-            <label for="fast">Fast</label>
-          </div>
-        </div>
-      </div>
       <button class="finish-button">
         <img class = "icon" alt="food" src="../assets/finish.png">
         <span class = "finish-button-text">Finish Feeding</span>
@@ -70,14 +52,10 @@ export default {
     return {
       ros: null,
       username: USER,
-      selectedOption: null,
-      showSettings: false, 
-      speed: 'moderate',
+      selectedOption: null, 
       messageSent: false,
       receivedMessage: '', 
-      inputMessage: '', 
-      subscribeTopic: '/robot_to_webapp', 
-      publishTopic: '/talker', 
+      inputMessage: '',   
       listener: null, 
       publisher: null, 
     }
@@ -87,10 +65,6 @@ export default {
     this.initSubscriber()
     this.initPublisher()
     this.publishMessage()
-    window.addEventListener('keydown', this.handleKeyDown) 
-  },
-  beforeUnmount () {
-    window.removeEventListener('keydown', this.handleKeyDown) 
   },
   beforeRouteLeave (to, from, next) {
     if (this.listener) {
@@ -134,15 +108,6 @@ export default {
       } catch (error) {
       }
     },
-    publishSpeedSetting() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          command: 'set_speed',
-          value: this.speed 
-        }) 
-      })
-      this.publisher.publish(message);
-    },
     handleButtonClick() {
       
       this.$router.push('/task_selection');
@@ -150,18 +115,6 @@ export default {
     handleButtonClick2() {
       this.publishMessage2();
       this.messageSent = true
-    },
-    handleKeyDown (event) { 
-      if (event.key === 'e' || event.key === 'E') {
-        this.$router.go(-1)
-      }
-    },
-    toggleSettings () {
-      
-      if (this.showSettings) {
-        this.publishSpeedSetting();
-      }
-      this.showSettings = !this.showSettings; 
     },
     initPublisher() {
 
@@ -222,7 +175,6 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  //margin-left: 20px;
   .icon {
     margin-right: 8px;
   }
@@ -258,16 +210,13 @@ export default {
 }
 .content{
   display: flex;
-  //align-items: center;
   justify-content: center;
   flex-flow: column;
 }
 .content-body {
   display: flex;
   align-items: flex-start;
-  //align-items: center;
   justify-content: space-between;
-  //padding: 20px;
   margin-top: 23px;
   .left{
     display: flex;
@@ -337,9 +286,7 @@ export default {
   }
   .buttonpart{
     width: 50vw;
-    //height: 12vh;
     display: flex;
-    //align-items: flex-start;
     align-items: center;
     justify-content: space-between;
     padding: 10px;
@@ -463,7 +410,6 @@ export default {
 }
 .buttonpart{
   display: flex;
-  //align-items: flex-start;
   align-items: center;
   justify-content: space-between;
   padding: 20px;

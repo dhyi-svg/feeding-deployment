@@ -17,16 +17,7 @@ module.exports = defineConfig({
     });
   },
   devServer: {
-    host: '192.168.1.2',
     allowedHosts: 'all',
-    server: {
-              type: 'https',
-              options: {
-                key:  '/home/isacc/certs/192.168.1.2-key.pem',
-                cert: '/home/isacc/certs/192.168.1.2.pem'
-              }
-            },
-
     client: {
       overlay: false,
     }

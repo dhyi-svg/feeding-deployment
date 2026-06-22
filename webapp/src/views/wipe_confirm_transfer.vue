@@ -8,9 +8,6 @@
       </div>
     </div>
     <div class="right">
-      <div class="setting-container">
-
-      </div>
       <button class="finish-button">
         <img class = "icon" alt="food" src="../assets/finish.png">
         <span class = "finish-button-text">Finish Feeding</span>
@@ -39,8 +36,6 @@ export default {
     return {
       ros: null,
       username: USER,
-      showSettings: false,
-      speed: 'moderate',
       publisher: null 
     }
   },
@@ -79,15 +74,6 @@ export default {
     },
     initPublisher() {
 
-      ros.on('connection', () => {
-      });
-
-      ros.on('error', (error) => {
-      });
-
-      ros.on('close', () => {
-      });
-
       this.publisher = new ROSLIB.Topic({
         ros: this.ros,
         name: '/webapp_to_robot', 
@@ -108,46 +94,14 @@ export default {
       } else {
       }
     },
-
-    toggleSettings() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({ 
-          state: 'task_selection',
-          status: 'jump' 
-        })
-      })
-      this.publisher.publish(message)
-      this.$router.push('/task_selection')
-    },
     redirectToChangeItem() {
       this.publishReturnToMain(); 
-      this.$router.push('/wipe_executing'); 
+      this.$router.push('/robot_executing'); 
     }
   }
 }
 </script>
 
-<!--<script>-->
-<!--export default {-->
-<!--  data () {-->
-<!--    return {-->
-<!--      showSettings: false,-->
-<!--      speed: 'moderate'-->
-<!--    }-->
-<!--  },-->
-<!--  methods: {-->
-<!--    toggleSettings () {-->
-<!--      this.showSettings = !this.showSettings-->
-<!--    },-->
-<!--    redirectToChangeItemC () {-->
-<!--      this.$router.push('/wipe_executing')-->
-<!--    },-->
-<!--    redirectToChangeItemR () {-->
-<!--      this.$router.push('/tomatoretry')-->
-<!--    }-->
-<!--  }-->
-<!--}-->
-<!--</script>-->
 
 <style scoped>
 .top {
@@ -346,16 +300,13 @@ export default {
 
 .continue-button,
 .retry-button {
-  //background-color: #fce69e;
   border: none;
   border-radius: 8px;
   color: black;
   padding: 10px 20px;
   cursor: pointer;
-  //font-size: 16px;
   display: flex;
   align-items: center;
-  //height: 40px;
   background-color: #FFE699;
   border-radius: 20px;
   width: 20vw;

@@ -71,7 +71,6 @@ export default {
       imageListener: null, 
       publisher: null,
       imageSrc: null,
-      subscribeTopic: '/robot_to_webapp'
     }
   },
   computed: {
@@ -89,10 +88,6 @@ export default {
     this.ros = new ROSLIB.Ros({ url: ROS_URL })
     this.initSubscriber()
     this.initPublisher()
-    window.addEventListener('keydown', this.handleKeyDown)
-  },
-  beforeUnmount () {
-    window.removeEventListener('keydown', this.handleKeyDown)
   },
   beforeRouteLeave (to, from, next) {
     if (this.listener) {
@@ -173,11 +168,6 @@ export default {
     },
     correctColor () {
       this.publishResponse('correct_color');
-    },
-    handleKeyDown (event) {
-      if (event.key === 'e' || event.key === 'E') {
-        this.$router.push({ name: 'emergency_stop' })
-      }
     }
   }
 }

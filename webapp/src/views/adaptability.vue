@@ -115,13 +115,11 @@ export default {
     return {
       ros: null,
       username: USER,
-      selectedOption: 0,
       showSettings: false,
       speed: 'moderate',
+      selectedOption: 0,
       foodItems: [],
       videoFrame: null, 
-      subscribeTopic: '/robot_to_webapp',
-      publishTopic: '/webapp_to_robot',
       listener: null,
       publisher: null,
       optionTexts: [
@@ -134,7 +132,7 @@ export default {
       previousSelectedOption: null,
       isRecognizing: false,
       customOrder: '',
-      videoFrame: null, 
+ 
       isVideo: false, 
     }
   },
@@ -160,10 +158,6 @@ export default {
     this.initPublisher()
     this.initVideoSubscriber()
     this.initRosConnection() 
-    window.addEventListener('keydown', this.handleKeyDown)
-  },
-  beforeUnmount () {
-    window.removeEventListener('keydown', this.handleKeyDown)
   },
   beforeRouteLeave (to, from, next) {
     if (this.listener) {
@@ -179,6 +173,9 @@ export default {
     next();
   },
   methods: {
+    toggleSettings() {
+      this.showSettings = !this.showSettings;
+    },
     sendToRosFromTextBox() {
       if (this.publisher && this.transcript.trim() !== '') {
         const message = new ROSLIB.Message({
@@ -261,9 +258,9 @@ export default {
     },
     publishMessageforNopre(){
       const message = new ROSLIB.Message({
-        data: JSON.stringify({ 
+        data: JSON.stringify({
           state: 'voice',
-          status: this.transcript 
+          status: this.transcript
         })
       })
       this.publisher.publish(message)
@@ -391,9 +388,9 @@ export default {
     },
     confirmUpdate(){
       const message = new ROSLIB.Message({
-        data: JSON.stringify({ 
+        data: JSON.stringify({
           state: 'adap',
-          status: 'save' 
+          status: 'save'
         })
       })
       this.publisher.publish(message)
@@ -414,25 +411,7 @@ export default {
     selectOption(option) {
       this.selectedOption = this.selectedOption === option ? 0 : option;
       this.transcript = '';
-    },
-    toggleSettings() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({ 
-          state: 'task_selection',
-          status: 'jump' 
-        })
-      })
-      this.publisher.publish(message)
       this.$router.push('/task_selection')
-    },
-    publishSpeedSetting() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          command: 'set_speed',
-          value: this.speed
-        })
-      })
-      this.publisher.publish(message)
     },
     redirectToChangeItem() {
       this.$router.push('/bite_selection')
@@ -635,14 +614,6 @@ export default {
 }
 
 .option-container {
-  //max-height: 36vh; 
-  ////overflow-x: auto;  
-  //padding-right: 10px; 
-  //display: flex;
-  ////align-items: flex-start;
-  //justify-content: space-between;
-  //flex-flow: column;
-  //padding: 0px;
   width: 47vw;
   height: 26vh; 
   display: flex;
@@ -708,9 +679,6 @@ export default {
 }
 .content{
   display: flex;
-  //transform: scale(0.8);
-  //height: 70vh;
-  //align-items: center;
   justify-content: center;
   flex-flow: column;
 }
@@ -718,9 +686,7 @@ export default {
   height: 70vh;
   display: flex;
   align-items: flex-start;
-  //align-items: center;
   justify-content: space-between;
-  //padding: 20px;
   margin-top: 0.5vh;
   .left{
     display: flex;
@@ -751,7 +717,6 @@ export default {
     margin-top: auto;
     font-size: 20px;
     font-weight: 700;
-    //line-height: 25px;
     letter-spacing: 0.17499999701976776px;
     text-align: left;
     word-wrap: break-word; 
@@ -764,7 +729,6 @@ export default {
     font-size: clamp(12px, 2.5vh, 20px);
     margin-top: auto;
     font-weight: 700;
-    //line-height: 25px;
     max-width: 12vw;
     letter-spacing: 0.17499999701976776px;
     text-align: left;
@@ -807,9 +771,7 @@ export default {
   }
   .buttonpart{
     width: 50vw;
-    //height: 12vh;
     display: flex;
-    //align-items: flex-start;
     align-items: center;
     justify-content: space-between;
     padding: 10px;
@@ -819,10 +781,8 @@ export default {
   width: 43vw;
   height: 18vh;
   display: flex;
-  //align-items: flex-start;
   align-items: start;
   justify-content: normal;
-  //padding: 20px;
   overflow-x: auto;
 }
 .top {
@@ -929,8 +889,6 @@ export default {
   flex-basis: 30%;
   aspect-ratio: 0.75;
   width: 12vw;
-  //top: 200px;
-  //left: 707px;
   min-height:15vh;
   min-width:12vw;
   max-width:15vw;
@@ -939,7 +897,6 @@ export default {
   flex-flow: column;
   align-items: center;
   justify-content: space-between;
-  //margin-right:15px;
   padding: 1px;
   gap: 0px;
   border-radius: 9px 9px 9px 9px;
@@ -949,13 +906,8 @@ export default {
     display: flex;
     flex-flow: column;
     align-items: center;
-    //width: 100%;
-    //height: 100%;
     margin: 0.5vh;
     object-fit: cover;
-    //height: 13vh;
-    //top: 210px;
-    //left: 716px;
     gap: 0px;
     opacity: 0px;
     border-radius: 20px;
@@ -965,7 +917,6 @@ export default {
 }
 .option{
   display: flex;
-  //align-items: flex-start;
   justify-content: space-between;
   flex-flow: column;
   padding: 0px;
@@ -973,7 +924,6 @@ export default {
 }
 .optionbox{
   width: 50vw;
-  //height: 12vh;
   top: 397px;
   left: 707px;
   gap: 0px;
@@ -990,7 +940,6 @@ export default {
 }
 .otheroption{
   display: flex;
-  //align-items: flex-start;
   justify-content: space-between;
   flex-flow: column;
   padding: 0px;
@@ -1007,12 +956,10 @@ export default {
   gap: 0px;
   border-radius: 20px 20px 20px 20px;
   opacity: 0px;
-  //background: #D9D9D9;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 5px;
-  //margin-top: 10px;
   flex-flow: column;
 
 }

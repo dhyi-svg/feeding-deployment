@@ -8,24 +8,6 @@
       </div>
     </div>
     <div class="right">
-      <div class="setting-container">
-
-        <div v-if="showSettings" class="settings-panel">
-          <h3>Speed:</h3>
-          <div>
-            <input type="radio" id="slow" name="speed" value="slow" v-model="speed" />
-            <label for="slow">Slow</label>
-          </div>
-          <div>
-            <input type="radio" id="moderate" name="speed" value="moderate" v-model="speed" checked />
-            <label for="moderate">Moderate</label>
-          </div>
-          <div>
-            <input type="radio" id="fast" name="speed" value="fast" v-model="speed" />
-            <label for="fast">Fast</label>
-          </div>
-        </div>
-      </div>
       <button class="finish-button" @click="redirectToChangeItemF">
         <img class="icon" alt="food" src="../assets/finish.png">
         <span class="finish-button-text">Finish Feeding</span>
@@ -52,10 +34,6 @@ export default {
     return {
       ros: null,
       username: USER,
-      showSettings: false,
-      speed: 'moderate',
-      subscribeTopic: '/robot_to_webapp',
-      publishTopic: '/webapp_to_robot',
       listener: null,
       publisher: null,
     }
@@ -64,10 +42,6 @@ export default {
     this.ros = new ROSLIB.Ros({ url: ROS_URL })
     this.initPublisher()
     this.initSubscriber()
-    window.addEventListener('keydown', this.handleKeyDown)
-  },
-  beforeUnmount () {
-    window.removeEventListener('keydown', this.handleKeyDown)
   },
   beforeRouteLeave (to, from, next) {
     if (this.listener) {
@@ -116,21 +90,11 @@ export default {
         messageType: 'std_msgs/String'
       })
     },
-    toggleSettings() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({ 
-          state: 'task_selection',
-          status: 'jump' 
-        })
-      })
-      this.publisher.publish(message)
-      this.$router.push('/task_selection')
-    },
     navigateToAddGesture() {
       const message = new ROSLIB.Message({
-        data: JSON.stringify({ 
+        data: JSON.stringify({
           state: 'gesture_menu',
-          status: 'add' 
+          status: 'add'
         })
       })
       this.publisher.publish(message)
@@ -138,13 +102,13 @@ export default {
     },
     navigateToTestGesture() {
       const message = new ROSLIB.Message({
-        data: JSON.stringify({ 
+        data: JSON.stringify({
           state: 'gesture_menu',
-          status: 'test' 
+          status: 'test'
         })
       })
       this.publisher.publish(message)
-      this.$router.push('/gesture_move_to_test')
+      this.$router.push('/robot_executing')
     },
     redirectToChangeItemF() {
       this.$router.push('/notify_caregiver')
@@ -300,9 +264,6 @@ export default {
 }
 .content{
   display: flex;
-  //transform: scale(0.8);
-  //height: 70vh;
-  //align-items: center;
   justify-content: center;
   flex-flow: column;
 }
@@ -310,9 +271,7 @@ export default {
   height: 80vh;
   display: flex;
   align-items: flex-start;
-  //align-items: center;
   justify-content: space-between;
-  //padding: 20px;
   margin-top: 0.5vh;
   .left{
     display: flex;
@@ -345,7 +304,6 @@ export default {
     margin-top: auto;
     font-size: 20px;
     font-weight: 700;
-    //line-height: 25px;
     letter-spacing: 0.17499999701976776px;
     text-align: left;
     word-wrap: break-word; 
@@ -358,7 +316,6 @@ export default {
     font-size: clamp(12px, 2.5vh, 20px);
     margin-top: auto;
     font-weight: 700;
-    //line-height: 25px;
     max-width: 12vw;
     letter-spacing: 0.17499999701976776px;
     text-align: left;
@@ -401,9 +358,7 @@ export default {
   }
   .buttonpart{
     width: 50vw;
-    //height: 12vh;
     display: flex;
-    //align-items: flex-start;
     align-items: center;
     justify-content: space-between;
     padding: 10px;
@@ -413,10 +368,8 @@ export default {
   width: 43vw;
   height: 18vh;
   display: flex;
-  //align-items: flex-start;
   align-items: start;
   justify-content: normal;
-  //padding: 20px;
   overflow-x: auto;
 }
 .top {
@@ -523,8 +476,6 @@ export default {
   flex-basis: 30%;
   aspect-ratio: 0.75;
   width: 12vw;
-  //top: 200px;
-  //left: 707px;
   min-height:15vh;
   min-width:12vw;
   max-width:15vw;
@@ -533,7 +484,6 @@ export default {
   flex-flow: column;
   align-items: center;
   justify-content: space-between;
-  //margin-right:15px;
   padding: 1px;
   gap: 0px;
   border-radius: 9px 9px 9px 9px;
@@ -543,13 +493,8 @@ export default {
     display: flex;
     flex-flow: column;
     align-items: center;
-    //width: 100%;
-    //height: 100%;
     margin: 0.5vh;
     object-fit: cover;
-    //height: 13vh;
-    //top: 210px;
-    //left: 716px;
     gap: 0px;
     opacity: 0px;
     border-radius: 20px;
@@ -559,7 +504,6 @@ export default {
 }
 .option{
   display: flex;
-  //align-items: flex-start;
   justify-content: space-between;
   flex-flow: column;
   padding: 0px;
@@ -567,7 +511,6 @@ export default {
 }
 .optionbox{
   width: 50vw;
-  //height: 12vh;
   top: 397px;
   left: 707px;
   gap: 0px;
@@ -584,7 +527,6 @@ export default {
 }
 .otheroption{
   display: flex;
-  //align-items: flex-start;
   justify-content: space-between;
   flex-flow: column;
   padding: 0px;

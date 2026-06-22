@@ -67,8 +67,6 @@ export default {
       username: USER,
       countdown: 1000,
       countdownText: "Auto Executing in 1000 seconds",
-      showSettings: false,
-      speed: 'moderate',
       countdownInterval: null,
       isActiveBite: false
     }
@@ -80,17 +78,13 @@ export default {
     this.initSubscriber()
     this.initPublisher()
     
-    window.addEventListener('keydown', this.handleKeyDown) 
   },
   beforeUnmount () {
     if (this.countdownInterval) {
       clearInterval(this.countdownInterval);
       this.countdownInterval = null;
     }
-    window.removeEventListener('keydown', this.handleKeyDown) 
-    if (this.countdownInterval) {
-      clearInterval(this.countdownInterval); 
-    }
+
   },
   beforeRouteLeave (to, from, next) {
     if (this.countdownInterval) {
@@ -154,7 +148,6 @@ export default {
           this.updateCountdownText();
 
           this.startCountdown();
-        } else {
         }
         const route = routeMap[parsedMessage.state]?.[parsedMessage.status];
         if (route) {
@@ -179,21 +172,17 @@ export default {
       this.publishMessageA()
       this.$router.push('/adaptability');
     },
-
-    autoClickBiteButton() {
-      this.handleButtonClick(); 
-    },
     handleButtonClickR() {
       this.publishMessageD();
-      this.$router.push('/switch_to_drink');
+      this.$router.push('/robot_executing');
     },
     handleButtonClick() {
       this.publishMessageR();
-      this.$router.push('/skill_explanation');
+      this.$router.push('/robot_executing');
     },
     handleButtonClickMouth() {
       this.publishMessagePhysical();
-      this.$router.push('/wipe_preparing');
+      this.$router.push('/robot_executing');
     },
     publishMessageG() {
       const message = new ROSLIB.Message({
@@ -257,84 +246,6 @@ export default {
         messageType: 'std_msgs/String' 
       });
     },
-    beforeRouteLeave (to, from, next) {
-      if (this.countdownInterval) {
-        clearInterval(this.countdownInterval);
-        this.countdownInterval = null;
-      }
-      if (this.listener) {
-        this.listener.unsubscribe();
-        this.listener = null;
-      }
-      if (this.publisher) {
-        this.publisher.unadvertise();
-        this.publisher = null;
-      }
-
-      next(); 
-    },
-
-    publishResumeFeeding() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          state: 'emergency_stop',
-          status: 'back'
-        })
-      });
-      this.publisher.publish(message);
-    },
-    publishSpeedSetting() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          command: 'set_speed',
-          value: this.speed 
-        }) 
-      })
-      this.publisher.publish(message);
-    },
-    toggleSettings() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({ 
-          state: 'task_selection',
-          status: 'jump' 
-        })
-      })
-      this.publisher.publish(message)
-      this.$router.push('/task_selection')
-    },
-    handleKeyDown (event) { 
-      if (event.key === 'e' || event.key === 'E') {
-        this.$router.go(-1)
-      }
-    },
-    publishCallCaregiver() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          status: 'call_caregiver'
-        })
-      });
-      this.publisher.publish(message);
-    },
-    publishCallNext() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          status: 'mouth_wiping'
-        })
-      });
-      this.publisher.publish(message);
-    },
-    redirectToChangeItem () {
-      this.publishCallCaregiver();
-      this.$router.push('/bite_acquiring')
-    },
-    redirectToChangeItemBack () {
-      this.publishResumeFeeding();
-      this.$router.go(-1)
-    },
-    redirectToChangeItemNext () {
-      this.publishCallNext();
-      this.$router.push('/wipe_preparing')
-    },
     redirectToChangeItemF () {
       this.$router.push('/notify_caregiver')
     },
@@ -344,9 +255,6 @@ export default {
 
 <style scoped>
 .bottom-buttons {
-  //display: flex;
-  //justify-content: center;
-  //gap: 20px;
   margin-top: 20px;
   display: flex;
   gap: 20px;
@@ -364,7 +272,6 @@ export default {
   padding: 10px 20px;
   font-family: Verdana;
   font-size: 3vw;
-  //font-weight: bold;
   cursor: pointer;
   display: flex;
   align-items: center;

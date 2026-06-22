@@ -8,24 +8,6 @@
       </div>
     </div>
     <div class="right">
-      <div class="setting-container">
-
-        <div v-if="showSettings" class="settings-panel">
-          <h3>Speed:</h3>
-          <div>
-            <input type="radio" id="slow" name="speed" value="slow" v-model="speed" />
-            <label for="slow">Slow</label>
-          </div>
-          <div>
-            <input type="radio" id="moderate" name="speed" value="moderate" v-model="speed" checked />
-            <label for="moderate">Moderate</label>
-          </div>
-          <div>
-            <input type="radio" id="fast" name="speed" value="fast" v-model="speed" />
-            <label for="fast">Fast</label>
-          </div>
-        </div>
-      </div>
       <button class="finish-button">
         <img class="icon" alt="food" src="../assets/finish.png">
         <span class="finish-button-text" @click="redirectToChangeItemF">Finish Feeding</span>
@@ -113,12 +95,8 @@ export default {
       recognition1: null, 
       recognition2: null, 
       selectedOption: 0,
-      showSettings: false,
-      speed: 'moderate',
       foodItems: [],
       videoFrame: null, 
-      subscribeTopic: '/robot_to_webapp',
-      publishTopic: '/webapp_to_robot',
       listener: null,
       publisher: null,
       optionTexts: [
@@ -156,10 +134,6 @@ export default {
     this.initPublisher()
     
     this.initVideoSubscriber()
-    window.addEventListener('keydown', this.handleKeyDown)
-  },
-  beforeUnmount () {
-    window.removeEventListener('keydown', this.handleKeyDown)
   },
   beforeRouteLeave (to, from, next) {
     if (this.listener) {
@@ -298,9 +272,9 @@ export default {
     },
     publishMessageforNopre(){
       const message = new ROSLIB.Message({
-        data: JSON.stringify({ 
+        data: JSON.stringify({
           state: 'voice',
-          status: this.transcript 
+          status: this.transcript
         })
       })
       this.publisher.publish(message)
@@ -441,7 +415,7 @@ export default {
       }
       this.transcript = '';
       this.transcriptDes = '';
-      this.$router.push('/gesture_move_to_record');
+      this.$router.push('/robot_executing');
     },
     publishMessageOnLoad() {
       const message = new ROSLIB.Message({
@@ -459,28 +433,7 @@ export default {
     selectOption(option) {
       this.selectedOption = this.selectedOption === option ? 0 : option;
       this.transcript = '';
-    },
-    toggleSettings() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({ 
-          state: 'task_selection',
-          status: 'jump' 
-        })
-      })
-      this.publisher.publish(message)
       this.$router.push('/task_selection')
-    },
-    publishSpeedSetting() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          command: 'set_speed',
-          value: this.speed
-        })
-      })
-      this.publisher.publish(message)
-    },
-    redirectToChangeItem() {
-      this.$router.push('/bite_selection')
     },
     redirectToChangeItemF() {
       this.$router.push('/notify_caregiver')
@@ -526,12 +479,10 @@ export default {
   gap: 0px;
   border-radius: 20px 20px 20px 20px;
   opacity: 0px;
-  //background: #D9D9D9;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 5px;
-  //margin-top: 10px;
   flex-flow: column;
 }
 .custom-input-box1 {
@@ -546,7 +497,6 @@ export default {
 }
 .otheroption1{
   display: flex;
-  //align-items: flex-start;
   justify-content: space-between;
   flex-flow: column;
   padding: 0px;
@@ -659,9 +609,7 @@ export default {
 .content-body {
   display: flex;
   align-items: flex-start;
-  //align-items: center;
   justify-content: space-between;
-  //padding: 20px;
   margin-top: 0.5vh;
   .left{
     display: flex;
@@ -701,9 +649,7 @@ export default {
   }
   .buttonpart{
     width: 50vw;
-    //height: 12vh;
     display: flex;
-    //align-items: flex-start;
     align-items: center;
     justify-content: space-between;
     padding: 10px;
@@ -796,7 +742,6 @@ export default {
 }
 .otheroption{
   display: flex;
-  //align-items: flex-start;
   justify-content: space-between;
   flex-flow: column;
   padding: 0px;
