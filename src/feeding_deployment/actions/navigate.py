@@ -13,6 +13,7 @@ try:
     from actionlib_msgs.msg import GoalStatus
     from geometry_msgs.msg import Twist
     from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
+    from std_msgs.msg import Empty
 
     ROS_NAV_IMPORTED = True
 except ModuleNotFoundError:
@@ -142,6 +143,32 @@ class NavigateHLA(HighLevelAction):
                 )
         return self._move_base_client
 
+    def _ensure_teleop_subscribers(self) -> None:
+        """Track whether a human teleop takeover is currently active.
+
+        The navigation timeout below must count only AUTONOMOUS driving time --
+        a human rescue can take arbitrarily long and must not trip it. The
+        shared_autonomy_manager owns the AUTONOMOUS/TELEOP state machine; we
+        mirror it here by watching the same takeover/resume intents the webapp
+        and Xbox node publish. (done ends the action, so it needs no handling.)
+        """
+        if getattr(self, "_teleop_subs_ready", False):
+            return
+        self._teleop_active = False
+        rospy.Subscriber(
+            "/shared_autonomy/takeover", Empty, self._on_teleop_takeover, queue_size=1
+        )
+        rospy.Subscriber(
+            "/shared_autonomy/resume", Empty, self._on_teleop_resume, queue_size=1
+        )
+        self._teleop_subs_ready = True
+
+    def _on_teleop_takeover(self, _msg: "Empty") -> None:
+        self._teleop_active = True
+
+    def _on_teleop_resume(self, _msg: "Empty") -> None:
+        self._teleop_active = False
+
     def _navigate_to_target(self, location_name: str, speed: str) -> None:
         # if self.robot_interface is None:
         #     print(f"[SIM] Would navigate to {location_name} (speed={speed}).")
@@ -176,18 +203,32 @@ class NavigateHLA(HighLevelAction):
         # The base is now driving (via the shared_autonomy_manager). Enable the
         # webapp's Robot Base Control button for the duration of this action so
         # the user can take over mid-drive. The navigation page publishes
-        # /shared_autonomy/takeover, which the manager honors and still reports
-        # SUCCEEDED once the human signals done.
+        # /shared_autonomy/takeover, which the manager honors; on /done it reports
+        # SUCCEEDED (blind success), on /resume it replans from the current pose.
+        self._ensure_teleop_subscribers()
+        self._teleop_active = False  # this leg starts under autonomy
         self._set_base_control_available(True)
+        # Only autonomous driving counts against the timeout: pause the budget
+        # while a human takeover is active so a long rescue can't time us out.
+        poll_s = 0.2
+        budget_s = timeout_s
         try:
-            finished = client.wait_for_result(rospy.Duration(timeout_s))
+            while True:
+                if client.wait_for_result(rospy.Duration(poll_s)):
+                    break  # move_base/manager reached a terminal state
+                if rospy.is_shutdown():
+                    client.cancel_goal()
+                    raise RuntimeError("ROS shutdown during navigation")
+                if not self._teleop_active:
+                    budget_s -= poll_s
+                if budget_s <= 0.0:
+                    client.cancel_goal()
+                    raise TimeoutError(
+                        f"Navigation to {location_name} timed out after "
+                        f"{timeout_s:.1f}s of autonomous driving"
+                    )
         finally:
             self._set_base_control_available(False)
-        if not finished:
-            client.cancel_goal()
-            raise TimeoutError(
-                f"Navigation to {location_name} timed out after {timeout_s:.1f}s"
-            )
 
         state = client.get_state()
         if state != GoalStatus.SUCCEEDED:
