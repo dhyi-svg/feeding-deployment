@@ -9,25 +9,10 @@
     </div>
     <div class="right">
       <div class="setting-container">
-        <button @click="toggleSettings" class="settings-button">
+        <button @click="$router.push('/task_selection')" class="settings-button">
           <img class="icon" alt="food" src="../assets/Vector.png">
           <span class="settings-button-text">Task Selection</span>
         </button>
-        <div v-if="showSettings" class="settings-panel">
-          <h3>Speed:</h3>
-          <div>
-            <input type="radio" id="slow" name="speed" value="slow" v-model="speed" />
-            <label for="slow">Slow</label>
-          </div>
-          <div>
-            <input type="radio" id="moderate" name="speed" value="moderate" v-model="speed" checked />
-            <label for="moderate">Moderate</label>
-          </div>
-          <div>
-            <input type="radio" id="fast" name="speed" value="fast" v-model="speed" />
-            <label for="fast">Fast</label>
-          </div>
-        </div>
       </div>
       <button class="finish-button">
         <img class="icon" alt="food" src="../assets/finish.png">
@@ -115,8 +100,6 @@ export default {
     return {
       ros: null,
       username: USER,
-      showSettings: false,
-      speed: 'moderate',
       selectedOption: 0,
       foodItems: [],
       videoFrame: null, 
@@ -173,9 +156,6 @@ export default {
     next();
   },
   methods: {
-    toggleSettings() {
-      this.showSettings = !this.showSettings;
-    },
     sendToRosFromTextBox() {
       if (this.publisher && this.transcript.trim() !== '') {
         const message = new ROSLIB.Message({

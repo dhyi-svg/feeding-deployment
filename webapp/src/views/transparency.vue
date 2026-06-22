@@ -9,7 +9,7 @@
     </div>
     <div class="right">
       <div class="setting-container">
-        <button @click="toggleSettings" class="settings-button">
+        <button @click="$router.push('/task_selection')" class="settings-button">
           <img class="icon" alt="food" src="../assets/Vector.png">
           <span class="settings-button-text">Task Selection</span>
         </button>
@@ -97,7 +97,6 @@ export default {
     return {
       ros: null,
       username: USER,
-      showSettings: false,
       selectedOption: 0,
       foodItems: [],
       videoFrame: null,
@@ -155,9 +154,6 @@ export default {
     next();
   },
   methods: {
-    toggleSettings() {
-      this.showSettings = !this.showSettings;
-    },
     handleFocus() {
       window.scrollBy(0, window.innerHeight * 0.09);
     },
