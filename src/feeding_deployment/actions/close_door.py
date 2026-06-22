@@ -54,8 +54,10 @@ class CloseDoorHLA(HighLevelAction):
         return f"close_{appliance.name}.yaml"
 
     def close_fridge(self, speed: str) -> None:
-        del speed
         assert self.sim.held_object_name is None
+
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed)
         print("Closing fridge door ...")
 
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
@@ -84,8 +86,10 @@ class CloseDoorHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
 
     def close_microwave(self, speed: str) -> None:
-        del speed
         assert self.sim.held_object_name is None
+
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed)
         print("Closing microwave door ...")
 
         # self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)

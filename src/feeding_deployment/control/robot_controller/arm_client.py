@@ -219,4 +219,4 @@ if __name__ == "__main__":
     arm_client_interface.execute_command(JointCommand(config.left_back_retract_pos))
 
     # set speed to medium
-    # arm_client_interface.set_speed("medium")
+    # arm_client_interface.set_speed("high")

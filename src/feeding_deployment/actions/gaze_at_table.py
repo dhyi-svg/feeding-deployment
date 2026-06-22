@@ -50,6 +50,9 @@ class GazeAtTableHLA(HighLevelAction):
         return "gaze_at_table.yaml"
 
     def gaze_at_table(self, speed: str) -> None:
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed)
+
         print("Gazing at table ...")
 
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)

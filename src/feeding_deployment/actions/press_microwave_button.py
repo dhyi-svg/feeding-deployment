@@ -58,6 +58,10 @@ class PressMicrowaveButtonHLA(HighLevelAction):
 
     def press_microwave_button(self, speed: str) -> None:
         assert self.sim.held_object_name is None
+
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed)
+
         print("Pressing microwave button ...")
 
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)

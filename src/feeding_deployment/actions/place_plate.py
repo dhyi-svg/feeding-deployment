@@ -65,10 +65,16 @@ class PlacePlateInApplianceHLA(HighLevelAction):
 
     def place_plate_in_fridge(self, speed: str) -> None:
         # assert self.sim.held_object_name == "plate"
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed)
+
         print("Placing plate in fridge ...")
 
     def place_plate_in_microwave(self, speed: str) -> None:
         # assert self.sim.held_object_name == "plate"
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed)
+
         print("Placing plate in microwave ...")
 
         perceived_poses = self.perception_interface.get_perceived_poses()
@@ -121,6 +127,9 @@ class PlacePlateOnHolderHLA(HighLevelAction):
 
     def place_plate_on_holder(self, speed: str) -> None:
         # assert self.sim.held_object_name == "plate"
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed)
+
         print("Placing plate on holder ...")
 
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
@@ -175,6 +184,9 @@ class PlacePlateInSinkHLA(HighLevelAction):
 
     def place_plate_in_sink(self, speed: str) -> None:
         # assert self.sim.held_object_name == "plate"
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed)
+
         print("Placing plate in sink ...")
 
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
@@ -235,6 +247,9 @@ class PlacePlateOnTableHLA(HighLevelAction):
 
     def place_plate_on_table(self, speed: str) -> None:
         # assert self.sim.held_object_name == "plate"
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed)
+
         print("Placing plate on table ...")
 
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)

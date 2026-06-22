@@ -72,6 +72,10 @@ class PickPlateFromApplianceHLA(HighLevelAction):
     
     def pick_plate_from_fridge(self, speed: str, handle_color, color_range) -> None:
         assert self.sim.held_object_name is None
+
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed)
+
         print("Picking plate from fridge ...")
 
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
@@ -104,6 +108,10 @@ class PickPlateFromApplianceHLA(HighLevelAction):
 
     def pick_plate_from_microwave(self, speed: str, handle_color, color_range) -> None:
         assert self.sim.held_object_name is None
+
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed)
+
         print("Picking plate from microwave ...")
 
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
@@ -188,6 +196,10 @@ class PickPlateFromHolderHLA(HighLevelAction):
     
     def pick_plate_from_holder(self, speed: str) -> None:
         assert self.sim.held_object_name is None
+
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed)
+
         print("Picking plate from holder ...")
 
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
@@ -243,6 +255,10 @@ class PickPlateFromTableHLA(HighLevelAction):
 
     def pick_plate_from_table(self, speed: str, handle_color, color_range) -> None:
         assert self.sim.held_object_name is None
+
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed)
+
         print("Picking plate from table ...")
 
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)

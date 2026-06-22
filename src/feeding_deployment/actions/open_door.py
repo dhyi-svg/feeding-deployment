@@ -57,6 +57,10 @@ class OpenDoorHLA(HighLevelAction):
     def open_fridge(self, speed: str) -> None:
 
         assert self.sim.held_object_name is None
+
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed)
+
         print("Opening fridge door ...")
         # return
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
@@ -109,6 +113,10 @@ class OpenDoorHLA(HighLevelAction):
         
     def open_microwave(self, speed: str) -> None:
         assert self.sim.held_object_name is None
+
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed)
+
         print("Opening microwave door ...")
 
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
