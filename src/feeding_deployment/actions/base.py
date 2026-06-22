@@ -21,6 +21,17 @@ import yaml
 import numpy as np
 import time
 
+
+class TeleopTakeoverException(Exception):
+    """Raised when user takes over control via teleoperation during skill execution.
+
+    redo_current: if True, the user asked to re-run the interrupted skill after
+    teleop; if False, they asked to treat it as done and continue to the next.
+    """
+    def __init__(self, message: str = "", redo_current: bool = False) -> None:
+        super().__init__(message)
+        self.redo_current = redo_current
+
 from pybullet_helpers.geometry import Pose, multiply_poses
 from pybullet_helpers.spaces import PoseSpace
 from pybullet_helpers.joint import JointPositions
@@ -59,6 +70,13 @@ from feeding_deployment.simulation.planning import (
 from feeding_deployment.simulation.simulator import FeedingDeploymentPyBulletSimulator
 from feeding_deployment.simulation.state import FeedingDeploymentWorldState
 import feeding_deployment.perception.gestures_perception.static_gesture_detectors as static_gesture_detectors
+
+# Master switch for mid-skill manual takeover (the global "Take Over" button).
+# When True, execute_robot_command checks for a takeover request before/after
+# every move and hands control to the teleop screen. Relies on stop_action being
+# able to preempt a blocking move (verify on hardware); without preemption it
+# still works, just at the next move boundary. Set False to disable entirely.
+MID_SKILL_TAKEOVER_ENABLED = True
 
 # Things the robot can hold.
 object_type = Type("object")
@@ -99,7 +117,9 @@ EmulateTransferDone = Predicate("EmulateTransferDone", [])
 ToolPrepared = Predicate("ToolPrepared", [tool_type])
 PlateInView = Predicate("PlateInView", [])
 ResetPos = Predicate("ResetPos", [])
+HomePos = Predicate("HomePos", [])
 IsUtensil = Predicate("IsUtensil", [tool_type])
+TableSeen = Predicate("TableSeen", [])
 
 # Define high-level actions.
 class HighLevelAction(abc.ABC):
@@ -165,7 +185,11 @@ class HighLevelAction(abc.ABC):
         objects: tuple[Object, ...],
         params: dict[str, Any],
     ) -> None:
-        """Execute the action on the robot."""
+        """Execute the action on the robot.
+
+        Raises TeleopTakeoverException if user takes over via teleoperation.
+        Raises RuntimeError if the action fails due to hardware constraints.
+        """
         bt_filename = self.get_behavior_tree_filename(objects, params)
         bt_filepath = self.behavior_tree_dir / bt_filename
         assert bt_filepath.exists()
@@ -336,9 +360,14 @@ class HighLevelAction(abc.ABC):
 
         return None, f"Invalid new node type {new_node_type}"
 
+    def get_joint_positions(self) -> list[float]:
+        if self.robot_interface is None:
+            raise ValueError("Robot interface is not available to get joint positions.")
+        return np.asarray(self.robot_interface.get_state()["position"], dtype=float)
+
     def move_to_joint_positions(self, joint_positions: list[float]) -> None:
-        
-        plan = None 
+
+        plan = None
         # if not self.no_waits:
         #     plan = self.sim.plan_to_joint_positions(joint_positions)
         if self.robot_interface is None:
@@ -395,6 +424,58 @@ class HighLevelAction(abc.ABC):
             self.wrist_interface.set_velocity_mode()
             self.wrist_interface.reset()
 
+    def run_manual_teleop_recovery(self, failure_context: str = None, session_id: str = None) -> None:
+        """Hand control to the user for manual recovery via the teleop screen.
+
+        User-initiated: the user opens this from the iPad to take over (e.g. the
+        robot is struggling or a joint is stuck). Routes the webapp to the teleop
+        page and blocks until the user taps Done, jogging the arm with bounded
+        relative steps in the meantime. Safety (force gating, velocity caps) is
+        enforced by the same controller/watchdog path as autonomy.
+
+        On exit it re-syncs the sim model (and RViz) to the arm's real joints so
+        downstream planning/visualization isn't left working from a stale pose.
+
+        No-op in simulation (no robot or web interface).
+        """
+        if self.robot_interface is None or self.web_interface is None:
+            print("Manual teleop recovery requested but robot/web interface is unavailable; skipping.")
+            return None
+        from feeding_deployment.actions.teleop_recovery import TeleopRecoverySession
+        session = TeleopRecoverySession(
+            robot_interface=self.robot_interface,
+            web_interface=self.web_interface,
+            retract_joint_config=self.sim.scene_description.retract_pos,
+            joint_lower_limits=self.arm_joint_lower_limits,
+            joint_upper_limits=self.arm_joint_upper_limits,
+            log_dir=self.log_dir,
+            failure_context=failure_context,
+            session_id=session_id,
+        )
+        # The user's post-teleop choice on a mid-skill takeover: "redo" or "next".
+        post_action = session.run()
+
+        # Fix #2: re-sync the sim (and RViz) to the arm's REAL joints after manual
+        # teleop. The end-effector pose follows from the joints via forward
+        # kinematics, so syncing joints syncs the pose too. Wrapped so a sync
+        # failure can never propagate back into the executive.
+        self.sync_sim_to_real_arm()
+
+        return post_action
+
+    def sync_sim_to_real_arm(self) -> None:
+        """Push the real arm's current joint state into the sim model and RViz."""
+        if self.robot_interface is None or self.perception_interface is None:
+            return
+        try:
+            joints = self.perception_interface.get_robot_joints()
+            self.sim.set_robot_motors(joints)
+            if self.rviz_interface is not None:
+                self.rviz_interface.joint_state_update(joints)
+            print("Teleop: synced sim/RViz to the arm's current joints.")
+        except Exception as e:
+            print(f"Teleop: failed to sync sim/RViz to real joints: {e}")
+
     def pause(self, duration: float) -> None:
         time.sleep(duration)
 
@@ -410,17 +491,65 @@ class HighLevelAction(abc.ABC):
                  break
 
     def execute_robot_command(self, robot_command: KinovaCommand, plan_viz: list[FeedingDeploymentWorldState] = None, tool_update: str = None) -> None:
-        """Execute the given commands on the robot."""
+        """Execute the given commands on the robot.
+
+        Raises TeleopTakeoverException if user takes over via teleoperation.
+        Raises RuntimeError if the command fails due to firmware/hardware constraints.
+        """
         if self.robot_interface is None:
             raise ValueError("Robot interface is not available to execute commands.")
-        
+
         if not self.no_waits:
             if tool_update is not None:
                 self.rviz_interface.tool_update(True, tool_update, Pose((0, 0, 0), (0, 0, 0, 1))) # pickup the drink
             if plan_viz is not None:
                 self.rviz_interface.visualize_plan(plan_viz)
             input("Execute next command?")
-        self.robot_interface.execute_command(robot_command)
+
+        # Mid-skill takeover: if requested before this move, hand to the user and
+        # skip the move (we assume they teleop to the goal pose).
+        choice = self._maybe_handle_mid_skill_takeover()
+        if choice is not None:
+            raise TeleopTakeoverException(
+                "User took over control before command execution",
+                redo_current=(choice == "redo"),
+            )
+
+        # The move blocks until done; a takeover requested during it best-effort
+        # aborts it via stop_action so control returns here promptly.
+        success = self.robot_interface.execute_command(robot_command)
+        if not success:
+            print("Command execution failed for robot command:", robot_command)
+
+        # Takeover requested during this move: hand to the user, then skip the
+        # rest of this move and let the skill continue to its next step.
+        choice = self._maybe_handle_mid_skill_takeover()
+        if choice is not None:
+            raise TeleopTakeoverException(
+                "User took over control during command execution",
+                redo_current=(choice == "redo"),
+            )
+
+        if not success and not isinstance(robot_command, (OpenGripperCommand, CloseGripperCommand)):
+            raise RuntimeError("Robot command failed to execute (joint limit or workspace reachability constraint)")
+
+    def _maybe_handle_mid_skill_takeover(self):
+        """If the user requested a takeover, run teleop and route the iPad to the
+        'explanation' page on exit. Returns the user's post-teleop choice
+        ("redo" or "next") if a takeover was handled, else None."""
+        if not MID_SKILL_TAKEOVER_ENABLED or self.web_interface is None:
+            return None
+        if not self.web_interface.consume_takeover():
+            return None
+        print("Mid-skill takeover requested; handing control to the user.")
+        post_action = self.run_manual_teleop_recovery(failure_context="mid_skill_takeover") or "next"
+        # Generic 'resuming' page while autonomy continues the skill.
+        try:
+              self.web_interface.switch_to_explanation_page()
+        #     self.web_interface._send_message({"state": "resuming", "status": "jump"})
+        except Exception as e:
+            print(f"Could not send resuming page jump: {e}")
+        return post_action
 
 
 @dataclass(frozen=True)
@@ -499,6 +628,43 @@ class ResetHLA(HighLevelAction):
         if self.flair is not None:
             self.flair.clear_preference()
 
+class HomeHLA(HighLevelAction):
+    """Move the robot to retract position without any tool."""
+
+    def get_name(self) -> str:
+        return "Home"
+
+    def get_operator(self) -> LiftedOperator:
+        return LiftedOperator(
+            self.get_name(),
+            parameters=[],
+            preconditions={LiftedAtom(GripperFree, [])},
+            add_effects={LiftedAtom(HomePos, [])},
+            delete_effects=set(),
+        )
+    
+    def get_behavior_tree_filename(
+        self,
+        objects: tuple[Object, ...],
+        params: dict[str, Any],
+    ) -> str:
+        # Behavior trees not used for this HLA
+        raise NotImplementedError
+
+    def execute_action(
+        self,
+        objects: tuple[Object, ...],
+        params: dict[str, Any],
+    ) -> None:
+        assert len(objects) == 0
+        assert self.sim.held_object_name is None
+
+        self.move_to_joint_positions(self.sim.scene_description.home_pos)
+
+        # set FLAIR preferences to None
+        if self.flair is not None:
+            self.flair.clear_preference()
+
 
 def pddl_plan_to_hla_plan(
     pddl_plan: list[GroundOperator], hlas: set[HighLevelAction]
@@ -567,7 +733,7 @@ class BehaviorTreeParameterizedPolicy(abc.ABC):
             assert parameter.space.contains(value), (
                 f"Value {value} invalid for parameter {parameter}")
             ordered_parameter_values.append(value)
-        
+
         print(f"Executing parameterized policy {self._name} with bindings:")
         for parameter, value in zip(parameters, ordered_parameter_values, strict=True):
             print(f"  {parameter.name} = {value}")
@@ -651,7 +817,7 @@ class ParameterizedActionBehaviorTreeNode(BehaviorTreeNode):
         self.log_start()
         self._policy.run(self._bindings)
         self.log_end()
-        return True  # assume this worked
+        return True
 
     def get_node(self, name: str) -> BehaviorTreeNode | None:
         if name == self.name:
@@ -708,7 +874,7 @@ class SequenceBehaviorTreeNode(BehaviorTreeNode):
         for child in self._children:
             child.tick()
         self.log_end()
-        return True  # assume everything worked
+        return True
 
     def get_node(self, name: str) -> BehaviorTreeNode | None:
         for child in self._children:

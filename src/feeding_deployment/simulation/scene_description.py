@@ -75,18 +75,35 @@ class SceneDescription:
     behind_intermediate_pos: JointPositions
     left_retract_pos: JointPositions
     left_back_retract_pos: JointPositions
+    right_back_retract_pos: JointPositions
     back_retract_pos: JointPositions
     retract_utensil_forward_pos: JointPositions
 
     microwave_closeup_gaze_pos: JointPositions
-
     microwave_plate_staging_pos: JointPositions
     microwave_plate_staging_pose: Pose
+    microwave_inside_gaze_pos: JointPositions
+
+    sink_gaze_pos: JointPositions
+    sink_plate_staging_pos: JointPositions
+    sink_plate_staging_pose: Pose
+
+    table_gaze_pos: JointPositions
+    table_plate_gaze_pos: JointPositions
+    table_intermediate_pos: JointPositions
+    table_intermediate_pose: Pose
+    table_plate_staging_pos: JointPositions
+    table_plate_staging_pose: Pose
 
     # Fridge
     fridge_door_staging_pos: JointPositions
     fridge_door_gaze_pos: JointPositions
     fridge_door_intermediate_restract_pos: JointPositions
+    fridge_contents_gaze_pos: JointPositions
+    fridge_inside_intermediate_pos: JointPositions
+    fridge_inside_intermediate_pose: Pose
+    fridge_above_intermediate_pos: JointPositions
+    fridge_above_intermediate_pose: Pose
 
     # Feeding task constants
     plate_gaze_pos: JointPositions
@@ -121,6 +138,8 @@ class SceneDescription:
     inside_plate_holder_pose: Pose
     above_plate_holder_pose: Pose
     above_plate_holder_pos: JointPositions
+    intermediate_plate_holder_pos: JointPositions
+    intermediate_plate_holder_pose: Pose
 
     # Plate constants
     plate_staging_pos: JointPositions

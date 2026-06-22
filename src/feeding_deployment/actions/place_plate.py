@@ -19,6 +19,7 @@ from feeding_deployment.actions.base import (
     InFrontOf,
     DoorOpen,
     PlateAt,
+    TableSeen,
 )
 
 class PlacePlateInApplianceHLA(HighLevelAction):
@@ -64,18 +65,26 @@ class PlacePlateInApplianceHLA(HighLevelAction):
 
     def place_plate_in_fridge(self, speed: str) -> None:
         # assert self.sim.held_object_name == "plate"
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed)
+
         print("Placing plate in fridge ...")
 
     def place_plate_in_microwave(self, speed: str) -> None:
         # assert self.sim.held_object_name == "plate"
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed)
+
         print("Placing plate in microwave ...")
 
         perceived_poses = self.perception_interface.get_perceived_poses()
+        behind_placement_pose = perceived_poses["behind_placement_pose"]
         placement_pose = perceived_poses["placement_pose"]
 
         self.move_to_joint_positions(self.sim.scene_description.microwave_plate_staging_pos)
         self.move_to_ee_pose(placement_pose)
         self.close_gripper()
+        self.move_to_ee_pose(behind_placement_pose)
         self.move_to_ee_pose(self.sim.scene_description.microwave_plate_staging_pose)
 
 class PlacePlateOnHolderHLA(HighLevelAction):
@@ -118,10 +127,14 @@ class PlacePlateOnHolderHLA(HighLevelAction):
 
     def place_plate_on_holder(self, speed: str) -> None:
         # assert self.sim.held_object_name == "plate"
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed)
+
         print("Placing plate on holder ...")
 
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.behind_intermediate_pos)
+        self.move_to_joint_positions(self.sim.scene_description.intermediate_plate_holder_pos)
         self.move_to_joint_positions(self.sim.scene_description.above_plate_holder_pos)
         self.move_to_ee_pose(self.sim.scene_description.inside_plate_holder_pose)
         self.close_gripper()
@@ -171,7 +184,24 @@ class PlacePlateInSinkHLA(HighLevelAction):
 
     def place_plate_in_sink(self, speed: str) -> None:
         # assert self.sim.held_object_name == "plate"
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed)
+
         print("Placing plate in sink ...")
+
+        self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.right_back_retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.sink_gaze_pos)
+
+        placement_poses = self.perception_interface.perceive_sink_placement_poses(web_interface=self.web_interface)
+
+        self.move_to_joint_positions(self.sim.scene_description.sink_plate_staging_pos)
+        self.move_to_ee_pose(placement_poses["sink_placement_pose"])
+        self.close_gripper()
+        self.move_to_ee_pose(self.sim.scene_description.sink_plate_staging_pose)
+        self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
+
+
 
 class PlacePlateOnTableHLA(HighLevelAction):
     """Place the plate on the table."""
@@ -189,6 +219,7 @@ class PlacePlateOnTableHLA(HighLevelAction):
             preconditions={
                 LiftedAtom(Holding, [plate]),
                 LiftedAtom(InFrontOf, [table]),
+                LiftedAtom(TableSeen, []),
             },
             add_effects={
                 LiftedAtom(GripperFree, []),
@@ -196,6 +227,7 @@ class PlacePlateOnTableHLA(HighLevelAction):
             },
             delete_effects={
                 LiftedAtom(Holding, [plate]),
+                LiftedAtom(TableSeen, []),
             },
         )
 
@@ -215,4 +247,19 @@ class PlacePlateOnTableHLA(HighLevelAction):
 
     def place_plate_on_table(self, speed: str) -> None:
         # assert self.sim.held_object_name == "plate"
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed)
+
         print("Placing plate on table ...")
+
+        self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.table_plate_staging_pos)
+
+        placement_poses = self.perception_interface.get_perceived_table_placement_poses()
+
+        self.move_to_ee_pose(placement_poses["pre_table_placement_pose"])
+        self.move_to_ee_pose(placement_poses["table_placement_pose"])
+        self.close_gripper()
+        self.move_to_ee_pose(placement_poses["behind_table_placement_pose"])
+        self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.retract_pos)

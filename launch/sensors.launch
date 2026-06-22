@@ -123,7 +123,13 @@
   </include>
 
   <!-- ===== ROS bridge for web app (from robot.launch) ===== -->
-  <node pkg="rosbridge_server" type="rosbridge_websocket" name="rosbridge_websocket" output="screen"/>
+  <!--Bohan [Jun 18, 2026]: to allow rosbridge serves TLS automatically when certfile + keyfile are present-->
+  <node pkg="rosbridge_server" type="rosbridge_websocket" name="rosbridge_websocket" output="screen">
+    <param name="certfile" value="/home/isacc/certs/192.168.1.2.pem"/>
+    <param name="keyfile"  value="/home/isacc/certs/192.168.1.2-key.pem"/>
+    <param name="port"     value="9090"/>
+  </node>
+
 
   <!-- ===== RViz (optional visualization) ===== -->
   <node pkg="rviz"

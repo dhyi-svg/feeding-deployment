@@ -236,11 +236,13 @@ class ArmInterface:
         print(f"Received joint pos command: {command_pos}")
 
         try:
-            self.arm.move_angular(command_pos)
+            success = self.arm.move_angular(command_pos)
         except Exception as e:
             print(f"Error in set_joint_position: {e}")
             # Re-raise a simplified exception to avoid pickling issues
             raise Exception(f"Error in set_joint_position: {str(e)}") from None # suppress original exception
+        
+        return success
 
     def set_joint_trajectory(self, trajectory_command):
 
@@ -252,11 +254,12 @@ class ArmInterface:
         )
 
         try:
-            self.arm.move_angular_trajectory(trajectory_command)
+            success = self.arm.move_angular_trajectory(trajectory_command)
         except Exception as e:
             print(f"Error in set_joint_trajectory: {e}")
             # Re-raise a simplified exception to avoid pickling issues
             raise Exception(f"Error in set_joint_trajectory: {str(e)}") from None # suppress original exception
+        return success
 
     def set_ee_pose(self, xyz, xyz_quat):
 
@@ -270,11 +273,12 @@ class ArmInterface:
         print(f"Received cartesian pose command: {xyz}, {xyz_quat}")
 
         try:
-            self.arm.move_cartesian(xyz, xyz_quat)
+            success = self.arm.move_cartesian(xyz, xyz_quat)
         except Exception as e:
             print(f"Error in set_ee_pose: {e}")
             # Re-raise a simplified exception to avoid pickling issues
             raise Exception(f"Error in set_ee_pose: {str(e)}") from None # suppress original exception
+        return success
         
     def set_cartesian_trajectory(self, trajectory_command):
 
@@ -286,11 +290,12 @@ class ArmInterface:
         )
 
         try:
-            self.arm.move_cartesian_trajectory(trajectory_command)
+            success = self.arm.move_cartesian_trajectory(trajectory_command)
         except Exception as e:
             print(f"Error in set_cartesian_trajectory: {e}")
             # Re-raise a simplified exception to avoid pickling issues
             raise Exception(f"Error in set_cartesian_trajectory: {str(e)}") from None # suppress original exception
+        return success
 
     def set_gripper(self, gripper_pos):
 
@@ -364,6 +369,26 @@ class ArmInterface:
             print(f"Error in retract: {e}")
             # Re-raise a simplified exception to avoid pickling issues
             raise Exception(f"Error in retract: {str(e)}") from None # suppress original exception
+
+    def stop_action(self):
+        """Abort the action currently executing without latching emergency stop.
+
+        Unlike emergency_stop(), this does NOT set emergency_stop_active, so the
+        arm keeps accepting commands afterward. Used to preempt the (long) move
+        to the default pose from the manual teleop recovery screen.
+        """
+        # save in log file
+        with open(self.log_file, "a") as f:
+            f.write("stop_action\n")
+
+        if self.in_compliant_mode:
+            print("stop_action ignored: arm is in compliant mode")
+            return
+        try:
+            self.arm.stop_action()
+        except Exception as e:
+            print(f"Error in stop_action: {e}")
+            raise Exception(f"Error in stop_action: {str(e)}") from None
 
     def emergency_stop(self):
         assert not self.emergency_stop_active, "Emergency stop is already active"

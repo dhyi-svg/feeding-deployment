@@ -52,7 +52,7 @@ parameters:
       lower: 5.0
       upper: 100.0
     is_user_editable: True
-    value: 10.0
+    value: 100.0
   - name: "RetractAfterTransfer"
     description: "Whether the robot retracts to its rest position after completing a bite transfer (1), or stays near the user (0). Retracting avoids obstructing the user's view but makes the meal take longer."
     space:

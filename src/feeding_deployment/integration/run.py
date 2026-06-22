@@ -61,14 +61,17 @@ from feeding_deployment.actions.base import (
     ToolTransferDone,
     EmulateTransferDone,
     ResetPos,
+    HomePos,
     InFrontOf,
     DoorOpen,
     DoorClosed,
     PlateAt,
     FoodHeated,
     SafeToNavigate,
+    TableSeen,
     GroundHighLevelAction,
     ResetHLA,
+    HomeHLA,
     pddl_plan_to_hla_plan,
     interpret_user_update_request,
     load_behavior_tree,
@@ -77,6 +80,7 @@ from feeding_deployment.actions.base import (
     NodeAdditionUserRequest,
     UserUpdateRequest,
     ParameterizedActionBehaviorTreeNode,
+    TeleopTakeoverException,
 )
 from feeding_deployment.actions.navigate import NavigateHLA
 from feeding_deployment.actions.open_door import OpenDoorHLA
@@ -98,6 +102,7 @@ from feeding_deployment.actions.stow_tool import StowToolHLA
 from feeding_deployment.actions.transfer_tool import TransferToolHLA
 from feeding_deployment.actions.emulate_transfer import EmulateTransferHLA
 from feeding_deployment.actions.acquisition import AcquireBiteHLA
+from feeding_deployment.actions.gaze_at_table import GazeAtTableHLA
 from feeding_deployment.interfaces.perception_interface import PerceptionInterface
 from feeding_deployment.interfaces.web_interface import WebInterface
 from feeding_deployment.interfaces.rviz_interface import RVizInterface
@@ -110,6 +115,7 @@ from feeding_deployment.simulation.scene_description import (
 from feeding_deployment.simulation.simulator import (
     FeedingDeploymentPyBulletSimulator,
     FeedingDeploymentWorldState,
+    NullSimulator,
 )
 from feeding_deployment.actions.flair.flair import FLAIR
 from feeding_deployment.transparency.query_llm import TransparencyQuery
@@ -138,6 +144,8 @@ HLAS = {
     TransferToolHLA,
     EmulateTransferHLA,
     ResetHLA,
+    HomeHLA,
+    GazeAtTableHLA,
 }
 
 assert os.environ.get("PYTHONHASHSEED") == "0", \
@@ -208,7 +216,7 @@ class _Runner:
         if run_on_robot:
             self.robot_interface = ArmInterfaceClient()  # type: ignore  # pylint: disable=no-member
             self.wrist_interface = WristInterface()
-            self.robot_interface.set_speed("high")
+            self.robot_interface.set_speed("medium")
         else:
             self.robot_interface = None
             self.wrist_interface = None
@@ -234,14 +242,18 @@ class _Runner:
         else:
             print("Running in simulation mode.")
 
-        self.flair = FLAIR(self.log_dir)
+        grounded_sam = self.perception_interface._grounded_sam if hasattr(self.perception_interface, '_grounded_sam') else None
+        self.flair = FLAIR(self.log_dir, grounded_sam=grounded_sam)
 
         if self.run_on_robot:
             self.rviz_interface = RVizInterface(self.scene_description)
         else:
             self.rviz_interface = None
 
-        self.sim = FeedingDeploymentPyBulletSimulator(self.scene_description, use_gui=use_gui, ignore_user=True)
+        if self.no_waits:
+            self.sim = NullSimulator(self.scene_description)
+        else:
+            self.sim = FeedingDeploymentPyBulletSimulator(self.scene_description, use_gui=use_gui, ignore_user=True)
 
         if self.use_interface:
             # Initialize the web interface.
@@ -249,6 +261,10 @@ class _Runner:
             self.web_interface = WebInterface(self.task_selection_queue, self.log_dir)
         else:
             self.web_interface = None
+
+        # Let a "Take Over" request best-effort abort the in-flight arm move.
+        if self.web_interface is not None and self.robot_interface is not None:
+            self.web_interface.register_takeover_stop(self.robot_interface.stop_action)
 
         # Create skills for high-level planning.
         hla_hyperparams = {"max_motion_planning_time": max_motion_planning_time}
@@ -270,12 +286,14 @@ class _Runner:
             IsUtensil,
             PlateInView,
             ResetPos,
+            HomePos,
             InFrontOf,
             DoorOpen,
             DoorClosed,
             PlateAt,
             FoodHeated,
             SafeToNavigate,
+            TableSeen,
         }
         self.types = {
             object_type,
@@ -398,8 +416,9 @@ class _Runner:
             GroundAtom(IsUtensil, [self.utensil]),
             GroundAtom(DoorClosed, [self.fridge]),
             GroundAtom(DoorClosed, [self.microwave]),
-            GroundAtom(InFrontOf, [self.fridge]),
+            GroundAtom(InFrontOf, [self.microwave]),
             GroundAtom(PlateAt, [self.holder]),
+            # GroundAtom(Holding, [self.plate]),
             GroundAtom(SafeToNavigate, []),
             # GroundAtom(FoodHeated, []),
         }
@@ -546,6 +565,17 @@ class _Runner:
             self.web_interface.ready_for_task_selection()
         last_task_type = None
         while self.active:
+            # Take-Over pressed while idle (no skill running): launch teleop here,
+            # then return to task selection. (Mid-skill takeovers are handled in
+            # execute_robot_command, not here.)
+            if self.web_interface is not None and self.web_interface.consume_takeover():
+                print("User-initiated takeover while idle; launching teleop ...")
+                try:
+                    self.hla_name_to_hla["Reset"].run_manual_teleop_recovery(failure_context="user_initiated_idle")
+                except Exception as e:
+                    print(f"Manual teleop recovery error: {e}")
+                self.web_interface.ready_for_task_selection()
+                continue
             if not continuous:
                 resp = input("Press 'y' to continue RUNNER, 'n' to stop: ")
                 while resp not in ["y", "n"]:
@@ -607,6 +637,16 @@ class _Runner:
                         else: # test
                             self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["EmulateTransfer"], (), {"test_mode": True} ))
                     last_task_type = task_type
+                elif task == "teleop":
+                    # User-initiated manual teleop recovery (between-tasks).
+                    # Blocks until the user taps Done on the teleop screen.
+                    print("Launching user-initiated manual teleop recovery ...")
+                    try:
+                        self.hla_name_to_hla["Reset"].run_manual_teleop_recovery(failure_context="user_initiated")
+                    except Exception as e:
+                        # Never let a teleop hiccup crash the executive loop.
+                        print(f"Manual teleop recovery error: {e}")
+                    last_task_type = None
                 else:
                     print(f"Invalid task selection: {task_selection_command}")
                     last_task_type = None
@@ -678,15 +718,47 @@ class _Runner:
         if isinstance(user_command, GroundHighLevelAction):
             plan_hlas.append(user_command)
 
-        for ground_hla in plan_hlas:
+        # Build the ordered list of skill names (snake_case behavior-tree names,
+        # e.g. "acquire_bite") so the web interface can show last/current/next.
+        skill_plan_names = []
+        for gh in plan_hlas:
+            try:
+                skill_plan_names.append(
+                    gh.hla.get_behavior_tree_filename(gh.objects, gh.params).removesuffix(".yaml")
+                )
+            except Exception:
+                skill_plan_names.append(gh.hla.get_name())
+
+        for i, ground_hla in enumerate(plan_hlas):
             print(f"Refining {ground_hla}")
+            # Tell the web interface which skill is now executing.
+            if self.web_interface is not None:
+                self.web_interface.publish_skill_plan(skill_plan_names, i)
             operator = ground_hla.get_operator()
 
             # import ipdb; ipdb.set_trace()
             assert operator.preconditions.issubset(self.current_atoms)
 
-            # Execute the high-level plan in simulation
-            ground_hla.execute_action()
+            # Execute the high-level plan in simulation. On a mid-skill takeover
+            # the user chooses, via the teleop Done button, whether to redo this
+            # skill (re-run it) or continue to the next (treat it as done, so we
+            # fall through and apply its effects below).
+            while True:
+                try:
+                    ground_hla.execute_action()
+                    break
+                except TeleopTakeoverException as e:
+                    if e.redo_current:
+                        print(f"User chose to redo {ground_hla} after teleop; re-running the skill.")
+                        continue
+                    print(f"User chose to continue past {ground_hla} after teleop; treating it as done.")
+                    break
+                except RuntimeError as e:
+                    print(f"HLA execution failed: {e}")
+                    print(f"Aborting task and returning to task selection page.")
+                    if self.web_interface is not None:
+                        self.web_interface.ready_for_task_selection()
+                    return
 
             sim_state = self.sim.get_current_state()
 
@@ -1008,17 +1080,40 @@ if __name__ == "__main__":
     # Handle Ctrl+C gracefully
     signal.signal(signal.SIGINT, runner.signal_handler)
 
+    # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateInSink"], (runner.plate, runner.sink)))
+    # for i in range(5):
+    #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateOnTable"], (runner.plate, runner.table)))
+    #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateOnHolder"], (runner.plate, runner.holder)))
+
+    # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromAppliance"], (runner.plate, runner.fridge)))
+    # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.fridge,)))
+    # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["CloseDoor"], (runner.fridge,)))
+
     if not args.use_interface:
         # for i in range(3):
         #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromHolder"], (runner.plate, runner.holder)))
-        #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateOnHolder"], (runner.plate, runner.holder)))
-        runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.fridge,)))
+            # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateOnHolder"], (runner.plate, runner.holder)))
+        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.microwave,)))
+        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromAppliance"], (runner.plate, runner.fridge)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateInAppliance"], (runner.plate, runner.microwave)))
-        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["CloseDoor"], (runner.microwave,)))
+        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["CloseDoor"], (runner.fridge,)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromAppliance"], (runner.plate, runner.microwave)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.fridge,)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["TransferTool"], (runner.utensil,runner.table)))
+        
+        for i in range(3):
+            input("Press Enter to execute open and close the microwave door ...")
+            runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.microwave,)))
+            runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["CloseDoor"], (runner.microwave,)))
+        # for i in range(10):
+        #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["Reset"], ()))
+        #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["Home"], ()))
+        #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickTool"], (runner.utensil,runner.table)))
+        #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["StowTool"], (runner.utensil,runner.table)))
         # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateInSink"], (runner.plate, runner.sink)))
+        # for i in range(3):
+        #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateOnTable"], (runner.plate, runner.table)))
+        #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateOnHolder"], (runner.plate, runner.holder)))
     else:
         runner.run()
 

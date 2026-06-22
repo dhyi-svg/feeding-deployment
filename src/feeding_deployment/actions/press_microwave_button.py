@@ -58,6 +58,10 @@ class PressMicrowaveButtonHLA(HighLevelAction):
 
     def press_microwave_button(self, speed: str, duration: float) -> None:
         assert self.sim.held_object_name is None
+
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed)
+
         # Each button press adds 30 seconds to the microwave timer.
         num_presses = max(1, int(round(duration / 30.0)))
         print(f"Pressing microwave button {num_presses} times (duration={duration}s) ...")
@@ -65,8 +69,8 @@ class PressMicrowaveButtonHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.microwave_closeup_gaze_pos)
 
-        time.sleep(5.0) # wait for the robot to stabilize before perception
-        press_button_poses = self.perception_interface.perceive_button_pressing_poses()
+        time.sleep(2.0) # wait for the robot to stabilize before perception
+        press_button_poses = self.perception_interface.perceive_button_pressing_poses(web_interface=self.web_interface)
 
         self.move_to_joint_positions(self.sim.scene_description.fridge_door_staging_pos)
         self.close_gripper() # just in case the gripper is open
@@ -76,3 +80,7 @@ class PressMicrowaveButtonHLA(HighLevelAction):
             self.move_to_ee_pose(press_button_poses["intermediate_pose"])
         self.move_to_ee_pose(press_button_poses["pre_press_pose"])
         self.move_to_joint_positions(self.sim.scene_description.fridge_door_staging_pos)
+
+        for i in range(num_presses):
+            print(f"Waiting for the microwave to finish heating... (iteration {i+1}/{num_presses})")
+            time.sleep(30) # wait for the microwave to finish heating. 

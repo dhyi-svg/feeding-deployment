@@ -6,7 +6,10 @@ Entrypoint for controlling the robot arm on compute machine. Additionally runs t
 
 import threading
 import time
+import types
 import numpy as np
+import yaml
+from pathlib import Path
 
 try:
     import rospy
@@ -18,6 +21,15 @@ try:
 except ModuleNotFoundError as e:
     # print(f"ROS not imported: {e}")
     ROSPY_IMPORTED = False
+
+def load_robot_config(config_path: str) -> types.SimpleNamespace:
+    with open(config_path, "r") as f:
+        raw = yaml.safe_load(f)
+    parsed = {}
+    for key, entry in raw.items():
+        if isinstance(entry, dict):
+            parsed[key] = entry["values"]
+    return types.SimpleNamespace(**parsed)
 
 from feeding_deployment.control.robot_controller.arm_interface import ArmInterface, ArmManager, NUC_HOSTNAME, ARM_RPC_PORT, RPC_AUTHKEY
 from feeding_deployment.control.robot_controller.command_interface import KinovaCommand, JointTrajectoryCommand, CartesianTrajectoryCommand, JointCommand, CartesianCommand, OpenGripperCommand, CloseGripperCommand
@@ -62,7 +74,16 @@ class ArmInterfaceClient:
 
     def get_state(self):
         return self._arm_interface.get_state()
-    
+
+    def stop_action(self):
+        """Abort the current arm action without latching emergency stop.
+
+        NOTE: this is issued on the same RPC connection as execute_command. If a
+        blocking move is in flight on this connection, the manager may serialize
+        this call behind it. See TELEOP_INTEGRATION.md (Default -> Stop).
+        """
+        return self._arm_interface.stop_action()
+
     def get_speed(self):
         return self._arm_interface.get_speed()
     
@@ -115,116 +136,87 @@ if __name__ == "__main__":
     rospy.init_node("arm_interface_client", anonymous=True)
     arm_client_interface = ArmInterfaceClient()
 
+    _config_path = Path(__file__).parent.parent.parent / "simulation" / "configs" / "vention.yaml"
+    config = load_robot_config(str(_config_path))
+
     run_commands = input("Press 'y' to run commands")
 
     if run_commands != "y":
         exit()
 
-    # left_retract_pos = [-1.57, -0.34903602299465675, -3.141591055693139, -2.0, 0.0, -0.872688061814757, 1.57075917569769]
-    # arm_client_interface.execute_command(JointCommand(left_retract_pos))
+    # arm_client_interface.execute_command(JointCommand(config.left_retract_pos))
+    # arm_client_interface.execute_command(JointCommand(config.behind_back_retract_pos))
 
-    fridge_door_gaze_pos = [-0.980015584273823, 0.47420615883552164, -3.015619807706865, -2.207007668035523, 0.7286555882107023, 1.2561937782724737, 1.2283014269116377]
-    arm_client_interface.execute_command(JointCommand(fridge_door_gaze_pos))
+    def pick_plate_from_holder():
+        arm_client_interface.execute_command(JointCommand(config.behind_back_retract_pos))
+        arm_client_interface.execute_command(JointCommand(config.behind_intermediate_pos))
+        arm_client_interface.execute_command(JointCommand(config.above_plate_holder_pos))
+        arm_client_interface.execute_command(CloseGripperCommand())
+        arm_client_interface.execute_command(CartesianCommand(config.inside_plate_holder_pose[:3], config.inside_plate_holder_pose[3:]))
+        arm_client_interface.execute_command(OpenGripperCommand())
+        arm_client_interface.execute_command(CartesianCommand(config.above_plate_holder_pose[:3], config.above_plate_holder_pose[3:]))
+        arm_client_interface.execute_command(CartesianCommand(config.intermediate_plate_holder_pose[:3], config.intermediate_plate_holder_pose[3:]))
+        arm_client_interface.execute_command(JointCommand(config.behind_intermediate_pos))
+        arm_client_interface.execute_command(JointCommand(config.behind_back_retract_pos))
 
-    # behind_back_retract_pos = [3.141592653589793, -1.8338532592607812, 3.1415681525077646, -2.5482659290666034, 1.0329455279146852e-05, -0.8727280092311087, 1.570780081512247]
-    # arm_client_interface.execute_command(JointCommand(behind_back_retract_pos))
+    def place_plate_in_holder():
+        arm_client_interface.execute_command(JointCommand(config.behind_back_retract_pos))
+        arm_client_interface.execute_command(JointCommand(config.behind_intermediate_pos))
+        arm_client_interface.execute_command(JointCommand(config.intermediate_plate_holder_pos))
+        arm_client_interface.execute_command(JointCommand(config.above_plate_holder_pos))
+        arm_client_interface.execute_command(CartesianCommand(config.inside_plate_holder_pose[:3], config.inside_plate_holder_pose[3:]))
+        arm_client_interface.execute_command(CloseGripperCommand())
+        arm_client_interface.execute_command(CartesianCommand(config.above_plate_holder_pose[:3], config.above_plate_holder_pose[3:]))
+        arm_client_interface.execute_command(JointCommand(config.behind_intermediate_pos))
+        arm_client_interface.execute_command(JointCommand(config.behind_back_retract_pos))
 
-    # microwave_config = [3.129084851214127, -0.8821358920979225, -3.1265742892545094, -2.5615186175991647, -0.006664826944032143, 0.10794081516859698, 1.5825896030500946]
-    # arm_client_interface.execute_command(JointCommand(microwave_config))
+    # test_pos = [3.10744480314447, -1.8572371452122223, 1.1964974245416935, -1.594397260375179, -0.30501716596895534, -1.4795676131253597, -0.3509103557698543]
+    # test_pose = [0.08398756384849548, -0.26479199528694153, 0.041124988347291946, -0.5071205909168355, 0.4950622048133263, 0.5030556345347846, -0.49464850974842006]
 
-    # inside_plate_pos = [3.1062098953470003, -1.8586057436964136, 1.195002325905723, -1.6045593504627034, -0.3068414313156591, -1.4701101954622704, -0.34915320208262024]
-    # arm_client_interface.execute_command(JointCommand(inside_plate_pos))
+    # test_pos = [3.1058546296575837, -1.8652210358441703, 1.1922856352777331, -1.585627470905548, -0.3061271715113003, -1.4878527072765966, -0.35709528108545463]
+    # test_pose = [0.08472398668527603, -0.2637099027633667, 0.038250695914030075, -0.5053791193878973, 0.49333470475951946, 0.5047943064799332, -0.4963824361437406]
 
-    # behind_back_retract_pos = [3.141592653589793, -1.8338532592607812, 3.1415681525077646, -2.5482659290666034, 1.0329455279146852e-05, -0.8727280092311087, 1.570780081512247]
-    # inside_plate_pose = [0.08079531788825989, -0.264194130897522, 0.04117746278643608, -0.5071274014359088, 0.49509496077110954, 0.5030325925271225, -0.4946321758512664]
-    # above_inside_plate_pos = [3.082130391718831, -1.7038792801561184, 1.3132477435696772, -1.74837857144247, -0.16963377405812263, -1.4230169852741819, -0.22686830167723393]
-    # above_inside_plate_pose = inside_plate_pose.copy()
-    # above_inside_plate_pose[2] += 0.1
-    # microwave_config = [3.129084851214127, -0.8821358920979225, -3.1265742892545094, -2.5615186175991647, -0.006664826944032143, 0.10794081516859698, 1.5825896030500946]
-    # intermediate_retract_pos = [-3.1387180375091615, -1.9098678662549133, 3.141273873207311, -2.0296824184331417, -0.012072641853547061, -1.4674305227734328, 1.5728473603084212]
 
-    # arm_client_interface.execute_command(JointCommand(behind_back_retract_pos))
-    # arm_client_interface.execute_command(JointCommand(intermediate_retract_pos))
-    # arm_client_interface.execute_command(JointCommand(above_inside_plate_pos))
-    # arm_client_interface.execute_command(CartesianCommand(inside_plate_pose[:3], inside_plate_pose[3:]))
-    # arm_client_interface.execute_command(CartesianCommand(above_inside_plate_pose[:3], above_inside_plate_pose[3:]))
-    # arm_client_interface.execute_command(JointCommand(intermediate_retract_pos))
-    # arm_client_interface.execute_command(JointCommand(behind_back_retract_pos))
-    # arm_client_interface.execute_command(JointCommand(microwave_config))
+    # arm_client_interface.execute_command(JointCommand(config.behind_back_retract_pos))
+    # arm_client_interface.execute_command(JointCommand(config.behind_intermediate_pos))
+    # arm_client_interface.execute_command(JointCommand(config.above_plate_holder_pos))
+    # arm_client_interface.execute_command(CloseGripperCommand())
+    # arm_client_interface.execute_command(CartesianCommand(config.inside_plate_holder_pose[:3], config.inside_plate_holder_pose[3:]))
 
-    # for i in range(5):
-    #     input("Press enter to execute inside plate position...")
-    #     inside_plate_pose = [0.08079531788825989, -0.264194130897522, 0.04117746278643608, -0.5071274014359088, 0.49509496077110954, 0.5030325925271225, -0.4946321758512664]
-    #     arm_client_interface.execute_command(CartesianCommand(inside_plate_pose[:3], inside_plate_pose[3:]))
+    # print current state
+    state = arm_client_interface.get_state()
+    print("Current joint positions:", state["position"])
+    print("Current end-effector pose:", state["ee_pos"])
+    ee_pose = state["ee_pos"]
+    joint_positions = state["position"]
 
-    #     arm_client_interface.execute_command(CloseGripperCommand())
+    def pick_plate_from_fridge():
+        arm_client_interface.execute_command(JointCommand(config.left_back_retract_pos))
+        arm_client_interface.execute_command(JointCommand(config.fridge_contents_gaze_pos))
+        arm_client_interface.execute_command(JointCommand(config.left_back_retract_pos))
+        arm_client_interface.execute_command(JointCommand(config.behind_back_retract_pos))
+        arm_client_interface.execute_command(JointCommand(config.fridge_inside_intermediate_pos))
+        arm_client_interface.execute_command(CartesianCommand(config.fridge_inside_intermediate_pose[:3], config.fridge_inside_intermediate_pose[3:]))
+        arm_client_interface.execute_command(CartesianCommand(config.fridge_above_intermediate_pose[:3], config.fridge_above_intermediate_pose[3:]))
+        arm_client_interface.execute_command(JointCommand(config.behind_back_retract_pos))
 
-    #     above_inside_plate_pose = inside_plate_pose.copy()
-    #     above_inside_plate_pose[2] += 0.1
-    #     arm_client_interface.execute_command(CartesianCommand(above_inside_plate_pose[:3], above_inside_plate_pose[3:]))
+    # joint_positions = [2.45761645, -1.51664894, -1.86802135, -2.26435991, 0.66374883, -0.25456571, 2.22414458]
+    # arm_client_interface.execute_command(JointCommand(config.fridge_inside_intermediate_pos))
+    # arm_client_interface.execute_command(CartesianCommand(ee_pose[:3], ee_pose[3:]))
+    # arm_client_interface.execute_command(CartesianCommand(config.fridge_above_intermediate_pose[:3], config.fridge_above_intermediate_pose[3:]))
+    # arm_client_interface.execute_command(JointCommand(config.behind_back_retract_pos))
+    # arm_client_interface.execute_command(JointCommand(joint_positions))
+    # arm_client_interface.execute_command(JointCommand(config.behind_back_retract_pos))
+    # pick_plate_from_fridge()
 
-    #     behind_back_retract_pos = [3.141592653589793, -1.8338532592607812, 3.1415681525077646, -2.5482659290666034, 1.0329455279146852e-05, -0.8727280092311087, 1.570780081512247]
-    #     arm_client_interface.execute_command(JointCommand(behind_back_retract_pos))
+    def pick_plate_from_table():
+        arm_client_interface.execute_command(JointCommand(config.back_retract_pos))
+        arm_client_interface.execute_command(JointCommand(config.table_gaze_pos))
+        arm_client_interface.execute_command(JointCommand(config.table_plate_staging_pos))
 
-    #     above_inside_plate_pos = [3.082130391718831, -1.7038792801561184, 1.3132477435696772, -1.74837857144247, -0.16963377405812263, -1.4230169852741819, -0.22686830167723393]
-    #     arm_client_interface.execute_command(JointCommand(above_inside_plate_pos))
+    # pick_plate_from_table()
 
-    #     arm_client_interface.execute_command(CartesianCommand(inside_plate_pose[:3], inside_plate_pose[3:]))
+    arm_client_interface.execute_command(JointCommand(config.left_back_retract_pos))
 
-    #     arm_client_interface.execute_command(OpenGripperCommand())
-
-    #     arm_client_interface.execute_command(CartesianCommand(above_inside_plate_pose[:3], above_inside_plate_pose[3:]))
-
-    #     # behind_back_retract_pos = [3.141592653589793, -1.8338532592607812, 3.1415681525077646, -2.5482659290666034, 1.0329455279146852e-05, -0.8727280092311087, 1.570780081512247]
-    #     arm_client_interface.execute_command(JointCommand(behind_back_retract_pos))
-
-    #     # above_inside_plate_pos = [3.082130391718831, -1.7038792801561184, 1.3132477435696772, -1.74837857144247, -0.16963377405812263, -1.4230169852741819, -0.22686830167723393]
-    #     arm_client_interface.execute_command(JointCommand(above_inside_plate_pos))
-
-    # behind_back_retract_pos = [3.141592653589793, -1.8338532592607812, 3.1415681525077646, -2.5482659290666034, 1.0329455279146852e-05, -0.8727280092311087, 1.570780081512247]
-    # arm_client_interface.execute_command(JointCommand(behind_back_retract_pos))
-
-    # back_home_pos = [3.141592653589793, 0.26193837151853794, -3.1415766746232525, -2.2690119171669654, 4.621619302645493e-06, 0.9598732314221993, 1.5708048489103847]
-    # arm_client_interface.execute_command(JointCommand(back_home_pos))
-
-    # left_retract_pos = [-1.57, -0.34903602299465675, -3.141591055693139, -2.0, 0.0, -0.872688061814757, 1.57075917569769]
-    # arm_client_interface.execute_command(JointCommand(left_retract_pos))
-
-    # left_back_retract_pos = [-1.57, -1.8338532592607812, 3.1415681525077646, -2.5482659290666034, 1.0329455279146852e-05, -0.8727280092311087, 1.570780081512247]
-    # arm_client_interface.execute_command(JointCommand(left_back_retract_pos))
-
-    # staging_pos = [3.141592653589793, 0.26193837151853794, -3.1415766746232525, -2.2690119171669654, 4.621619302645493e-06, 0.9598732314221993, 1.5708048489103847]
-    # arm_client_interface.execute_command(JointCommand(staging_pos))
-
-    # back_retract_pos = [-2.6098978682220775e-05, -1.8305038015577884, 3.1415657556627834, -2.5482749838143097, 4.621619302645493e-06, -0.8727317376566344, 1.5708057810167664]
-    # arm_client_interface.execute_command(JointCommand(back_retract_pos))
-    
-    # retract_pos = [0.0, -0.34903602299465675, -3.141591055693139, -2.0, 0.0, -0.872688061814757, 1.57075917569769]
-    # arm_client_interface.execute_command(JointCommand(retract_pos))
-
-    # midpoint_pos = [2.2912525080624357, 0.730991513381838, 2.0830126187361424, -2.1737367965371632, 0.28532185799581516, -0.4648462461578422, -0.29495787389950756]
-    # arm_client_interface.execute_command(JointCommand(midpoint_pos))
-
-    # before_transfer_pos = [-2.86554642, -1.61951779, -2.60986085, -1.37302839, 1.11779249, -1.18028264, 2.05515862]
-    # arm_client_interface.execute_command(JointCommand(before_transfer_pos))
-
-    # drink_gaze_pos = [-0.004187021865822871, 0.6034579885210962, -3.1259047705564633, -2.3538005746884725, 0.01149092320739253, 1.3411586039000891, 1.6825233913747728]
-    # arm_client_interface.execute_command(JointCommand(drink_gaze_pos))
-
-    # input("Press enter to execute home position...")
-    # home_pos = [-2.8762139772986473e-05, 0.26193837151853794, -3.1415766746232525, -2.2690119171669654, 4.621619302645493e-06, 0.9598732314221993, 1.5708048489103847]
-    # arm_client_interface.execute_command(JointCommand(home_pos))
-
-    # input("Press enter to execute plate position...")
-    # plate_pose = [0.219, -0.264, -0.001, 0.489, -0.491, -0.496, 0.524]
-    # arm_client_interface.execute_command(CartesianCommand(plate_pose[:3], plate_pose[3:]))
-
-    # input("Press enter to execute outside plate position...")
-    # outside_plate_pose = plate_pose.copy()
-    # outside_plate_pose[0] += 0.1
-    # arm_client_interface.execute_command(CartesianCommand(outside_plate_pose[:3], outside_plate_pose[3:]))
-
-    # input("Press enter to execute above plate position...")
-    # above_plate_pose = plate_pose.copy()
-    # above_plate_pose[2] += 0.1
-    # arm_client_interface.execute_command(CartesianCommand(above_plate_pose[:3], above_plate_pose[3:]))
+    # set speed to medium
+    # arm_client_interface.set_speed("high")

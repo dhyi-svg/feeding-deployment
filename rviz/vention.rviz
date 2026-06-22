@@ -494,7 +494,7 @@ Visualization Manager:
   Global Options:
     Background Color: 48; 48; 48
     Default Light: true
-    Fixed Frame: vention_base_link
+    Fixed Frame: map
     Frame Rate: 30
   Name: root
   Tools:
@@ -518,7 +518,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 4.080068111419678
+      Distance: 8.05333137512207
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -534,9 +534,9 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.0297967195510864
+      Pitch: 1.274796485900879
       Target Frame: <Fixed Frame>
-      Yaw: 1.490399718284607
+      Yaw: 2.9453999996185303
     Saved: ~
 Window Geometry:
   Displays:
