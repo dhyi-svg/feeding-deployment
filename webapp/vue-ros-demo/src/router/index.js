@@ -1,218 +1,190 @@
-// import { createRouter, createWebHistory } from 'vue-router'
 import { createRouter, createWebHashHistory } from 'vue-router'
-import AboutView from '../components/OldTopBar(NoUsed).vue'
 
 const routes = [
   {
-    path: '/detectconfirmation',
-    name: 'detectconfirmation',
-    component: () => import(/* webpackChunkName: "about" */ '../views/detect_confirmation.vue')
+    path: '/detection_confirm',
+    name: 'detection_confirm',
+    component: () => import('../views/detection_confirm.vue')
   },
   {
-    path: '/acquirebite',
-    name: 'acquirebite',
-    component: () => import(/* webpackChunkName: "about" */ '../views/acquire_bite.vue')
+    path: '/bite_selection',
+    name: 'bite_selection',
+    component: () => import('../views/bite_selection.vue')
   },
   {
-    path: '/newmealpage',
-    name: 'newmealpage',
-    component: () => import(/* webpackChunkName: "about" */ '../views/NewMealPage.vue')
+    path: '/meal_setup',
+    name: 'meal_setup',
+    component: () => import('../views/meal_setup.vue')
   },
   {
-    path: '/pickingup',
-    name: 'pickingup',
-    component: () => import(/* webpackChunkName: "about" */ '../views/pickingup.vue')
+    path: '/bite_acquiring',
+    name: 'bite_acquiring',
+    component: () => import('../views/bite_acquiring.vue')
   },
   {
-    path: '/notify',
-    name: 'notify',
-    component: () => import(/* webpackChunkName: "about" */ '../views/notify-caregiver.vue')
+    path: '/notify_caregiver',
+    name: 'notify_caregiver',
+    component: () => import('../views/notify_caregiver.vue')
   },
   {
-    path: '/physical',
-    name: 'physical',
-    component: () => import(/* webpackChunkName: "about" */ '../views/physical-button.vue')
+    path: '/emergency_stop',
+    name: 'emergency_stop',
+    component: () => import('../views/emergency_stop.vue')
   },
   {
-    path: '/transfermeal',
-    name: 'transfermeal',
-    component: () => import(/* webpackChunkName: "about" */ '../views/transfer_meal.vue')
+    path: '/bite_confirm_transfer',
+    name: 'bite_confirm_transfer',
+    component: () => import('../views/bite_confirm_transfer.vue')
   },
   {
-    path: '/executingbitetransfer',
-    name: 'executingbitetransfer',
-    component: () => import(/* webpackChunkName: "about" */ '../views/Executing_Bite_Transfer.vue')
+    path: '/bite_executing',
+    name: 'bite_executing',
+    component: () => import('../views/bite_executing.vue')
   },
   {
-    path: '/afterbitetransfer',
-    name: 'afterbitetransfer',
-    component: () => import(/* webpackChunkName: "about" */ '../views/after_bite_transfer.vue')
+    path: '/after_bite',
+    name: 'after_bite',
+    component: () => import('../views/after_bite.vue')
   },
   {
-    path: '/test',
-    name: 'test',
-    component: () => import(/* webpackChunkName: "about" */ '../views/Test.vue')
-  },
-  {
-    path: '/afterdrinktransfer',
-    name: 'afterdrinktransfer',
-    component: () => import(/* webpackChunkName: "about" */ '../views/after_drink_transfer.vue')
+    path: '/after_drink',
+    name: 'after_drink',
+    component: () => import('../views/after_drink.vue')
   },
   {
     path: '/task_selection',
     name: 'task_selection',
-    component: () => import(/* webpackChunkName: "about" */ '../views/task_selection.vue')
+    component: () => import('../views/task_selection.vue')
   },
   {
-    path: '/swithtodrink',
-    name: 'swithtodrink',
-    component: () => import(/* webpackChunkName: "about" */ '../views/swith_to_drink.vue')
+    path: '/switch_to_drink',
+    name: 'switch_to_drink',
+    component: () => import('../views/switch_to_drink.vue')
   },
   {
-    path: '/transferdrinks',
-    name: 'transferdrinks',
-    component: () => import(/* webpackChunkName: "about" */ '../views/transferdrinks.vue')
+    path: '/drink_confirm_transfer',
+    name: 'drink_confirm_transfer',
+    component: () => import('../views/drink_confirm_transfer.vue')
   },
   {
-    path: '/executingdrinktransfer',
-    name: 'executingdrinktransfer',
-    component: () => import(/* webpackChunkName: "about" */ '../views/Executing_Drink_Transfer.vue')
+    path: '/drink_executing',
+    name: 'drink_executing',
+    component: () => import('../views/drink_executing.vue')
   },
   {
-    path: '/wipingtrans',
-    name: '/wipingtrans',
-    component: () => import(/* webpackChunkName: "about" */ '../views/wipingtrans.vue')
+    path: '/wipe_confirm_transfer',
+    name: 'wipe_confirm_transfer',
+    component: () => import('../views/wipe_confirm_transfer.vue')
   },
   {
-    path: '/wiping',
-    name: 'wiping',
-    component: () => import(/* webpackChunkName: "about" */ '../views/wiping.vue')
+    path: '/wipe_preparing',
+    name: 'wipe_preparing',
+    component: () => import('../views/wipe_preparing.vue')
   },
   {
-    path: '/wipingprocess',
-    name: 'wipingprocess',
-    component: () => import(/* webpackChunkName: "about" */ '../views/wipingprocess.vue')
+    path: '/wipe_executing',
+    name: 'wipe_executing',
+    component: () => import('../views/wipe_executing.vue')
   },
   {
-    path: '/callbeforetransfer',
-    name: 'callbeforetransfer',
-    component: () => import(/* webpackChunkName: "about" */ '../views/call-before-transfer.vue')
+    path: '/call_before_transfer',
+    name: 'call_before_transfer',
+    component: () => import('../views/call_before_transfer.vue')
   },
   {
-    path: '/home',
-    name: 'home',
-    component: () => import(/* webpackChunkName: "about" */ '../views/home.vue')
+    path: '/gesture_test',
+    name: 'gesture_test',
+    component: () => import('../views/gesture_test.vue')
   },
   {
-    path: '/CustomTextDisplay',
-    name: 'CustomTextDisplay',
-    component: () => import(/* webpackChunkName: "about" */ '../views/CustomTextDisplay.vue')
+    path: '/gesture_move_back',
+    name: 'gesture_move_back',
+    component: () => import('../views/gesture_move_back.vue')
   },
   {
-    path: '/gesturetest',
-    name: 'Gesturetest',
-    component: () => import(/* webpackChunkName: "about" */ '../views/gesturetest.vue')
+    path: '/skill_explanation',
+    name: 'skill_explanation',
+    component: () => import('../views/skill_explanation.vue')
   },
   {
-    path: '/gesturemoveback',
-    name: 'Gesturemoveback',
-    component: () => import(/* webpackChunkName: "about" */ '../views/gesturemoveback.vue')
+    path: '/gesture_move_to_record',
+    name: 'gesture_move_to_record',
+    component: () => import('../views/gesture_move_to_record.vue')
   },
   {
-    path: '/preparepickup',
-    name: 'preparepickup',
-    component: () => import(/* webpackChunkName: "about" */ '../views/PrepareBitePickup.vue')
+    path: '/gesture_setup',
+    name: 'gesture_setup',
+    component: () => import('../views/gesture_setup.vue')
   },
   {
-    path: '/gesturemove',
-    name: 'GestureMove',
-    component: () => import(/* webpackChunkName: "about" */ '../views/gesturemove.vue')
+    path: '/gesture_record_positive',
+    name: 'gesture_record_positive',
+    component: () => import('../views/gesture_record_positive.vue')
   },
   {
-    path: '/gesturesetting',
-    name: 'Gesturesetting',
-    component: () => import(/* webpackChunkName: "about" */ '../views/GestureSetting.vue')
+    path: '/gesture_record_negative',
+    name: 'gesture_record_negative',
+    component: () => import('../views/gesture_record_negative.vue')
   },
   {
-    path: '/gesturerecording',
-    name: 'GestureRecording',
-    component: () => import(/* webpackChunkName: "about" */ '../views/GestureRecording.vue')
+    path: '/gesture_menu',
+    name: 'gesture_menu',
+    component: () => import('../views/gesture_menu.vue')
   },
   {
-    path: '/gesturerecording2',
-    name: 'GestureRecording2',
-    component: () => import(/* webpackChunkName: "about" */ '../views/GestureRecording2.vue')
+    path: '/transparency',
+    name: 'transparency',
+    component: () => import('../views/transparency.vue')
   },
   {
-    path: '/gesturemain',
-    name: 'gesturemain',
-    component: () => import(/* webpackChunkName: "about" */ '../views/GestureMain.vue')
-  },
-  {
-    path: '/robotbehavior',
-    name: 'robotbehavior',
-    component: () => import(/* webpackChunkName: "about" */ '../views/Robotbehavior.vue')
-  },
-  {
-    path: '/fixedconfigurations',
-    name: 'fixedconfigurations',
-    component: () => import(/* webpackChunkName: "about" */ '../views/fixedconfigurations.vue')
+    path: '/adaptability',
+    name: 'adaptability',
+    component: () => import('../views/adaptability.vue')
   },
   {
     path: '/preference_correction',
     name: 'preference_correction',
-    component: () => import(/* webpackChunkName: "about" */ '../views/PreferenceCorrection.vue')
+    component: () => import('../views/preference_correction.vue')
   },
   {
     path: '/preference_context',
     name: 'preference_context',
-    component: () => import(/* webpackChunkName: "about" */ '../views/PreferenceContext.vue')
+    component: () => import('../views/preference_context.vue')
   },
   {
-    path: '/gesturemove2',
-    name: 'gesturemove2',
-    component: () => import(/* webpackChunkName: "about" */ '../views/gesturemove2.vue')
-  },
-  {
-    path: '/preparepickup2',
-    name: 'preparepickup2',
-    component: () => import(/* webpackChunkName: "about" */ '../views/PrepareBitePickup2.vue')
+    path: '/gesture_move_to_test',
+    name: 'gesture_move_to_test',
+    component: () => import('../views/gesture_move_to_test.vue')
   },
   {
     path: '/manipulation_teleop',
     name: 'manipulation_teleop',
-    component: () => import(/* webpackChunkName: "about" */ '../views/ManipulationTeleop.vue')
+    component: () => import('../views/manipulation_teleop.vue')
   },
   {
     path: '/navigation_teleop',
     name: 'navigation_teleop',
-    component: () => import(/* webpackChunkName: "about" */ '../views/NavigationTeleop.vue')
-  },
-  {
-    path: '/resuming',
-    name: 'resuming',
-    component: () => import(/* webpackChunkName: "about" */ '../views/Resuming.vue')
+    component: () => import('../views/navigation_teleop.vue')
   },
   {
     path: '/color_correction',
     name: 'color_correction',
-    component: () => import(/* webpackChunkName: "about" */ '../views/color_correction.vue')
+    component: () => import('../views/color_correction.vue')
   },
   {
     path: '/mictest',
     name: 'mictest',
-    component: () => import(/* webpackChunkName: "about" */ '../views/MicTest.vue')
+    component: () => import('../views/mic_test.vue')
   },
   {
     path: '/idle_takeover',
     name: 'idle_takeover',
-    component: () => import(/* webpackChunkName: "about" */ '../views/IdleTakeover.vue')
+    component: () => import('../views/idle_takeover.vue')
   }
 ]
 
 const router = createRouter({
   history: createWebHashHistory(),
-  // history: createWebHistory(process.env.BASE_URL),
   routes
 })
 export default router

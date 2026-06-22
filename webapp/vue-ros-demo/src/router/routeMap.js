@@ -1,67 +1,63 @@
-// src/router/routeMap.js
 const routeMap = {
-  emergency_stop: {
-    completed: { name: 'physical' }
-  },
-  some_other_state: {
-    some_status: '/acquirebite'
-  },
-  another_state: {
-    another_status: '/transferdrinks'
-  },
-  home: {
-    jump: '/home'
-  },
-  preparepickup: {
-    jump: '/preparepickup'
-  },
-  customtextdisplay: {
-    jump: '/CustomTextDisplay'
-  },
-  newmealpage: {
-    jump: '/newmealpage'
-  },
-  preparepickup2: {
-    jump: '/preparepickup2'
-  },
-  acquirebite: {
-    jump: '/acquirebite'
-  },
-  pickingup: {
-    jump: '/pickingup'
-  },
-  transfermeal: {
-    jump: '/transfermeal'
-  },
-  executingbitetransfer: {
-    jump: '/executingbitetransfer'
-  },
-  afterbitetransfer: {
-    jump: '/afterbitetransfer'
-  },
-  swithtodrink: {
-    jump: '/swithtodrink'
-  },
-  transferdrinks: {
-    jump: '/transferdrinks'
-  },
-  executingdrinktransfer: {
-    jump: '/executingdrinktransfer'
-  },
-  afterdrinktransfer: {
-    jump: '/afterdrinktransfer'
-  },
   task_selection: {
     jump: '/task_selection'
   },
+  skill_explanation: {
+    jump: '/skill_explanation'
+  },
+  meal_setup: {
+    jump: '/meal_setup'
+  },
+  bite_selection: {
+    jump: '/bite_selection'
+  },
+  bite_acquiring: {
+    jump: '/bite_acquiring'
+  },
+  bite_confirm_transfer: {
+    jump: '/bite_confirm_transfer'
+  },
+  bite_executing: {
+    jump: '/bite_executing'
+  },
+  after_bite: {
+    jump: '/after_bite'
+  },
+  switch_to_drink: {
+    jump: '/switch_to_drink'
+  },
+  drink_confirm_transfer: {
+    jump: '/drink_confirm_transfer'
+  },
+  drink_executing: {
+    jump: '/drink_executing'
+  },
+  after_drink: {
+    jump: '/after_drink'
+  },
+  wipe_preparing: {
+    jump: '/wipe_preparing'
+  },
+  wipe_confirm_transfer: {
+    jump: '/wipe_confirm_transfer'
+  },
+  wipe_executing: {
+    jump: '/wipe_executing'
+  },
+  detection_confirm: {
+    jump: '/detection_confirm'
+  },
   detect_confirmation: {
-    jump: '/detectconfirmation'
+    jump: '/detection_confirm'
+  },
+  color_correction: {
+    jump: '/color_correction'
   },
   transparency: {
-    jump: '/robotbehavior'
+    jump: '/transparency'
   },
   adaptability: {
-    jump: '/fixedconfigurations'
+    jump: '/adaptability'
   },
   preference_correction: {
     jump: '/preference_correction'
@@ -69,56 +65,38 @@ const routeMap = {
   preference_context: {
     jump: '/preference_context'
   },
-  wiping: {
-    jump: '/wiping'
+  gesture_menu: {
+    jump: '/gesture_menu'
   },
-  wipingtrans: {
-    jump: '/wipingtrans'
+  gesture_setup: {
+    jump: '/gesture_setup'
   },
-  gesturemoveback: {
-    jump: '/gesturemoveback'
+  gesture_move_to_record: {
+    jump: '/gesture_move_to_record'
   },
-  gesturemove2: {
-    jump: '/gesturemove2'
+  gesture_record_positive: {
+    jump: '/gesture_record_positive'
   },
-  wipingprocess: {
-    jump: '/wipingprocess'
+  gesture_record_negative: {
+    jump: '/gesture_record_negative'
   },
-  after_wipe_transfer: {
-    jump: '/after_wipe_transfer'
+  gesture_move_to_test: {
+    jump: '/gesture_move_to_test'
   },
-  callbeforetransfer: {
-    jump: '/callbeforetransfer'
+  gesture_move_back: {
+    jump: '/gesture_move_back'
   },
-  CustomTextDisplay: {
-    jump: '/CustomTextDisplay'
-  },
-  fixedconfigurations: {
-    jump: '/fixedconfigurations'
-  },
-  gesturemain: {
-    jump: '/gesturemain'
-  },
-  gesturemove: {
-    jump: '/gesturemove'
-  },
-  gesturerecording: {
-    jump: '/gesturerecording'
-  },
-  gesturerecording2: {
-    jump: '/gesturerecording2'
-  },
-  gesturesetting: {
-    jump: '/gesturesetting'
-  },
-  gesturetest: {
-    jump: '/gesturetest'
+  gesture_test: {
+    jump: '/gesture_test'
   },
   notify_caregiver: {
     jump: '/notify_caregiver'
   },
-  robotbehavior: {
-    jump: '/robotbehavior'
+  emergency_stop: {
+    completed: { name: 'emergency_stop' }
+  },
+  call_before_transfer: {
+    jump: '/call_before_transfer'
   },
   teleop: {
     jump: '/manipulation_teleop'
@@ -126,11 +104,8 @@ const routeMap = {
   navigation_teleop: {
     jump: '/navigation_teleop'
   },
-  resuming: {
-    jump: '/resuming'
-  },
-  color_correction: {
-    jump: '/color_correction'
+  gesture_record: {
+    jump: '/gesture_record_positive'
   }
 };
 

@@ -48,14 +48,14 @@ class WebInterface:
         self.received_web_interface_messages = queue.Queue()
         
         # Create a publisher for communication with the web interface.
-        self.web_interface_publisher = rospy.Publisher("/ServerComm", String, queue_size=10)
+        self.web_interface_publisher = rospy.Publisher("/robot_to_webapp", String, queue_size=10)
         # Latched so a page that subscribes mid-skill (e.g. the teleop screens,
         # which only mount after takeover) immediately receives the current plan.
-        self.skill_plan_publisher = rospy.Publisher("/SkillPlan", String, queue_size=1, latch=True)
+        self.skill_plan_publisher = rospy.Publisher("/skill_plan", String, queue_size=1, latch=True)
         self.web_interface_image_publisher = rospy.Publisher("/camera/image/compressed", CompressedImage, queue_size=10)
         self.image_bridge = CvBridge()
         self.user_preference = None
-        self.web_interface_sub = rospy.Subscriber("WebAppComm", String, self._message_callback, queue_size=100)
+        self.web_interface_sub = rospy.Subscriber("/webapp_to_robot", String, self._message_callback, queue_size=100)
         self.base_takeover_sub = rospy.Subscriber(
             "/shared_autonomy/takeover",
             Empty,
@@ -104,8 +104,7 @@ class WebInterface:
             print("Error stopping gesture listener thread: ", e)
 
     def switch_to_explanation_page(self) -> None:
-        # rostopic pub -1 /ServerComm std_msgs/String "data: '{\"state\":\"preparepickup2\",\"status\":\"jump\"}'"
-        self.web_interface_publisher.publish(String(json.dumps({"state": "preparepickup2", "status": "jump"})))
+        self.web_interface_publisher.publish(String(json.dumps({"state": "skill_explanation", "status": "jump"})))
 
     def publish_skill_plan(self, plan_names: list, current_index: int) -> None:
         """Publish (latched) the ordered skill plan and the index of the skill
@@ -136,7 +135,7 @@ class WebInterface:
     def _message_callback(self, msg: "String") -> None:
         """Callback for the web interface."""
         msg_dict = json.loads(msg.data)
-        print("Received message on WebAppComm: ", msg.data)
+        print("Received message on /webapp_to_robot: ", msg.data)
 
         # Teleop heartbeats arrive every few seconds; keep them out of the print
         # spam and the verbose received-messages log, but still enqueue them
@@ -145,7 +144,7 @@ class WebInterface:
             msg_dict.get("state") == "teleop" and msg_dict.get("status") == "heartbeat"
         )
         if not is_teleop_heartbeat:
-            print("Received message on WebAppComm: ", msg.data)
+            print("Received message on /webapp_to_robot: ", msg.data)
             with open(self.webapp_received_messages_log, "a") as f:
                 f.write(msg.data + "\n")
 
@@ -267,11 +266,11 @@ class WebInterface:
 
         # after bite and after sip are special, because they have bite and sip preselected for autocontinue with a timeout
         if last_task_type == "bite":
-            self._send_message({"state": "afterbitetransfer", "status": "jump"})
+            self._send_message({"state": "after_bite", "status": "jump"})
             time.sleep(0.5)
             self._send_message({"state": "auto_time", "status": str(self.bite_autocontinue_timeout)})
         elif last_task_type == "sip":
-            self._send_message({"state": "afterdrinktransfer", "status": "jump"})
+            self._send_message({"state": "after_drink", "status": "jump"})
             time.sleep(0.5)
             self._send_message({"state": "auto_time", "status": str(self.drink_autocontinue_timeout)})
         else:
@@ -306,7 +305,7 @@ class WebInterface:
         self.current_page = "meal_assistance"
 
         # Jump to new meal input page
-        self._send_message({"state": "newmealpage", "status": "jump"})
+        self._send_message({"state": "meal_setup", "status": "jump"})
 
         # Wait for the web interface to be ready for initial data
         time.sleep(0.5)
@@ -318,7 +317,7 @@ class WebInterface:
         while self.active:
             msg_dict = self.get_required_web_interface_message(lambda msg_dict: True)
             # data: "{\"state\":\"order_selection\",\"status\":\"ready_for_initial_data\"}"
-            if msg_dict["state"] != "order_selection":
+            if msg_dict["state"] != "meal_setup":
                 break
 
         return msg_dict["state"], msg_dict["status"]
@@ -328,7 +327,7 @@ class WebInterface:
         self.current_page = "meal_assistance"
 
         # Jump to next bite selection page
-        self._send_message({"state": "acquirebite", "status": "jump"})
+        self._send_message({"state": "bite_selection", "status": "jump"})
 
         # Send required data for the next bite selection page
         time.sleep(0.5) # simulate delay, needed for web interface
@@ -346,13 +345,13 @@ class WebInterface:
         # Get the user's next bite selection
         msg_dict_1 = self.get_required_web_interface_message(
             lambda msg_dict: (
-                ((msg_dict["status"] == "aquire_food" or msg_dict["status"] == 0 or msg_dict["status"] == 2) or msg_dict["state"] == "dip_selection")
+                ((msg_dict["status"] == "acquire_food" or msg_dict["status"] == 0 or msg_dict["status"] == 2) or msg_dict["state"] == "dip_selection")
             )
         )
-        if msg_dict_1["status"] == "aquire_food" or msg_dict_1["status"] == 0 or msg_dict_1["status"] == 2:
+        if msg_dict_1["status"] == "acquire_food" or msg_dict_1["status"] == 0 or msg_dict_1["status"] == 2:
             bite_msg_dict = msg_dict_1
             # But if bite is manual, then we should not wait for dip selection
-            if bite_msg_dict["status"] == "aquire_food":
+            if bite_msg_dict["status"] == "acquire_food":
                 dip_msg_dict = self.get_required_web_interface_message(
                     lambda msg_dict: (
                         (msg_dict["state"] == "dip_selection")
@@ -371,7 +370,7 @@ class WebInterface:
             # Dip recieved means bite has to be autonomous
             bite_msg_dict = self.get_required_web_interface_message(
                 lambda msg_dict: (
-                    (msg_dict["status"] == "aquire_food" or msg_dict["status"] == 0 or msg_dict["status"] == 2)
+                    (msg_dict["status"] == "acquire_food" or msg_dict["status"] == 0 or msg_dict["status"] == 2)
                 )
             )
             return "autonomous", bite_msg_dict["data"], dip_msg_dict["status"]
@@ -381,19 +380,19 @@ class WebInterface:
 
         self.current_page = "meal_assistance"
 
-        # Jump to successful food acquisition page
-        self._send_message({"state": "transfermeal", "status": "jump"})
+        # Jump to bite confirm transfer page
+        self._send_message({"state": "bite_confirm_transfer", "status": "jump"})
 
         # Wait until the user confirms that the food has been acquired
         msg_dict = self.get_required_web_interface_message(
             lambda msg_dict: (
-                (msg_dict["state"] == "post_bite_pickup")
+                (msg_dict["state"] == "bite_confirm_transfer")
             )
         )
 
-        if msg_dict["status"] == "bite_transfer":
+        if msg_dict["status"] == "confirm":
             return True
-        elif msg_dict["status"] == "return_to_main":
+        elif msg_dict["status"] == "cancel":
             return False
         else:
             print("Unsupported message received from the web interface: ", msg_dict)
@@ -402,13 +401,13 @@ class WebInterface:
 
         self.current_page = "meal_assistance"
 
-        # Jump to ready for drink transfer page
-        self._send_message({"state": "transferdrinks", "status": "jump"})
+        # Jump to drink confirm transfer page
+        self._send_message({"state": "drink_confirm_transfer", "status": "jump"})
 
         # Wait until the user confirms that the drink has been transferred
         self.get_required_web_interface_message(
             lambda msg_dict: (
-                (msg_dict["state"] == "post_drink_pickup" and msg_dict["status"] == "drink_transfer")
+                (msg_dict["state"] == "drink_confirm_transfer" and msg_dict["status"] == "confirm")
             )
         )
 
@@ -416,14 +415,14 @@ class WebInterface:
 
         self.current_page = "meal_assistance"
 
-        # jump to ready for wipe transfer page
-        print("Jumping to mouth wiping transfer page")
-        self._send_message({"state": "wipingtrans", "status": "jump"})
+        # Jump to wipe confirm transfer page
+        print("Jumping to wipe confirm transfer page")
+        self._send_message({"state": "wipe_confirm_transfer", "status": "jump"})
 
         # Wait until the user confirms that the wipe has been transferred
         self.get_required_web_interface_message(
             lambda msg_dict: (
-                (msg_dict["state"] == "prepared_mouth_wiping" and msg_dict["status"] == "move_to_wiping_position")
+                (msg_dict["state"] == "wipe_confirm_transfer" and msg_dict["status"] == "confirm")
             )
         )
 
@@ -438,23 +437,23 @@ class WebInterface:
         Returns True if the user confirms the detection looks correct, and False
         if the perception should be re-run.
         """
-        self.current_page = "detect_confirmation"
+        self.current_page = "detection_confirm"
 
         # Jump to the detection confirmation page.
-        self._send_message({"state": "detect_confirmation", "status": "jump", "detection_type": detection_type})
+        self._send_message({"state": "detection_confirm", "status": "jump", "detection_type": detection_type})
 
         # Wait for the web interface to be ready, then tell the (now-mounted)
         # confirmation page which detection this is and send the visualization
         # image. The "info" status is not in the frontend routeMap, so it only
         # updates the page's copy without triggering a re-navigation.
         time.sleep(0.5)
-        self._send_message({"state": "detect_confirmation", "status": "info", "detection_type": detection_type})
+        self._send_message({"state": "detection_confirm", "status": "info", "detection_type": detection_type})
         if vis_image is not None:
             self._send_image(vis_image)
 
         # Wait until the user confirms or rejects the detection.
         msg_dict = self.get_required_web_interface_message(
-            lambda msg_dict: (msg_dict["state"] == "detect_confirmation")
+            lambda msg_dict: (msg_dict["state"] == "detection_confirm")
         )
 
         if msg_dict is None:
@@ -472,15 +471,15 @@ class WebInterface:
 
         Returns 'confirm', 'redo', or 'correct_color'.
         """
-        self.current_page = "detect_confirmation"
-        self._send_message({"state": "detect_confirmation", "status": "jump", "detection_type": detection_type})
+        self.current_page = "detection_confirm"
+        self._send_message({"state": "detection_confirm", "status": "jump", "detection_type": detection_type})
         time.sleep(0.5)
-        self._send_message({"state": "detect_confirmation", "status": "info", "detection_type": detection_type})
+        self._send_message({"state": "detection_confirm", "status": "info", "detection_type": detection_type})
         if vis_image is not None:
             self._send_image(vis_image)
 
         msg_dict = self.get_required_web_interface_message(
-            lambda msg_dict: (msg_dict["state"] == "detect_confirmation")
+            lambda msg_dict: (msg_dict["state"] == "detection_confirm")
         )
         if msg_dict is None:
             return "redo"
@@ -533,7 +532,6 @@ class WebInterface:
             # Jump to transparency query page
             self._send_message({"state": "transparency", "status": "jump"})
 
-        # Wait until the user provides a transparency query
         msg_dict = self.get_required_web_interface_message(
             lambda msg_dict: (
                 (msg_dict["state"] == "transparency_request")
@@ -585,7 +583,7 @@ class WebInterface:
 
         msg_dict = self.get_required_web_interface_message(
             lambda msg_dict: (
-                (msg_dict["state"] == "gesture_main")
+                (msg_dict["state"] == "gesture_menu")
             )
         )
 
@@ -606,8 +604,8 @@ class WebInterface:
         
         self.current_page = "test_gesture"
 
-        # Jump to test gesture page
-        self._send_message({"state": "gesturetest", "status": "jump"})
+        # Jump to gesture test page
+        self._send_message({"state": "gesture_test", "status": "jump"})
 
         # Send available gestures to the web interface
         print("Length of available gestures: ", len(available_gestures))
@@ -628,7 +626,7 @@ class WebInterface:
         while self.active:
             msg_dict = self.get_required_web_interface_message(
                 lambda msg_dict: (
-                    (msg_dict["state"] == "test_selection")
+                    (msg_dict["state"] == "gesture_test_selection")
                 )
             )
 
@@ -660,8 +658,8 @@ class WebInterface:
     def get_gesture_examples(self) -> None:
         """Get gesture examples from the user."""
         
-        # Jump to gesturerecording page
-        self._send_message({"state": "gesturerecording", "status": "jump"})
+        # Jump to gesture recording page
+        self._send_message({"state": "gesture_record", "status": "jump"})
 
         positive_timestamps = self.record_gesture_examples()
         negative_timestamps = self.record_gesture_examples(positive=False)
@@ -672,9 +670,9 @@ class WebInterface:
         """Record gesture examples."""
 
         if positive:
-            trigger_message = "gesture_add"
+            trigger_message = "gesture_record_positive"
         else:
-            trigger_message = "gesture_add_negative"
+            trigger_message = "gesture_record_negative"
 
         timestamps = []
         start_timestamp, end_timestamp = None, None

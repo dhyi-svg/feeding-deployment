@@ -18,25 +18,26 @@
 
   <div class="content">
     <div class="buttons">
-      <div class="button2">
-        <button class="button3" @click="handleButtonClick">
+      <div class="button22">
+        <button class="button33" @click="handleButtonClick">
           <img class="button-drink" alt="Vue logo" src="../assets/for.png">
           Take a Bite
         </button>
       </div>
       <div class="button2">
-        <button class="button3" @click="handleButtonClickR">
+        <button class="button3" @click="handleButtonClickR" :class="{ 'active': isActiveBite }">
           <img class="button-drink" alt="Vue logo" src="../assets/drin.png">
           Take a Sip
         </button>
       </div>
-      <div class="button2">
-        <button class="button3" @click="handleButtonClickMouth" :class="{ 'active': isActiveMouth }">
+      <div class="button22">
+        <button class="button33" @click="handleButtonClickMouth">
           <img class="button-drink" alt="Vue logo" src="../assets/Frame.png">
           Wipe Mouth
         </button>
       </div>
     </div>
+    <div class="button-text">{{ countdownText }}</div>
     <div class="bottom-buttons">
       <button class="sub-button" @click="navigateToTrans()">
         <img class="sub-button-icon" src="../assets/trans.png" alt="Adaptability Icon" />
@@ -58,31 +59,71 @@
 import ROSLIB from "roslib";
 import routeMap from '@/router/routeMap';
 import { ROS_URL, USER} from '@/config/parameterConfig';
+
 export default {
   data () {
     return {
       ros: null,
       username: USER,
-      isActiveMouth: false,
+      countdown: 1000,
+      countdownText: "Auto Executing in 00:15 seconds",
       showSettings: false,
       speed: 'moderate',
-      countdownInterval: null
+      countdownInterval: null,
+      isActiveBite: false
     }
   },
   mounted () {
     this.ros = new ROSLIB.Ros({ url: ROS_URL })
+    this.isActiveBite = true;
+    this.startCountdown();
     this.initSubscriber()
     this.initPublisher()
     
     window.addEventListener('keydown', this.handleKeyDown) 
   },
   beforeUnmount () {
+    if (this.countdownInterval) {
+      clearInterval(this.countdownInterval);
+      this.countdownInterval = null;
+    }
     window.removeEventListener('keydown', this.handleKeyDown) 
     if (this.countdownInterval) {
       clearInterval(this.countdownInterval); 
     }
   },
+  beforeRouteLeave (to, from, next) {
+    if (this.countdownInterval) {
+      clearInterval(this.countdownInterval);
+      this.countdownInterval = null;
+    }
+    if (this.listener) {
+      this.listener.unsubscribe();
+      this.listener = null;
+    }
+
+    if (this.publisher) {
+      this.publisher.unadvertise();
+      this.publisher = null;
+    }
+
+    next();
+  },
   methods: {
+    startCountdown() {
+      this.countdownInterval = setInterval(() => {
+        if (this.countdown > 0) {
+          this.countdown -= 1;
+          this.updateCountdownText();
+        } else {
+          clearInterval(this.countdownInterval);
+          this.handleButtonClickR();
+        }
+      }, 1000);
+    },
+    updateCountdownText() {
+      this.countdownText = `Auto Executing in 00:${this.countdown.toString().padStart(2, '0')} seconds`;
+    },
     initSubscriber() {
 
       this.listener = new ROSLIB.Topic({
@@ -93,20 +134,6 @@ export default {
       this.listener.subscribe((message) => {
         this.handleRosMessage(message);
       });
-    },
-    handleRosMessage(message) {
-      try {
-        const parsedMessage = JSON.parse(message.data);
-        const route = routeMap[parsedMessage.state]?.[parsedMessage.status];
-        if (route) {
-          if (typeof route === 'string') {
-            this.$router.push(route); 
-          } else if (typeof route === 'object') {
-            this.$router.push(route); 
-          }
-        }
-      } catch (error) {
-      }
     },
     navigateToGes() {
       this.publishMessageG()
@@ -119,6 +146,36 @@ export default {
     navigateToAda() {
       this.publishMessageA()
       this.$router.push('/adaptability');
+    },
+    handleRosMessage(message) {
+      try {
+        const parsedMessage = JSON.parse(message.data);
+        if (parsedMessage.state === 'auto_time' && parsedMessage.status) {
+          if (this.countdownInterval) {
+            clearInterval(this.countdownInterval);
+            this.countdownInterval = null;
+          }
+
+          this.countdown = parseInt(parsedMessage.status, 10);
+          this.updateCountdownText();
+
+          this.startCountdown();
+        } else {
+        }
+        const route = routeMap[parsedMessage.state]?.[parsedMessage.status];
+        if (route) {
+          if (typeof route === 'string') {
+            this.$router.push(route); 
+          } else if (typeof route === 'object') {
+            this.$router.push(route); 
+          }
+        }
+      } catch (error) {
+      }
+    },
+
+    autoClickDrinkButton() {
+      this.handleButtonClickR(); 
     },
     handleButtonClickR() {
       this.publishMessageD();
@@ -227,7 +284,7 @@ export default {
       })
       this.publisher.publish(message);
     },
-    toggleSettings() {
+    toggleSettings () {
       const message = new ROSLIB.Message({
         data: JSON.stringify({ 
           state: 'task_selection',
@@ -279,6 +336,9 @@ export default {
 
 <style scoped>
 .bottom-buttons {
+  //display: flex;
+  //justify-content: center;
+  //gap: 20px;
   margin-top: 20px;
   display: flex;
   gap: 20px;
@@ -311,15 +371,16 @@ export default {
   width: 7vw;
   margin-right: 10px;
 }
+
 .button-text {
   font-family: Verdana;
   font-size: 16px;
   color: black;
-  text-align: left;
+  text-align: center;
   width:85vw;
   padding-top: 10px; 
 }
-.button3 {
+.button33 {
   background-color: #FFE699;
   border-radius: 20px;
   display: flex;
@@ -327,7 +388,7 @@ export default {
   justify-content: center;
   background-color: #FFE699;
   border-radius: 20px;
-  width: 25vw;
+  width: 29vw;
   height: 40vh;
   top: 740px;
   left: 924px;
@@ -357,6 +418,86 @@ export default {
   letter-spacing: 0.22500000894069672px;
   text-align: center;
 
+}
+.button3 {
+  background-color: #FFE699;
+  border-radius: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #FFE699;
+  border-radius: 20px;
+  width: 29vw;
+  height: 40vh;
+  top: 740px;
+  left: 924px;
+  gap: 0px;
+  opacity: 0px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-flow: column;
+  .icon {
+    margin-right: 8px;
+  }
+  .button-drink{
+    height:18vh;
+    width: 14vw;
+  }
+  .button-setting{
+    height:7vh;
+    width: 4vw;
+    margin:10px
+  }
+  border: none;
+  font-family: Verdana;
+  font-size: 3vw;
+  font-weight: 400;
+  line-height: 24px;
+  letter-spacing: 0.22500000894069672px;
+  text-align: center;
+
+}
+
+.button22 {
+  background-color: #FFE699;
+  border-radius: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #FFE699;
+  border-radius: 20px;
+  width: 29vw;
+  height: 40vh;
+  top: 740px;
+  left: 924px;
+  gap: 0px;
+  opacity: 0px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-flow: column;
+  .icon {
+    margin-right: 8px;
+  }
+  .button-drink{
+    height:25vh;
+    width: 20vw;
+  }
+  .button-setting{
+    height:7vh;
+    width: 4vw;
+    margin:10px
+  }
+  font-family: Verdana;
+  font-size: 20px;
+  font-weight: 400;
+  line-height: 24px;
+  letter-spacing: 0.22500000894069672px;
+  text-align: center;
+}
+.button3.active {
+  border: 3px solid black !important; 
 }
 .button2 {
   background-color: #FFE699;
@@ -572,6 +713,7 @@ export default {
   flex-direction: column;
   justify-content: center;
   align-items: center;
+  //align-items: baseline;
   height: 80vh;
   padding: 20px;
 }

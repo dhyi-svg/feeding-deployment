@@ -8,79 +8,83 @@
       </div>
     </div>
     <div class="right">
+      <div class="setting-container">
 
+        <div v-if="showSettings" class="settings-panel">
+          <h3>Speed:</h3>
+          <div>
+            <input type="radio" id="slow" name="speed" value="slow" />
+            <label for="slow">Slow</label>
+          </div>
+          <div>
+            <input type="radio" id="moderate" name="speed" value="moderate" checked />
+            <label for="moderate">Moderate</label>
+          </div>
+          <div>
+            <input type="radio" id="fast" name="speed" value="fast" />
+            <label for="fast">Fast</label>
+          </div>
+        </div>
+      </div>
       <button class="finish-button">
         <img class = "icon" alt="food" src="../assets/finish.png">
-        <span class="finish-button-text" @click="redirectToChangeItemF">Finish Feeding</span>
+        <span class = "finish-button-text">Finish Feeding</span>
       </button>
     </div>
   </div>
 
   <div class="content">
-    <div class="buttons">
-      <div class="button2">
-        <button class="button3" @click="handleButtonClick">
-          <img class="button-drink" alt="Vue logo" src="../assets/for.png">
-          Take a Bite
-        </button>
-      </div>
-      <div class="button2">
-        <button class="button3" @click="handleButtonClickR">
-          <img class="button-drink" alt="Vue logo" src="../assets/drin.png">
-          Take a Sip
-        </button>
-      </div>
-      <div class="button2">
-        <button class="button3" @click="handleButtonClickMouth" :class="{ 'active': isActiveMouth }">
-          <img class="button-drink" alt="Vue logo" src="../assets/Frame.png">
-          Wipe Mouth
-        </button>
-      </div>
+    <div class="physical-button-pressed">
+      Physical Button Pressed
     </div>
-    <div class="bottom-buttons">
-      <button class="sub-button" @click="navigateToTrans()">
-        <img class="sub-button-icon" src="../assets/trans.png" alt="Adaptability Icon" />
-        Transparency
-      </button>
-      <button class="sub-button" @click="navigateToAda()">
-        <img class="sub-button-icon" src="../assets/ada.png" alt="Adaptability Icon" />
-        Adaptability
-      </button>
-      <button class="sub-button" @click="navigateToGes()">
-        <img class="sub-button-icon" src="../assets/ges.png" alt="Adaptability Icon" />
-        Gestures
-      </button>
+    <div class="instruction">
+      Anomaly detected. How would you like to proceed?
+    </div>
+    <div class="buttons">
+      <div class="button-container">
+        <button class="icon-button">
+          <img src="../assets/call-center.png" alt="Call Experimenter">
+        </button>
+        <button class="text-button" @click="redirectToChangeItem">Call Experimenter</button>
+      </div>
+      <div class="button-container">
+        <button class="icon-button">
+          <img class = "icon-for" src="../assets/for.png" alt="Resume Feeding">
+        </button>
+        <button class="text-button" @click="redirectToChangeItemBack">Resume Feeding</button>
+      </div>
+      <div class="button-container">
+        <button class="icon-button">
+          <img src="../assets/Frame.png" alt="Mouth Wiping">
+        </button>
+        <button class="text-button" @click="redirectToChangeItemNext">Mouth Wiping</button>
+      </div>
     </div>
   </div>
 </template>
 
 <script>
-import ROSLIB from "roslib";
+import ROSLIB from "roslib"
 import routeMap from '@/router/routeMap';
 import { ROS_URL, USER} from '@/config/parameterConfig';
+
 export default {
   data () {
     return {
       ros: null,
       username: USER,
-      isActiveMouth: false,
       showSettings: false,
-      speed: 'moderate',
-      countdownInterval: null
+      speed: 'moderate'
     }
   },
   mounted () {
     this.ros = new ROSLIB.Ros({ url: ROS_URL })
     this.initSubscriber()
     this.initPublisher()
-    
     window.addEventListener('keydown', this.handleKeyDown) 
   },
   beforeUnmount () {
     window.removeEventListener('keydown', this.handleKeyDown) 
-    if (this.countdownInterval) {
-      clearInterval(this.countdownInterval); 
-    }
   },
   methods: {
     initSubscriber() {
@@ -107,85 +111,6 @@ export default {
         }
       } catch (error) {
       }
-    },
-    navigateToGes() {
-      this.publishMessageG()
-      this.$router.push('/gesture_menu');
-    },
-    navigateToTrans() {
-      this.publishMessageT()
-      this.$router.push('/transparency');
-    },
-    navigateToAda() {
-      this.publishMessageA()
-      this.$router.push('/adaptability');
-    },
-    handleButtonClickR() {
-      this.publishMessageD();
-      this.$router.push('/switch_to_drink');
-    },
-    handleButtonClick() {
-      this.publishMessageR();
-      this.$router.push('/skill_explanation');
-    },
-    handleButtonClickMouth() {
-      this.publishMessagePhysical();
-      this.$router.push('/wipe_preparing');
-    },
-    publishMessageG() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          state: 'task_selection',
-          status: 'gesture'
-        }) 
-      })
-      this.publisher.publish(message);
-    },
-    publishMessageD() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          state: 'task_selection',
-          status: 'take_sip'
-        }) 
-      })
-      this.publisher.publish(message);
-    },
-    publishMessageR() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          state: 'task_selection',
-          status: 'take_bite'
-        }) 
-      })
-      this.publisher.publish(message);
-    },
-    publishMessagePhysical() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          state: 'task_selection',
-          status: 'mouth_wiping'
-        })
-      })
-      this.publisher.publish(message);
-    },
-    publishMessageT() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          state: 'task_selection',
-          status: 'transparency'
-        })
-      })
-      this.publisher.publish(message);
-    },
-    publishMessageA() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          state: 'task_selection',
-          status: 'adaptability'
-        })
-      })
-
-      this.publisher.publish(message);
     },
     initPublisher() {
 
@@ -227,15 +152,12 @@ export default {
       })
       this.publisher.publish(message);
     },
-    toggleSettings() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({ 
-          state: 'task_selection',
-          status: 'jump' 
-        })
-      })
-      this.publisher.publish(message)
-      this.$router.push('/task_selection')
+    toggleSettings () {
+      
+      if (this.showSettings) {
+        this.publishSpeedSetting();
+      }
+      this.showSettings = !this.showSettings; 
     },
     handleKeyDown (event) { 
       if (event.key === 'e' || event.key === 'E') {
@@ -260,7 +182,7 @@ export default {
     },
     redirectToChangeItem () {
       this.publishCallCaregiver();
-      this.$router.push('/switch_to_drink')
+      this.$router.push('/call_before_transfer')
     },
     redirectToChangeItemBack () {
       this.publishResumeFeeding();
@@ -270,134 +192,14 @@ export default {
       this.publishCallNext();
       this.$router.push('/wipe_preparing')
     },
-    redirectToChangeItemF () {
-      this.$router.push('/notify_caregiver')
-    },
   }
 }
 </script>
 
 <style scoped>
-.bottom-buttons {
-  margin-top: 20px;
-  display: flex;
-  gap: 20px;
-  max-width: 90vw;
-  max-height: 90vh;
-  width: 100%;
-  align-items: baseline;
-  justify-content: space-between;
-}
-
-.sub-button {
-  background-color: #ffe699;
-  border: none;
-  border-radius: 10px;
-  padding: 10px 20px;
-  font-family: Verdana;
-  font-size: 3vw;
-  //font-weight: bold;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 150px;
-  width: 41vw;
-  height: 19vh;
-}
-
-.sub-button-icon {
-  height: 15vh;
-  width: 7vw;
-  margin-right: 10px;
-}
-.button-text {
-  font-family: Verdana;
-  font-size: 16px;
-  color: black;
-  text-align: left;
-  width:85vw;
-  padding-top: 10px; 
-}
-.button3 {
-  background-color: #FFE699;
-  border-radius: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background-color: #FFE699;
-  border-radius: 20px;
-  width: 25vw;
-  height: 40vh;
-  top: 740px;
-  left: 924px;
-  gap: 0px;
-  opacity: 0px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-flow: column;
-  .icon {
-    margin-right: 8px;
-  }
-  .button-drink{
-    height:18vh;
-    width: 14vw;
-  }
-  .button-setting{
-    height:7vh;
-    width: 4vw;
-    margin:10px
-  }
-  border: none;
-  font-family: Verdana;
-  font-size: 3vw;
-  font-weight: 400;
-  line-height: 24px;
-  letter-spacing: 0.22500000894069672px;
-  text-align: center;
-
-}
-.button2 {
-  background-color: #FFE699;
-  border-radius: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background-color: #FFE699;
-  border-radius: 20px;
-  width: 29vw;
-  height: 40vh;
-  top: 740px;
-  left: 924px;
-  gap: 0px;
-  opacity: 0px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-flow: column;
-  .icon {
-    margin-right: 8px;
-  }
-  .button-drink{
-    height:25vh;
-    width: 20vw;
-  }
-  .button-setting{
-    height:7vh;
-    width: 4vw;
-    margin:10px
-  }
-  font-family: Verdana;
-  font-size: 20px;
-  font-weight: 400;
-  line-height: 24px;
-  letter-spacing: 0.22500000894069672px;
-  text-align: center;
-}
 .icon-for{
-  height: 40vh;
-  width: 40vw;
+  height: 20vh;
+  width: 16vw;
 }
 .top {
   height: 9vh;
@@ -606,11 +408,6 @@ export default {
 .buttons {
   display: flex;
   gap: 20px;
-  max-width: 90vw;
-  max-height: 90vh;
-  width: 100%;
-  align-items: baseline;
-  justify-content: space-between;
 }
 
 .button-container {

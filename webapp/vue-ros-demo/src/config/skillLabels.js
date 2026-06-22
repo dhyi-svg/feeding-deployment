@@ -1,8 +1,3 @@
-// Human-readable labels for robot skills (snake_case behavior-tree names ->
-// display names). Shared by the explanation page and the teleop screens so the
-// displayed skill name stays consistent across the app. Names mirror the
-// behavior trees in src/feeding_deployment/actions/behavior_trees/.
-
 export const SKILL_LABELS = {
   navigate_to_table: 'Drive to Table',
   navigate_to_fridge: 'Drive to Fridge',
@@ -36,15 +31,9 @@ export const SKILL_LABELS = {
   stow_wipe: 'Stow Wipe'
 }
 
-// Returns a friendly label for a skill, falling back to a title-cased version
-// of the raw name (e.g. "wash_plate" -> "Wash Plate") for anything unlisted.
 export function skillLabel (name) {
-  if (!name) {
-    return ''
-  }
-  if (SKILL_LABELS[name]) {
-    return SKILL_LABELS[name]
-  }
+  if (!name) return ''
+  if (SKILL_LABELS[name]) return SKILL_LABELS[name]
   return name
     .split('_')
     .map(word => word.charAt(0).toUpperCase() + word.slice(1))

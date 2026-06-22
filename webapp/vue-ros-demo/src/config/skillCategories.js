@@ -1,20 +1,9 @@
-// Maps each skill (the behavior-tree name published on /SkillPlan) to the kind
-// of teleop the context-aware takeover button should switch to:
-//   'navigation'   -> drive the mobile base (/navigation_teleop)
-//   'manipulation' -> move the arm       (/manipulation_teleop)
-//
-// Only navigation skills strictly need an entry; anything not listed defaults to
-// 'manipulation' (see categoryOf). The full list is kept here for clarity and so
-// a reviewer can see every skill's intended routing at a glance.
-
 export const SKILL_CATEGORY = {
-  // --- navigation (drive the base) ---
   navigate_to_table: 'navigation',
   navigate_to_sink: 'navigation',
   navigate_to_fridge: 'navigation',
   navigate_to_microwave: 'navigation',
 
-  // --- manipulation (move the arm) ---
   acquire_bite: 'manipulation',
   transfer_utensil: 'manipulation',
   transfer_drink: 'manipulation',
@@ -43,9 +32,6 @@ export const SKILL_CATEGORY = {
   place_plate_in_sink: 'manipulation'
 }
 
-// Resolve a skill name to a category. Unknown skills default to 'manipulation';
-// the navigate_* prefix is a safety net so a newly-added navigation skill never
-// mis-routes to the arm before someone adds it to the map above.
 export function categoryOf (skillName) {
   if (!skillName) return 'manipulation'
   if (SKILL_CATEGORY[skillName]) return SKILL_CATEGORY[skillName]

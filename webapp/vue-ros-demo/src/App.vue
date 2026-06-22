@@ -1,17 +1,9 @@
 <template>
   <div id="app">
-    <!-- One-time gesture to start the physical takeover button's mic listener.
-         iOS requires a user tap before getUserMedia; hidden once enabled. -->
     <button v-if="!takeoverMicEnabled" class="enable-takeover-btn" @click="enableTakeoverMic">
       🎙 Enable takeover button
     </button>
-    <!-- Global manual-control buttons: let the user grab control at any time,
-         including in the middle of a skill. Hidden on the teleop/resuming pages.
-         Anchored as a group whose right edge clears the page's Finish Feeding
-         button; the flex gap keeps the two from colliding with each other. -->
     <div v-if="showTakeOver" class="global-controls">
-      <!-- Base control: from the task-selection menu, or while the robot is
-           autonomously driving (the executive enables it during navigation). -->
       <button
         v-if="onTaskSelection || baseControlEnabled"
         class="global-btn base"
@@ -34,14 +26,11 @@ export default {
     return {
       takeoverPublisher: null,
       serverListener: null,
-      // Set by the executive while the base is autonomously driving, so the
-      // user can take over mid-drive (Robot Base Control is otherwise menu-only).
       baseControlEnabled: false,
-      // --- context-aware physical takeover button (read via Web Audio) ---
       takeoverMicEnabled: false,
-      takeoverThreshold: 0.1,   // tuned on the iPad (normalized peak, 0..1)
-      skillPlan: [],            // latched /SkillPlan: ordered skill names
-      skillCurrent: -1,         // index of executing skill; -1 == idle
+      takeoverThreshold: 0.1,
+      skillPlan: [],
+      skillCurrent: -1,
       _analyser: null,
       _audioBuf: null,
       _prevAbove: false,
@@ -52,7 +41,7 @@ export default {
   computed: {
     showTakeOver () {
       const p = this.$route.path
-      return p !== '/manipulation_teleop' && p !== '/navigation_teleop' && p !== '/resuming'
+      return p !== '/manipulation_teleop' && p !== '/navigation_teleop'
     },
     onTaskSelection () {
       return this.$route.path === '/task_selection'
@@ -62,13 +51,12 @@ export default {
     const ros = new ROSLIB.Ros({ url: ROS_URL })
     this.takeoverPublisher = new ROSLIB.Topic({
       ros,
-      name: '/WebAppComm',
+      name: '/webapp_to_robot',
       messageType: 'std_msgs/String'
     })
-    // Listen for base-control availability from the executive (set during navigation).
     this.serverListener = new ROSLIB.Topic({
       ros,
-      name: '/ServerComm',
+      name: '/robot_to_webapp',
       messageType: 'std_msgs/String'
     })
     this.serverListener.subscribe((msg) => {
@@ -79,12 +67,9 @@ export default {
         }
       } catch (e) { /* ignore non-JSON */ }
     })
-    // Track which skill is executing so the physical takeover button can route
-    // to the matching teleop. /SkillPlan is latched: { plan, current }, where
-    // current === -1 means idle (no skill running).
     this.skillPlanListener = new ROSLIB.Topic({
       ros,
-      name: '/SkillPlan',
+      name: '/skill_plan',
       messageType: 'std_msgs/String'
     })
     this.skillPlanListener.subscribe((msg) => {
@@ -100,7 +85,6 @@ export default {
   },
   methods: {
     controlArm () {
-      // Signal a mid-skill manipulation takeover, then open the arm teleop page.
       if (this.takeoverPublisher) {
         this.takeoverPublisher.publish(new ROSLIB.Message({
           data: JSON.stringify({ state: 'teleop', status: 'takeover' })
@@ -109,18 +93,16 @@ export default {
       this.$router.push('/manipulation_teleop')
     },
     controlBase () {
-      // The navigation page itself announces the base takeover on mount.
       this.$router.push('/navigation_teleop')
     },
 
-    // ---- context-aware physical takeover button (Web Audio) ----
     async enableTakeoverMic () {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
         })
         const ctx = new (window.AudioContext || window.webkitAudioContext)()
-        await ctx.resume() // iOS needs resume() after the user gesture
+        await ctx.resume()
         const src = ctx.createMediaStreamSource(stream)
         this._analyser = ctx.createAnalyser()
         this._analyser.fftSize = 2048
@@ -142,7 +124,7 @@ export default {
       }
       const above = peak > this.takeoverThreshold
       const now = Date.now()
-      if (above && !this._prevAbove && (now - this._lastHit) > 1500) { // rising edge + 1.5s debounce
+      if (above && !this._prevAbove && (now - this._lastHit) > 1500) {
         this._lastHit = now
         this.onTakeoverButton()
       }
@@ -150,18 +132,11 @@ export default {
       this._raf = requestAnimationFrame(this.audioLoop)
     },
     onTakeoverButton () {
-      // Ignore presses while we're already in a teleop / recovery / chooser
-      // context (showTakeOver is false on the teleop + resuming pages). Otherwise
-      // repeated presses keep publishing {teleop,takeover}, which re-latches the
-      // robot-side takeover_event and re-triggers takeover when the skill
-      // resumes — the "have to tap redo twice" symptom.
       if (!this.showTakeOver || this.$route.path === '/idle_takeover') return
-      // Idle: no skill running -> open the chooser page, nothing else.
       if (this.skillCurrent < 0) {
         if (this.$route.path !== '/idle_takeover') this.$router.push('/idle_takeover')
         return
       }
-      // Executing: route to the teleop matching the current skill's category.
       const skill = this.skillPlan[this.skillCurrent]
       if (categoryOf(skill) === 'navigation') this.controlBase()
       else this.controlArm()
@@ -171,8 +146,6 @@ export default {
 </script>
 
 <style>
-/* Reset the default body margin so full-height pages (height: 100vh, e.g. the
-   teleop screens) fit the viewport exactly without scrolling. */
 html, body {
   margin: 0;
   padding: 0;
@@ -200,20 +173,10 @@ nav a.router-link-exact-active {
   color: #42b983;
 }
 
-/* Global control buttons, fixed top-right as a group. The group's RIGHT edge is
-   pinned at right:240px so it always clears the page's ~220px-wide "Finish
-   Feeding" button (which occupies the rightmost ~225px); the buttons grow
-   leftward and the 10px gap keeps them apart. The group spans the same 9vh top
-   band as the page header and centers its buttons, so they line up with the
-   "Finish Feeding" button at any viewport height. */
 .global-controls {
   position: fixed;
   top: 0;
   right: 240px;
-  /* Match the header bar's FULL rendered height: its 9vh content height plus
-     its 5px top/bottom padding (content-box). Centering within this band lines
-     the buttons up with the "Finish Feeding" button, which is centered in the
-     same bar. */
   height: calc(9vh + 10px);
   z-index: 1000;
   display: flex;

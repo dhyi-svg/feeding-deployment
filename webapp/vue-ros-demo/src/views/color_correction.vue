@@ -1,7 +1,7 @@
 <template>
   <div class="top">
     <div class="left">
-      <img class="user" alt="User" src="https://c.animaapp.com/jvBoNEN4/img/user.svg">
+      <img class="user" alt="User" src="../assets/user_avatar.svg">
       <div class="usertext">
         <div class="username">{{ username }}</div>
         <div class="userslog">Adjust color detection.</div>
@@ -10,7 +10,7 @@
   </div>
 
   <div class="content">
-    <!-- Image + vertical side panel -->
+    
     <div class="image-and-side">
       <div class="canvas-container">
         <canvas
@@ -23,7 +23,6 @@
         <div v-else-if="waitingForResult" class="canvas-overlay-text">Running detection…</div>
       </div>
 
-      <!-- Color swatch + vertical range slider, spanning image height -->
       <div class="side-panel" :style="sideHeight ? { height: sideHeight + 'px' } : {}">
         <div class="color-swatch" :style="{ backgroundColor: selectedColorCss }"></div>
         <div class="slider-wrapper">
@@ -39,12 +38,10 @@
       </div>
     </div>
 
-    <!-- Status badge -->
     <div v-if="detectionStatus" :class="['status-badge', detectionStatus]">
       {{ detectionStatusText }}
     </div>
 
-    <!-- Buttons -->
     <div class="buttons">
       <button class="reset-button"   :disabled="!showingResult || waitingForResult" @click="resetImage">Reset</button>
       <button class="rerun-button"   :disabled="!selectedColor || waitingForResult || showingResult" @click="rerunDetection">Rerun</button>
@@ -62,6 +59,7 @@ export default {
   name: 'ColorCorrection',
   data () {
     return {
+      ros: null,
       username: USER,
       colorRange: 0.1,
       selectedColor: null,
@@ -93,6 +91,7 @@ export default {
     }
   },
   mounted () {
+    this.ros = new ROSLIB.Ros({ url: ROS_URL })
     this.initPublisher()
     this.initSubscriber()
     window.addEventListener('resize', this.updateSideHeight)
@@ -105,11 +104,9 @@ export default {
   },
   methods: {
     initPublisher () {
-      const ros = new ROSLIB.Ros({ url: ROS_URL })
-      this.publisher = new ROSLIB.Topic({ ros, name: '/WebAppComm', messageType: 'std_msgs/String' })
+      this.publisher = new ROSLIB.Topic({ ros, name: '/webapp_to_robot', messageType: 'std_msgs/String' })
     },
     initSubscriber () {
-      const ros = new ROSLIB.Ros({ url: ROS_URL })
 
       this.imageListener = new ROSLIB.Topic({
         ros, name: '/camera/image/compressed', messageType: 'sensor_msgs/CompressedImage'
@@ -136,7 +133,7 @@ export default {
       })
 
       this.listener = new ROSLIB.Topic({
-        ros, name: '/ServerComm', messageType: 'std_msgs/String'
+        ros, name: '/robot_to_webapp', messageType: 'std_msgs/String'
       })
       this.listener.subscribe((msg) => {
         try {
@@ -156,7 +153,6 @@ export default {
           const route = routeMap[data.state]?.[data.status]
           if (route) this.$router.push(route)
         } catch (e) {
-          console.error('Failed to parse ServerComm message:', e)
         }
       })
     },
@@ -289,7 +285,6 @@ export default {
   gap: 8px;
 }
 
-/* ── Image + side panel row ── */
 .image-and-side {
   display: flex;
   flex-direction: row;
@@ -329,7 +324,6 @@ export default {
   pointer-events: none;
 }
 
-/* ── Side panel: color swatch + vertical slider ── */
 .side-panel {
   width: 72px;
   display: flex;
@@ -359,7 +353,6 @@ export default {
   overflow: hidden;
 }
 
-/* Vertical range slider — rotated horizontal slider for reliable iPad centering */
 .vertical-slider {
   -webkit-appearance: none;
   appearance: none;
@@ -371,7 +364,6 @@ export default {
   outline: none;
 }
 
-/* Track */
 .vertical-slider::-webkit-slider-runnable-track {
   background: #ccc;
   border-radius: 5px;
@@ -383,7 +375,6 @@ export default {
   height: 10px;
 }
 
-/* Thumb — large square dial */
 .vertical-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
@@ -416,7 +407,6 @@ export default {
   flex-shrink: 0;
 }
 
-/* ── Status badge ── */
 .status-badge {
   padding: 5px 16px;
   border-radius: 8px;
@@ -430,7 +420,6 @@ export default {
 .status-badge.success { background: #d4edda; color: #155724; }
 .status-badge.failed  { background: #f8d7da; color: #721c24; }
 
-/* ── Buttons ── */
 .buttons { display: flex; gap: 12px; }
 .reset-button, .rerun-button, .confirm-button {
   border: none;
