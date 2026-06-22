@@ -7,13 +7,6 @@
         <div class = "userslog">Enjoy your mealtime now!</div>
       </div>
     </div>
-    <div class="right">
-
-      <button class="finish-button">
-        <img class = "icon" alt="food" src="../assets/finish.png">
-        <span class="finish-button-text" @click="redirectToChangeItemF">Finish Feeding</span>
-      </button>
-    </div>
   </div>
 
   <div class="content">
@@ -38,17 +31,11 @@
       </div>
     </div>
     <div class="bottom-buttons">
-      <button class="sub-button" @click="navigateToTrans()">
-        <img class="sub-button-icon" src="../assets/trans.png" alt="Adaptability Icon" />
-        Transparency
+      <button class="wide-button" @click="$router.push('/personalization')">
+        Personalization
       </button>
-      <button class="sub-button" @click="navigateToAda()">
-        <img class="sub-button-icon" src="../assets/ada.png" alt="Adaptability Icon" />
-        Adaptability
-      </button>
-      <button class="sub-button" @click="navigateToGes()">
-        <img class="sub-button-icon" src="../assets/ges.png" alt="Adaptability Icon" />
-        Gestures
+      <button class="wide-button" @click="handleFinishFeeding">
+        Finish Feeding
       </button>
     </div>
   </div>
@@ -104,18 +91,6 @@ export default {
       } catch (error) {
       }
     },
-    navigateToGes() {
-      this.publishMessageG()
-      this.$router.push('/gesture_menu');
-    },
-    navigateToTrans() {
-      this.publishMessageT()
-      this.$router.push('/transparency');
-    },
-    navigateToAda() {
-      this.publishMessageA()
-      this.$router.push('/adaptability');
-    },
     handleButtonClickR() {
       this.publishMessageD();
       this.$router.push('/robot_executing');
@@ -127,15 +102,6 @@ export default {
     handleButtonClickMouth() {
       this.publishMessagePhysical();
       this.$router.push('/robot_executing');
-    },
-    publishMessageG() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          state: 'task_selection',
-          status: 'gesture'
-        }) 
-      })
-      this.publisher.publish(message);
     },
     publishMessageD() {
       const message = new ROSLIB.Message({
@@ -164,24 +130,15 @@ export default {
       })
       this.publisher.publish(message);
     },
-    publishMessageT() {
+    handleFinishFeeding() {
       const message = new ROSLIB.Message({
         data: JSON.stringify({
           state: 'task_selection',
-          status: 'transparency'
+          status: 'finish_feeding'
         })
       })
       this.publisher.publish(message);
-    },
-    publishMessageA() {
-      const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          state: 'task_selection',
-          status: 'adaptability'
-        })
-      })
-
-      this.publisher.publish(message);
+      this.$router.push('/robot_executing');
     },
     initPublisher() {
 
@@ -204,9 +161,6 @@ export default {
 
       next();
     },
-    redirectToChangeItemF () {
-      this.$router.push('/notify_caregiver')
-    },
   }
 }
 </script>
@@ -217,32 +171,23 @@ export default {
   display: flex;
   gap: 20px;
   max-width: 90vw;
-  max-height: 90vh;
   width: 100%;
-  align-items: baseline;
   justify-content: space-between;
 }
 
-.sub-button {
+.wide-button {
   background-color: #ffe699;
   border: none;
-  border-radius: 10px;
-  padding: 10px 20px;
+  border-radius: 16px;
   font-family: Verdana;
-  font-size: 3vw;
+  font-size: 2.5vw;
+  font-weight: 400;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-width: 150px;
-  width: 41vw;
-  height: 19vh;
-}
-
-.sub-button-icon {
-  height: 15vh;
-  width: 7vw;
-  margin-right: 10px;
+  flex: 1;
+  height: 12vh;
 }
 .button-text {
   font-family: Verdana;

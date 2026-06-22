@@ -7,12 +7,6 @@
         <div class = "userslog">Enjoy your mealtime now!</div>
       </div>
     </div>
-    <div class="right">
-      <button class="finish-button">
-        <img class = "icon" alt="food" src="../assets/finish.png">
-        <span class = "finish-button-text" @click ="redirectToChangeItemF">Finish Feeding</span>
-      </button>
-    </div>
   </div>
 
   <div class="skill-plan" v-if="planSlots.current">
@@ -161,9 +155,6 @@ export default {
       });
     },
 
-    redirectToChangeItemF () {
-      this.$router.push('/notify_caregiver')
-    },
   }
 }
 </script>
@@ -181,30 +172,6 @@ export default {
     display: flex;
     justify-content: center;
     align-items: center;
-    .finish-button-text{
-      font-family: Verdana;
-      font-size: 18px;
-      font-weight: 400;
-      line-height: 24px;
-      letter-spacing: 0.17499999701976776px;
-      text-align: left;
-    }
-    .finish-button {
-      background-color: #6e7e8e;
-      border: none;
-      border-radius: 8px;
-      color: white;
-      padding: 10px 20px;
-      margin-left: 10px;
-      cursor: pointer;
-      font-size: 16px;
-      display: flex;
-      align-items: center;
-      height: 50px;
-    }
-    .finish-button span {
-      margin-left: 5px;
-    }
   }
   .left {
     display: flex;
@@ -246,23 +213,6 @@ export default {
   align-items: center;
 }
 
-.finish-button {
-  background-color: #6e7e8e;
-  border: none;
-  border-radius: 8px;
-  color: white;
-  padding: 10px 20px;
-  margin-left: 10px;
-  cursor: pointer;
-  font-size: 16px;
-  display: flex;
-  align-items: center;
-  height: 50px;
-}
-
-.finish-button span {
-  margin-left: 5px;
-}
 
 .skill-plan {
   display: flex;

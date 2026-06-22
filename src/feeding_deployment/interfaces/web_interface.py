@@ -168,8 +168,8 @@ class WebInterface:
 
         if msg_dict["status"] == "finish_feeding":
             task_selected = {
-                "task": "reset",
-                "type": "reset",
+                "task": "finish_feeding",
+                "type": "place_plate_in_sink",
             }
             self.task_selection_queue.put(task_selected)
         elif msg_dict["state"] == "task_selection":

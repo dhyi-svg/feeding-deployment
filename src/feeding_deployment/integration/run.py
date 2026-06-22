@@ -589,6 +589,9 @@ class _Runner:
                 if task == "reset":
                     self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["Reset"], ()))
                     last_task_type = None
+                elif task == "finish_feeding":
+                    self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["PlacePlateInSink"], (self.plate, self.sink)))
+                    last_task_type = None
                 elif task == "meal_assistance":
                     if task_type == "bite":
                         self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["TransferTool"], (self.utensil,self.table)))

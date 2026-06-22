@@ -2,6 +2,15 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 
 const routes = [
   {
+    path: '/',
+    redirect: '/home'
+  },
+  {
+    path: '/home',
+    name: 'home',
+    component: () => import('../views/home.vue')
+  },
+  {
     path: '/detection_confirm',
     name: 'detection_confirm',
     component: () => import('../views/detection_confirm.vue')
@@ -16,12 +25,7 @@ const routes = [
     name: 'meal_setup',
     component: () => import('../views/meal_setup.vue')
   },
-  {
-    path: '/notify_caregiver',
-    name: 'notify_caregiver',
-    component: () => import('../views/notify_caregiver.vue')
-  },
-  {
+{
     path: '/bite_confirm_transfer',
     name: 'bite_confirm_transfer',
     component: () => import('../views/bite_confirm_transfer.vue')
@@ -40,6 +44,11 @@ const routes = [
     path: '/task_selection',
     name: 'task_selection',
     component: () => import('../views/task_selection.vue')
+  },
+  {
+    path: '/personalization',
+    name: 'personalization',
+    component: () => import('../views/personalization.vue')
   },
   {
     path: '/drink_confirm_transfer',

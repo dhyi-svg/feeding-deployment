@@ -7,15 +7,6 @@
         <div class = "userslog">Enjoy your mealtime now!</div>
       </div>
     </div>
-    <div class="right">
-      <div class="setting-container">
-
-      </div>
-      <button class="finish-button">
-        <img class = "icon" alt="food" src="../assets/finish.png">
-        <span class = "finish-button-text" @click ="redirectToChangeItemF">Finish Feeding</span>
-      </button>
-    </div>
   </div>
 
   <div class="content">
@@ -130,9 +121,6 @@ export default {
     redirectToChangeItemRetry () {
       this.$router.push('/bite_selection')
     },
-    redirectToChangeItemF () {
-      this.$router.push('/notify_caregiver')
-    }
   }
 }
 </script>
@@ -166,19 +154,10 @@ export default {
       letter-spacing: 0.17499999701976776px;
       text-align: left;
     }
-    .finish-button-text{
-      font-family: Verdana;
-      font-size: 18px;
-      font-weight: 400;
-      line-height: 24px;
-      letter-spacing: 0.17499999701976776px;
-      text-align: left;
-    }
     .setting-container {
       position: relative;
     }
-    .settings-button,
-    .finish-button {
+    .settings-button {
       background-color: #6e7e8e;
       border: none;
       border-radius: 8px;
@@ -191,8 +170,7 @@ export default {
       align-items: center;
       height: 50px;
     }
-    .settings-button span,
-    .finish-button span {
+    .settings-button span {
       margin-left: 5px;
     }
     .settings-panel {
@@ -261,8 +239,7 @@ export default {
   position: relative;
 }
 
-.settings-button,
-.finish-button {
+.settings-button {
   background-color: #6e7e8e;
   border: none;
   border-radius: 8px;
@@ -276,8 +253,7 @@ export default {
   height: 50px;
 }
 
-.settings-button span,
-.finish-button span {
+.settings-button span {
   margin-left: 5px;
 }
 

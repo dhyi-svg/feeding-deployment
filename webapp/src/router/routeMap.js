@@ -65,10 +65,7 @@ const routeMap = {
   gesture_test: {
     jump: '/gesture_test'
   },
-  notify_caregiver: {
-    jump: '/notify_caregiver'
-  },
-  teleop: {
+teleop: {
     jump: '/manipulation_teleop'
   },
   navigation_teleop: {

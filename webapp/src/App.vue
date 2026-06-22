@@ -41,11 +41,17 @@ export default {
   computed: {
     showTakeOver () {
       const p = this.$route.path
-      return p !== '/manipulation_teleop' && p !== '/navigation_teleop'
+      const excluded = [
+        '/manipulation_teleop', '/navigation_teleop',
+        '/transparency', '/adaptability', '/personalization',
+        '/gesture_menu', '/gesture_setup', '/gesture_test',
+        '/gesture_record_positive', '/gesture_record_negative'
+      ]
+      return !excluded.includes(p)
     },
     onTaskSelection () {
       return this.$route.path === '/task_selection'
-    }
+    },
   },
   mounted () {
     const ros = new ROSLIB.Ros({ url: ROS_URL })
@@ -176,13 +182,14 @@ nav a.router-link-exact-active {
 .global-controls {
   position: fixed;
   top: 0;
-  right: 240px;
+  right: 10px;
   height: calc(9vh + 10px);
   z-index: 1000;
   display: flex;
   align-items: center;
   gap: 10px;
 }
+
 .global-btn {
   height: 50px;
   font-family: Verdana, sans-serif;

@@ -7,18 +7,6 @@
         <div class="userslog">Enjoy your mealtime now!</div>
       </div>
     </div>
-    <div class="right">
-      <div class="setting-container">
-        <button @click="$router.push('/task_selection')" class="settings-button">
-          <img class="icon" alt="food" src="../assets/Vector.png">
-          <span class="settings-button-text">Task Selection</span>
-        </button>
-      </div>
-      <button class="finish-button">
-        <img class="icon" alt="food" src="../assets/finish.png">
-        <span class="finish-button-text" @click="redirectToChangeItemF">Finish Feeding</span>
-      </button>
-    </div>
   </div>
 
   <div class="content">
@@ -87,6 +75,13 @@
         <span class="left_text">The robot’s response is shown above — if it’s an image or a video!</span>
       </div>
     </div>
+  </div>
+
+  <div class="task-selection-footer">
+    <button @click="$router.push('/task_selection')" class="task-selection-btn">
+      <img class="icon" alt="food" src="../assets/Vector.png">
+      <span>Task Selection</span>
+    </button>
   </div>
 </template>
 
@@ -395,9 +390,6 @@ export default {
     },
     redirectToChangeItem() {
       this.$router.push('/bite_selection')
-    },
-    redirectToChangeItemF() {
-      this.$router.push('/notify_caregiver')
     },
     initSubscriber() {
 
@@ -793,19 +785,10 @@ export default {
       letter-spacing: 0.17499999701976776px;
       text-align: left;
     }
-    .finish-button-text{
-      font-family: Verdana;
-      font-size: 18px;
-      font-weight: 400;
-      line-height: 24px;
-      letter-spacing: 0.17499999701976776px;
-      text-align: left;
-    }
     .setting-container {
       position: relative;
     }
-    .settings-button,
-    .finish-button {
+    .settings-button {
       background-color: #6e7e8e;
       border: none;
       border-radius: 8px;
@@ -818,8 +801,7 @@ export default {
       align-items: center;
       height: 50px;
     }
-    .settings-button span,
-    .finish-button span {
+    .settings-button span {
       margin-left: 5px;
     }
     .settings-panel {
@@ -990,5 +972,33 @@ export default {
     margin-right: 8px;
   }
   cursor: pointer
+}
+
+.task-selection-footer {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 500;
+}
+
+.task-selection-btn {
+  background-color: #6e7e8e;
+  border: none;
+  border-radius: 8px;
+  color: white;
+  padding: 10px 20px;
+  cursor: pointer;
+  font-size: 16px;
+  font-family: Verdana, sans-serif;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 50px;
+}
+
+.task-selection-btn .icon {
+  width: 20px;
+  height: 20px;
 }
 </style>
