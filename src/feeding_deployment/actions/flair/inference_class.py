@@ -26,50 +26,50 @@ try:
     sys.path.append(PATH_TO_DEPTH_ANYTHING)
 
     from depth_anything.dpt import DepthAnything
-    # from depth_anything.dpt import DPT_DINOv2
     from depth_anything.util.transform import Resize, NormalizeImage, PrepareForNet
 
     from feeding_deployment.actions.flair.src.food_pos_ori_net.model.minispanet import MiniSPANet
     from feeding_deployment.actions.flair.src.spaghetti_segmentation.model import SegModel
+    from feeding_deployment.perception.grounded_sam import GroundedSAM
 
     FOOD_MODELS_IMPORTS = True
 except ModuleNotFoundError as e:
-    # print(f"Module not found: {e}")
     FOOD_MODELS_IMPORTS = False
+    GroundedSAM = None
 
 from feeding_deployment.actions.flair.vision_utils import detect_densest, new_detect_densest, detect_sparsest, detect_centroid, detect_angular_bbox, detect_convex_hull, detect_filling_push_noodles, detect_filling_push_semisolid, efficient_sam_box_prompt_segment, outpaint_masks, detect_blue, proj_pix2mask, cleanup_mask, visualize_keypoints, visualize_skewer, visualize_push, detect_plate, mask_weight, nearest_neighbor, nearest_point_to_mask, detect_furthest_unobstructed_boundary_point, calculate_heatmap_density, calculate_heatmap_entropy, resize_to_square, fill_enclosing_polygon, detect_fillings_in_mask, expanded_detect_furthest_unobstructed_boundary_point
 from feeding_deployment.actions.flair.preference_planner import PreferencePlanner
 # from feeding_deployment.actions.flair.food_identification import GPT4VFoodIdentification
 
 class BiteAcquisitionInference:
-    def __init__(self, mode):
+    def __init__(self, mode, grounded_sam=None):
 
         if FOOD_MODELS_IMPORTS:
             self.DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-            # GroundingDINO config and checkpoint
-            self.GROUNDING_DINO_CONFIG_PATH = PATH_TO_GROUNDED_SAM + "/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
-            self.GROUNDING_DINO_CHECKPOINT_PATH = PATH_TO_GROUNDED_SAM + "/groundingdino_swint_ogc.pth"
-
-            print("Initializing Grounding Dino")        
-            # Building GroundingDINO inference model
-            self.grounding_dino_model = Model(model_config_path=self.GROUNDING_DINO_CONFIG_PATH, model_checkpoint_path=self.GROUNDING_DINO_CHECKPOINT_PATH)
-            self.use_efficient_sam = USE_EFFICIENT_SAM
-
-            if self.use_efficient_sam:
-                # Building MobileSAM predictor
-                self.EFFICIENT_SAM_CHECKPOINT_PATH = PATH_TO_GROUNDED_SAM + "/efficientsam_s_gpu.jit"
-                self.efficientsam = torch.jit.load(self.EFFICIENT_SAM_CHECKPOINT_PATH)
+            if grounded_sam is not None:
+                self.grounding_dino_model = grounded_sam.grounding_dino_model
+                self.sam_predictor = grounded_sam.sam_predictor
+                self.use_efficient_sam = False
             else:
-                # Segment-Anything checkpoint
-                SAM_ENCODER_VERSION = "vit_h"
-                SAM_CHECKPOINT_PATH = PATH_TO_GROUNDED_SAM + "/sam_vit_h_4b8939.pth"
+                self.GROUNDING_DINO_CONFIG_PATH = PATH_TO_GROUNDED_SAM + "/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
+                self.GROUNDING_DINO_CHECKPOINT_PATH = PATH_TO_GROUNDED_SAM + "/groundingdino_swint_ogc.pth"
 
-                print("Initializing SAM")
-                # Building SAM Model and SAM Predictor
-                sam = sam_model_registry[SAM_ENCODER_VERSION](checkpoint=SAM_CHECKPOINT_PATH)
-                sam.to(device=self.DEVICE)
-                self.sam_predictor = SamPredictor(sam)
+                print("Initializing Grounding Dino")
+                self.grounding_dino_model = Model(model_config_path=self.GROUNDING_DINO_CONFIG_PATH, model_checkpoint_path=self.GROUNDING_DINO_CHECKPOINT_PATH)
+                self.use_efficient_sam = USE_EFFICIENT_SAM
+
+                if self.use_efficient_sam:
+                    self.EFFICIENT_SAM_CHECKPOINT_PATH = PATH_TO_GROUNDED_SAM + "/efficientsam_s_gpu.jit"
+                    self.efficientsam = torch.jit.load(self.EFFICIENT_SAM_CHECKPOINT_PATH)
+                else:
+                    SAM_ENCODER_VERSION = "vit_h"
+                    SAM_CHECKPOINT_PATH = PATH_TO_GROUNDED_SAM + "/sam_vit_h_4b8939.pth"
+
+                    print("Initializing SAM")
+                    sam = sam_model_registry[SAM_ENCODER_VERSION](checkpoint=SAM_CHECKPOINT_PATH)
+                    sam.to(device=self.DEVICE)
+                    self.sam_predictor = SamPredictor(sam)
 
             print("Initializing Depth Anything")
             self.depth_anything = DepthAnything.from_pretrained('LiheYoung/depth_anything_vitl14').to(self.DEVICE).eval()
@@ -120,6 +120,7 @@ class BiteAcquisitionInference:
         self.preference_planner = PreferencePlanner()
 
         self.mode = mode
+        self.allow_dip = True
 
     # def recognize_items(self, image):
     #     response = self.gpt4v_client.prompt(image).strip()
@@ -1051,6 +1052,10 @@ class BiteAcquisitionInference:
         print('Next bite', next_bite)
         print('skewer_labels', skewer_labels)
         print('Next actions', skewer_actions)
+
+        if not self.allow_dip and len(next_bite) >= 2:
+            print(f"[preference] Dipping suppressed: LLM suggested {next_bite}, using only {next_bite[0]}")
+            next_bite = [next_bite[0]]
 
         if len(next_bite) == 1 and next_bite[0] in labels:
             print(skewer_labels, next_bite[0])

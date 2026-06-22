@@ -7,6 +7,10 @@
 **/llm_cache_continuous/**
 **/llm_cache/**
 
+urdf/meshes/*.STL
+urdf/meshes/*.stl
+*/__pycache__/*
+
 src/feeding_deployment/integration/log
 src/feeding_deployment/integration/saved_states/last_stage.p
 src/feeding_deployment/integration/log/behavior_trees

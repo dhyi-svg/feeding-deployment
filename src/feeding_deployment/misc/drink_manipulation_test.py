@@ -54,7 +54,7 @@ class TFInterface:
 
         self.broadcaster.sendTransform(t)
 
-    def get_frame_to_frame_transform(self, camera_info_data, frame_A = "base_link", target_frame = "camera_color_optical_frame"):
+    def get_frame_to_frame_transform(self, camera_info_data, frame_A = "arm_base_link", target_frame = "camera_color_optical_frame"):
         stamp = camera_info_data.header.stamp
         try:
             transform = self.tfBuffer.lookup_transform(
@@ -68,7 +68,7 @@ class TFInterface:
             tf2_ros.ConnectivityException,
             tf2_ros.ExtrapolationException,
         ):
-            print("Exexption finding transform between base_link and", target_frame)
+            print("Exexption finding transform between arm_base_link and", target_frame)
             return None
 
     def make_homogeneous_transform(self, transform):
@@ -188,7 +188,7 @@ class DrinkPerception(TFInterface):
 
             # base to tag homogeneous transform and update tf
             base_to_tag = np.dot(base_to_camera, camera_to_tag)
-            self.updateTF("base_link", "AR_tag", base_to_tag)
+            self.updateTF("arm_base_link", "AR_tag", base_to_tag)
             self.update_aruco_pose(base_to_tag)
 
     def update_aruco_pose(self, aruco_pose_mat):
@@ -349,7 +349,7 @@ class DrinkManipulation(TFInterface):
         self.move_to_pose(pre_grasp_pose)
 
     def move_to_pose(self, pose):
-        self.updateTF("base_link", "goal_frame", self.pose_to_matrix(pose))
+        self.updateTF("arm_base_link", "goal_frame", self.pose_to_matrix(pose))
         input("Press enter to go to goal pose")        
 
         cmd = CartesianCommand(pose[0], pose[1])

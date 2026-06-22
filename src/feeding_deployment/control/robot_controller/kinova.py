@@ -97,7 +97,7 @@ class DeviceConnection:
 
 
 class KinovaArm:
-    ACTION_TIMEOUT_DURATION = 60
+    ACTION_TIMEOUT_DURATION = 100
 
     def __init__(self):
 
@@ -524,11 +524,14 @@ class KinovaArm:
                 )
                 if finished:
                     print("Angular movement completed")
+                    return True
                 else:
                     print("Timeout on action notification wait")
+                    return False
         else:
             print("Error found in trajectory")
             print(result.trajectory_error_report)
+            return False
 
     def move_angular(self, joint_angles, blocking=True):
 
@@ -559,12 +562,10 @@ class KinovaArm:
 
             if np.any(np.abs(error) > 5): # 5 degrees
                 print("Arm did not reach desired position")
-                self.stop()
-                print("Arm stopped")
-                self.disconnect()
-                print("Arm disconnected")
+                return False
             else:
                 print("Angular movement completed")
+                return True
 
 
     def move_cartesian(self, xyz, xyz_quat, blocking=True):
@@ -592,12 +593,10 @@ class KinovaArm:
             x = current_state["ee_pos"]
             if not np.allclose(x[:3], xyz, atol=0.01): # 1 cm
                 print("Arm did not reach desired position")
-                self.stop()
-                print("Arm stopped")
-                self.disconnect()
-                print("Arm disconnected")
+                return False
             else:
                 print("Cartesian movement completed")
+                return True
 
     def move_cartesian_trajectory(self, trajectory, blocking=True):
         assert not self.cyclic_running, "Arm must be in high-level servoing mode"
@@ -634,7 +633,7 @@ class KinovaArm:
         if len(result.trajectory_error_report.trajectory_error_elements) != 0:
             print("Error found in trajectory")
             print(result.trajectory_error_report)
-            return
+            return False
 
         print("Reaching cartesian pose trajectory...")
 
@@ -646,10 +645,19 @@ class KinovaArm:
             finished = self.end_or_abort_event.wait(
                 KinovaArm.ACTION_TIMEOUT_DURATION
             )
-            if finished:
-                print("Cartesian movement completed")
-            else:
+            if not finished:
                 print("Timeout on action notification wait")
+                return False
+            # read states and check if the arm actually reached the ending pose
+            end_xyz = trajectory[-1][0]
+            current_state = self.get_state()
+            x = current_state["ee_pos"]
+            if not np.allclose(x[:3], end_xyz, atol=0.01):  # 1 cm
+                print("Arm did not reach desired position")
+                return False
+            else:
+                print("Cartesian trajectory completed")
+                return True
 
     def _gripper_position_command(self, value, blocking=True, timeout=1.0):
         assert not self.cyclic_running, "Arm must be in high-level servoing mode"

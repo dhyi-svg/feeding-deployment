@@ -105,7 +105,7 @@ class RVizInterface:
         if pick:
             self.publish_static_transform("sim/finger_tip", "sim/" + tool_base, object_pose)
         else:
-            self.publish_static_transform("sim/base_link", "sim/" + tool_base, object_pose)
+            self.publish_static_transform("sim/arm_base_link", "sim/" + tool_base, object_pose)
     
     def publish_static_transform(self, parent_frame: str, child_frame: str, pose: Pose) -> None:
 
@@ -197,7 +197,7 @@ class RVizInterface:
         marker.id = marker_id
         marker.type = Marker.CUBE
         marker.header.stamp = rospy.Time.now()
-        marker.header.frame_id = "sim/base_link"
+        marker.header.frame_id = "sim/arm_base_link"
         marker.action = marker.ADD
 
         marker.pose.position.x = pose.position[0]
@@ -232,7 +232,7 @@ class RVizInterface:
         marker.mesh_resource = mesh_path
         marker.mesh_use_embedded_materials = True
         marker.header.stamp = rospy.Time.now()
-        marker.header.frame_id = "sim/base_link"
+        marker.header.frame_id = "sim/arm_base_link"
         marker.action = marker.ADD
 
         marker.pose.position.x = pose.position[0]
@@ -300,7 +300,7 @@ class RVizInterface:
         marker = Marker()
         marker.id = 0
         marker.header.stamp = rospy.Time.now()
-        marker.header.frame_id = "base_link"
+        marker.header.frame_id = "arm_base_link"
         marker.type = marker.MESH_RESOURCE
         marker.action = marker.ADD
         marker.scale.x = 0.001
@@ -328,7 +328,7 @@ class RVizInterface:
         marker = Marker()
         marker.id = id
         marker.header.stamp = rospy.Time.now()
-        marker.header.frame_id = "base_link"
+        marker.header.frame_id = "arm_base_link"
         marker.type = marker.CUBE
         marker.action = marker.ADD
         marker.scale.x = 0.01

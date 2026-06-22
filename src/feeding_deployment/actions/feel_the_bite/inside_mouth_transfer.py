@@ -114,8 +114,8 @@ class InsideMouthTransfer(Transfer):
                 target = self.getNextWaypoint(forque_base, servo_point_base, distance_lookahead=INFRONT_DISTANCE_LOOKAHEAD)
 
                 self.move_to_ee_pose(Pose.from_matrix(target))
-                self.rviz_interface.visualizeTransform("base_link", "next_target", target)
-                self.rviz_interface.visualizeTransform("base_link", "final_target", servo_point_base)
+                self.rviz_interface.visualizeTransform("arm_base_link", "next_target", target)
+                self.rviz_interface.visualizeTransform("arm_base_link", "final_target", servo_point_base)
             
             # Pause so that new head pose can be re-perceived
             time.sleep(0.2)
@@ -157,9 +157,9 @@ class InsideMouthTransfer(Transfer):
                     target = self.getNextWaypoint(intermediate_forque_target, forque_target_base, distance_lookahead = distance_lookahead_update)
                 
                 self.move_to_ee_pose(Pose.from_matrix(target))
-                self.rviz_interface.visualizeTransform("base_link", "next_target", target)
-                self.rviz_interface.visualizeTransform("base_link", "final_target", forque_target_base)
-                self.rviz_interface.visualizeTransform("base_link", "intermediate_target", intermediate_forque_target)
+                self.rviz_interface.visualizeTransform("arm_base_link", "next_target", target)
+                self.rviz_interface.visualizeTransform("arm_base_link", "final_target", forque_target_base)
+                self.rviz_interface.visualizeTransform("arm_base_link", "intermediate_target", intermediate_forque_target)
 
             self.set_filter_noisy_readings_pub.publish(Bool(data=False))
 
@@ -197,8 +197,8 @@ class InsideMouthTransfer(Transfer):
                 target = self.getNextWaypoint(forque_base, forque_target_base, distance_lookahead = INSIDE_DISTANCE_LOOKAHEAD_Z)
                 
                 self.move_to_ee_pose(Pose.from_matrix(target))
-                self.rviz_interface.visualizeTransform("base_link", "next_target", target)
-                self.rviz_interface.visualizeTransform("base_link", "final_target", forque_target_base)
+                self.rviz_interface.visualizeTransform("arm_base_link", "next_target", target)
+                self.rviz_interface.visualizeTransform("arm_base_link", "final_target", forque_target_base)
 
         final_target = self.perception_interface.get_tool_tip_pose_at_staging()
 
@@ -220,5 +220,5 @@ class InsideMouthTransfer(Transfer):
                 target = self.getNextWaypoint(forque_base, final_target, distance_lookahead=INFRONT_DISTANCE_LOOKAHEAD)
 
                 self.move_to_ee_pose(Pose.from_matrix(target))
-                self.rviz_interface.visualizeTransform("base_link", "next_target", target)
-                self.rviz_interface.visualizeTransform("base_link", "final_target", final_target)
+                self.rviz_interface.visualizeTransform("arm_base_link", "next_target", target)
+                self.rviz_interface.visualizeTransform("arm_base_link", "final_target", final_target)

@@ -7,7 +7,7 @@ class NewMealParser:
     def __init__(self, log_dir):
 
         self.llm = OpenAILLM(
-            model_name="gpt-4.1-2025-04-14",
+            model_name="gpt-5.4",
             cache_dir=log_dir / "llm_cache",
         )
 

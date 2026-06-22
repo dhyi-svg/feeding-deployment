@@ -11,8 +11,6 @@ import json
 from openai import OpenAI
 import ast
 
-#model='gpt-4-1106-preview',
-
 class GPTInterface:
     def __init__(self):
         self.api_key =  os.environ.get('OPENAI_API_KEY')
@@ -27,7 +25,7 @@ class GPTInterface:
                     'content': prompt
                   }
         response = self.client.chat.completions.create(
-                   model='gpt-4-0125-preview',
+                   model='gpt-5.4',
                    messages=[message]
                   )
         chatbot_response = response.choices[0].message.content

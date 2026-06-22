@@ -1,4 +1,4 @@
-# Description: This script is used to detect ArUco markers and estimate their pose in the camera frame.
+# Description: This script is used to detect tool attachments.
 
 # python imports
 import os, sys
@@ -7,154 +7,38 @@ import numpy as np
 import time
 import math
 from scipy.spatial.transform import Rotation
-from sklearn.cluster import DBSCAN   # <-- ADDED
+from sklearn.cluster import DBSCAN
 import open3d as o3d
+from pybullet_helpers.geometry import Pose, Pose3D
 
 # ros imports
 import rospy
-import message_filters
-from sensor_msgs.msg import Image, CameraInfo
-from cv_bridge import CvBridge, CvBridgeError
-import tf2_ros
-from geometry_msgs.msg import Point, Pose
+from sensor_msgs.msg import CameraInfo
+from geometry_msgs.msg import Point
 from visualization_msgs.msg import MarkerArray, Marker
 
-from geometry_msgs.msg import TransformStamped
 from collections import deque
 
 from geometry_msgs.msg import Pose as pose_msg
 
-
-class TFInterface:
-    def __init__(self):
-        self.tfBuffer = tf2_ros.Buffer()  # Using default cache time of 10 secs
-        self.listener = tf2_ros.TransformListener(self.tfBuffer)
-        self.broadcaster = tf2_ros.TransformBroadcaster()
-        time.sleep(1.0)
-
-    def updateTF(self, source_frame, target_frame, pose):
-
-        t = TransformStamped()
-
-        t.header.stamp = rospy.Time.now()
-        t.header.frame_id = source_frame
-        t.child_frame_id = target_frame
-
-        t.transform.translation.x = pose[0][3]
-        t.transform.translation.y = pose[1][3]
-        t.transform.translation.z = pose[2][3]
-
-        R = Rotation.from_matrix(pose[:3, :3]).as_quat()
-        t.transform.rotation.x = R[0]
-        t.transform.rotation.y = R[1]
-        t.transform.rotation.z = R[2]
-        t.transform.rotation.w = R[3]
-
-        self.broadcaster.sendTransform(t)
-
-    def get_frame_to_frame_transform(self, camera_info_data, frame_A = "base_link", target_frame = "camera_color_optical_frame"):
-        stamp = camera_info_data.header.stamp
-        try:
-            transform = self.tfBuffer.lookup_transform(
-                frame_A,
-                target_frame,
-                rospy.Time(secs=stamp.secs, nsecs=stamp.nsecs),
-            )
-            return transform
-        except (
-            tf2_ros.LookupException,
-            tf2_ros.ConnectivityException,
-            tf2_ros.ExtrapolationException,
-        ):
-            # print("Exexption finding transform between base_link and", target_frame)
-            return None
-
-    def make_homogeneous_transform(self, transform):
-        A_to_B = np.zeros((4, 4))
-        A_to_B[:3, :3] = Rotation.from_quat(
-            [
-                transform.transform.rotation.x,
-                transform.transform.rotation.y,
-                transform.transform.rotation.z,
-                transform.transform.rotation.w,
-            ]
-        ).as_matrix()
-        A_to_B[:3, 3] = np.array(
-            [
-                transform.transform.translation.x,
-                transform.transform.translation.y,
-                transform.transform.translation.z,
-            ]
-        ).reshape(1, 3)
-        A_to_B[3, 3] = 1
-
-        return A_to_B
-
-    def pose_to_matrix(self, pose):
-        position = pose[0]
-        orientation = pose[1]
-        pose_matrix = np.zeros((4, 4))
-        pose_matrix[:3, 3] = position
-        pose_matrix[:3, :3] = Rotation.from_quat(orientation).as_matrix()
-        pose_matrix[3, 3] = 1
-        return pose_matrix
-    
-    def matrix_to_pose(self, mat):
-        position = mat[:3, 3]
-        orientation = Rotation.from_matrix(mat[:3, :3]).as_quat()
-        return (position, orientation)
+from feeding_deployment.perception.tf_interface import TFInterface 
 
 
 class AttachmentPerception(TFInterface):
     def __init__(self, num_perception_samples=25):
+        super().__init__()
 
-        self.turned_on = False
         self.num_perception_samples = num_perception_samples
-        self.bridge = CvBridge()
 
-        self.color_image_sub = message_filters.Subscriber(
-            '/camera/color/image_raw', Image)
-        self.camera_info_sub = message_filters.Subscriber(
-            '/camera/color/camera_info', CameraInfo)
-        self.depth_image_sub = message_filters.Subscriber(
-            '/camera/aligned_depth_to_color/image_raw', Image)
-        
         self.attachment_points_pub = rospy.Publisher("/attachment_points", Marker, queue_size=1)
         self.attachment_center_pub = rospy.Publisher("/attachment_center", Marker, queue_size=1)
 
-        # to simulate an aruco being detected
-        self.attachment_pose_publisher = rospy.Publisher("/attachment_pose", Pose, queue_size=10)
+    def detect_attachment(self, rgb_image, camera_info_msg, depth_image, handle_orientation="front", handle_color=None, color_range=0.1):
+        if rgb_image is None:
+            print("No camera data provided.")
+            return None
 
-        ts = message_filters.TimeSynchronizer(
-            [self.color_image_sub,
-             self.camera_info_sub,
-             self.depth_image_sub], 1)
-        ts.registerCallback(self.rgbdCallback)
-
-        super().__init__()
-
-    def turn_on(self):
-        self.turned_on = True
-
-    def turn_off(self):
-        self.turned_on = False
-
-    def rgbdCallback(self, rgb_image_msg, camera_info_msg, depth_image_msg):
-
-        # if hasattr(self, "saved") and self.saved:
-            # return
-
-        if not self.turned_on:
-            return
-
-        try:
-            rgb_image = self.bridge.imgmsg_to_cv2(
-                rgb_image_msg, "bgr8")
-            depth_image = self.bridge.imgmsg_to_cv2(
-                depth_image_msg, "32FC1")
-        except CvBridgeError as e:
-            print(e)
-            return
+        transform = self.get_frame_to_frame_transform(camera_info_msg)
 
         file_path = os.path.dirname(__file__)
         print("Got images")
@@ -165,7 +49,7 @@ class AttachmentPerception(TFInterface):
         # -----------------------------
         # Color mask
         # -----------------------------
-        mask = self.detect_attachment_color(rgb_image)
+        mask = self.detect_attachment_color(rgb_image, handle_color=handle_color, color_range=color_range)
         # mask = self.clean_mask(mask)
 
         # -----------------------------
@@ -280,11 +164,22 @@ class AttachmentPerception(TFInterface):
         # Get 4 rectangle corners in 2D (plane coordinates)
         box_2d = cv2.boxPoints(rect)  # shape (4,2)
 
+        # visualize cornerns in an image
+        corner_vis = rgb_image.copy()
+        # visualize center
+        uv_center = self.world2Pixel(camera_info_msg, world_x=center_3d[0], world_y=center_3d[1], world_z=center_3d[2])
+        cv2.circle(corner_vis, (int(uv_center[0]), int(uv_center[1])), 5, (0, 0, 255), -1)
+
         # Back-project corners to 3D
         corners_3d = []
         for x2d, y2d in box_2d:
             p3d = P0 + x2d * u + y2d * v
             corners_3d.append(p3d)
+            # visualize corner in image
+            uv = self.world2Pixel(camera_info_msg, world_x=p3d[0], world_y=p3d[1], world_z=p3d[2])
+            cv2.circle(corner_vis, (int(uv[0]), int(uv[1])), 5, (0, 255, 0), -1)
+
+        cv2.imwrite(file_path + "/attachment_corners.png", corner_vis)
 
         corners_3d = np.array(corners_3d)
 
@@ -336,28 +231,27 @@ class AttachmentPerception(TFInterface):
 
             # base to tag homogeneous transform and update tf
             base_to_tag = np.dot(base_to_camera, camera_to_tag)
-            self.updateTF("base_link", "attachment", base_to_tag)
-            self.update_attachment_pose(base_to_tag)
 
-    def update_attachment_pose(self, aruco_pose_mat):
+            if handle_orientation == "front":
+                # Rajat Hack: Override rotation to fix handle facing the robot
+                base_to_tag[:3, :3] = Rotation.from_quat([-0.5, 0.5, 0.5, -0.5]).as_matrix()
+            elif handle_orientation == "left": # convention of quaternion is (x, y, z, w)
+                base_to_tag[:3, :3] = Rotation.from_quat([0.0, 0.7071, 0.7071, 0.0]).as_matrix()
 
-        position, orientation = self.matrix_to_pose(aruco_pose_mat)        
-        pose_msg = Pose()
-        pose_msg.position.x = position[0]
-        pose_msg.position.y = position[1]
-        pose_msg.position.z = position[2]
-        pose_msg.orientation.x = orientation[0]
-        pose_msg.orientation.y = orientation[1]
-        pose_msg.orientation.z = orientation[2]
-        pose_msg.orientation.w = orientation[3]
-        self.attachment_pose_publisher.publish(pose_msg)
+            self.updateTF("arm_base_link", "attachment", base_to_tag)
+            return self.matrix_to_pose(base_to_tag)
 
-    def detect_attachment_color(self, bgr_image):
+        print("Could not find transform between arm_base_link and camera_color_optical_frame.")
+        return None
+
+    def detect_attachment_color(self, bgr_image, handle_color=None, color_range=0.1):
         hsv = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV)
-
-        lower = np.array([35, 50, 120])
-        upper = np.array([50, 140, 220])
-
+        if handle_color is None:
+            handle_color = np.array([82, 55, 84])
+        handle_color = np.asarray(handle_color)
+        delta = (float(color_range) * np.array([179, 255, 255])).astype(int)
+        lower = np.clip(handle_color - delta, [0, 0, 0], [179, 255, 255]).astype(np.uint8)
+        upper = np.clip(handle_color + delta, [0, 0, 0], [179, 255, 255]).astype(np.uint8)
         return cv2.inRange(hsv, lower, upper)
 
     def clean_mask(self, mask):
@@ -465,9 +359,32 @@ class AttachmentPerception(TFInterface):
 
         return True, (world_x, world_y, world_z)
 
+    def world2Pixel(self, camera_info, world_x, world_y, world_z):
+
+        fx = camera_info.K[0]
+        fy = camera_info.K[4]
+        cx = camera_info.K[2]
+        cy = camera_info.K[5] 
+
+        image_x = world_x * (fx / world_z) + cx
+        image_y = world_y * (fy / world_z) + cy
+
+        return int(image_x), int(image_y)
+
 
 if __name__ == '__main__':
-    rospy.init_node('AttachmentPerception')
-    attachment_perception = AttachmentPerception()
-    attachment_perception.turn_on()
-    rospy.spin()
+    file_path = os.path.dirname(__file__)
+    rgb_path = os.path.join(file_path, "rgb.png")
+    bgr = cv2.imread(rgb_path)
+    if bgr is None:
+        print(f"Could not load {rgb_path}")
+        sys.exit(1)
+
+    ap = AttachmentPerception.__new__(AttachmentPerception)
+    mask = ap.detect_attachment_color(bgr)
+
+    vis = bgr.copy()
+    vis[mask > 0] = (0, 0, 255)
+    out_path = os.path.join(file_path, "color_test.png")
+    cv2.imwrite(out_path, vis)
+    print(f"Mask pixels: {np.count_nonzero(mask)}  →  saved {out_path}")
