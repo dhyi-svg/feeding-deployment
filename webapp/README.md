@@ -8,19 +8,18 @@ Vue 3 single-page application that provides the caregiver-facing UI for the feed
 
 ```
 webapp/
-└── vue-ros-demo/       # Vue 3 SPA (all frontend code lives here)
-    ├── src/
-    │   ├── App.vue             # Root component; shared ROS connection + skill-plan overlay
-    │   ├── main.js
-    │   ├── router/
-    │   │   ├── index.js        # Route definitions (all snake_case paths)
-    │   │   └── routeMap.js     # Maps {state, status} ROS messages → route paths
-    │   ├── config/
-    │   │   └── parameterConfig.js  # ROS host/port and user display name
-    │   ├── views/              # One .vue file per page (filenames match route paths)
-    │   └── assets/             # Images used by views
-    └── public/
-        └── index.html
+├── src/
+│   ├── App.vue             # Root component; shared ROS connection + skill-plan overlay
+│   ├── main.js
+│   ├── router/
+│   │   ├── index.js        # Route definitions (all snake_case paths)
+│   │   └── routeMap.js     # Maps {state, status} ROS messages → route paths
+│   ├── config/
+│   │   └── parameterConfig.js  # ROS host/port and user display name
+│   ├── views/              # One .vue file per page (filenames match route paths)
+│   └── assets/             # Images used by views
+└── public/
+    └── index.html
 ```
 
 ### ROS Topics
@@ -56,7 +55,7 @@ All `/robot_to_webapp` and `/webapp_to_robot` messages are JSON strings:
 ### Install
 
 ```bash
-cd webapp/vue-ros-demo
+cd webapp
 npm install
 ```
 
@@ -79,7 +78,7 @@ roslaunch rosbridge_server rosbridge_websocket.launch   # ROS 1
 ros2 launch rosbridge_server rosbridge_websocket_launch.xml   # ROS 2
 
 # In another terminal — start the dev server
-cd webapp/vue-ros-demo
+cd webapp
 npm run serve
 ```
 
@@ -88,7 +87,7 @@ Open `http://localhost:8080` in a browser. The app starts at `/#/task_selection`
 ### Build (production)
 
 ```bash
-cd webapp/vue-ros-demo
+cd webapp
 npm run build
 ```
 
