@@ -68,6 +68,12 @@ class WebInterface:
             self._on_base_done,
             queue_size=1,
         )
+        self.base_resume_sub = rospy.Subscriber(
+            "/shared_autonomy/resume",
+            Empty,
+            self._on_base_resume,
+            queue_size=1,
+        )
         time.sleep(1.0)  # Wait for the subscriber to connect
 
         self.current_page = "task_selection" # task_selection, transparency, adaptability
@@ -231,6 +237,9 @@ class WebInterface:
 
     def _on_base_done(self, _msg: "Empty") -> None:
         print("User finished robot base control teleoperation.")
+
+    def _on_base_resume(self, _msg: "Empty") -> None:
+        print("User resumed autonomous navigation after base teleoperation.")
 
     def register_takeover_stop(self, fn) -> None:
         """Register a function (e.g. robot_interface.stop_action) called the moment

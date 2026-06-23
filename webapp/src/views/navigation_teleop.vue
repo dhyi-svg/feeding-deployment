@@ -1,13 +1,13 @@
 <template>
   <div class="navteleop">
-    
     <div class="tb">
       <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
       <div>
         <div class="tb-n">{{ username }}</div>
-        <div class="tb-s">Base navigation — push to drive, release to stop</div>
+        <div class="tb-s">Base navigation — push to drive, Resume to let autonomy finish, Done when parked</div>
       </div>
-      <button class="btn sm amber" style="margin-left:auto;height:6vh;padding:0 1.5vw" @click="finish()">Done</button>
+      <button class="btn sm teal" style="margin-left:auto;height:6vh;padding:0 1.5vw" @click="resume()">Resume</button>
+      <button class="btn sm amber" style="height:6vh;padding:0 1.5vw" @click="finish()">Done</button>
     </div>
 
     <div class="banner" :class="{ bad: !connected }">{{ bannerText }}</div>
@@ -68,6 +68,7 @@ export default {
       cmdVelPub: null,
       takeoverPub: null,
       donePub: null,
+      resumePub: null,
       listener: null,
       skillPlanListener: null,
 
@@ -93,7 +94,11 @@ export default {
 
     this.takeoverPub = new ROSLIB.Topic({ ros: this.ros, name: '/shared_autonomy/takeover', messageType: 'std_msgs/Empty' })
     this.donePub = new ROSLIB.Topic({ ros: this.ros, name: '/shared_autonomy/done', messageType: 'std_msgs/Empty' })
-    
+    // Resume: hand back to autonomy, which replans from the current pose to the
+    // original goal (manager re-sends the goal). Distinct from done/blind-success.
+    this.resumePub = new ROSLIB.Topic({ ros: this.ros, name: '/shared_autonomy/resume', messageType: 'std_msgs/Empty' })
+
+    // Follow the executive's page jumps like every other page.
     this.listener = new ROSLIB.Topic({ ros: this.ros, name: '/robot_to_webapp', messageType: 'std_msgs/String' })
     this.listener.subscribe((msg) => this.handleRosMessage(msg))
 
@@ -193,11 +198,26 @@ export default {
       return skillLabel(name)
     },
     finish () {
-      
+      // Stop the base and tell the manager the human has parked the robot at the
+      // goal (blind success). The executive then continues to the NEXT skill in
+      // the plan, so return to the skill-plan (explanation) page -- NOT the task
+      // menu -- so the user sees what's next and the executive can page-jump on.
+      // Same destination as resume(); only the published intent differs.
       this.center()
       this.sendVelocity()
       if (this.donePub) this.donePub.publish(new ROSLIB.Message({}))
-      this.$router.push('/task_selection')
+      this.$router.push('/robot_executing')
+    },
+    resume () {
+      // Stop driving, tell the manager to hand back to autonomy (it replans from
+      // the current pose to the original goal), and return to the skill-plan
+      // (explanation) page -- the same place manipulation teleop returns to.
+      // The takeover button is available there, so the user can take over again
+      // if the robot gets stuck again on the way to the goal.
+      this.center()
+      this.sendVelocity()
+      if (this.resumePub) this.resumePub.publish(new ROSLIB.Message({}))
+      this.$router.push('/robot_executing')
     },
     teardown () {
       this.center()
