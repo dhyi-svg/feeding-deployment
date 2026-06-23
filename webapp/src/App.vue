@@ -1,8 +1,10 @@
 <template>
   <div id="app">
-    <button v-if="!takeoverMicEnabled" class="enable-takeover-btn" @click="enableTakeoverMic">
-      🎙 Enable takeover button
-    </button>
+    <div v-if="showTakeoverEnable" class="enable-takeover-wrap">
+      <button class="enable-takeover-btn" @click="enableTakeoverMic">
+        🎙 Enable takeover button
+      </button>
+    </div>
     <div v-if="showTakeOver" class="global-controls">
       <button
         v-if="onTaskSelection || baseControlEnabled"
@@ -42,7 +44,7 @@ export default {
     showTakeOver () {
       const p = this.$route.path
       const excluded = [
-        '/manipulation_teleop', '/navigation_teleop',
+        '/manipulation_teleop', '/navigation_teleop', '/mictest',
         '/transparency', '/adaptability', '/personalization',
         '/gesture_menu', '/gesture_setup', '/gesture_test',
         '/gesture_record_positive', '/gesture_record_negative'
@@ -51,6 +53,14 @@ export default {
     },
     onTaskSelection () {
       return this.$route.path === '/task_selection'
+    },
+    showTakeoverEnable () {
+      // The takeover-mic enable is only meaningful during autonomous operation.
+      // Hide it on pages where you've already taken over / it's irrelevant (and
+      // where their longer headers would collide with the centered pill).
+      if (this.takeoverMicEnabled) return false
+      const excluded = ['/manipulation_teleop', '/navigation_teleop', '/idle_takeover', '/mictest']
+      return !excluded.includes(this.$route.path)
     },
   },
   mounted () {
@@ -155,6 +165,7 @@ export default {
 html, body {
   margin: 0;
   padding: 0;
+  background: #0D1B2A;
 }
 
 #app {
@@ -182,44 +193,55 @@ nav a.router-link-exact-active {
 .global-controls {
   position: fixed;
   top: 0;
-  right: 10px;
-  height: calc(9vh + 10px);
+  right: 2.5vw;
+  height: 10vh;
   z-index: 1000;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 }
 
 .global-btn {
-  height: 50px;
+  height: 6vh;
   font-family: Verdana, sans-serif;
-  font-size: 14px;
+  font-size: 1.9vh;
   font-weight: 700;
-  padding: 0 16px;
-  border: none;
-  border-radius: 8px;
-  color: #fff;
+  padding: 0 1.6vw;
+  border-radius: 10px;
+  color: #F5F0E8;
   cursor: pointer;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  background: #1E3347;
+  border: 2px solid #243C54;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
   white-space: nowrap;
 }
-.global-btn.arm { background: #ff7a45; }
-.global-btn.arm:active { background: #e8602c; }
-.global-btn.base { background: #378add; }
-.global-btn.base:active { background: #2f6fb0; }
-.enable-takeover-btn {
+.global-btn.arm { color: #F0A500; border-color: rgba(240, 165, 0, .4); }
+.global-btn.arm:active { background: #243C54; }
+.global-btn.base { color: #2EC4B6; border-color: rgba(46, 196, 182, .4); }
+.global-btn.base:active { background: #243C54; }
+.enable-takeover-wrap {
   position: fixed;
-  top: 10px;
-  left: 10px;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 10vh;
   z-index: 1100;
-  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.enable-takeover-btn {
+  pointer-events: auto;
+  font-family: Verdana, sans-serif;
+  font-size: 1.8vh;
   font-weight: 700;
-  padding: 8px 14px;
-  border: none;
-  border-radius: 8px;
-  background: #6a1b9a;
-  color: #fff;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  padding: 1vh 1.6vw;
+  border-radius: 999px;
+  background: #1E3347;
+  color: #2EC4B6;
+  border: 2px solid rgba(46, 196, 182, .4);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
   cursor: pointer;
 }
 </style>

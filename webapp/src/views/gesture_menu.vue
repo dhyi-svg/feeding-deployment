@@ -11,12 +11,20 @@
     <div class="bd">
       <div class="choice-row">
         <button class="choice-card" @click="navigateToAddGesture">
-          <div class="cc-ico">➕</div>
+          <div class="cc-ico">
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+            </svg>
+          </div>
           <div class="cc-lbl">Add Gesture</div>
           <div class="cc-sub">record a new one</div>
         </button>
         <button class="choice-card" @click="navigateToTestGesture">
-          <div class="cc-ico">🧪</div>
+          <div class="cc-ico">
+            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path d="M7 5.5v13a1 1 0 0 0 1.5.87l11-6.5a1 1 0 0 0 0-1.74l-11-6.5A1 1 0 0 0 7 5.5z" fill="currentColor"/>
+            </svg>
+          </div>
           <div class="cc-lbl">Test Gesture</div>
           <div class="cc-sub">try it on the robot</div>
         </button>
@@ -114,3 +122,13 @@ export default {
   }
 }
 </script>
+
+<style scoped>
+.cc-ico {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--a);
+}
+.cc-ico svg { width: 7vh; height: 7vh; }
+</style>

@@ -173,7 +173,7 @@ export default {
       ],
       username: USER,
       countdownInterval: null,
-      countdownText: "Auto Executing in 00:15 seconds",
+      countdownText: "Auto-confirming in 15s",
       countdown: 1000,
       Pwidth: 0,
       Pheight: 0,
@@ -339,7 +339,7 @@ export default {
       }, 1000);
     },
     updateCountdownText() {
-      this.countdownText = `Auto Executing in 00:${this.countdown.toString().padStart(2, '0')} seconds`;
+      this.countdownText = `Auto-confirming in ${this.countdown}s`;
     },
 
     checkSizes() {
@@ -1101,21 +1101,21 @@ export default {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 12px;
+  gap: 1vw;
 }
 
 .skill-fallback-lbl {
-  font-size: 11px;
+  font-size: 1.9vh;
   color: var(--tm);
   text-align: right;
   line-height: 1.3;
-  max-width: 130px;
+  max-width: 22vw;
 }
 
 .skill-fallback-btn {
-  width: 56px;
-  height: 56px;
-  border-radius: 14px;
+  width: 9vh;
+  height: 9vh;
+  border-radius: 16px;
   flex-shrink: 0;
   background: transparent;
   border: 2px solid var(--s3);
@@ -1123,7 +1123,7 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 24px;
+  font-size: 3.6vh;
   cursor: pointer;
 }
 </style>

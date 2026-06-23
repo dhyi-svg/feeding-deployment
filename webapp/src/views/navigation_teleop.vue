@@ -4,8 +4,8 @@
     <div class="tb">
       <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
       <div>
-        <div class="tb-n">Base Navigation Control</div>
-        <div class="tb-s">Push to drive · release to stop · press Done when parked</div>
+        <div class="tb-n">{{ username }}</div>
+        <div class="tb-s">Base navigation — push to drive, release to stop</div>
       </div>
       <button class="btn sm amber" style="margin-left:auto;height:6vh;padding:0 1.5vw" @click="finish()">Done</button>
     </div>
@@ -43,7 +43,7 @@
 <script>
 import ROSLIB from 'roslib'
 import routeMap from '@/router/routeMap'
-import { ROS_URL } from '@/config/parameterConfig'
+import { ROS_URL, USER } from '@/config/parameterConfig'
 import { skillLabel } from '@/config/skillLabels'
 
 const MAX_LIN = 0.30   
@@ -57,6 +57,7 @@ export default {
   name: 'NavigationTeleop',
   data () {
     return {
+      username: USER,
       lin: 0,
       ang: 0,
       dragging: false,
@@ -213,12 +214,11 @@ export default {
 
 <style scoped>
 .navteleop {
-  max-width: 1140px;
-  margin: 0 auto;
+  width: 100%;
   font-family: Verdana, sans-serif;
   background: var(--g);
   color: var(--t);
-  padding: 8px 20px 10px;
+  padding: 8px 3vw 10px;
   box-sizing: border-box;
   height: 100vh;
   display: flex;

@@ -4,8 +4,8 @@
     <div class="tb">
       <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
       <div>
-        <div class="tb-n">Manual Control</div>
-        <div class="tb-s">Move the arm, then press Done</div>
+        <div class="tb-n">{{ username }}</div>
+        <div class="tb-s">Manual arm control — move the arm, then press Done</div>
       </div>
       <button class="btn sm ghost" style="margin-left:auto;height:6vh;padding:0 1.5vw" @click="backToMenu()">Back to Menu</button>
     </div>
@@ -443,12 +443,11 @@ export default {
 <style scoped>
 
 .teleop {
-  max-width: 1140px;
-  margin: 0 auto;
+  width: 100%;
   font-family: Verdana, sans-serif;
   background: var(--g);
   color: var(--t);
-  padding: 8px 20px 10px;
+  padding: 8px 3vw 10px;
   box-sizing: border-box;
   height: 100vh;
   display: flex;

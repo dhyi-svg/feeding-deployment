@@ -1,0 +1,1259 @@
+<title>Aimee — iPad Landscape UI Preview</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+button,input,textarea{font-family:inherit;color:inherit}
+
+:root{
+  --g:#0D1B2A;--s1:#162535;--s2:#1E3347;--s3:#243C54;
+  --t:#F5F0E8;--tm:#8BA8C4;--a:#F0A500;--a2:#2EC4B6;
+  --bd:#1E3347;--r:14px;--rl:20px;
+}
+
+body{
+  background:#06101A;color:var(--t);
+  font-family:'Segoe UI',system-ui,-apple-system,sans-serif;
+  padding:36px 24px 80px;line-height:1.4;
+}
+
+/* Gallery chrome */
+.header{text-align:center;margin-bottom:36px}
+.g-eyebrow{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--a);margin-bottom:8px}
+.g-title{font:normal 30px/1.1 Georgia,serif;color:var(--t);margin-bottom:10px}
+.g-risk{
+  max-width:620px;margin:12px auto 0;font-size:13px;color:var(--tm);line-height:1.6;
+  border-left:3px solid var(--a);padding-left:14px;text-align:left;display:inline-block;
+}
+.g-risk strong{color:var(--t)}
+
+.section{margin-bottom:48px}
+.section-label{
+  font-size:10px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--s3);margin-bottom:14px;padding-left:4px;
+}
+
+/* Horizontal scroll row */
+.row{
+  display:flex;gap:20px;overflow-x:auto;padding-bottom:12px;
+}
+.row::-webkit-scrollbar{height:4px}
+.row::-webkit-scrollbar-track{background:var(--s1);border-radius:2px}
+.row::-webkit-scrollbar-thumb{background:var(--s3);border-radius:2px}
+
+/* Frame wrap */
+.fw{flex-shrink:0;display:flex;flex-direction:column;gap:7px}
+.ftag{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--tm);text-align:center}
+
+/* iPad landscape frame: ~16:10 */
+.frame{
+  width:580px;height:390px;
+  border-radius:22px;background:var(--g);
+  border:1.5px solid var(--bd);
+  box-shadow:0 20px 56px rgba(0,0,0,.65);
+  overflow:hidden;display:flex;flex-direction:column;
+  flex-shrink:0;
+}
+
+/* Top bar — leaner for landscape (less vertical space to spare) */
+.tb{
+  background:var(--s1);padding:11px 20px;
+  display:flex;align-items:center;gap:12px;
+  border-bottom:1px solid var(--bd);flex-shrink:0;height:52px;
+}
+.av{
+  width:34px;height:34px;border-radius:50%;
+  background:linear-gradient(135deg,var(--a),#c87800);
+  display:flex;align-items:center;justify-content:center;
+  font:700 14px Georgia,serif;color:var(--g);flex-shrink:0;
+}
+.tb-n{font-size:14px;font-weight:700;color:var(--t)}
+.tb-s{font-size:11px;color:var(--tm)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--a2);box-shadow:0 0 6px var(--a2);margin-left:auto}
+
+/* Body */
+.bd{padding:16px 20px;flex:1;display:flex;flex-direction:column;overflow:hidden}
+
+/* ── Shared components ── */
+.btn{
+  border:none;cursor:pointer;border-radius:var(--r);
+  font-family:inherit;font-weight:700;
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  white-space:nowrap;
+}
+.xl{height:68px;font-size:20px}
+.lg{height:60px;font-size:17px}
+.md{height:52px;font-size:15px}
+.sm{height:42px;font-size:13px}
+.w100{width:100%}
+.amber{background:var(--a);color:var(--g)}
+.ghost{background:transparent;color:var(--t);border:2px solid var(--s3)}
+.teal{background:rgba(46,196,182,.12);color:var(--a2);border:2px solid rgba(46,196,182,.22)}
+.danger{background:rgba(220,60,60,.1);color:#e88;border:2px solid rgba(220,60,60,.22)}
+
+/* ────────── HOME ────────── */
+.home-body{
+  display:grid;grid-template-columns:1fr 1fr;gap:20px;
+  align-items:center;flex:1;
+}
+.home-left{display:flex;flex-direction:column;gap:14px}
+.h-robot{
+  width:60px;height:60px;border-radius:50%;
+  background:var(--s2);border:2px solid var(--s3);
+  display:flex;align-items:center;justify-content:center;font-size:26px;
+}
+.h-greet{font:normal 28px/1.2 Georgia,serif;color:var(--t)}
+.h-greet em{font-style:normal;color:var(--a)}
+.h-sub{font-size:14px;color:var(--tm);line-height:1.5}
+.home-right{display:flex;align-items:center;justify-content:center}
+
+/* ────────── TASK SELECTION ────────── */
+.task-body{display:flex;flex-direction:column;gap:12px;flex:1;justify-content:center}
+.tg{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;flex:1}
+.tc{
+  background:var(--s2);border-radius:18px;
+  display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:12px;
+  cursor:pointer;border:2px solid transparent;padding:16px 8px;
+}
+.tc.hi{border-color:var(--a);background:rgba(240,165,0,.06)}
+.tc-i{
+  width:52px;height:52px;border-radius:50%;
+  background:rgba(240,165,0,.13);
+  display:flex;align-items:center;justify-content:center;font-size:26px;
+}
+.tc-l{font-size:15px;font-weight:700;text-align:center;color:var(--t)}
+.brow{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+
+/* ────────── ROBOT EXECUTING ────────── */
+.ss{
+  background:var(--s1);padding:10px 20px;
+  display:flex;align-items:center;gap:10px;
+  border-bottom:1px solid var(--bd);flex-shrink:0;
+}
+.sk{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.sk .sl{font-size:9px;text-transform:uppercase;letter-spacing:.1em;color:var(--tm)}
+.sk .sv{font-size:13px;color:var(--tm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sk.now .sv{color:var(--a);font-weight:700}
+.sa{color:var(--s3);font-size:14px;flex-shrink:0}
+.exec-body{flex:1;display:flex;align-items:center;justify-content:center;gap:32px}
+.icon-ring{
+  width:80px;height:80px;border-radius:50%;
+  border:2px solid var(--s3);
+  background:rgba(46,196,182,.07);
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+}
+.pi{
+  width:48px;height:48px;border-radius:50%;
+  background:rgba(46,196,182,.14);
+  display:flex;align-items:center;justify-content:center;font-size:24px;
+}
+.exec-text strong{display:block;font-size:20px;color:var(--t);margin-bottom:6px;font-family:Georgia,serif}
+.exec-text span{font-size:14px;color:var(--tm);line-height:1.5;display:block;max-width:240px}
+
+/* ────────── CONFIRM TRANSFER ────────── */
+.confirm-body{
+  display:grid;grid-template-columns:1fr 1fr;gap:24px;
+  align-items:center;flex:1;
+}
+.cf-left strong{
+  display:block;font:normal 22px/1.3 Georgia,serif;
+  color:var(--t);margin-bottom:8px;
+}
+.cf-left p{font-size:14px;color:var(--tm);line-height:1.6}
+.cf-right{display:flex;flex-direction:column;gap:10px}
+
+/* ────────── DETECTION CONFIRM (image on top, buttons below — image is landscape) ────────── */
+.det-bd{gap:10px}
+.det-instruction{font-size:13px;color:var(--tm);text-align:center;line-height:1.5;flex-shrink:0}
+.cam{
+  background:var(--s1);border-radius:var(--r);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:6px;color:var(--tm);font-size:13px;
+  border:1px dashed var(--s3);position:relative;overflow:hidden;
+}
+.cam-wide{flex:1;min-height:0}
+.cam-ico{font-size:36px}
+.cam-lbl{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--s3)}
+.marker{position:absolute;width:13px;height:13px;border-radius:50%;border:2px solid rgba(255,255,255,.8)}
+.det-actions{display:flex;gap:10px;flex-shrink:0}
+.det-actions .btn{flex:1}
+
+/* ────────── COLOR CORRECTION (canvas + sidebar kept side-by-side; buttons below) ────────── */
+.cc-row{display:flex;gap:14px;flex:1;min-height:0}
+.cc-canvas{flex:1}
+.cc-side{
+  width:64px;flex-shrink:0;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:10px;
+}
+.cc-swatch{width:44px;height:44px;border-radius:10px;background:#c98b5a;border:2px solid var(--s3)}
+.cc-slider{writing-mode:vertical-lr;direction:rtl;width:6px;height:100px;accent-color:var(--a)}
+.cc-val{font-size:12px;color:var(--tm);font-family:monospace}
+
+/* ────────── TRANSPARENCY / ADAPTABILITY (no image — text exchange only) ────────── */
+.talk-bd{gap:8px}
+.talk-lbl{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--tm);margin-top:6px}
+.talk-box{
+  background:var(--s2);border-radius:var(--r);padding:10px 12px;
+  display:flex;align-items:flex-end;gap:8px;
+}
+.talk-input{
+  flex:1;background:transparent;border:none;outline:none;resize:none;
+  color:var(--t);font-family:inherit;font-size:14px;height:54px;
+}
+.icon-btn{
+  width:38px;height:38px;border-radius:10px;border:2px solid var(--s3);
+  background:transparent;color:var(--tm);cursor:pointer;font-size:14px;
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+}
+.icon-btn.amber-ic{border-color:var(--a);color:var(--a)}
+.response-box{
+  background:var(--s1);border:1px dashed var(--s3);border-radius:var(--r);
+  padding:12px 14px;font-size:13px;color:var(--tm);line-height:1.5;flex:1;
+}
+
+/* ────────── PREFERENCES ────────── */
+.prg{display:flex;gap:5px;margin-bottom:5px}
+.pip{height:4px;flex:1;border-radius:2px;background:var(--s3)}
+.pip.d{background:var(--a2)}
+.pip.a{background:var(--a)}
+.sc{font-size:11px;color:var(--tm);margin-bottom:12px}
+.pref-body{display:grid;grid-template-columns:1fr 1.4fr;gap:20px;flex:1;align-items:start}
+.pq{font:normal 22px/1.3 Georgia,serif;color:var(--t);margin-bottom:8px}
+.pred{font-size:12px;color:var(--tm);line-height:1.5}
+.pred strong{color:var(--a2)}
+.opts{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
+.oc{
+  background:var(--s2);border-radius:var(--r);height:52px;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 16px;cursor:pointer;border:2px solid transparent;
+}
+.oc.sel{border-color:var(--a);background:rgba(240,165,0,.07)}
+.ot{font-size:14px;font-weight:600;color:var(--t)}
+.och{width:22px;height:22px;border-radius:50%;background:var(--a);color:var(--g);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700}
+.nf{display:flex;gap:10px}
+.nf .btn{flex:1}
+
+/* ────────── AFTER BITE / AFTER DRINK (same as Task Selection, plus autocontinue) ────────── */
+.cdown{font-size:13px;color:var(--tm);text-align:center}
+.cdown span{color:var(--a);font-weight:700;font-size:15px}
+.tc-col{display:flex;flex-direction:column;gap:6px;min-height:0}
+.tc-col .tc{flex:1;min-height:0}
+.tc-col .cdown{font-size:10px;margin:0}
+.tc-col .cdown span{font-size:11px}
+
+/* ────────── SIMPLE CONFIRM (single instruction + button, reused by drink/wipe transfer) ────────── */
+.simple-confirm{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;text-align:center}
+.simple-confirm p{font-size:16px;color:var(--t);line-height:1.6;max-width:400px;font-family:Georgia,serif}
+
+/* ────────── BIG CHOICE CARDS (gesture menu, idle takeover) ────────── */
+.choice-stack{flex:1;display:flex;flex-direction:column;gap:12px;justify-content:center}
+.choice-row{flex:1;display:flex;gap:12px}
+.choice-card{
+  flex:1;background:var(--s2);border-radius:18px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+  border:2px solid transparent;cursor:pointer;color:var(--t);
+}
+.choice-card.hi{border-color:var(--a2);background:rgba(46,196,182,.07)}
+.choice-card .cc-ico{font-size:28px}
+.choice-card .cc-lbl{font-size:16px;font-weight:700}
+.choice-card .cc-sub{font-size:11px;color:var(--tm)}
+
+/* ────────── TEXT-FIELD SETUP PAGES (gesture setup, meal setup) ────────── */
+.field-stack{flex:1;display:flex;flex-direction:column;gap:10px;justify-content:center;min-height:0}
+.field-lbl{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--tm)}
+.field-box{
+  background:var(--s2);border-radius:var(--r);padding:8px 10px;
+  display:flex;align-items:flex-end;gap:8px;
+}
+.field-input{
+  flex:1;background:transparent;border:none;outline:none;resize:none;
+  color:var(--t);font-family:inherit;font-size:13px;height:32px;
+}
+.field-box.tall .field-input{height:48px}
+.field-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:4px}
+
+/* ────────── GESTURE RECORDER ────────── */
+.rec-frame{flex:1;display:flex;flex-direction:column;gap:8px;min-height:0}
+.rec-preview{
+  flex:1;min-height:0;background:var(--s1);border:1px dashed var(--s3);border-radius:var(--r);
+  display:flex;align-items:center;justify-content:center;color:var(--tm);font-size:13px;gap:6px;
+}
+.rec-controls{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.rec-controls .btn{font-size:11px;padding:0}
+
+/* ────────── GESTURE TEST (option list + response) ────────── */
+.gtest-body{display:grid;grid-template-columns:1fr 1fr;gap:14px;flex:1;min-height:0}
+.gtest-list{display:flex;flex-direction:column;gap:6px;overflow-y:auto;min-height:0}
+.gtest-col{display:flex;flex-direction:column;gap:8px;min-height:0}
+.gtest-col .response-box{flex:1}
+
+/* ────────── BITE SELECTION ────────── */
+.bite-body{display:grid;grid-template-columns:1.15fr 1fr;gap:14px;flex:1;min-height:0}
+.bite-left{display:flex;flex-direction:column;gap:6px;min-height:0}
+.bite-cam{flex:1;min-height:0;position:relative}
+.bite-marker{
+  position:absolute;width:30px;height:24px;border-radius:6px;border:2px solid var(--a2);
+  display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:var(--a2);
+}
+.bite-marker.sel{border-color:var(--a);color:var(--a);background:rgba(240,165,0,.1)}
+.bite-side{display:flex;flex-direction:column;gap:8px;min-height:0}
+.bite-current{
+  background:var(--s2);border-radius:12px;padding:8px 10px;display:flex;gap:10px;align-items:center;
+}
+.bc-ico{width:38px;height:38px;border-radius:8px;background:var(--s3);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:18px}
+.bc-name{font-size:13px;font-weight:700}
+.bc-next{font-size:10px;color:var(--tm)}
+.swap-row{display:flex;gap:6px;overflow-x:auto}
+.swap-item{
+  flex-shrink:0;width:46px;height:46px;border-radius:10px;background:var(--s2);
+  display:flex;align-items:center;justify-content:center;font-size:18px;
+}
+.dip-opts{display:flex;gap:6px;overflow-x:auto}
+.dip-opt{
+  flex-shrink:0;background:var(--s2);border-radius:999px;border:2px solid transparent;
+  padding:6px 12px;display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:var(--t);cursor:pointer;
+}
+.dip-opt.sel{border-color:var(--a);background:rgba(240,165,0,.08)}
+.skill-fallback{margin-top:auto;display:flex;align-items:center;justify-content:flex-end;gap:12px}
+.skill-fallback-lbl{font-size:11px;color:var(--tm);text-align:right;line-height:1.3;max-width:130px}
+.skill-fallback-btn{
+  width:68px;height:68px;border-radius:16px;flex-shrink:0;
+  background:transparent;border:2px solid var(--s3);color:var(--tm);
+  display:flex;align-items:center;justify-content:center;font-size:28px;cursor:pointer;
+}
+
+/* ────────── MANUAL SKILL SELECTION (modal opened from Bite Selection) ────────── */
+.skill-modal-hdr{font-size:13px;color:var(--t);line-height:1.5;margin-bottom:2px;font-family:Georgia,serif}
+.skill-modal-sub{font-size:11px;color:var(--tm);margin-bottom:10px}
+.skill-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;flex:1;min-height:0}
+.skill-card{
+  background:var(--s2);border-radius:12px;border:2px solid transparent;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+  cursor:pointer;color:var(--t);
+}
+.skill-card.sel{border-color:var(--a);background:rgba(240,165,0,.08)}
+.sk-ico{font-size:22px}
+.sk-lbl{font-size:11px;font-weight:700}
+
+.mark-body{display:flex;flex-direction:column;gap:10px;flex:1;min-height:0}
+.mark-cam{position:relative;flex:1;min-height:0}
+.mark-dot{position:absolute;width:14px;height:14px;border-radius:50%;background:var(--a2);border:2px solid var(--t)}
+.mark-line{position:absolute;border-top:2px dashed var(--a2);width:90px;top:46%;left:42%;transform:rotate(18deg)}
+.mark-instruction{font-size:13px;color:var(--tm);text-align:center;flex-shrink:0}
+.mark-actions{display:flex;gap:10px;flex-shrink:0}
+.mark-actions .btn{flex:1}
+
+/* ────────── TELEOP (manipulation / navigation) ────────── */
+.teleop-bd{gap:8px}
+.teleop-tabs{display:flex;gap:6px}
+.teleop-tab{flex:1;text-align:center;font-size:11px;padding:6px 0;border-radius:8px;background:var(--s2);color:var(--tm);cursor:pointer}
+.teleop-tab.active{background:var(--a);color:var(--g);font-weight:700}
+.step-row{display:flex;gap:6px;align-items:center}
+.step-row .field-lbl{margin:0;flex-shrink:0}
+.step-chip{flex:1;text-align:center;font-size:10px;padding:5px 0;border-radius:7px;background:var(--s2);color:var(--tm)}
+.step-chip.active{background:var(--s3);color:var(--t);font-weight:700}
+.jog-grid{display:grid;grid-template-columns:1fr 1fr 1fr;grid-template-rows:1fr 1fr;gap:6px;flex:1;min-height:0}
+.jog-btn{background:var(--s2);border:none;border-radius:10px;color:var(--t);font-size:11px;cursor:pointer}
+.jog-up{grid-column:1/4}
+.jog-left{grid-row:2}
+.jog-right{grid-column:3;grid-row:2}
+.jog-center{grid-column:2;grid-row:2;background:var(--s1);color:var(--tm);font-size:9px}
+.teleop-bottom{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.joy-wrap{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px}
+.joy-pad{
+  width:150px;height:150px;border-radius:50%;background:var(--s2);
+  border:1px solid var(--s3);position:relative;
+}
+.joy-knob{
+  position:absolute;width:54px;height:54px;border-radius:50%;left:48px;top:48px;
+  background:rgba(46,196,182,.18);border:2px solid var(--a2);
+}
+.joy-readout{display:flex;justify-content:center;gap:20px;font-size:12px;color:var(--tm)}
+.joy-readout b{color:var(--t)}
+
+/* ────────── MIC TEST (engineering diagnostic, not part of caregiver flow) ────────── */
+.mic-meter{height:16px;background:var(--s1);border-radius:6px;overflow:hidden}
+.mic-meter-fill{height:100%;background:var(--a2);width:32%}
+.mic-row{font-size:12px;color:var(--tm);display:flex;justify-content:space-between;margin-top:8px}
+.mic-row b{color:var(--t)}
+.mic-log{
+  margin-top:8px;flex:1;min-height:0;background:var(--g);border:1px solid var(--bd);border-radius:10px;
+  padding:8px 10px;font-family:monospace;font-size:10px;color:var(--tm);overflow-y:auto;
+}
+
+/* ────────── PERSONALIZATION ────────── */
+.pers-body{display:flex;flex-direction:column;gap:10px;flex:1;justify-content:center}
+.pcard{
+  background:var(--s2);border-radius:16px;height:64px;
+  display:flex;align-items:center;gap:16px;padding:0 20px;
+  cursor:pointer;border:2px solid transparent;
+}
+.p-ico{font-size:22px;flex-shrink:0}
+.p-nm{font-size:15px;font-weight:700;color:var(--t)}
+.p-ds{font-size:11px;color:var(--tm)}
+
+/* Token strip */
+.tokens{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:28px}
+.tok{display:flex;align-items:center;gap:8px;background:var(--s1);border:1px solid var(--bd);border-radius:9px;padding:8px 12px}
+.sw{width:24px;height:24px;border-radius:5px;flex-shrink:0}
+.tok-name{font-size:11px;font-weight:700}
+.tok-hex{font-size:10px;color:var(--tm);font-family:monospace}
+</style>
+
+<!-- ═══ HEADER ═══ -->
+<div class="header">
+  <p class="g-eyebrow">iPad Landscape · Design Preview</p>
+  <h1 class="g-title">Aimee's Feeding Robot</h1>
+  <p style="text-align:center;margin-top:12px">
+    <span class="g-risk">
+      <strong>The risk:</strong> Dark navy for a medical app. Justified —
+      mealtimes are often in dim settings where bright screens glare; amber on navy exceeds WCAG AAA contrast;
+      the palette reads as warm and premium rather than clinical.
+      Georgia headings add dignity. Landscape layout uses 2-column splits to give each element maximum touch surface.
+    </span>
+  </p>
+</div>
+
+<!-- ═══ TOKENS ═══ -->
+<div class="section">
+  <p class="section-label">Palette</p>
+  <div class="tokens">
+    <div class="tok"><div class="sw" style="background:#0D1B2A;border:1px solid #243C54"></div><div><div class="tok-name">Ground</div><div class="tok-hex">#0D1B2A</div></div></div>
+    <div class="tok"><div class="sw" style="background:#162535"></div><div><div class="tok-name">Surface</div><div class="tok-hex">#162535</div></div></div>
+    <div class="tok"><div class="sw" style="background:#1E3347"></div><div><div class="tok-name">Cards</div><div class="tok-hex">#1E3347</div></div></div>
+    <div class="tok"><div class="sw" style="background:#F5F0E8"></div><div><div class="tok-name">Text</div><div class="tok-hex">#F5F0E8</div></div></div>
+    <div class="tok"><div class="sw" style="background:#8BA8C4"></div><div><div class="tok-name">Muted</div><div class="tok-hex">#8BA8C4</div></div></div>
+    <div class="tok"><div class="sw" style="background:#F0A500"></div><div><div class="tok-name">Amber</div><div class="tok-hex">#F0A500</div></div></div>
+    <div class="tok"><div class="sw" style="background:#2EC4B6"></div><div><div class="tok-name">Teal</div><div class="tok-hex">#2EC4B6</div></div></div>
+  </div>
+</div>
+
+<!-- ═══ ROW 1: Startup flow ═══ -->
+<div class="section">
+  <p class="section-label">Startup</p>
+  <div class="row">
+
+    <!-- HOME -->
+    <div class="fw">
+      <p class="ftag">Home</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Enjoy your mealtime now!</div></div>
+          <div class="dot"></div>
+        </div>
+        <div class="bd">
+          <div class="home-body">
+            <div class="home-left">
+              <div class="h-robot">🤖</div>
+              <div class="h-greet">Good morning,<br><em>Aimee.</em></div>
+              <div class="h-sub">Your robot is connected<br>and ready when you are.</div>
+            </div>
+            <div class="home-right">
+              <button class="btn xl amber" style="width:220px">Start Meal</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PREFERENCE CONTEXT -->
+    <div class="fw">
+      <p class="ftag">Meal Context</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Tell us about this meal</div></div>
+        </div>
+        <div class="bd">
+          <div class="prg">
+            <div class="pip d"></div><div class="pip a"></div><div class="pip"></div><div class="pip"></div>
+          </div>
+          <p class="sc">Step 2 of 4</p>
+          <div class="pref-body">
+            <div>
+              <p class="pq">What kind of meal is this?</p>
+              <p style="font-size:13px;color:var(--tm);margin-top:4px">Select one to continue.</p>
+            </div>
+            <div>
+              <div class="opts">
+                <div class="oc"><span class="ot">Breakfast</span></div>
+                <div class="oc"><span class="ot">Lunch</span></div>
+                <div class="oc sel"><span class="ot">Dinner</span><div class="och">✓</div></div>
+                <div class="oc"><span class="ot">Snack</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="nf" style="margin-top:auto">
+            <button class="btn md ghost">Go Back</button>
+            <button class="btn md amber">Continue</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PREFERENCE CORRECTION -->
+    <div class="fw">
+      <p class="ftag">Preference Correction</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Review the robot's predictions</div></div>
+        </div>
+        <div class="bd">
+          <div class="prg">
+            <div class="pip d"></div><div class="pip d"></div><div class="pip a"></div><div class="pip"></div><div class="pip"></div><div class="pip"></div><div class="pip"></div><div class="pip"></div>
+          </div>
+          <p class="sc">Preference 3 of 18</p>
+          <div class="pref-body">
+            <div>
+              <p class="pq">Robot speed</p>
+              <p class="pred" style="margin-top:8px">Predicted: <strong>Medium</strong></p>
+              <p style="font-size:12px;color:var(--tm);margin-top:8px;line-height:1.6">Change it if this doesn't match what you'd like — the robot learns from each correction.</p>
+            </div>
+            <div>
+              <div class="opts">
+                <div class="oc"><span class="ot">Slow</span></div>
+                <div class="oc sel"><span class="ot">Medium</span><div class="och">✓</div></div>
+                <div class="oc"><span class="ot">Fast</span></div>
+              </div>
+              <p class="cdown" style="text-align:left;margin-top:8px">Auto-confirming <em>Medium</em> in <span>10s</span></p>
+            </div>
+          </div>
+          <div class="nf" style="margin-top:auto">
+            <button class="btn md ghost">Go Back</button>
+            <button class="btn md amber">Save &amp; Next</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══ ROW 2: Main meal loop ═══ -->
+<div class="section">
+  <p class="section-label">Main Meal Loop</p>
+  <div class="row">
+
+    <!-- TASK SELECTION -->
+    <div class="fw">
+      <p class="ftag">Task Selection</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Choose your next action</div></div>
+        </div>
+        <div class="bd" style="padding:14px 16px">
+          <div class="task-body">
+            <div class="tg" style="flex:1">
+              <div class="tc hi">
+                <div class="tc-i">🍴</div>
+                <div class="tc-l">Take a Bite</div>
+              </div>
+              <div class="tc">
+                <div class="tc-i">🥤</div>
+                <div class="tc-l">Take a Sip</div>
+              </div>
+              <div class="tc">
+                <div class="tc-i">🫧</div>
+                <div class="tc-l">Wipe Mouth</div>
+              </div>
+            </div>
+            <div class="brow">
+              <button class="btn md ghost w100">Personalization</button>
+              <button class="btn md danger w100">Finish Feeding</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ROBOT EXECUTING -->
+    <div class="fw">
+      <p class="ftag">Robot Executing</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Robot is working</div></div>
+          <div class="dot"></div>
+        </div>
+        <div class="ss">
+          <div class="sk">
+            <span class="sl">Previous</span>
+            <span class="sv">Move to plate</span>
+          </div>
+          <div class="sa">›</div>
+          <div class="sk now">
+            <span class="sl">Now</span>
+            <span class="sv">Acquiring bite</span>
+          </div>
+          <div class="sa">›</div>
+          <div class="sk">
+            <span class="sl">Next</span>
+            <span class="sv">Transfer to mouth</span>
+          </div>
+        </div>
+        <div class="exec-body">
+          <div class="icon-ring"><div class="pi">🦾</div></div>
+          <div class="exec-text">
+            <strong>Picking up your food</strong>
+            <span>The robot is acquiring a bite.<br>Transfer coming soon — please stay still.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- AFTER BITE -->
+    <div class="fw">
+      <p class="ftag">After Bite</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">What would you like next?</div></div>
+        </div>
+        <div class="bd" style="padding:14px 16px">
+          <div class="task-body">
+            <div class="tg" style="flex:1">
+              <div class="tc-col">
+                <div class="tc hi">
+                  <div class="tc-i">🍴</div>
+                  <div class="tc-l">Take a Bite</div>
+                </div>
+                <p class="cdown">Auto-confirming in <span>12s</span></p>
+              </div>
+              <div class="tc">
+                <div class="tc-i">🥤</div>
+                <div class="tc-l">Take a Sip</div>
+              </div>
+              <div class="tc">
+                <div class="tc-i">🫧</div>
+                <div class="tc-l">Wipe Mouth</div>
+              </div>
+            </div>
+            <div class="brow">
+              <button class="btn md ghost w100">Personalization</button>
+              <button class="btn md danger w100">Finish Feeding</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- AFTER DRINK -->
+    <div class="fw">
+      <p class="ftag">After Drink</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">What would you like next?</div></div>
+        </div>
+        <div class="bd" style="padding:14px 16px">
+          <div class="task-body">
+            <div class="tg" style="flex:1">
+              <div class="tc">
+                <div class="tc-i">🍴</div>
+                <div class="tc-l">Take a Bite</div>
+              </div>
+              <div class="tc-col">
+                <div class="tc hi">
+                  <div class="tc-i">🥤</div>
+                  <div class="tc-l">Take a Sip</div>
+                </div>
+                <p class="cdown">Auto-confirming in <span>15s</span></p>
+              </div>
+              <div class="tc">
+                <div class="tc-i">🫧</div>
+                <div class="tc-l">Wipe Mouth</div>
+              </div>
+            </div>
+            <div class="brow">
+              <button class="btn md ghost w100">Personalization</button>
+              <button class="btn md danger w100">Finish Feeding</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══ ROW 3: Confirmations ═══ -->
+<div class="section">
+  <p class="section-label">Confirmations &amp; Verification</p>
+  <div class="row">
+
+    <!-- BITE CONFIRM TRANSFER -->
+    <div class="fw">
+      <p class="ftag">Confirm Transfer</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Ready to transfer?</div></div>
+        </div>
+        <div class="bd">
+          <div class="confirm-body">
+            <div class="cf-left">
+              <strong>Did the robot grab the bite successfully?</strong>
+              <p>If the pickup looks correct, continue and the robot will bring it to your mouth.<br><br>If not, retry and it will try again.</p>
+            </div>
+            <div class="cf-right">
+              <button class="btn lg amber w100">Continue — Transfer Bite</button>
+              <button class="btn lg ghost w100">Retry Pickup</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- DRINK CONFIRM TRANSFER -->
+    <div class="fw">
+      <p class="ftag">Drink Confirm Transfer</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Ready to transfer?</div></div>
+        </div>
+        <div class="bd">
+          <div class="simple-confirm">
+            <p>The robot has picked up the drink.<br>Continue when you're ready to take a sip.</p>
+            <button class="btn lg amber" style="width:70%">Continue</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- WIPE CONFIRM TRANSFER -->
+    <div class="fw">
+      <p class="ftag">Wipe Confirm Transfer</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Ready to transfer?</div></div>
+        </div>
+        <div class="bd">
+          <div class="simple-confirm">
+            <p>The robot has picked up the mouth wipe.<br>Continue when you're ready.</p>
+            <button class="btn lg amber" style="width:70%">Continue</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- DETECTION CONFIRM -->
+    <div class="fw">
+      <p class="ftag">Detection Confirm</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Verify the detection</div></div>
+        </div>
+        <div class="bd det-bd">
+          <p class="det-instruction">Does the highlighted attachment point look correct?</p>
+          <div class="cam cam-wide">
+            <div class="cam-ico">📷</div>
+            <div class="cam-lbl">Live camera feed</div>
+            <div class="marker" style="top:42%;left:46%;background:rgba(60,220,80,.7)"></div>
+          </div>
+          <div class="det-actions">
+            <button class="btn md amber">Looks Correct</button>
+            <button class="btn md ghost">Redo</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- COLOR CORRECTION (structure kept: canvas + sidebar side-by-side; buttons below) -->
+    <div class="fw">
+      <p class="ftag">Color Correction</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Adjust color detection</div></div>
+        </div>
+        <div class="bd det-bd">
+          <div class="cc-row">
+            <div class="cam cc-canvas">
+              <div class="cam-ico">📷</div>
+              <div class="cam-lbl">Click the food's color</div>
+            </div>
+            <div class="cc-side">
+              <div class="cc-swatch"></div>
+              <input type="range" class="cc-slider" disabled>
+              <span class="cc-val">0.18</span>
+            </div>
+          </div>
+          <div class="det-actions">
+            <button class="btn md ghost">Reset</button>
+            <button class="btn md teal">Rerun</button>
+            <button class="btn md amber">Confirm</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PERSONALIZATION -->
+    <div class="fw">
+      <p class="ftag">Personalization</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Customize how the robot works</div></div>
+        </div>
+        <div class="bd">
+          <div class="pers-body">
+            <div class="pcard">
+              <div class="p-ico">📋</div>
+              <div><div class="p-nm">Transparency</div><div class="p-ds">Ask the robot why it made a choice</div></div>
+            </div>
+            <div class="pcard">
+              <div class="p-ico">✏️</div>
+              <div><div class="p-nm">Adaptability</div><div class="p-ds">Change how the robot behaves</div></div>
+            </div>
+            <div class="pcard">
+              <div class="p-ico">👋</div>
+              <div><div class="p-nm">Gestures</div><div class="p-ds">Control the robot with gestures</div></div>
+            </div>
+            <button class="btn sm ghost w100" style="margin-top:4px">← Back to Task Selection</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══ ROW 4: Talk to the robot ═══ -->
+<div class="section">
+  <p class="section-label">Talk to the Robot — text only, no camera feed</p>
+  <div class="row">
+
+    <!-- TRANSPARENCY -->
+    <div class="fw">
+      <p class="ftag">Transparency</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Ask the robot about this meal</div></div>
+        </div>
+        <div class="bd talk-bd">
+          <p class="talk-lbl">What would you like to know?</p>
+          <div class="talk-box">
+            <textarea class="talk-input" readonly>Why did you skip dipping that bite?</textarea>
+            <button class="icon-btn" title="voice">🎤</button>
+            <button class="icon-btn" title="clear">✕</button>
+            <button class="icon-btn amber-ic" title="send">➤</button>
+          </div>
+          <p class="talk-lbl">Robot's response</p>
+          <div class="response-box">The bite already had sauce on it from a previous dip, so I skipped dipping again to avoid over-saucing it.</div>
+          <button class="btn sm ghost w100" style="margin-top:auto">← Task Selection</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ADAPTABILITY -->
+    <div class="fw">
+      <p class="ftag">Adaptability</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Adjust how the robot is feeding you</div></div>
+        </div>
+        <div class="bd talk-bd">
+          <p class="talk-lbl">What would you like to edit?</p>
+          <div class="talk-box">
+            <textarea class="talk-input" readonly>Can you slow down a bit?</textarea>
+            <button class="icon-btn" title="voice">🎤</button>
+            <button class="icon-btn" title="clear">✕</button>
+            <button class="icon-btn amber-ic" title="send">➤</button>
+          </div>
+          <p class="talk-lbl">Robot's response</p>
+          <div class="response-box">Sure — I've reduced my movement speed for the rest of this meal.</div>
+          <button class="btn sm ghost w100" style="margin-top:auto">← Task Selection</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══ ROW 5: Bite & meal setup ═══ -->
+<div class="section">
+  <p class="section-label">Bite &amp; Meal Setup</p>
+  <div class="row">
+
+    <!-- BITE SELECTION -->
+    <div class="fw">
+      <p class="ftag">Bite Selection</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Choose your bite</div></div>
+        </div>
+        <div class="bd det-bd">
+          <div class="bite-body">
+            <div class="bite-left">
+              <div class="cam bite-cam">
+                <div class="cam-ico">📷</div>
+                <div class="cam-lbl">Plate camera feed</div>
+                <div class="bite-marker sel" style="top:30%;left:38%">1</div>
+                <div class="bite-marker" style="top:55%;left:58%">2</div>
+                <div class="bite-marker" style="top:22%;left:62%">3</div>
+              </div>
+              <button class="btn md amber w100">Pickup Bite</button>
+              <p class="cdown">Auto-confirming in <span>15s</span></p>
+            </div>
+            <div class="bite-side">
+              <span class="field-lbl">Current bite</span>
+              <div class="bite-current">
+                <div class="bc-ico">🍗</div>
+                <div><div class="bc-name">Buffalo chicken bite</div><div class="bc-next">Next: Potato wedge</div></div>
+              </div>
+              <span class="field-lbl">Swap food item</span>
+              <div class="swap-row">
+                <div class="swap-item">🥔</div>
+                <div class="swap-item">🥗</div>
+                <div class="swap-item">🍞</div>
+              </div>
+              <span class="field-lbl">Choose your dip</span>
+              <div class="dip-opts">
+                <div class="dip-opt"><span>No dip</span></div>
+                <div class="dip-opt sel"><span>Ranch dressing</span><div class="och" style="width:16px;height:16px;font-size:9px">✓</div></div>
+                <div class="dip-opt"><span>Ketchup</span></div>
+              </div>
+              <div class="skill-fallback">
+                <span class="skill-fallback-lbl">Trouble picking this up?</span>
+                <button class="skill-fallback-btn" title="Execute Pickup Skill Manually">🛠️</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MANUAL SKILL SELECTION — step 1: choose skill -->
+    <div class="fw">
+      <p class="ftag">Manual Skill Select — Choose Skill</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Trouble picking up your choice?</div></div>
+        </div>
+        <div class="bd det-bd">
+          <p class="skill-modal-hdr">Let's try a different approach.</p>
+          <p class="skill-modal-sub">Select a skill and continue enjoying your meal.</p>
+          <div class="skill-grid">
+            <div class="skill-card sel"><div class="sk-ico">🍢</div><div class="sk-lbl">Skewering</div></div>
+            <div class="skill-card"><div class="sk-ico">🥄</div><div class="sk-lbl">Scooping</div></div>
+            <div class="skill-card"><div class="sk-ico">🫕</div><div class="sk-lbl">Dipping</div></div>
+            <div class="skill-card"><div class="sk-ico">🍝</div><div class="sk-lbl">Twirling</div></div>
+            <div class="skill-card"><div class="sk-ico">🤏</div><div class="sk-lbl">Grouping</div></div>
+            <div class="skill-card"><div class="sk-ico">🫸</div><div class="sk-lbl">Pushing</div></div>
+          </div>
+          <button class="btn md amber w100" style="margin-top:10px">Confirm</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MANUAL SKILL SELECTION — step 2: mark points -->
+    <div class="fw">
+      <p class="ftag">Manual Skill Select — Mark Points</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Skewering — mark the entry point(s)</div></div>
+        </div>
+        <div class="bd det-bd">
+          <div class="mark-body">
+            <p class="mark-instruction">Click on one or two points on the image to set where the fork should enter.</p>
+            <div class="cam mark-cam">
+              <div class="cam-ico">📷</div>
+              <div class="cam-lbl">Tap one or two points</div>
+              <div class="mark-dot" style="top:46%;left:42%"></div>
+              <div class="mark-dot" style="top:32%;left:58%"></div>
+              <div class="mark-line"></div>
+            </div>
+            <div class="mark-actions">
+              <button class="btn md ghost">Reset Parameter</button>
+              <button class="btn md amber">Confirm</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MEAL SETUP -->
+    <div class="fw">
+      <p class="ftag">Meal Setup</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Tell us about the plate</div></div>
+        </div>
+        <div class="bd det-bd">
+          <div class="bite-body">
+            <div class="cam bite-cam">
+              <div class="cam-ico">📷</div>
+              <div class="cam-lbl">Plate camera feed</div>
+            </div>
+            <div class="field-stack">
+              <span class="field-lbl">Food items on the plate</span>
+              <div class="field-box">
+                <textarea class="field-input" readonly>Chicken nuggets, broccoli, ketchup</textarea>
+              </div>
+              <span class="field-lbl">Preferred bite ordering</span>
+              <div class="field-box tall">
+                <textarea class="field-input" readonly>Start with broccoli, alternate with nuggets, ketchup last</textarea>
+              </div>
+              <div class="field-actions">
+                <button class="btn md amber" style="width:50%">Confirm</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══ ROW 6: Gestures ═══ -->
+<div class="section">
+  <p class="section-label">Gestures</p>
+  <div class="row">
+
+    <!-- GESTURE MENU -->
+    <div class="fw">
+      <p class="ftag">Gesture Menu</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Teach or test a gesture</div></div>
+        </div>
+        <div class="bd">
+          <div class="choice-row">
+            <button class="choice-card">
+              <div class="cc-ico">➕</div>
+              <div class="cc-lbl">Add Gesture</div>
+              <div class="cc-sub">record a new one</div>
+            </button>
+            <button class="choice-card">
+              <div class="cc-ico">🧪</div>
+              <div class="cc-lbl">Test Gesture</div>
+              <div class="cc-sub">try it on the robot</div>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- GESTURE SETUP -->
+    <div class="fw">
+      <p class="ftag">Gesture Setup</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Describe the new gesture</div></div>
+        </div>
+        <div class="bd">
+          <div class="field-stack">
+            <span class="field-lbl">Gesture name</span>
+            <div class="field-box">
+              <textarea class="field-input" readonly>Two quick nods</textarea>
+              <button class="icon-btn" title="voice">🎤</button>
+              <button class="icon-btn" title="clear">✕</button>
+            </div>
+            <span class="field-lbl">Description</span>
+            <div class="field-box tall">
+              <textarea class="field-input" readonly>Nodding the head down-up twice means "skip this bite."</textarea>
+              <button class="icon-btn" title="voice">🎤</button>
+              <button class="icon-btn" title="clear">✕</button>
+            </div>
+            <div class="field-actions">
+              <button class="btn md ghost" style="width:35%">Submit</button>
+              <button class="btn md amber" style="width:35%">Next</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- GESTURE RECORD POSITIVE -->
+    <div class="fw">
+      <p class="ftag">Gesture Record — Positive</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Record examples of the gesture</div></div>
+        </div>
+        <div class="bd rec-frame">
+          <div class="rec-preview">🎥 Camera preview</div>
+          <div class="rec-controls">
+            <button class="btn sm amber">Start</button>
+            <button class="btn sm ghost">Stop</button>
+            <button class="btn sm ghost">Delete Last</button>
+            <button class="btn sm teal">Next</button>
+          </div>
+          <div class="response-box" style="flex:0 0 auto;min-height:34px">Recorded 3 of 5 positive examples.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- GESTURE RECORD NEGATIVE -->
+    <div class="fw">
+      <p class="ftag">Gesture Record — Negative</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Record examples of NOT the gesture</div></div>
+        </div>
+        <div class="bd rec-frame">
+          <div class="rec-preview">🎥 Camera preview</div>
+          <div class="rec-controls">
+            <button class="btn sm amber">Start</button>
+            <button class="btn sm ghost">Stop</button>
+            <button class="btn sm ghost">Delete Last</button>
+            <button class="btn sm teal">Return</button>
+          </div>
+          <div class="response-box" style="flex:0 0 auto;min-height:34px">Recorded 4 of 5 negative examples.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- GESTURE TEST -->
+    <div class="fw">
+      <p class="ftag">Gesture Test</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Pick a gesture to test</div></div>
+        </div>
+        <div class="bd">
+          <div class="gtest-body">
+            <div class="gtest-list">
+              <div class="oc sel"><span class="ot">Two quick nods</span><div class="och">✓</div></div>
+              <div class="oc"><span class="ot">Look left</span></div>
+              <div class="oc"><span class="ot">Open mouth wide</span></div>
+            </div>
+            <div class="gtest-col">
+              <span class="field-lbl">Robot's response</span>
+              <div class="response-box">Detected "Two quick nods" — skipping this bite.</div>
+              <div class="field-actions" style="margin-top:0">
+                <button class="btn sm teal" style="flex:1">Send &amp; Test</button>
+                <button class="btn sm ghost" style="flex:1">Done</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══ ROW 7: Manual control & diagnostics ═══ -->
+<div class="section">
+  <p class="section-label">Manual Control &amp; Diagnostics</p>
+  <div class="row">
+
+    <!-- IDLE TAKEOVER -->
+    <div class="fw">
+      <p class="ftag">Idle Takeover</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Robot is idle — choose what to control</div></div>
+        </div>
+        <div class="bd">
+          <div class="choice-row">
+            <button class="choice-card">
+              <div class="cc-ico">🕹️</div>
+              <div class="cc-lbl">Navigation</div>
+              <div class="cc-sub">drive the base</div>
+            </button>
+            <button class="choice-card">
+              <div class="cc-ico">🦾</div>
+              <div class="cc-lbl">Manipulation</div>
+              <div class="cc-sub">move the arm</div>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MANIPULATION TELEOP -->
+    <div class="fw">
+      <p class="ftag">Manipulation Teleop</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Manual Control</div></div>
+          <button class="btn sm ghost" style="margin-left:auto;height:34px;padding:0 12px">Back</button>
+        </div>
+        <div class="bd teleop-bd">
+          <div class="teleop-tabs">
+            <div class="teleop-tab active">Task space</div>
+            <div class="teleop-tab">Joint space</div>
+          </div>
+          <div class="step-row">
+            <span class="field-lbl">Step</span>
+            <div class="step-chip">Fine</div>
+            <div class="step-chip active">Medium</div>
+            <div class="step-chip">Coarse</div>
+          </div>
+          <div class="jog-grid">
+            <button class="jog-btn jog-up">Up</button>
+            <button class="jog-btn jog-left">Left</button>
+            <button class="jog-btn jog-center">Reach / Pull</button>
+            <button class="jog-btn jog-right">Right</button>
+            <button class="jog-btn" style="grid-column:1/4">Down</button>
+          </div>
+          <div class="teleop-bottom">
+            <button class="btn sm teal">Retract</button>
+            <button class="btn sm amber">Done</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- NAVIGATION TELEOP -->
+    <div class="fw">
+      <p class="ftag">Navigation Teleop</p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">A</div>
+          <div><div class="tb-n">Hi Aimee</div><div class="tb-s">Push to drive · release to stop</div></div>
+          <button class="btn sm amber" style="margin-left:auto;height:34px;padding:0 14px">Done</button>
+        </div>
+        <div class="joy-wrap">
+          <div class="joy-pad"><div class="joy-knob"></div></div>
+          <div class="joy-readout"><span>drive <b>0.12</b> m/s</span><span>turn <b>0.00</b> rad/s</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MIC TEST -->
+    <div class="fw">
+      <p class="ftag">Mic Test <span style="opacity:.6">(engineering diagnostic)</span></p>
+      <div class="frame">
+        <div class="tb">
+          <div class="av">⚙</div>
+          <div><div class="tb-n">Mic Test</div><div class="tb-s">Calibrate the switch-button mic — not part of the caregiver flow</div></div>
+        </div>
+        <div class="bd" style="gap:6px">
+          <div class="mic-row"><span>Active input</span><b>USB switch adapter</b></div>
+          <div class="mic-meter"><div class="mic-meter-fill"></div></div>
+          <div class="mic-row"><span>Peak 0.084</span><span>Threshold <b>0.020</b></span></div>
+          <input type="range" disabled style="accent-color:var(--a2)">
+          <div class="mic-row"><span>Presses detected</span><b>7</b></div>
+          <div class="mic-log">
+            PRESS #7 — peak 0.091 | threshold 0.020<br>
+            peak 0.012<br>
+            PRESS #6 — peak 0.077 | threshold 0.020
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>

@@ -137,8 +137,8 @@ export default {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 1.5vh;
-  max-width: 700px;
+  gap: 2.2vh;
+  max-width: 1000px;
   width: 100%;
   margin: 0 auto;
 }
@@ -146,18 +146,18 @@ export default {
 .pcard {
   background: var(--s2);
   border-radius: var(--rl);
-  height: 11vh;
+  height: 15vh;
   display: flex;
   align-items: center;
   gap: 2vw;
-  padding: 0 2vw;
+  padding: 0 2.5vw;
   cursor: pointer;
   border: 2px solid transparent;
 }
 
 .p-ico {
-  width: 6vh;
-  height: 6vh;
+  width: 9vh;
+  height: 9vh;
   border-radius: 50%;
   background: rgba(240, 165, 0, .13);
   display: flex;
@@ -174,13 +174,18 @@ export default {
 }
 
 .p-nm {
-  font-size: 2.2vh;
+  font-size: 2.9vh;
   font-weight: 700;
   color: var(--t);
+  margin-bottom: 0.4vh;
 }
 
 .p-ds {
-  font-size: 1.5vh;
+  font-size: 2.1vh;
   color: var(--tm);
+}
+
+.back-btn {
+  margin-top: 1vh;
 }
 </style>

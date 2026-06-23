@@ -4,7 +4,7 @@
       <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
       <div>
         <div class="tb-n">{{ username }}</div>
-        <div class="tb-s">Enjoy your mealtime now!</div>
+        <div class="tb-s">The robot is working…</div>
       </div>
       <div class="dot"></div>
     </div>

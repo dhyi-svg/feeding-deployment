@@ -1,8 +1,13 @@
 <template>
   <div class="page">
-    <div class="bd idle-bd">
-      <h1 class="idle-title">Robot is idle</h1>
-      <p class="idle-sub">No skill is running. Choose what you want to teleoperate.</p>
+    <div class="tb">
+      <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
+      <div>
+        <div class="tb-n">{{ username }}</div>
+        <div class="tb-s">Robot is idle — choose what to control</div>
+      </div>
+    </div>
+    <div class="bd">
       <div class="choice-row">
         <button class="choice-card" @click="takeoverBase">
           <div class="cc-ico">🕹️</div>
@@ -22,12 +27,12 @@
 <script>
 
 import ROSLIB from 'roslib'
-import { ROS_URL } from '@/config/parameterConfig'
+import { ROS_URL, USER } from '@/config/parameterConfig'
 
 export default {
   name: 'IdleTakeover',
   data () {
-    return { ros: null, webAppPub: null }
+    return { ros: null, webAppPub: null, username: USER }
   },
   mounted () {
     this.ros = new ROSLIB.Ros({ url: ROS_URL })
@@ -55,28 +60,3 @@ export default {
 }
 </script>
 
-<style scoped>
-.idle-bd {
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  gap: 2vh;
-}
-.idle-title {
-  font: normal 3.6vh/1.2 Georgia, serif;
-  color: var(--t);
-  margin: 0;
-}
-.idle-sub {
-  font-size: 1.8vh;
-  color: var(--tm);
-  margin: 0 0 1vh;
-}
-.choice-row {
-  width: 70%;
-  max-width: 700px;
-}
-.choice-card {
-  height: 24vh;
-}
-</style>

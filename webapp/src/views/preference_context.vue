@@ -4,7 +4,7 @@
       <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
       <div>
         <div class="tb-n">{{ username }}</div>
-        <div class="tb-s">Tell the robot about this meal before we begin.</div>
+        <div class="tb-s">Tell us about this meal</div>
       </div>
     </div>
 
@@ -31,7 +31,7 @@
             <h1 class="pq">{{ currentStep.label }}</h1>
             <p class="pref-help">Select one to continue.</p>
           </div>
-          <div class="opts" :class="{ 'two-col': currentStep.key === 'meal' || currentStep.key === 'setting' }">
+          <div class="opts">
             <div
               class="oc"
               v-for="option in currentOptions"
@@ -279,11 +279,5 @@ export default {
   overflow-y: auto;
   min-height: 0;
   align-content: start;
-}
-
-.opts.two-col {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1vh 1.5vw;
 }
 </style>

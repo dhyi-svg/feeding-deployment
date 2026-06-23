@@ -4,7 +4,7 @@
       <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
       <div>
         <div class="tb-n">{{ username }}</div>
-        <div class="tb-s">Enjoy your mealtime now!</div>
+        <div class="tb-s">Ready to start your meal</div>
       </div>
       <div class="dot"></div>
     </div>
@@ -12,7 +12,7 @@
     <div class="bd home-bd">
       <div class="home-left">
         <div class="h-robot">🤖</div>
-        <div class="h-greet">Ready when<br><em>you are.</em></div>
+        <div class="h-greet">Ready when <em>you are.</em></div>
         <div class="h-sub">Your robot is connected and ready to begin.</div>
       </div>
       <div class="home-right">

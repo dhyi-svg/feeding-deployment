@@ -1,51 +1,62 @@
 <template>
-  <div class="mic-test">
-    <h2>iPad button mic test</h2>
-    <p class="hint">
-      Confirms (1) the mic works over HTTPS on this iPad, (2) your button's
-      audio adapter is the active input, and (3) the detection threshold to use
-      in the real takeover component.
-    </p>
-
-    <div class="row">
-      <button @click="enableMic">Enable mic</button>
-      <span class="status">{{ status }}</span>
+  <div class="page">
+    <div class="tb">
+      <div class="av">⚙</div>
+      <div>
+        <div class="tb-n">Mic Test</div>
+        <div class="tb-s">Calibrate the switch-button mic — not part of the caregiver flow</div>
+      </div>
     </div>
 
-    <div class="row">Active input device: <b>{{ device }}</b></div>
-    <div class="row">
-      Live peak (0–1): <b>{{ peak.toFixed(3) }}</b>
-      &nbsp;&nbsp; max seen: <b>{{ maxSeen.toFixed(3) }}</b>
-    </div>
-    <div class="meter-wrap"><div class="meter" :style="{ width: meterWidth + '%' }"></div></div>
+    <div class="bd">
+      <div class="mic-wrap">
+        <p class="mic-hint">
+          Confirms the mic works over HTTPS, your button's audio adapter is the active
+          input, and the detection threshold to use in the real takeover component.
+        </p>
 
-    <div class="row">
-      Threshold:
-      <input type="range" min="0" max="0.3" step="0.001" v-model.number="threshold" />
-      <b>{{ threshold.toFixed(3) }}</b>
-    </div>
+        <div class="mic-enable-row">
+          <button class="btn md amber" style="min-width:34%" @click="enableMic">Enable mic</button>
+          <span class="mic-status">{{ status }}</span>
+        </div>
 
-    <div class="row">
-      Detector:
-      <span class="press" :class="{ hit: pressActive }">{{ pressActive ? 'PRESS!' : '— idle —' }}</span>
-      &nbsp;&nbsp; presses detected: <b>{{ count }}</b>
-    </div>
+        <div class="mic-row"><span>Active input device</span><b>{{ device }}</b></div>
+        <div class="mic-row">
+          <span>Live peak (0–1)</span>
+          <b>{{ peak.toFixed(3) }} &nbsp;·&nbsp; max {{ maxSeen.toFixed(3) }}</b>
+        </div>
 
-    <div class="row">
-      <button @click="maxSeen = 0">reset max</button>
-      &nbsp;<button @click="logs = []">clear log</button>
-    </div>
+        <div class="mic-meter"><div class="mic-meter-fill" :style="{ width: meterWidth + '%' }"></div></div>
 
-    <div class="log-panel">
-      <div v-for="(line, i) in logs" :key="i" :class="line.type">{{ line.msg }}</div>
-    </div>
+        <div class="threshold-row">
+          <span class="threshold-lbl">Threshold</span>
+          <input type="range" min="0" max="0.3" step="0.001" v-model.number="threshold" />
+          <b>{{ threshold.toFixed(3) }}</b>
+        </div>
 
-    <p class="hint">
-      Tip: tap near the iPad's built-in mic vs. press the button to see which the
-      meter responds to — that tells you whether the adapter is the active input.
-      Then set the threshold so idle stays quiet but every press fires, and note
-      that value.
-    </p>
+        <div class="mic-row">
+          <span>Detector
+            <span class="press-state" :class="{ hit: pressActive }">{{ pressActive ? 'PRESS!' : '— idle —' }}</span>
+          </span>
+          <b>{{ count }} presses</b>
+        </div>
+
+        <div class="mic-enable-row">
+          <button class="btn sm ghost" style="flex:1" @click="maxSeen = 0">Reset max</button>
+          <button class="btn sm ghost" style="flex:1" @click="logs = []">Clear log</button>
+        </div>
+
+        <div class="mic-log">
+          <div v-for="(line, i) in logs" :key="i" :class="line.type">{{ line.msg }}</div>
+        </div>
+
+        <p class="mic-hint">
+          Tip: tap near the iPad's built-in mic vs. press the button to see which the meter
+          responds to — that tells you whether the adapter is the active input. Then set the
+          threshold so idle stays quiet but every press fires, and note that value.
+        </p>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -79,7 +90,7 @@ export default {
   methods: {
     async enableMic () {
       try {
-        
+
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
         })
@@ -97,7 +108,7 @@ export default {
         } catch (e) { this.device = 'enumerate failed' }
 
         const ctx = new (window.AudioContext || window.webkitAudioContext)()
-        await ctx.resume() 
+        await ctx.resume()
         const src = ctx.createMediaStreamSource(stream)
         this._analyser = ctx.createAnalyser()
         this._analyser.fftSize = 2048
@@ -127,7 +138,7 @@ export default {
 
       const above = p > this.threshold
       const now = Date.now()
-      if (above && !this._prevAbove && (now - this._lastHit) > 1500) { 
+      if (above && !this._prevAbove && (now - this._lastHit) > 1500) {
         this._lastHit = now
         this.count++
         this.pressActive = true
@@ -142,16 +153,79 @@ export default {
 </script>
 
 <style scoped>
-.mic-test { font-family: -apple-system, system-ui, sans-serif; margin: 1.2rem; line-height: 1.4; background: var(--g); color: var(--t); min-height: 100vh; padding: 1.2rem; }
-.hint { color: var(--tm); max-width: 40rem; }
-.row { margin: .9rem 0; }
-.status { margin-left: .5rem; }
-.meter-wrap { width: 100%; max-width: 40rem; height: 44px; background: var(--s1); border-radius: 8px; overflow: hidden; }
-.meter { height: 100%; background: var(--a2); }
-.press { font-size: 1.6rem; font-weight: 700; color: var(--tm); }
-.press.hit { color: #e88; }
-button { font-size: 1.1rem; padding: .6rem 1rem; border-radius: 8px; border: 2px solid var(--s3); background: var(--s2); color: var(--t); cursor: pointer; }
-.log-panel { margin-top: .8rem; max-width: 40rem; height: 220px; overflow-y: auto; background: var(--g); border: 1px solid var(--bd); color: var(--tm); font-family: monospace; font-size: .8rem; padding: .5rem; border-radius: 8px; }
-.log-panel .press { color: #e88; font-weight: 700; }
-.log-panel .peak  { color: var(--tm); }
+.mic-wrap {
+  max-width: 760px;
+  width: 100%;
+  margin: 0 auto;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.6vh;
+}
+.mic-hint {
+  font-size: 1.9vh;
+  color: var(--tm);
+  line-height: 1.5;
+  text-align: center;
+}
+.mic-enable-row {
+  display: flex;
+  align-items: center;
+  gap: 1.5vw;
+}
+.mic-status {
+  font-size: 2vh;
+  color: var(--tm);
+}
+.mic-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1vw;
+  font-size: 2vh;
+  color: var(--tm);
+  padding: 1.2vh 0;
+  border-bottom: 1px solid var(--bd);
+}
+.mic-row b { color: var(--t); }
+.mic-meter {
+  height: 2.6vh;
+  background: var(--s1);
+  border: 1px solid var(--s3);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.mic-meter-fill { height: 100%; background: var(--a2); }
+.threshold-row {
+  display: flex;
+  align-items: center;
+  gap: 1.5vw;
+  font-size: 2vh;
+  color: var(--tm);
+}
+.threshold-lbl { flex-shrink: 0; }
+.threshold-row input[type=range] {
+  flex: 1;
+  accent-color: var(--a);
+  height: 2.6vh;
+}
+.threshold-row b { color: var(--t); flex-shrink: 0; min-width: 4ch; text-align: right; }
+.press-state { font-weight: 700; color: var(--tm); margin-left: 6px; }
+.press-state.hit { color: var(--a); }
+.mic-log {
+  height: 20vh;
+  flex-shrink: 0;
+  overflow-y: auto;
+  background: var(--g);
+  border: 1px solid var(--bd);
+  border-radius: 10px;
+  padding: 1.5vh;
+  font-family: monospace;
+  font-size: 1.5vh;
+  color: var(--tm);
+}
+.mic-log .press { color: var(--a); font-weight: 700; }
+.mic-log .peak { color: var(--tm); }
 </style>

@@ -219,3 +219,11 @@ export default {
   }
 }
 </script>
+
+<style scoped>
+.field-stack {
+  max-width: 820px;
+  width: 100%;
+  margin: 0 auto;
+}
+</style>
