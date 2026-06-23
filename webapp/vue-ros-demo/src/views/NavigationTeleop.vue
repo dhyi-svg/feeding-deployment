@@ -5,8 +5,9 @@
       <img class="user" alt="User" src="https://c.animaapp.com/jvBoNEN4/img/user.svg">
       <div class="header-text">
         <div class="header-title">Base Navigation Control</div>
-        <div class="header-sub">Push to drive · release to stop · press Done when parked</div>
+        <div class="header-sub">Push to drive · Resume to let autonomy finish · Done when parked</div>
       </div>
+      <button class="resume-btn" @click="resume()">Resume</button>
       <button class="done-btn" @click="finish()">Done</button>
     </div>
 
@@ -70,6 +71,7 @@ export default {
       cmdVelPub: null,
       takeoverPub: null,
       donePub: null,
+      resumePub: null,
       listener: null,
       skillPlanListener: null,
       // Snake_case name of the HLA the robot is executing (null if idle), from
@@ -98,6 +100,9 @@ export default {
     // (cancels the autopilot / move_base goal), matching shared_autonomy_teleop.
     this.takeoverPub = new ROSLIB.Topic({ ros: this.ros, name: '/shared_autonomy/takeover', messageType: 'std_msgs/Empty' })
     this.donePub = new ROSLIB.Topic({ ros: this.ros, name: '/shared_autonomy/done', messageType: 'std_msgs/Empty' })
+    // Resume: hand back to autonomy, which replans from the current pose to the
+    // original goal (manager re-sends the goal). Distinct from done/blind-success.
+    this.resumePub = new ROSLIB.Topic({ ros: this.ros, name: '/shared_autonomy/resume', messageType: 'std_msgs/Empty' })
     // Follow the executive's page jumps like every other page.
     this.listener = new ROSLIB.Topic({ ros: this.ros, name: '/ServerComm', messageType: 'std_msgs/String' })
     this.listener.subscribe((msg) => this.handleRosMessage(msg))
@@ -205,11 +210,26 @@ export default {
       return skillLabel(name)
     },
     finish () {
-      // Stop the base, tell the manager the human has parked it, return to menu.
+      // Stop the base and tell the manager the human has parked the robot at the
+      // goal (blind success). The executive then continues to the NEXT skill in
+      // the plan, so return to the skill-plan (explanation) page -- NOT the task
+      // menu -- so the user sees what's next and the executive can page-jump on.
+      // Same destination as resume(); only the published intent differs.
       this.center()
       this.sendVelocity()
       if (this.donePub) this.donePub.publish(new ROSLIB.Message({}))
-      this.$router.push('/task_selection')
+      this.$router.push('/preparepickup2')
+    },
+    resume () {
+      // Stop driving, tell the manager to hand back to autonomy (it replans from
+      // the current pose to the original goal), and return to the skill-plan
+      // (explanation) page -- the same place manipulation teleop returns to.
+      // The takeover button is available there, so the user can take over again
+      // if the robot gets stuck again on the way to the goal.
+      this.center()
+      this.sendVelocity()
+      if (this.resumePub) this.resumePub.publish(new ROSLIB.Message({}))
+      this.$router.push('/preparepickup2')
     },
     teardown () {
       this.center()
@@ -249,8 +269,13 @@ export default {
 .header .user { width: 36px; height: 36px; }
 .header-title { font-size: 20px; font-weight: 700; color: #1f2937; }
 .header-sub { font-size: 14px; color: #6e7e8e; }
-.done-btn {
+.resume-btn {
   margin-left: auto; font-family: Verdana, sans-serif; font-size: 16px;
+  font-weight: 700; padding: 0 22px; border: none; border-radius: 8px;
+  background: #2563eb; color: #fff; cursor: pointer; height: 50px;
+}
+.done-btn {
+  font-family: Verdana, sans-serif; font-size: 16px;
   font-weight: 700; padding: 0 22px; border: none; border-radius: 8px;
   background: #28a745; color: #fff; cursor: pointer; height: 50px;
 }
