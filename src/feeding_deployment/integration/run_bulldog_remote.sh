@@ -2,10 +2,12 @@
 #
 # Remote-button variant of run_bulldog.sh.
 #
-# Use this when the e-stop button is plugged into a machine that cannot run ROS
-# (e.g. a MacBook) running estop_sender.py, which streams the button state to
-# this NUC over UDP. This launches estop_udp_bridge.py (UDP -> ROS) in place of
-# estops_publisher.py. bulldog.py and arm_server.py are UNCHANGED.
+# Use this when the single (experimentor) e-stop button is plugged into a machine
+# that cannot run ROS (e.g. a MacBook) running estop_sender.py, which streams the
+# button state to this NUC over UDP. This launches estop_udp_bridge.py (UDP -> ROS)
+# in place of estops_publisher.py; the bridge republishes the button onto
+# /experimentor_estop, exactly the topic bulldog watches. bulldog.py and
+# arm_server.py are UNCHANGED.
 #
 # Prereqs on the NUC:
 #   - arm_server.py already running (bulldog connects to it over RPC at :5000)
@@ -15,8 +17,11 @@
 # Prereq on the Mac:
 #   - estop_sender.py running and reaching this NUC's IP on udp/5005
 
-# Function to clean up background processes
+WAIT_TIMEOUT=120  # seconds to wait for the Mac sender before aborting
+
+# Function to clean up background processes (re-entrant safe).
 cleanup() {
+    trap - SIGINT SIGTERM EXIT  # disarm so this runs at most once
     echo "Stopping background processes..."
     kill $roscore_pid 2>/dev/null
     if kill -0 $bridge_pid 2>/dev/null; then
@@ -24,8 +29,8 @@ cleanup() {
     fi
 }
 
-# Trap Ctrl+C and call cleanup
-trap cleanup SIGINT
+# Trap Ctrl+C, termination, and normal exit and call cleanup.
+trap cleanup SIGINT SIGTERM EXIT
 
 # Start roscore
 roscore &
@@ -36,7 +41,7 @@ sleep 2
 
 # Run the UDP -> ROS e-stop bridge in the background (replaces estops_publisher.py).
 # The physical button is read on the Mac by estop_sender.py; the bridge republishes
-# it onto /user_estop and /experimentor_estop, exactly the topics bulldog watches.
+# it onto /experimentor_estop, exactly the topic bulldog watches.
 cd ~/feeding-deployment/src/feeding_deployment/safety
 python estop_udp_bridge.py &
 bridge_pid=$!  # Store the PID of the bridge
@@ -47,17 +52,27 @@ sleep 2
 # bulldog's heartbeat check trips when it sees < 50 msgs in the last second, so
 # if the topic is silent at startup (e.g. the Mac sender isn't running yet) it
 # emergency-stops instantly. Wait for at least one message, then let the 1s
-# heartbeat window fill before launching bulldog.
-echo "Waiting for /user_estop to go live (start estop_sender.py on the Mac if you haven't)..."
-until rostopic echo -n1 /user_estop >/dev/null 2>&1; do
+# heartbeat window fill before launching bulldog. Abort rather than hang forever.
+echo "Waiting for /experimentor_estop to go live (start estop_sender.py on the Mac if you haven't)..."
+half_seconds=0
+until rostopic echo -n1 /experimentor_estop >/dev/null 2>&1; do
     sleep 0.5
+    half_seconds=$((half_seconds + 1))
+    if [ $((half_seconds % 10)) -eq 0 ]; then
+        echo "  ... still waiting for the Mac sender ($((half_seconds / 2))s elapsed)."
+    fi
+    if [ $((half_seconds / 2)) -ge $WAIT_TIMEOUT ]; then
+        echo "ERROR: /experimentor_estop never went live after ${WAIT_TIMEOUT}s."
+        echo "       Is estop_sender.py running on the Mac and reaching this NUC on udp/5005? Aborting."
+        exit 1  # triggers the EXIT trap -> cleanup
+    fi
 done
-echo "/user_estop is live; letting the 1s heartbeat window fill before starting bulldog..."
+echo "/experimentor_estop is live; letting the 1s heartbeat window fill before starting bulldog..."
 sleep 2
 
-# Run bulldog (foreground; exits on first anomaly)
+# Run bulldog (foreground; exits on first anomaly). When it exits, the bridge is
+# killed by cleanup; the bridge also self-exits when /bulldog_status goes away, and
+# the Mac sender self-terminates when it stops receiving the bridge's epoch acks.
 python bulldog.py
 
 cleanup  # Ensure cleanup is called when bulldog finishes
-wait $roscore_pid
-wait $bridge_pid

@@ -2,8 +2,9 @@
 
 # Function to clean up background processes
 cleanup() {
+    trap - SIGINT SIGTERM EXIT  # disarm so this runs at most once
     echo "Stopping background processes..."
-    kill $roscore_pid
+    kill $roscore_pid 2>/dev/null
     if kill -0 $estops_pid 2>/dev/null; then
         kill $estops_pid
     fi
@@ -12,8 +13,8 @@ cleanup() {
     fi
 }
 
-# Trap Ctrl+C and call cleanup
-trap cleanup SIGINT
+# Trap Ctrl+C (and termination/normal-exit) and call cleanup
+trap cleanup SIGINT SIGTERM EXIT
 
 # Start roscore
 roscore &
@@ -22,9 +23,9 @@ roscore_pid=$!  # Store the PID of roscore
 # Wait for 5 seconds to ensure roscore has time to start
 sleep 2
 
-# Run estops_publisher.py in the background
+# Run estops_publisher.py (single experimentor button) in the background
 cd ~/feeding-deployment/src/feeding_deployment/safety
-python estops_publisher.py --user_id 2 --exp_id 1 &
+python estops_publisher.py --id 1 &
 estops_pid=$!  # Store the PID of estops_publisher
 
 # Wait for 1 second
