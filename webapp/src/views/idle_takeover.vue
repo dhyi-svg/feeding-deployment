@@ -1,16 +1,20 @@
 <template>
-  <div class="idle-takeover">
-    <h1>Robot is idle</h1>
-    <p>No skill is running. Choose what you want to teleoperate.</p>
-    <div class="choices">
-      <button class="choice base" @click="takeoverBase">
-        Navigation
-        <small>drive the base</small>
-      </button>
-      <button class="choice arm" @click="takeoverArm">
-        Manipulation
-        <small>move the arm</small>
-      </button>
+  <div class="page">
+    <div class="bd idle-bd">
+      <h1 class="idle-title">Robot is idle</h1>
+      <p class="idle-sub">No skill is running. Choose what you want to teleoperate.</p>
+      <div class="choice-row">
+        <button class="choice-card" @click="takeoverBase">
+          <div class="cc-ico">🕹️</div>
+          <div class="cc-lbl">Navigation</div>
+          <div class="cc-sub">drive the base</div>
+        </button>
+        <button class="choice-card" @click="takeoverArm">
+          <div class="cc-ico">🦾</div>
+          <div class="cc-lbl">Manipulation</div>
+          <div class="cc-sub">move the arm</div>
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -52,33 +56,27 @@ export default {
 </script>
 
 <style scoped>
-.idle-takeover {
-  font-family: Avenir, Helvetica, Arial, sans-serif;
-  text-align: center;
-  padding: 6vh 1rem;
-}
-.idle-takeover h1 { font-size: 2rem; margin-bottom: .3rem; }
-.idle-takeover p { color: #555; margin-bottom: 2rem; }
-.choices { display: flex; gap: 2rem; justify-content: center; flex-wrap: wrap; }
-.choice {
-  width: 240px;
-  height: 160px;
-  border: none;
-  border-radius: 16px;
-  color: #fff;
-  font-size: 1.6rem;
-  font-weight: 700;
-  cursor: pointer;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-  display: flex;
-  flex-direction: column;
+.idle-bd {
   align-items: center;
   justify-content: center;
-  gap: .4rem;
+  text-align: center;
+  gap: 2vh;
 }
-.choice small { font-size: 1rem; font-weight: 400; opacity: .9; }
-.choice.base { background: #378add; }
-.choice.base:active { background: #2f6fb0; }
-.choice.arm { background: #ff7a45; }
-.choice.arm:active { background: #e8602c; }
+.idle-title {
+  font: normal 3.6vh/1.2 Georgia, serif;
+  color: var(--t);
+  margin: 0;
+}
+.idle-sub {
+  font-size: 1.8vh;
+  color: var(--tm);
+  margin: 0 0 1vh;
+}
+.choice-row {
+  width: 70%;
+  max-width: 700px;
+}
+.choice-card {
+  height: 24vh;
+}
 </style>

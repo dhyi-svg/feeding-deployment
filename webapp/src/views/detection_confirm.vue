@@ -1,26 +1,26 @@
 <template>
-  <div class="top">
-    <div class="left">
-      <img class="user" alt="User" src="../assets/user_avatar.svg">
-      <div class="usertext">
-        <div class="username">{{ username }}</div>
-        <div class="userslog">{{ currentSlog }}</div>
+  <div class="page">
+    <div class="tb">
+      <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
+      <div>
+        <div class="tb-n">{{ username }}</div>
+        <div class="tb-s">{{ currentSlog }}</div>
       </div>
     </div>
-  </div>
 
-  <div class="content">
-    <div class="instruction" v-html="currentInstruction"></div>
+    <div class="bd det-bd">
+      <div class="det-instruction" v-html="currentInstruction"></div>
 
-    <div class="image-container">
-      <img v-if="imageSrc" :src="imageSrc" class="detection-image" alt="Detection visualization" />
-      <div v-else class="waiting">Waiting for detection image...</div>
-    </div>
+      <div class="cam cam-wide">
+        <img v-if="imageSrc" :src="imageSrc" alt="Detection visualization" />
+        <div v-else class="cam-placeholder">Waiting for detection image...</div>
+      </div>
 
-    <div class="buttons">
-      <button class="continue-button" @click="confirmDetection">Looks Correct</button>
-      <button class="retry-button" @click="redoDetection">Redo</button>
-      <button v-if="detectionType === 'attachment'" class="color-button" @click="correctColor">Correct Color</button>
+      <div class="det-actions">
+        <button class="btn md amber" @click="confirmDetection">Looks Correct</button>
+        <button class="btn md ghost" @click="redoDetection">Redo</button>
+        <button v-if="detectionType === 'attachment'" class="btn md teal" @click="correctColor">Correct Color</button>
+      </div>
     </div>
   </div>
 </template>
@@ -142,7 +142,7 @@ export default {
 
       this.listener = new ROSLIB.Topic({
         ros: this.ros,
-        name: this.subscribeTopic,
+        name: '/robot_to_webapp',
         messageType: 'std_msgs/String'
       })
       this.listener.subscribe((message) => {
@@ -173,103 +173,3 @@ export default {
 }
 </script>
 
-<style scoped>
-.top {
-  height: 9vh;
-  background: #eee;
-  display: flex;
-  align-items: unset;
-  justify-content: space-between;
-  padding: 5px;
-  margin-bottom: 5px;
-}
-.left {
-  display: flex;
-  align-items: center;
-  padding: 15px;
-}
-.usertext {
-  align-items: baseline;
-  display: flex;
-  justify-content: center;
-  flex-flow: column;
-  margin-left: 5px;
-}
-.username {
-  font-family: Verdana;
-  font-size: 20px;
-  font-weight: 400;
-  line-height: 18px;
-  text-align: left;
-}
-.userslog {
-  font-family: Verdana;
-  font-size: 16px;
-  font-weight: 400;
-  line-height: 18px;
-  text-align: left;
-}
-.content {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  height: 85vh;
-}
-.instruction {
-  margin-bottom: 20px;
-  text-align: center;
-  font-family: Verdana;
-  font-size: 24px;
-  font-weight: 700;
-  line-height: 30px;
-  width: 60vw;
-}
-.image-container {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  margin-bottom: 20px;
-  min-height: 30vh;
-}
-.detection-image {
-  max-width: 50vw;
-  max-height: 45vh;
-  border: 2px solid #6e7e8e;
-  border-radius: 8px;
-}
-.waiting {
-  font-family: Verdana;
-  font-size: 20px;
-  color: #6e7e8e;
-}
-.buttons {
-  display: flex;
-  gap: 20px;
-  margin-top: 10px;
-}
-.continue-button,
-.retry-button,
-.color-button {
-  border: none;
-  color: black;
-  cursor: pointer;
-  background-color: #FFE699;
-  border-radius: 20px;
-  width: 20vw;
-  height: 12vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-left: 20px;
-  font-family: Verdana;
-  font-size: 30px;
-  font-weight: 400;
-  line-height: 24px;
-  text-align: center;
-  padding: 10px;
-}
-.color-button {
-  background-color: #B3D9FF;
-}
-</style>

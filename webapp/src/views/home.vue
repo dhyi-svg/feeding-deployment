@@ -1,17 +1,23 @@
 <template>
-  <div class="top">
-    <div class="left">
-      <img class="user" alt="User" src="../assets/user_avatar.svg">
-      <div class="usertext">
-        <div class="username">{{ username }}</div>
-        <div class="userslog">Enjoy your mealtime now!</div>
+  <div class="page">
+    <div class="tb">
+      <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
+      <div>
+        <div class="tb-n">{{ username }}</div>
+        <div class="tb-s">Enjoy your mealtime now!</div>
       </div>
+      <div class="dot"></div>
     </div>
-  </div>
 
-  <div class="content">
-    <div class="buttons">
-      <button class="continue-button" @click="handleButtonClick">Start Meal</button>
+    <div class="bd home-bd">
+      <div class="home-left">
+        <div class="h-robot">🤖</div>
+        <div class="h-greet">Ready when<br><em>you are.</em></div>
+        <div class="h-sub">Your robot is connected and ready to begin.</div>
+      </div>
+      <div class="home-right">
+        <button class="btn xl amber" style="width:60%" @click="handleButtonClick">Start Meal</button>
+      </div>
     </div>
   </div>
 </template>
@@ -92,80 +98,45 @@ export default {
 </script>
 
 <style scoped>
-.top {
-  height: 9vh;
-  background: #eee;
-  display: flex;
-  align-items: unset;
-  justify-content: space-between;
-  padding: 5px;
-  margin-bottom: 5px;
-  .right {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-  }
-  .left {
-    display: flex;
-    justify-content: space-between;
-    padding: 15px;
-  }
-  .usertext {
-    align-items: baseline;
-    display: flex;
-    justify-content: center;
-    flex-flow: column;
-    margin-left: 5px;
-  }
-  .username {
-    font-family: Verdana;
-    font-size: 20px;
-    font-weight: 400;
-    line-height: 18px;
-    letter-spacing: 0.17499999701976776px;
-    text-align: left;
-  }
-  .userslog {
-    font-family: Verdana;
-    font-size: 16px;
-    font-weight: 400;
-    line-height: 18px;
-    letter-spacing: 0.17499999701976776px;
-    text-align: left;
-  }
+.home-bd {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4vw;
+  align-items: center;
+  flex: 1;
 }
-
-.content {
+.home-left {
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  height: 80vh;
+  gap: 1.5vh;
 }
-
-.buttons {
-  display: flex;
-  gap: 20px;
-  margin-top: 10px;
-}
-
-.continue-button {
-  border: none;
-  border-radius: 20px;
-  color: black;
-  background-color: #FFE699;
-  width: 20vw;
-  height: 12vh;
+.h-robot {
+  width: 8vh;
+  height: 8vh;
+  border-radius: 50%;
+  background: var(--s2);
+  border: 2px solid var(--s3);
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
-  font-family: Verdana;
-  font-size: 30px;
-  font-weight: 400;
-  line-height: 24px;
-  letter-spacing: 0.22500000894069672px;
-  text-align: center;
-  padding: 10px;
+  font-size: 4vh;
+}
+.h-greet {
+  font: normal 4.5vh/1.2 Georgia, serif;
+  color: var(--t);
+}
+.h-greet em {
+  font-style: normal;
+  color: var(--a);
+}
+.h-sub {
+  font-size: 2vh;
+  color: var(--tm);
+  line-height: 1.5;
+}
+.home-right {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 </style>

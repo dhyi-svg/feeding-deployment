@@ -1,17 +1,14 @@
 <template>
   <div class="page">
-    <header class="topbar">
-      <div class="user-block">
-        <img class="avatar" alt="User" src="../assets/user_avatar.svg">
-        <div>
-          <div class="username">{{ username }}</div>
-          <div class="subtitle">Review the robot's predicted preferences</div>
-        </div>
+    <div class="tb">
+      <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
+      <div>
+        <div class="tb-n">{{ username }}</div>
+        <div class="tb-s">Review the robot's predicted preferences</div>
       </div>
-    </header>
+    </div>
 
-    <main class="content">
-      
+    <div class="bd">
       <div v-if="fieldEntries.length === 0" class="waiting-card">
         <p class="eyebrow">Preference Correction</p>
         <h1>Waiting for preference data from the backend...</h1>
@@ -21,65 +18,65 @@
         <p class="eyebrow">Preference Correction</p>
         <h1 v-if="isApplied">Preferences Applied!</h1>
         <h1 v-else>Sending preferences to robot...</h1>
-        <div class="feedback-banner" :class="feedbackClass">
-          <span v-if="isApplied" class="checkmark">✓</span>
-          {{ feedbackMessage }}
-        </div>
+        <div class="response-box" style="margin-top:2vh">{{ feedbackMessage }}</div>
       </div>
 
-      <div v-else class="pref-page">
-        
-        <div class="progress-bar">
+      <template v-else>
+        <div class="prg">
           <div
-            class="progress-step"
+            class="pip"
             v-for="(entry, i) in fieldEntries"
             :key="entry[0]"
-            :class="{
-              active: i === currentIndex,
-              done: i < currentIndex
-            }"
+            :class="{ a: i === currentIndex, d: i < currentIndex }"
           ></div>
         </div>
 
-        <p class="step-count">{{ currentIndex + 1 }} of {{ fieldEntries.length }}</p>
+        <p class="sc">Preference {{ currentIndex + 1 }} of {{ fieldEntries.length }}</p>
 
-        <h1 class="pref-title">{{ formatLabel(currentField) }}</h1>
-        <p class="predicted-label">Robot predicted: <strong>{{ predictedBundle[currentField] }}</strong></p>
-
-        <div class="options-list">
-          <div
-            class="option-btn"
-            v-for="option in currentOptions"
-            :key="option"
-            :class="{ selected: editableBundle[currentField] === option }"
-            @click="selectOption(option)"
-          >
-            <span class="option-text">{{ option }}</span>
-            <div class="option-check" v-if="editableBundle[currentField] === option">✓</div>
+        <div class="pref-body">
+          <div class="pref-q">
+            <h1 class="pq">{{ formatLabel(currentField) }}</h1>
+            <p class="pred">Predicted: <strong>{{ predictedBundle[currentField] }}</strong></p>
+            <p class="pref-help">Change it if this doesn't match what you'd like — the robot learns from each correction.</p>
+          </div>
+          <div class="pref-options">
+            <div class="opts">
+              <div
+                class="oc"
+                v-for="option in currentOptions"
+                :key="option"
+                :class="{ sel: editableBundle[currentField] === option }"
+                @click="selectOption(option)"
+              >
+                <span class="ot">{{ option }}</span>
+                <div class="och" v-if="editableBundle[currentField] === option">✓</div>
+              </div>
+            </div>
+            <p class="cdown auto-note">Auto-confirming <em>{{ editableBundle[currentField] }}</em> in <span>{{ countdown }}s</span></p>
           </div>
         </div>
-      </div>
-    </main>
+      </template>
 
-    <footer v-if="fieldEntries.length > 0 && !isSubmitting && !isApplied" class="footer">
-      <button class="nav-btn back-nav" @click="goBack" :disabled="currentIndex === 0">
-        Go Back
-      </button>
-      <button
-        v-if="currentIndex < fieldEntries.length - 1"
-        class="nav-btn continue-nav"
-        @click="goNext"
-      >
-        Continue
-      </button>
-      <button
-        v-else
-        class="nav-btn confirm-nav"
-        @click="submitBundle"
-      >
-        Confirm All Preferences
-      </button>
-    </footer>
+      <div v-if="fieldEntries.length > 0 && !isSubmitting && !isApplied" class="footer">
+        <button class="btn lg ghost" @click="goBack" :disabled="currentIndex === 0">
+          Go Back
+        </button>
+        <button
+          v-if="currentIndex < fieldEntries.length - 1"
+          class="btn lg amber"
+          @click="goNext"
+        >
+          Continue
+        </button>
+        <button
+          v-else
+          class="btn lg amber"
+          @click="submitBundle"
+        >
+          Confirm All Preferences
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -87,6 +84,8 @@
 import ROSLIB from 'roslib'
 import routeMap from '@/router/routeMap'
 import { ROS_URL, USER } from '@/config/parameterConfig'
+
+const AUTOCONTINUE_SECONDS = 10
 
 export default {
   name: 'PreferenceCorrection',
@@ -102,7 +101,9 @@ export default {
       currentIndex: 0,
       isSubmitting: false,
       isApplied: false,
-      feedbackMessage: ''
+      feedbackMessage: '',
+      countdown: AUTOCONTINUE_SECONDS,
+      countdownTimer: null
     }
   },
   computed: {
@@ -114,11 +115,6 @@ export default {
     },
     currentOptions() {
       return this.normalizedOptions[this.currentField] ?? []
-    },
-    feedbackClass() {
-      if (this.isApplied) return 'success'
-      if (this.isSubmitting) return 'pending'
-      return ''
     }
   },
   mounted() {
@@ -142,15 +138,43 @@ export default {
     },
     selectOption(option) {
       this.editableBundle = { ...this.editableBundle, [this.currentField]: option }
+      this.restartCountdown()
     },
     goNext() {
       if (this.currentIndex < this.fieldEntries.length - 1) {
         this.currentIndex++
+        this.restartCountdown()
       }
     },
     goBack() {
       if (this.currentIndex > 0) {
         this.currentIndex--
+        this.restartCountdown()
+      }
+    },
+    restartCountdown() {
+      this.clearCountdownTimer()
+      this.countdown = AUTOCONTINUE_SECONDS
+      this.countdownTimer = setInterval(() => {
+        if (this.countdown > 0) {
+          this.countdown--
+        } else {
+          this.clearCountdownTimer()
+          this.advanceFromCountdown()
+        }
+      }, 1000)
+    },
+    clearCountdownTimer() {
+      if (this.countdownTimer) {
+        clearInterval(this.countdownTimer)
+        this.countdownTimer = null
+      }
+    },
+    advanceFromCountdown() {
+      if (this.currentIndex < this.fieldEntries.length - 1) {
+        this.goNext()
+      } else {
+        this.submitBundle()
       }
     },
     initPublisher() {
@@ -180,6 +204,7 @@ export default {
         }
 
         if (parsedMessage.state === 'preference_correction_applied') {
+          this.clearCountdownTimer()
           this.isSubmitting = false
           this.isApplied = true
           this.feedbackMessage = parsedMessage.message || 'Preferences were applied successfully.'
@@ -238,10 +263,12 @@ export default {
       this.isSubmitting = false
       this.isApplied = false
       this.feedbackMessage = ''
+      this.restartCountdown()
     },
     submitBundle() {
       if (!this.publisher) return
 
+      this.clearCountdownTimer()
       this.isSubmitting = true
       this.isApplied = false
       this.feedbackMessage = 'Confirmation sent. Waiting for backend to apply preferences...'
@@ -254,22 +281,11 @@ export default {
       })
 
       this.publisher.publish(message)
-      
+
       this.$router.push('/robot_executing')
     },
-    goToTaskSelection() {
-      if (this.publisher) {
-        const message = new ROSLIB.Message({
-          data: JSON.stringify({
-            state: 'task_selection',
-            status: 'jump'
-          })
-        })
-        this.publisher.publish(message)
-      }
-      this.$router.push('/task_selection')
-    },
     teardownRos() {
+      this.clearCountdownTimer()
       if (this.listener) {
         this.listener.unsubscribe()
         if (this.listener.ros) this.listener.ros.close()
@@ -286,305 +302,31 @@ export default {
 </script>
 
 <style scoped>
-.page {
-  height: 100vh;
-  overflow: hidden;
-  background:
-    radial-gradient(circle at top left, rgba(255, 209, 102, 0.35), transparent 30%),
-    linear-gradient(160deg, #fffaf2 0%, #eef6ff 100%);
-  color: #1f2937;
-  padding: 24px;
-  box-sizing: border-box;
+.pred {
+  font-size: 1.9vh;
+  color: var(--tm);
+  margin-top: 1vh;
+}
+
+.pred strong {
+  color: var(--a2);
+}
+
+.pref-options {
   display: flex;
   flex-direction: column;
-}
-
-.topbar {
-  max-width: 1100px;
-  width: 100%;
-  margin: 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.user-block {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.avatar {
-  width: 52px;
-  height: 52px;
-}
-
-.username {
-  font-size: 24px;
-  font-weight: 700;
-}
-
-.subtitle {
-  color: #5b6472;
-  font-size: 15px;
-}
-
-.back-button {
-  border: 1px solid #d1d5db;
-  border-radius: 999px;
-  padding: 14px 22px;
-  font-size: 16px;
-  font-weight: 700;
-  cursor: pointer;
-  background: #fff;
-  color: #1f2937;
-}
-
-.content {
-  flex: 1;
   min-height: 0;
-  max-width: 1100px;
-  width: 100%;
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 12px 0;
-  overflow: hidden;
 }
 
-.waiting-card {
-  background: rgba(255, 255, 255, 0.88);
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  border-radius: 24px;
-  padding: 40px;
-  box-shadow: 0 18px 40px rgba(31, 41, 55, 0.08);
-  backdrop-filter: blur(8px);
-  width: 100%;
-  text-align: center;
-}
-
-.waiting-card h1 {
-  font-size: clamp(28px, 4vw, 44px);
-  margin: 0 0 16px;
-}
-
-.eyebrow {
-  margin: 0 0 12px;
-  color: #b45309;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-size: 14px;
-}
-
-.pref-page {
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  overflow: hidden;
-}
-
-.progress-bar {
-  display: flex;
-  gap: 10px;
-}
-
-.progress-step {
-  width: 14px;
-  height: 14px;
-  border-radius: 999px;
-  background: #d1d5db;
-  transition: background 0.25s;
-}
-
-.progress-step.done {
-  background: #10b981;
-}
-
-.progress-step.active {
-  background: #f59e0b;
-  width: 36px;
-}
-
-.step-count {
-  color: #6b7280;
-  font-size: 15px;
-  margin: 0;
-}
-
-.pref-title {
-  font-size: clamp(24px, 3.5vw, 40px);
-  font-weight: 800;
-  margin: 0;
-  text-align: center;
-}
-
-.predicted-label {
-  color: #6b7280;
-  font-size: 15px;
-  margin: 0;
-}
-
-.options-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  width: 100%;
-  max-width: 700px;
+.opts {
   overflow-y: auto;
   min-height: 0;
+  align-content: start;
 }
 
-.option-btn {
-  background: #FFE699;
-  border-radius: 16px;
-  width: 100%;
-  min-height: 7vh;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 24px;
-  cursor: pointer;
-  border: 3px solid transparent;
-  transition: border-color 0.2s, background 0.2s, transform 0.1s;
-  box-sizing: border-box;
-}
-
-.option-btn:hover {
-  transform: scale(1.02);
-  border-color: #f59e0b;
-}
-
-.option-btn.selected {
-  background: #f59e0b;
-  border-color: #b45309;
-}
-
-.option-text {
-  font-family: Verdana, sans-serif;
-  font-size: clamp(16px, 1.8vw, 22px);
-  font-weight: 700;
-  color: #1f2937;
-}
-
-.option-check {
-  font-size: 20px;
-  font-weight: 900;
-  color: #1f2937;
-}
-
-.footer {
-  max-width: 1100px;
-  width: 100%;
-  margin: 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding-top: 12px;
-}
-
-.nav-btn {
-  border: none;
-  border-radius: 16px;
-  font-family: Verdana, sans-serif;
-  font-size: clamp(16px, 1.6vw, 22px);
-  font-weight: 700;
-  cursor: pointer;
-  height: 8vh;
-  min-width: 26vw;
-  transition: opacity 0.2s, transform 0.1s;
-}
-
-.nav-btn:hover {
-  transform: scale(1.02);
-}
-
-.nav-btn:active {
-  transform: scale(0.98);
-}
-
-.nav-btn:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-  transform: none;
-}
-
-.back-nav {
-  background: #d9d9d9;
-  color: #1f2937;
-}
-
-.continue-nav,
-.confirm-nav {
-  background: #FFE699;
-  color: #1f2937;
-}
-
-.confirm-nav {
-  background: linear-gradient(135deg, #f59e0b, #ef4444);
-  color: #fff;
-}
-
-.feedback-banner {
-  margin-top: 18px;
-  padding: 14px 16px;
-  border-radius: 14px;
-  font-size: 15px;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.feedback-banner.pending {
-  background: #eff6ff;
-  color: #1d4ed8;
-}
-
-.feedback-banner.success {
-  background: #ecfdf5;
-  color: #047857;
-}
-
-.checkmark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 999px;
-  background: rgba(4, 120, 87, 0.12);
-  font-weight: 800;
-}
-
-@media (max-width: 720px) {
-  .page {
-    padding: 16px;
-  }
-
-  .topbar,
-  .footer {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .user-block {
-    justify-content: center;
-    text-align: center;
-  }
-
-  .nav-btn {
-    min-width: unset;
-    width: 100%;
-    height: 10vh;
-  }
+.auto-note {
+  text-align: left;
+  margin-top: 1.2vh;
+  flex-shrink: 0;
 }
 </style>

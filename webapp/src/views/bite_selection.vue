@@ -1,102 +1,96 @@
 <template>
-  <div class="top">
-    <div class="left">
-      <img class="user" alt="User" src="../assets/user_avatar.svg">
-      <div class = "usertext">
-        <div class="username">{{ username }}</div>
-        <div class = "userslog">Enjoy your mealtime now!</div>
+  <div class="page">
+    <div class="tb">
+      <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
+      <div>
+        <div class="tb-n">{{ username }}</div>
+        <div class="tb-s">Choose your bite</div>
       </div>
     </div>
-  </div>
-  <div class="container">
-    <div class="modal" v-if="showModal">
-      <button class="close-button" @click="closeModal">×</button>
-      <div v-if="currentStep === 1">
-        <div class="modal-header">
-          Trouble picking up your choice? Let’s try a different approach.
-        </div>
-        <div class="modal-subheader">
-          Select a skill and continue enjoying your meal.
-        </div>
-        <div class="skills">
-          <div
-            v-for="(skill, index) in skills"
-            :key="index"
-            :class="{ 'skillschoosing': true, active: activeIndex === index }"
-            @click="setActive(index)"
-          >
-            <img :src="skill.img" :alt="skill.name" />
-            <span>{{ skill.name }}</span>
-          </div>
-        </div>
-        <div class="confirm-button-container">
-          <button class="confirm-button" @click="goToStep2">Confirm</button>
-        </div>
-      </div>
-      <div v-else-if="currentStep === 2" class="horizontal-layout">
-        <div class="image-marker-container" @click="addMarker" ref="imageMarkerContainer" :style="{ backgroundImage: 'url(' + imageSrc + ')' }">
-          
-          <div
-            v-for="(marker, index) in markers"
-            :key="index"
-            class="marker"
-            :style="{
-        top: (marker.y * 100) + '%',
-        left: (marker.x * 100) + '%'
-      }"
-          ></div>
-          <svg v-if="markers.length === 2" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;">
-            <line
-              :x1="markers[0].x * imageWidth2"
-              :y1="markers[0].y * imageHeight2"
-              :x2="markers[1].x * imageWidth2"
-              :y2="markers[1].y * imageHeight2"
-              stroke="#a3d5ff" stroke-width="7" stroke-dasharray="5,5"/>
-          </svg>
-        </div>
-        <div class="right-section">
-          <div class="instruction">
-            Click on one/two points on the image below:
-          </div>
-          <div class="button-container">
-            <button class="reset-button" @click="resetMarkers">Reset Parameter</button>
-            <button class="confirm-button" @click="redirectForConfirButton">Confirm</button>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="content">
-      <div class="content-body">
-        <div class = "left">
-          <span class = "left-first-title">Choose your bite</span>
 
-          <div class="left-side-image">
+    <div class="modal-overlay" v-if="showModal">
+      <div class="modal-card">
+        <button class="modal-close" @click="closeModal">×</button>
+
+        <template v-if="currentStep === 1">
+          <p class="skill-modal-hdr">Trouble picking up your choice? Let's try a different approach.</p>
+          <p class="skill-modal-sub">Select a skill and continue enjoying your meal.</p>
+          <div class="skill-grid">
+            <div
+              v-for="(skill, index) in skills"
+              :key="index"
+              class="skill-card"
+              :class="{ sel: activeIndex === index }"
+              @click="setActive(index)"
+            >
+              <img class="sk-ico" :src="skill.img" :alt="skill.name" />
+              <span class="sk-lbl">{{ skill.name }}</span>
+            </div>
+          </div>
+          <button class="btn md amber w100" style="margin-top:1.5vh" @click="goToStep2">Confirm</button>
+        </template>
+
+        <template v-else-if="currentStep === 2">
+          <p class="mark-instruction">Click on one or two points on the image below:</p>
+          <div
+            class="cam mark-cam"
+            @click="addMarker"
+            ref="imageMarkerContainer"
+            :style="{ backgroundImage: 'url(' + imageSrc + ')' }"
+          >
+            <div
+              v-for="(marker, index) in markers"
+              :key="index"
+              class="mark-dot"
+              :style="{ top: (marker.y * 100) + '%', left: (marker.x * 100) + '%' }"
+            ></div>
+            <svg v-if="markers.length === 2" class="mark-line-svg">
+              <line
+                :x1="markers[0].x * imageWidth2"
+                :y1="markers[0].y * imageHeight2"
+                :x2="markers[1].x * imageWidth2"
+                :y2="markers[1].y * imageHeight2"
+                stroke="#2EC4B6" stroke-width="4" stroke-dasharray="6,6"/>
+            </svg>
+          </div>
+          <div class="mark-actions">
+            <button class="btn md ghost" @click="resetMarkers">Reset Parameter</button>
+            <button class="btn md amber" @click="redirectForConfirButton">Confirm</button>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <div class="bd det-bd">
+      <div class="bite-body">
+        <div class="bite-left">
+          <div class="cam bite-cam">
             <div class="image-wrapper" @click="stopCountdown">
-              <img :src="imageSrc" :style="imageStyle" @load="getImageDimensions" class="responsive-image"/>
+              <img :src="imageSrc" :style="imageStyle" @load="getImageDimensions" class="responsive-image" alt="Plate"/>
 
               <div
                 v-for="(box, index) in currentItem.boxes"
                 :key="index"
                 :ref="`box-${index}`"
-                class="box1"
+                class="bite-box"
                 :style="{
                   position: 'absolute',
                   top: `${box.BoxTRatio * imageHeight}px`,
                   left: `${box.BoxLRatio * imageWidth}px`,
                   width: `${box.BoxWRatio * imageWidth}px`,
                   height: `${box.BoxHRatio * imageHeight}px`,
-                  borderColor: selectedBox === index ? '#FFE699' : '#B4B4B4AD',
+                  borderColor: selectedBox === index ? '#F0A500' : '#8BA8C4AD',
                   borderWidth: selectedBox === index ? '4px' : '2px',
-                  backgroundColor: selectedBox === index ? 'rgba(128, 128, 128, 0.5)' : 'transparent',
-                  zIndex: selectedBox === index ? '10' : '100' // change zIndex
+                  backgroundColor: selectedBox === index ? 'rgba(240, 165, 0, 0.18)' : 'transparent',
+                  zIndex: selectedBox === index ? '10' : '100'
                 }"
                 @click="handleBoxClick(index)"
               >
                 <span
-                  class="box-number"
+                  class="bite-box-num"
                   :style="{
-                    backgroundColor: selectedBox === index ? 'yellow' : 'red',
-                    color: selectedBox === index ? 'black' : 'white'
+                    backgroundColor: selectedBox === index ? '#F0A500' : '#243C54',
+                    color: selectedBox === index ? '#0D1B2A' : '#F5F0E8'
                   }"
                 >
                   {{ index + 1 }}
@@ -105,53 +99,52 @@
             </div>
           </div>
 
-          <div class="button-container">
-            <button class="custom-button" @click="redirectToChangeItem">Pickup Bite</button>
-          </div>
-          <div class="button-text">{{ countdownText }}</div>
-
+          <button class="btn md amber w100" @click="redirectToChangeItem">Pickup Bite</button>
+          <p class="cdown">{{ countdownText }}</p>
         </div>
-        <div class = "right">
-          <span class = "right_text">Current Bite:</span>
-          <div class="info-card" @click="stopCountdown">
-            <img :src="currentItem.image" alt="current bite image" class="food-image" />
-            <div class="info-content">
-              <h3 class="food-name">{{ currentItem.name }}</h3>
-              <p v-if="nextItem" class="food-detail">Next Bite: {{ nextItem.name }}</p>
 
-            </div>
-          </div>
-          <span class="right_text">Change Food Items:</span>
-          <div class="ingredient-list-wrapper">
-            <div class="ingredient-list" @click="stopCountdown">
-              <div v-if="nFoodTypes === 1" class="info-card">
-                <p class="ingredient-name">Sorry, only one option available</p>
-              </div>
-              <div v-else v-for="(item, index) in items.slice(0, nFoodTypes-1)" :key="index" class="ingredient-item" @click="swapItems(index)">
-                <img :src="item.image" alt="food item image" class="ingredient-image" />
-                <p class="ingredient-name">{{ item.name }}</p>
-              </div>
-            </div>
-          </div>
-          <div class="buttonpart">
+        <div class="bite-side">
+          <span class="field-lbl">Current bite</span>
+          <div class="bite-current" @click="stopCountdown">
+            <img :src="currentItem.image" alt="current bite" class="bc-img" />
             <div>
-            <span class="left_text">Choose your dip:</span>
-            <div class="option-container" @click="stopCountdown">
-              <div class="option" v-for="(option, index) in optionTexts" :key="index">
-                <div class="optionboxfordips" :class="{ selected: selectedOption === index + 1 }" @click="selectOption(index + 1)">
-                  <span class="option-box-text">{{ option }}</span>
-                  <img class="metaballs" alt="option" src="../assets/optionbutton.png">
-                </div>
-              </div>
+              <div class="bc-name">{{ currentItem.name }}</div>
+              <div class="bc-next" v-if="nextItem">Next: {{ nextItem.name }}</div>
             </div>
           </div>
 
-            <div v-if="!showModal" class="button2" @click="stopCountdown">
-              <button class="button2" @click="showModal = true; currentStep = 1">
-                <img class="button-setting" alt="Vue logo" src="../assets/drink (2).png">
-                Execute Food Pickup <br> Skill Manually
-              </button>
+          <span class="field-lbl">Swap food item</span>
+          <div class="swap-row" @click="stopCountdown">
+            <div v-if="nFoodTypes === 1" class="swap-empty">Only one option available</div>
+            <div
+              v-else
+              v-for="(item, index) in items.slice(0, nFoodTypes-1)"
+              :key="index"
+              class="swap-item"
+              @click="swapItems(index)"
+            >
+              <img :src="item.image" alt="food item" />
+              <span class="swap-name">{{ item.name }}</span>
             </div>
+          </div>
+
+          <span class="field-lbl">Choose your dip</span>
+          <div class="dip-opts" @click="stopCountdown">
+            <div
+              class="dip-opt"
+              v-for="(option, index) in optionTexts"
+              :key="index"
+              :class="{ sel: selectedOption === index + 1 }"
+              @click="selectOption(index + 1)"
+            >
+              <span>{{ option }}</span>
+              <div class="och" style="width:16px;height:16px;font-size:9px" v-if="selectedOption === index + 1">✓</div>
+            </div>
+          </div>
+
+          <div class="skill-fallback" v-if="!showModal">
+            <span class="skill-fallback-lbl">Trouble picking this up?</span>
+            <button class="skill-fallback-btn" title="Execute Pickup Skill Manually" @click="showModal = true; currentStep = 1">🛠️</button>
           </div>
         </div>
       </div>
@@ -734,15 +727,10 @@ export default {
               
               this.imageSrc = base64Image;
 
-              const Owidth = img.width;
-              const Oheight = img.height;
-
-              const aspectRatio = Owidth / Oheight;
-
               this.imageStyle = {
-                width: '43vw',
-                height: `${43 / aspectRatio}vw`, 
-                objectFit: 'cover',
+                width: '100%',
+                height: '100%',
+                objectFit: 'contain',
                 display: 'block'
               };
 
@@ -762,7 +750,7 @@ export default {
       }
       this.listener = new ROSLIB.Topic({
         ros: this.ros,
-        name: this.subscribeTopic,
+        name: '/robot_to_webapp',
         messageType: 'std_msgs/String'
       });
 
@@ -821,874 +809,322 @@ export default {
 </script>
 
 <style scoped>
-.voice-start-button.recognizing {
-  background-color: #6e7e8e; 
-}
-.metaballs{
-  display: flex;
-  flex-flow: column;
-  align-items: center;
-  object-fit: contain;
-  width: 3vw;
-  height: 6vh;
-  margin: 0.5vh;
-  gap: 0px;
-  opacity: 0px;
-  border-radius: 20px;
-  padding: 0vh;
-  align-self: center;
-}
-.option-box-text{
-  font-family: Verdana;
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 24px;
-  letter-spacing: 0.17499999701976776px;
-  text-align: left;
-  padding: 10px;
-}
-.option{
-  display: flex;
-  justify-content: space-between;
-  flex-flow: column;
-  padding: 0px;
-}
-.optionboxfordips{
-  width: 25vw;
-  height: 8vh;
-  top: 397px;
-  left: 707px;
-  gap: 0px;
-  margin: 3px;
-  border-radius: 20px 20px 20px 20px;
-  border: 1px 0px 0px 0px;
-  opacity: 0px;
-  border: 1px solid #D3D3D3;
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(13, 27, 42, 0.85);
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 5px;
-}
-.option-container {
-  max-height: 29vh; 
-  overflow-y: auto;  
-  padding-right: 10px; 
+  justify-content: center;
+  z-index: 110;
 }
 
-.left_text{
-  font-family: Verdana;
-  font-size: 18px;
-  font-weight: 400;
-  line-height: 24px;
-  letter-spacing: 0.17499999701976776px;
-  text-align: left;
-  display: block;
-  margin-top: 1vh;
-  margin-bottom: 1vh;
+.modal-card {
+  background: var(--s1);
+  border: 1px solid var(--bd);
+  border-radius: var(--rl);
+  padding: 3vh 3vw;
+  width: 80vw;
+  max-width: 900px;
+  max-height: 84vh;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  box-shadow: 0 20px 56px rgba(0, 0, 0, .65);
 }
-.selected-box {
-  border-color: yellow !important;
-  border-width: 20px !important;
-  background-color: rgba(255, 255, 0, 0.3) !important;
+
+.modal-close {
+  position: absolute;
+  top: 1.5vh;
+  right: 1.5vw;
+  background: transparent;
+  border: none;
+  font-size: 2.4vh;
+  color: var(--tm);
+  cursor: pointer;
 }
-.left-side-image {
-  position: relative; 
-  margin-right: 20px;
+
+.skill-modal-hdr {
+  font: normal 2.6vh/1.4 Georgia, serif;
+  color: var(--t);
+  margin-bottom: .5vh;
+  padding-right: 3vw;
+}
+
+.skill-modal-sub {
+  font-size: 1.7vh;
+  color: var(--tm);
+  margin-bottom: 2vh;
+}
+
+.skill-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.2vw;
+}
+
+.skill-card {
+  background: var(--s2);
+  border-radius: var(--r);
+  border: 2px solid transparent;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: .8vh;
+  padding: 2vh 1vw;
+  cursor: pointer;
+}
+
+.skill-card.sel {
+  border-color: var(--a);
+  background: rgba(240, 165, 0, .08);
+}
+
+.sk-ico {
+  width: 5vw;
+  height: 9vh;
+  object-fit: contain;
+  filter: invert(1);
+}
+
+.sk-lbl {
+  font-size: 1.7vh;
+  font-weight: 700;
+  color: var(--t);
+}
+
+.mark-instruction {
+  font-size: 1.9vh;
+  color: var(--t);
+  text-align: center;
+  margin-bottom: 1.5vh;
+}
+
+.mark-cam {
+  flex: 1;
+  min-height: 36vh;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  position: relative;
+  cursor: crosshair;
+}
+
+.mark-dot {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--a2);
+  border: 2px solid var(--t);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.mark-line-svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.mark-actions {
+  display: flex;
+  gap: 1.2vw;
+  margin-top: 1.5vh;
+}
+
+.mark-actions .btn {
+  flex: 1;
+}
+
+.bite-body {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  gap: 1.5vw;
+  flex: 1;
+  min-height: 0;
+}
+
+.bite-left {
+  display: flex;
+  flex-direction: column;
+  gap: .8vh;
+  min-height: 0;
+}
+
+.bite-cam {
+  flex: 1;
+  min-height: 0;
 }
 
 .image-wrapper {
   position: relative;
-  width: 100%; 
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-.responsive-image1 {
-  width: 43vw;
-  object-fit: cover;
-  display: block;
-}
-.box1 {
-  position: absolute;
-  width: 60px;
-  height: 65px;
+
+.bite-box {
   box-sizing: border-box;
   cursor: pointer;
-  border: 5px solid #FFE699;
+  border-style: solid;
+  border-radius: 4px;
 }
-.box-number {
+
+.bite-box-num {
   position: absolute;
-  top: 0;
-  left: 0;
+  top: -10px;
+  left: -10px;
   font-weight: bold;
-  color: white;
-  background-color: red;
   border-radius: 50%;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   display: flex;
   align-items: center;
   justify-content: center;
-}
-.current-bite {
-  display: flex;
-  align-items: center;
-  padding: 10px;
-  border-radius: 10px;
-  box-shadow: 0px 2px 5px rgba(0, 0, 0, 0.1);
-  background-color: #f5f5f5;
-  border: 1px solid #e0e0e0;
-  height: 24vh;
-  width: 45vw;
+  font-size: 1.3vh;
 }
 
-.current-bite-image {
-  width: 100%;  
-  height: 100%;
-  object-fit: contain; 
-}
-
-.food-items {
-  display: flex;
-  justify-content: space-around;
-}
-
-.food-item {
-  cursor: pointer;
-  text-align: center;
-  width: 80px; 
-  height: 80px; 
-}
-
-.food-item-image {
-  width: 100%;  
-  height: 100%;
-  object-fit: contain; 
-}
-.info-card {
-  display: flex;
-  align-items: center;
-  padding: 10px;
-  border-radius: 10px;
-  box-shadow: 0px 2px 5px rgba(0, 0, 0, 0.1);
-  background-color: #f5f5f5;
-  border: 1px solid #e0e0e0;
-  height: 15vh;
-  width: 45vw;
-}
-
-.food-image {
-  border-radius: 8px;
-  object-fit: cover;
-  margin-right: 15px;
-}
-
-.info-content {
+.bite-side {
   display: flex;
   flex-direction: column;
+  gap: .8vh;
+  min-height: 0;
 }
 
-.food-name {
-  font-weight: bold;
-  margin: 0;
-  color: #333;
-  font-family: Verdana;
-  font-size: 24px;
-  font-weight: 700;
-  line-height: 1.2em;
-  text-align: left;
-  word-break: break-word;
-  overflow-wrap: break-word;
-  white-space: normal;
-
-}
-
-.food-detail, .food-timer {
-  font-family: Verdana;
-  font-size: 18px;
-  font-weight: 400;
-  line-height: 1px;
-  text-align: left;
-  line-height: 0.9em;
-  word-break: break-word;
-  overflow-wrap: break-word;
-  white-space: normal;
-
-}
-.ingredient-item.active {
-  border: 4px solid #fc6423;
-  box-shadow: 0 0 15px rgba(252, 100, 35, 0.9);
-  background-color: #ffffff;
-}
-
-.ingredient-list-wrapper {
-  display: flex;
-  align-items: center;
-  padding: 10px;
-  overflow-x: scroll;
-}
-
-.ingredient-list {
-  display: flex;
-  gap: 10px; 
-  width: 45vw;
-  justify-content: normal;
-  align-items: center;
-}
-.skillschoosing {
-  text-align: center;
-  transition: all 0.15s ease-in-out;
-  cursor: pointer;
-  box-sizing: border-box;
-  box-shadow: 0 0 5px rgba(0, 0, 0, 0.1);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  background-color: #f5f5f5;
-  padding: 10px;
-  border-radius: 8px;
-  width: 15.5vw;
-  height: 30vh;
-  margin: 5px;
-  justify-content: space-evenly;
-}
-
-.skillschoosing img {
-  width: 8vw;
-  height: 13.5vh;
-  margin: 15px;
-}
-
-.skillschoosing span,
-.skillschoosing p {
-  font-size: 18px;
-  color: #000000;
-  font-family: Verdana;
-  font-weight: 700;
-  line-height: 20px;
-  text-align: center;
-
-}
-
-.skillschoosing.active {
-  border: 4px solid #fc6423;
-  box-shadow: 0 0 15px rgba(252, 100, 35, 0.9);
-  background-color: #ffffff;
-}
-
-.ingredient-item {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between; 
-  align-items: center; 
-  width: 120px; 
-  height: 180px; 
-  border-radius: 20px;
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-  background-color: white;
-}
-
-.ingredient-image {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 15px;
-  object-fit: cover;
-  margin-top: 3vh;
-}
-
-.ingredient-name {
-  font-family: Verdana;
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 1.2em;
-  text-align: center;
-  word-break: break-all;
-  word-wrap: break-word;
-  white-space: normal;
-
-}
-
-.right_text{
-  font-family: Verdana;
-  font-size: 18px;
-  font-weight: 400;
-  line-height: 24px;
-  letter-spacing: 0.17499999701976776px;
-  text-align: left;
-
-}
-.left-first-title{
-  font-family: Verdana;
-  font-size: 20px;
-  font-weight: 700;
-  line-height: 25px;
-  letter-spacing: 0.17499999701976776px;
-  text-align: left;
-}
-.usertext{
-  align-items: baseline;
-  display: flex;
-  justify-content: center;
-  flex-flow: column;
-  margin-left: 5px;
-}
-.username{
-  font-family: Verdana;
-  font-size: 20px;
-  font-weight: 400;
-  line-height: 18px;
-  letter-spacing: 0.17499999701976776px;
-  text-align: left;
-}
-.userslog{
-  font-family: Verdana;
-  font-size: 16px;
-  font-weight: 400;
-  line-height: 18px;
-  letter-spacing: 0.17499999701976776px;
-  text-align: left;
-}
-.buttonpart {
-  display: flex;
-  align-items: center;
-  justify-content: space-evenly;
-  height: 30vh;
-  width: 45vw;
-}
-
-.button2 {
-  background-color: #FFE699;
-  border-radius: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background-color: #FFE699;
-  border-radius: 20px;
-  width: 16vw;
-  height: 25vh;
-  top: 740px;
-  left: 924px;
-  gap: 0px;
-  opacity: 0px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-flow: column;
-  .icon {
-    margin-right: 8px;
-  }
-  .button-drink{
-    height:10vh;
-    width: 6vw;
-  }
-  .button-setting{
-    height:7vh;
-    width: 4vw;
-    margin:10px
-  }
-  border: none;
-
-  font-family: Verdana;
-  font-size: 16px;
-  font-weight: 400;
-  line-height: 24px;
-  letter-spacing: 0.22500000894069672px;
-  text-align: center;
-
-}
-
-.button-drink {
-  height: 10vh;
-  width: 10vw;
-}
-
-.show-button-container {
-  background-color: #FFE699; 
-  border-radius: 20px;
-  width: 215px; 
-  height: 63px; 
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-left: 20px;
-}
-
-.show-button {
-  background-color: transparent; 
-  border: none;
-  color: black;
-  font-size: 16px;
-  cursor: pointer;
-}
-
-.box{
-  height: 18vh;
-  width: 14vw;
-  display: flex;
-  flex-flow: column;
-  align-items: center;
-  justify-content: space-between;
-  margin:2px;
-  padding: 10px;
-  gap: 0px;
-  border-radius: 9px 9px 9px 9px;
-  opacity: 0px;
-  background: #E0E0E0;
-  .metaballs{
-    width: 92px;
-    height: 88px;
-    top: 210px;
-    left: 716px;
-    gap: 0px;
-    opacity: 0px;
-  }
-}
-.optionboxfordips.selected {
-  background-color: #6c7984; 
-  color: white; 
-}
-.option{
-  display: flex;
-  justify-content: space-between;
-  flex-flow: column;
-  padding: 0px;
-
-}
-.optionbox{
-  width: 50vw;
-  height: 12vh;
-  top: 397px;
-  left: 707px;
-  gap: 0px;
-  margin: 3px;
-  border-radius: 20px 20px 20px 20px;
-  border: 1px 0px 0px 0px;
-  opacity: 0px;
-  border: 1px solid #000000;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 5px;
-
-}
-.otheroption{
-  display: flex;
-  justify-content: space-between;
-  flex-flow: column;
-  padding: 0px;
-
-}
-.otheroptionbox{
-  width: 50vw;
-  height: 12vh;
-  top: 645px;
-  left: 708px;
-  gap: 0px;
-  border-radius: 20px 20px 20px 20px;
-  opacity: 0px;
-  background: #D9D9D9;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 5px;
-  margin: 0px;
-
-}
-.title{
-  text-align: left;
-  margin: 5px 5px 5px 100px;
-}
-
-.button1 {
-  visibility: hidden;
-  background-color: #d9d9d9;
-  border-radius: 20px;
-  height: 48px;
-  width: 112px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-left: 20px;
-  .icon {
-    margin-right: 8px;
-  }
-}
-
-.box-top{
-  height:23vh;
-  width:45vw ;
-  display: flex;
-  justify-content: left;
-  background-color: #F2F2F2;
-  border: none;
-  padding: 15px;
-  gap: 0px;
-  border-radius: 24px;
-  border: 5px ;
-  border-color: #333333;
-  opacity: 0px;
-
-  .metaballs1{
-    height: 18vh;
-    width: 13vw;
-  }
-}
-.button-container {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-
-.custom-button {
-  background-color: #6e7e91; 
-  color: white;
-  border: none;
-  padding: 10px 30px;
-  border-radius: 20px; 
-  cursor: pointer;
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); 
-  outline: none;
-  height: 11vh; 
-  width: 45vw; 
-  font-family: Verdana;
-  font-size: 24px;
-  font-weight: 700;
-  line-height: 29.17px;
-  text-align: center;
-}
-
-.custom-button:hover {
-  background-color: #5b6a7b; 
-}
-.optionbox.selected {
-  background-color: #6c7984; 
-  color: white; 
-}
-.food{
-  width: 45vw;
-  height: 68vh;
-}
-.content{
-  display: flex;
-  justify-content: center;
-  flex-flow: column;
-}
-.content-body {
-  display: flex;
-  justify-content: space-evenly;
-  margin-top: 0px;
-  .left{
-    display: flex;
-    justify-content: flex-start;
-    align-items: baseline;
-    flex-flow: column;
-  }
-  .right{
-    display: flex;
-    justify-content: flex-start;
-    align-items: baseline;
-    flex-flow: column;
-  }
-}
-.threeboxes{
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.top {
-  height: 10vh;
-  background: #eee;
-  display: flex;
-  align-items: unset;
-  justify-content: space-between;
-  padding: 5px;
-  margin-bottom: 5px;
-  .food {
-    width: 500px;
-    height: 200px;
-    top: 179px;
-    left: 68px;
-    gap: 0px;
-    opacity: 0px;
-  }
-  .right {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    .settings-button-text{
-      font-family: Verdana;
-      font-size: 18px;
-      font-weight: 400;
-      line-height: 24px;
-      letter-spacing: 0.17499999701976776px;
-      text-align: left;
-    }
-    .setting-container {
-      position: relative;
-    }
-    .settings-button {
-      background-color: #6e7e8e;
-      border: none;
-      border-radius: 8px;
-      color: white;
-      padding: 10px 20px;
-      margin-left: 10px;
-      cursor: pointer;
-      font-size: 16px;
-      display: flex;
-      align-items: center;
-      height: 50px;
-    }
-    .settings-button span {
-      margin-left: 5px;
-    }
-    .settings-panel {
-      position: absolute;
-      top: 120%;
-      left: 50%;
-      transform: translateX(-50%);
-      width: calc(90%); 
-      max-width: 200px; 
-      background-color: #6e7e8e;
-      border-radius: 8px;
-      color: white;
-      padding: 15px;
-      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-      text-align: left;
-      z-index: 15;
-    }
-    .settings-panel h3 {
-      margin-top: 0;
-    }
-    .settings-panel label {
-      margin-left: 5px;
-      font-size: 14px;
-    }
-  }
-  .left {
-    display: flex;
-    justify-content: space-between;
-    padding:15px
-  }
-}
-
-.container {
-  position: relative;
-}
-
-.modal {
-  position: absolute;
-  top: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  background-color: #708090; 
+.bite-current {
+  background: var(--s2);
   border-radius: 12px;
-  padding: 20px;
-  margin: auto;
-  text-align: left;
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-  color: white; 
-  z-index: 110; 
-  height: 84vh;
-  width: 92vw;
-}
-
-.close-button {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  background: transparent;
-  border: none;
-  font-size: 20px;
-  color: white;
+  padding: 1vh 1vw;
+  display: flex;
+  gap: 1vw;
+  align-items: center;
   cursor: pointer;
 }
 
-.modal-header {
-  font-size: 16px;
-  font-weight: bold;
-  margin-bottom: 10px;
-  font-family: Verdana;
-  font-weight: 400;
-  line-height: 30px;
-  letter-spacing: 0.17499999701976776px;
-  text-align: left;
-
-}
-
-.modal-subheader {
-  margin-bottom: 20px;
-  color: #ffffff; 
-  font-family: Verdana;
-  font-size: 20px;
-  font-weight: 700;
-  line-height: 30px;
-  letter-spacing: 0.17499999701976776px;
-  text-align: left;
-
-}
-
-.skills {
-  display: flex;
-  justify-content: space-between;
-  background-color: #6c7a89;
-  padding: 20px;
-  border-radius: 15px;
-}
-
-.skill img {
-  width: 8vw;
-  height: 13.5vh;
-  margin: 15px;
-}
-
-.skill span {
-  font-size: 18px;
-  color: #000000; 
-  font-family: Verdana;
-  font-weight: 700;
-  line-height: 20px;
-  text-align: center;
-
-}
-.button-container {
-  display: flex;
-  justify-content: center;
-  margin-top: 10px;
-  flex-flow: column;
-}
-.confirm-button-container{
-  display: flex;
-  justify-content: center;
-  margin-top: 20px;
-}
-
-.confirm-button, .reset-button, .back-button {
-  background-color: #fce69e;
-  border: none;
+.bc-img {
+  width: 6vh;
+  height: 6vh;
   border-radius: 8px;
-  padding: 10px 20px;
-  cursor: pointer;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-  color: black; 
-  margin: 5px;
-  width: 33vw;
-  height: 12vh;
-  font-family: Verdana;
-  font-size: 32px;
-  font-weight: 400;
-  line-height: 24px;
-  letter-spacing: 0.22500000894069672px;
-  text-align: center;
-
+  object-fit: cover;
+  flex-shrink: 0;
 }
 
-.horizontal-layout {
-  display: flex;
-  justify-content: space-between;
-}
-.image-marker-container {
-  overflow: hidden;
-  width: 45vw;  
-  height: 45vh; 
-  background-image: imageSrc; 
-  background-size: 100% 100%; 
-  background-repeat: no-repeat; 
-  position: relative;
-  border: 1px solid #000;
-  margin: 0 auto; 
-  display: flex;
-  align-items: center; 
-  justify-content: center; 
-}
-.image-container {
-  position: relative;
-  flex: 2; 
-  display: flex;
-  justify-content: center;
-  margin-right: 20px;
-  width: 65vw;
-  height: 60vh;
+.bc-name {
+  font-size: 1.9vh;
+  font-weight: 700;
+  color: var(--t);
 }
 
-.right-section {
-  flex: 1;
+.bc-next {
+  font-size: 1.4vh;
+  color: var(--tm);
+}
+
+.swap-row {
+  display: flex;
+  gap: .6vw;
+  overflow-x: auto;
+  min-height: 8vh;
+}
+
+.swap-empty {
+  font-size: 1.5vh;
+  color: var(--tm);
+  padding: 1vh;
+}
+
+.swap-item {
+  flex-shrink: 0;
+  width: 9vh;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  align-items: flex-start; 
-  margin-left: 6vh;
-}
-
-.instruction {
-  margin-bottom: 20px;
-  max-width: 100%; 
-  word-wrap: break-word; 
-  font-family: Verdana;
-  font-size: 20px;
-  font-weight: 700;
-  line-height: 30px;
-  letter-spacing: 0.17499999701976776px;
-  text-align: left;
-
-}
-.marker{
-  width: 30px; 
-  height: 30px; 
-  background-image: url('../assets/mouselogo.png'); 
-  background-size: cover; 
-  position: absolute;
-  transform: translate(-50%, -50%);
-}
-
-.marker1 {
-  position: absolute;
-  width: 60px;
-  height: 60px;
-  background-size: contain;
-  background-repeat: no-repeat;
-  pointer-events: none; 
-}
-
-.show-button-container {
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 0; 
-}
-
-.show-button {
-  background-color: #6e7e8e;
-  border: none;
-  border-radius: 8px;
-  color: white;
-  padding: 10px 20px;
-  cursor: pointer;
-  font-size: 16px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-  background-color: transparent; 
-  border: none;
-  color: black;
-  font-size: 16px;
+  align-items: center;
+  gap: .4vh;
   cursor: pointer;
 }
 
-.image-container {
+.swap-item img {
+  width: 6vh;
+  height: 6vh;
+  border-radius: 10px;
+  object-fit: cover;
+  background: var(--s2);
+}
+
+.swap-name {
+  font-size: 1.2vh;
+  color: var(--tm);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 9vh;
+}
+
+.dip-opts {
   display: flex;
-  justify-content: flex-start;
-  align-items: flex-start;
-  .cimg{
-    width: 80%;
-    height: 100%;
-  }
+  flex-direction: column;
+  gap: .6vh;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
 }
 
-.image-container clickimg {
-  width: 80%;
-  height: 100%;
+.dip-opt {
+  background: var(--s2);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  padding: 1vh 1.2vw;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  font-size: 1.6vh;
+  color: var(--t);
+  flex-shrink: 0;
 }
-.image-container cimg {
-  width: 80%;
-  height: 100%;
+
+.dip-opt.sel {
+  border-color: var(--a);
+  background: rgba(240, 165, 0, .08);
+}
+
+.skill-fallback {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.skill-fallback-lbl {
+  font-size: 11px;
+  color: var(--tm);
+  text-align: right;
+  line-height: 1.3;
+  max-width: 130px;
+}
+
+.skill-fallback-btn {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  flex-shrink: 0;
+  background: transparent;
+  border: 2px solid var(--s3);
+  color: var(--tm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  cursor: pointer;
 }
 </style>
 

@@ -1,33 +1,40 @@
 <template>
-  <div class="top">
-    <div class="left">
-      <img class="user" alt="User" src="../assets/user_avatar.svg">
-      <div class="usertext">
-        <div class="username">{{ username }}</div>
-        <div class="userslog">Enjoy your mealtime now!</div>
+  <div class="page">
+    <div class="tb">
+      <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
+      <div>
+        <div class="tb-n">{{ username }}</div>
+        <div class="tb-s">Customize how the robot works</div>
       </div>
     </div>
-  </div>
 
-  <div class="content">
-    <div class="buttons">
-      <button class="pers-button" @click="navigateToTrans()">
-        <img class="button-icon" src="../assets/trans.png" alt="Transparency Icon" />
-        Transparency
-      </button>
-      <button class="pers-button" @click="navigateToAda()">
-        <img class="button-icon" src="../assets/ada.png" alt="Adaptability Icon" />
-        Adaptability
-      </button>
-      <button class="pers-button" @click="navigateToGes()">
-        <img class="button-icon" src="../assets/ges.png" alt="Gestures Icon" />
-        Gestures
-      </button>
-    </div>
-    <div class="back-row">
-      <button class="back-button" @click="$router.push('/task_selection')">
-        Back to Task Selection
-      </button>
+    <div class="bd">
+      <div class="pers-body">
+        <div class="pcard" @click="navigateToTrans()">
+          <div class="p-ico"><img src="../assets/trans.png" alt="Transparency"></div>
+          <div>
+            <div class="p-nm">Transparency</div>
+            <div class="p-ds">Ask the robot why it made a choice</div>
+          </div>
+        </div>
+        <div class="pcard" @click="navigateToAda()">
+          <div class="p-ico"><img src="../assets/ada.png" alt="Adaptability"></div>
+          <div>
+            <div class="p-nm">Adaptability</div>
+            <div class="p-ds">Change how the robot behaves</div>
+          </div>
+        </div>
+        <div class="pcard" @click="navigateToGes()">
+          <div class="p-ico"><img src="../assets/ges.png" alt="Gestures"></div>
+          <div>
+            <div class="p-nm">Gestures</div>
+            <div class="p-ds">Control the robot with gestures</div>
+          </div>
+        </div>
+        <button class="btn sm ghost w100" style="margin-top:1vh" @click="$router.push('/task_selection')">
+          ← Back to Task Selection
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -125,97 +132,55 @@ export default {
 </script>
 
 <style scoped>
-.top {
-  height: 9vh;
-  background: #eee;
-  display: flex;
-  align-items: unset;
-  justify-content: space-between;
-  padding: 5px;
-  margin-bottom: 5px;
-  .left {
-    display: flex;
-    justify-content: space-between;
-    padding: 15px;
-  }
-  .usertext {
-    align-items: baseline;
-    display: flex;
-    justify-content: center;
-    flex-flow: column;
-    margin-left: 5px;
-  }
-  .username {
-    font-family: Verdana;
-    font-size: 20px;
-    font-weight: 400;
-    line-height: 18px;
-    letter-spacing: 0.17499999701976776px;
-    text-align: left;
-  }
-  .userslog {
-    font-family: Verdana;
-    font-size: 16px;
-    font-weight: 400;
-    line-height: 18px;
-    letter-spacing: 0.17499999701976776px;
-    text-align: left;
-  }
-}
-
-.content {
+.pers-body {
+  flex: 1;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  align-items: center;
-  height: 80vh;
-  gap: 30px;
-}
-
-.buttons {
-  display: flex;
-  gap: 20px;
-  max-width: 90vw;
+  gap: 1.5vh;
+  max-width: 700px;
   width: 100%;
-  justify-content: space-between;
+  margin: 0 auto;
 }
 
-.pers-button {
-  background-color: #FFE699;
-  border: none;
-  border-radius: 20px;
+.pcard {
+  background: var(--s2);
+  border-radius: var(--rl);
+  height: 11vh;
+  display: flex;
+  align-items: center;
+  gap: 2vw;
+  padding: 0 2vw;
+  cursor: pointer;
+  border: 2px solid transparent;
+}
+
+.p-ico {
+  width: 6vh;
+  height: 6vh;
+  border-radius: 50%;
+  background: rgba(240, 165, 0, .13);
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-flow: column;
-  flex: 1;
-  height: 40vh;
-  font-family: Verdana;
-  font-size: 3vw;
-  font-weight: 400;
-  cursor: pointer;
+  flex-shrink: 0;
 }
 
-.button-icon {
-  height: 18vh;
-  width: 10vw;
-  margin-bottom: 10px;
+.p-ico img {
+  width: 50%;
+  height: 50%;
+  object-fit: contain;
+  filter: invert(1);
 }
 
-.back-row {
-  width: 100%;
-  max-width: 90vw;
-  display: flex;
-  justify-content: flex-start;
+.p-nm {
+  font-size: 2.2vh;
+  font-weight: 700;
+  color: var(--t);
 }
 
-.back-button {
-  background-color: #d9d9d9;
-  border: none;
-  border-radius: 12px;
-  padding: 12px 28px;
-  font-family: Verdana;
-  font-size: 1.5vw;
-  cursor: pointer;
+.p-ds {
+  font-size: 1.5vh;
+  color: var(--tm);
 }
 </style>

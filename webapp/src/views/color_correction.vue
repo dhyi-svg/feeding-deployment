@@ -1,51 +1,50 @@
 <template>
-  <div class="top">
-    <div class="left">
-      <img class="user" alt="User" src="../assets/user_avatar.svg">
-      <div class="usertext">
-        <div class="username">{{ username }}</div>
-        <div class="userslog">Adjust color detection.</div>
+  <div class="page">
+    <div class="tb">
+      <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
+      <div>
+        <div class="tb-n">{{ username }}</div>
+        <div class="tb-s">Adjust color detection.</div>
       </div>
     </div>
-  </div>
 
-  <div class="content">
-    
-    <div class="image-and-side">
-      <div class="canvas-container">
-        <canvas
-          ref="canvas"
-          class="main-canvas"
-          :style="{ cursor: showingResult || waitingForResult ? 'default' : 'crosshair' }"
-          @click="onCanvasClick"
-        />
-        <div v-if="!imageReady" class="canvas-overlay-text">Waiting for camera image…</div>
-        <div v-else-if="waitingForResult" class="canvas-overlay-text">Running detection…</div>
-      </div>
-
-      <div class="side-panel" :style="sideHeight ? { height: sideHeight + 'px' } : {}">
-        <div class="color-swatch" :style="{ backgroundColor: selectedColorCss }"></div>
-        <div class="slider-wrapper">
-          <input
-            type="range"
-            class="vertical-slider"
-            v-model.number="colorRange"
-            :style="{ width: sliderHeight + 'px' }"
-            min="0" max="1" step="0.01"
+    <div class="bd det-bd">
+      <div class="cc-row">
+        <div class="canvas-container">
+          <canvas
+            ref="canvas"
+            class="main-canvas"
+            :style="{ cursor: showingResult || waitingForResult ? 'default' : 'crosshair' }"
+            @click="onCanvasClick"
           />
+          <div v-if="!imageReady" class="canvas-overlay-text">Waiting for camera image…</div>
+          <div v-else-if="waitingForResult" class="canvas-overlay-text">Running detection…</div>
         </div>
-        <div class="range-value">{{ colorRange.toFixed(2) }}</div>
+
+        <div class="cc-side" :style="sideHeight ? { height: sideHeight + 'px' } : {}">
+          <div class="cc-swatch" :style="{ backgroundColor: selectedColorCss }"></div>
+          <div class="slider-wrapper">
+            <input
+              type="range"
+              class="cc-slider"
+              v-model.number="colorRange"
+              :style="{ width: sliderHeight + 'px' }"
+              min="0" max="1" step="0.01"
+            />
+          </div>
+          <div class="cc-val">{{ colorRange.toFixed(2) }}</div>
+        </div>
       </div>
-    </div>
 
-    <div v-if="detectionStatus" :class="['status-badge', detectionStatus]">
-      {{ detectionStatusText }}
-    </div>
+      <div v-if="detectionStatus" :class="['status-badge', detectionStatus]">
+        {{ detectionStatusText }}
+      </div>
 
-    <div class="buttons">
-      <button class="reset-button"   :disabled="!showingResult || waitingForResult" @click="resetImage">Reset</button>
-      <button class="rerun-button"   :disabled="!selectedColor || waitingForResult || showingResult" @click="rerunDetection">Rerun</button>
-      <button class="confirm-button" :disabled="!showingResult || waitingForResult" @click="confirmColor">Confirm</button>
+      <div class="det-actions">
+        <button class="btn md ghost" :disabled="!showingResult || waitingForResult" @click="resetImage">Reset</button>
+        <button class="btn md teal" :disabled="!selectedColor || waitingForResult || showingResult" @click="rerunDetection">Rerun</button>
+        <button class="btn md amber" :disabled="!showingResult || waitingForResult" @click="confirmColor">Confirm</button>
+      </div>
     </div>
   </div>
 </template>
@@ -104,12 +103,12 @@ export default {
   },
   methods: {
     initPublisher () {
-      this.publisher = new ROSLIB.Topic({ ros, name: '/webapp_to_robot', messageType: 'std_msgs/String' })
+      this.publisher = new ROSLIB.Topic({ ros: this.ros, name: '/webapp_to_robot', messageType: 'std_msgs/String' })
     },
     initSubscriber () {
 
       this.imageListener = new ROSLIB.Topic({
-        ros, name: '/camera/image/compressed', messageType: 'sensor_msgs/CompressedImage'
+        ros: this.ros, name: '/camera/image/compressed', messageType: 'sensor_msgs/CompressedImage'
       })
       this.imageListener.subscribe((msg) => {
         const src = 'data:image/jpeg;base64,' + msg.data
@@ -133,7 +132,7 @@ export default {
       })
 
       this.listener = new ROSLIB.Topic({
-        ros, name: '/robot_to_webapp', messageType: 'std_msgs/String'
+        ros: this.ros, name: '/robot_to_webapp', messageType: 'std_msgs/String'
       })
       this.listener.subscribe((msg) => {
         try {
@@ -262,33 +261,10 @@ export default {
 </script>
 
 <style scoped>
-.top {
-  height: 9vh;
-  background: #eee;
-  display: flex;
-  align-items: center;
-  padding: 5px 15px;
-  margin-bottom: 5px;
-}
-.left { display: flex; align-items: center; }
-.usertext { display: flex; flex-flow: column; align-items: baseline; margin-left: 5px; }
-.username { font-family: Verdana; font-size: 20px; font-weight: 400; text-align: left; line-height: 18px; }
-.userslog { font-family: Verdana; font-size: 16px; font-weight: 400; text-align: left; line-height: 18px; }
-
-.content {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  height: 85vh;
-  padding: 8px 16px;
-  box-sizing: border-box;
-  gap: 8px;
-}
-
-.image-and-side {
+.cc-row {
   display: flex;
   flex-direction: row;
-  gap: 10px;
+  gap: 1vw;
   flex: 1;
   min-height: 0;
   width: 100%;
@@ -308,39 +284,41 @@ export default {
 .main-canvas {
   max-width: 100%;
   max-height: 100%;
-  border: 2px solid #aaa;
-  border-radius: 6px;
+  border: 2px solid var(--s3);
+  border-radius: 8px;
   display: block;
 }
 
 .canvas-overlay-text {
   position: absolute;
   font-family: Verdana;
-  font-size: 18px;
-  color: #666;
-  background: rgba(255,255,255,0.8);
-  padding: 8px 16px;
-  border-radius: 6px;
+  font-size: 1.8vh;
+  color: var(--tm);
+  background: var(--s1);
+  padding: 1vh 1.5vw;
+  border-radius: 8px;
   pointer-events: none;
 }
 
-.side-panel {
-  width: 72px;
+.cc-side {
+  width: 7vw;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 1vh;
   flex-shrink: 0;
   align-self: center;
 }
 
-.color-swatch {
-  width: 68px;
-  height: 68px;
+.cc-swatch {
+  width: 6vw;
+  height: 6vw;
+  max-width: 68px;
+  max-height: 68px;
   border-radius: 10px;
-  border: 2px solid #777;
+  border: 2px solid var(--s3);
   flex-shrink: 0;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .4);
 }
 
 .slider-wrapper {
@@ -353,7 +331,7 @@ export default {
   overflow: hidden;
 }
 
-.vertical-slider {
+.cc-slider {
   -webkit-appearance: none;
   appearance: none;
   transform: rotate(-90deg);
@@ -364,85 +342,60 @@ export default {
   outline: none;
 }
 
-.vertical-slider::-webkit-slider-runnable-track {
-  background: #ccc;
+.cc-slider::-webkit-slider-runnable-track {
+  background: var(--s3);
   border-radius: 5px;
   height: 10px;
 }
-.vertical-slider::-moz-range-track {
-  background: #ccc;
+.cc-slider::-moz-range-track {
+  background: var(--s3);
   border-radius: 5px;
   height: 10px;
 }
 
-.vertical-slider::-webkit-slider-thumb {
+.cc-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
   width: 54px;
   height: 54px;
-  background: #444;
+  background: var(--a);
   border-radius: 10px;
   cursor: grab;
-  box-shadow: 0 3px 8px rgba(0,0,0,0.35);
-  border: 3px solid #fff;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, .5);
+  border: 3px solid var(--g);
   margin-top: -22px;
 }
-.vertical-slider::-moz-range-thumb {
+.cc-slider::-moz-range-thumb {
   width: 54px;
   height: 54px;
-  background: #444;
+  background: var(--a);
   border-radius: 10px;
   cursor: grab;
-  box-shadow: 0 3px 8px rgba(0,0,0,0.35);
-  border: 3px solid #fff;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, .5);
+  border: 3px solid var(--g);
 }
-.vertical-slider::-webkit-slider-thumb:active { background: #222; cursor: grabbing; }
-.vertical-slider::-moz-range-thumb:active     { background: #222; cursor: grabbing; }
+.cc-slider::-webkit-slider-thumb:active { background: #c87800; cursor: grabbing; }
+.cc-slider::-moz-range-thumb:active     { background: #c87800; cursor: grabbing; }
 
-.range-value {
+.cc-val {
   font-family: Verdana;
-  font-size: 38px;
+  font-size: 2.2vh;
   font-weight: 700;
-  color: #333;
+  color: var(--t);
   flex-shrink: 0;
 }
 
 .status-badge {
-  padding: 5px 16px;
+  padding: .8vh 1.5vw;
   border-radius: 8px;
   font-family: Verdana;
-  font-size: 15px;
+  font-size: 1.6vh;
   font-weight: 700;
   width: 100%;
   text-align: center;
   box-sizing: border-box;
+  flex-shrink: 0;
 }
-.status-badge.success { background: #d4edda; color: #155724; }
-.status-badge.failed  { background: #f8d7da; color: #721c24; }
-
-.buttons { display: flex; gap: 12px; }
-.reset-button, .rerun-button, .confirm-button {
-  border: none;
-  color: black;
-  cursor: pointer;
-  border-radius: 20px;
-  width: 15vw;
-  height: 9vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: Verdana;
-  font-size: 22px;
-  font-weight: 400;
-  text-align: center;
-  padding: 8px;
-}
-.reset-button   { background-color: #B3D9FF; }
-.rerun-button   { background-color: #FFE699; }
-.confirm-button { background-color: #90EE90; }
-.reset-button:disabled,
-.rerun-button:disabled, .confirm-button:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
+.status-badge.success { background: rgba(46, 196, 182, .15); color: var(--a2); }
+.status-badge.failed  { background: rgba(220, 60, 60, .12); color: #e88; }
 </style>

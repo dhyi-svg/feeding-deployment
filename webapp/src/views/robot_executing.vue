@@ -1,37 +1,36 @@
 <template>
-  <div class="top">
-    <div class="left">
-      <img class="user" alt="User" src="../assets/user_avatar.svg">
-      <div class = "usertext">
-        <div class="username">{{ username }}</div>
-        <div class = "userslog">Enjoy your mealtime now!</div>
+  <div class="page">
+    <div class="tb">
+      <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
+      <div>
+        <div class="tb-n">{{ username }}</div>
+        <div class="tb-s">Enjoy your mealtime now!</div>
+      </div>
+      <div class="dot"></div>
+    </div>
+
+    <div class="ss" v-if="planSlots.current">
+      <div class="sk past" v-if="planSlots.last">
+        <span class="sl">Previous</span>
+        <span class="sv">{{ skillLabel(planSlots.last) }}</span>
+      </div>
+      <div class="sa" v-if="planSlots.last">&#8594;</div>
+      <div class="sk now">
+        <span class="sl">Now</span>
+        <span class="sv">{{ skillLabel(planSlots.current) }}</span>
+      </div>
+      <div class="sa" v-if="planSlots.next">&#8594;</div>
+      <div class="sk upcoming" v-if="planSlots.next">
+        <span class="sl">Next</span>
+        <span class="sv">{{ skillLabel(planSlots.next) }}</span>
       </div>
     </div>
-  </div>
 
-  <div class="skill-plan" v-if="planSlots.current">
-    <div class="skill-step past" v-if="planSlots.last">
-      <span class="step-label">Previous</span>
-      <span class="step-name">{{ skillLabel(planSlots.last) }}</span>
-    </div>
-    <div class="skill-arrow" v-if="planSlots.last">&#8594;</div>
-    <div class="skill-step current">
-      <span class="step-label">Now</span>
-      <span class="step-name">{{ skillLabel(planSlots.current) }}</span>
-    </div>
-    <div class="skill-arrow" v-if="planSlots.next">&#8594;</div>
-    <div class="skill-step upcoming" v-if="planSlots.next">
-      <span class="step-label">Next</span>
-      <span class="step-name">{{ skillLabel(planSlots.next) }}</span>
+    <div class="bd exec-body">
+      <div class="icon-ring"><div class="pi">🦾</div></div>
+      <div class="exec-text">{{ displayedMessage }}</div>
     </div>
   </div>
-
-  <div class="content">
-    <div class="message">
-      {{ displayedMessage }}
-    </div>
-  </div>
-
 </template>
 
 <script>
@@ -160,123 +159,88 @@ export default {
 </script>
 
 <style scoped>
-.top {
-  height: 9vh;
-  background: #eee;
-  display: flex;
-  align-items: unset;
-  justify-content: space-between;
-  padding: 5px;
-  margin-bottom: 5px;
-  .right {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-  }
-  .left {
-    display: flex;
-    justify-content: space-between;
-    padding:15px
-  }
-  .usertext{
-    align-items: baseline;
-    display: flex;
-    justify-content: center;
-    flex-flow: column;
-    margin-left: 5px;
-  }
-  .username{
-    font-family: Verdana;
-    font-size: 20px;
-    font-weight: 400;
-    line-height: 18px;
-    letter-spacing: 0.17499999701976776px;
-    text-align: left;
-  }
-  .userslog{
-    font-family: Verdana;
-    font-size: 16px;
-    font-weight: 400;
-    line-height: 18px;
-    letter-spacing: 0.17499999701976776px;
-    text-align: left;
-  }
-}
-
-.left {
-  display: flex;
-  align-items: center;
-}
-
-.right {
-  display: flex;
-  align-items: center;
-}
-
-
-.skill-plan {
+.ss {
+  background: var(--s1);
+  padding: 1.2vh 2vw;
   display: flex;
   justify-content: center;
   align-items: center;
-  gap: 12px;
-  padding: 10px 10px;
+  gap: 1.2vw;
+  border-bottom: 1px solid var(--bd);
+  flex-shrink: 0;
 }
 
-.skill-step {
+.sk {
   display: flex;
   flex-direction: column;
   align-items: center;
-  min-width: 140px;
-  padding: 10px 18px;
+  min-width: 12vw;
+  padding: 1vh 1.2vw;
   border-radius: 10px;
-  background: #eee;
-  color: #6e7e8e;
+  background: var(--s2);
+  color: var(--tm);
   border: 2px solid transparent;
 }
 
-.skill-step.current {
-  background: #6e7e8e;
-  color: white;
-  border-color: #3d4a57;
-  transform: scale(1.08);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+.sk.now {
+  background: rgba(240, 165, 0, .08);
+  color: var(--t);
+  border-color: var(--a);
 }
 
-.skill-step .step-label {
-  font-family: Verdana;
-  font-size: 12px;
+.sk .sl {
+  font-size: 1.2vh;
   text-transform: uppercase;
   letter-spacing: 1px;
   opacity: 0.8;
 }
 
-.skill-step .step-name {
-  font-family: Verdana;
-  font-size: 18px;
+.sk .sv {
+  font-size: 1.9vh;
   font-weight: bold;
   margin-top: 4px;
+  color: inherit;
 }
 
-.skill-arrow {
-  font-size: 26px;
-  color: #6e7e8e;
+.sk.now .sv {
+  color: var(--a);
 }
 
-.content {
+.sa {
+  font-size: 2vh;
+  color: var(--tm);
+}
+
+.exec-body {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
   align-items: center;
-  
-  height: 60vh;
+  justify-content: center;
+  gap: 3vh;
+  flex: 1;
 }
 
-.message {
-  font-weight: bold;
+.icon-ring {
+  width: 12vh;
+  height: 12vh;
+  border-radius: 50%;
+  border: 2px solid var(--s3);
+  background: rgba(46, 196, 182, .07);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pi {
+  font-size: 6vh;
+}
+
+.exec-text {
   font-family: Verdana;
-  font-size: 40px;
-  letter-spacing: 0.17499999701976776px;
+  font-size: 2.6vh;
+  color: var(--t);
   text-align: center;
+  max-width: 70vw;
+  line-height: 1.4;
 }
-
-
 </style>

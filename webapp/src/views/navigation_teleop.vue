@@ -1,13 +1,13 @@
 <template>
   <div class="navteleop">
     
-    <div class="header">
-      <img class="user" alt="User" src="../assets/user_avatar.svg">
-      <div class="header-text">
-        <div class="header-title">Base Navigation Control</div>
-        <div class="header-sub">Push to drive · release to stop · press Done when parked</div>
+    <div class="tb">
+      <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
+      <div>
+        <div class="tb-n">Base Navigation Control</div>
+        <div class="tb-s">Push to drive · release to stop · press Done when parked</div>
       </div>
-      <button class="done-btn" @click="finish()">Done</button>
+      <button class="btn sm amber" style="margin-left:auto;height:6vh;padding:0 1.5vw" @click="finish()">Done</button>
     </div>
 
     <div class="banner" :class="{ bad: !connected }">{{ bannerText }}</div>
@@ -216,39 +216,25 @@ export default {
   max-width: 1140px;
   margin: 0 auto;
   font-family: Verdana, sans-serif;
-  background: #fff;
+  background: var(--g);
+  color: var(--t);
   padding: 8px 20px 10px;
   box-sizing: border-box;
-  
   height: 100vh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
-.header {
-  display: flex; align-items: center; gap: 12px;
-  background: #eee; border-radius: 8px;
-  padding: 6px 14px; margin-bottom: 8px;
-}
-.header .user { width: 36px; height: 36px; }
-.header-title { font-size: 20px; font-weight: 700; color: #1f2937; }
-.header-sub { font-size: 14px; color: #6e7e8e; }
-.done-btn {
-  margin-left: auto; font-family: Verdana, sans-serif; font-size: 16px;
-  font-weight: 700; padding: 0 22px; border: none; border-radius: 8px;
-  background: #28a745; color: #fff; cursor: pointer; height: 50px;
-}
-
 .banner {
   text-align: center; font-size: 14px; padding: 8px; border-radius: 8px;
-  color: #085041; background: #e1f5ee; margin-bottom: 8px;
+  color: var(--a2); background: rgba(46, 196, 182, .12); margin: 8px 0;
 }
-.banner.bad { color: #791f1f; background: #fcebeb; }
+.banner.bad { color: #e88; background: rgba(220, 60, 60, .12); }
 
 .hla-banner {
   text-align: center; font-size: 15px; padding: 8px; border-radius: 8px;
-  color: #2c5777; background: #e3edf7; margin-bottom: 8px;
+  color: var(--a2); background: rgba(46, 196, 182, .12); margin-bottom: 8px;
 }
 
 .joystick-area {
@@ -259,23 +245,23 @@ export default {
 
 .pad {
   position: relative; width: 300px; height: 300px; border-radius: 50%;
-  background: #f1efe8; border: 1px solid #b4b2a9; touch-action: none;
+  background: var(--s2); border: 1px solid var(--s3); touch-action: none;
 }
-.axis { position: absolute; background: #d3d1c7; }
+.axis { position: absolute; background: var(--s3); }
 .ax-v { width: 1px; height: 100%; left: 50%; }
 .ax-h { height: 1px; width: 100%; top: 50%; }
 
 .knob {
   position: absolute; width: 108px; height: 108px; border-radius: 50%;
-  background: #e6f1fb; border: 2px solid #378add;
+  background: rgba(46, 196, 182, .15); border: 2px solid var(--a2);
   left: 96px; top: 96px;
   display: flex; align-items: center; justify-content: center;
-  color: #185fa5; font-size: 26px;
+  color: var(--a2); font-size: 26px;
   transition: left 0.08s ease-out, top 0.08s ease-out;
 }
 .knob.dragging { transition: none; }
 
-.readout { display: flex; gap: 32px; font-size: 16px; color: #5f5e5a; }
-.readout b { color: #111; font-weight: 700; }
-.hint { font-size: 13px; color: #888780; }
+.readout { display: flex; gap: 32px; font-size: 16px; color: var(--tm); }
+.readout b { color: var(--t); font-weight: 700; }
+.hint { font-size: 13px; color: var(--tm); }
 </style>

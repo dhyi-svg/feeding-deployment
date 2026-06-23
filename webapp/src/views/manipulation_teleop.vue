@@ -1,14 +1,13 @@
 <template>
   <div class="teleop">
-    
-    <div class="header">
-      <img class="user" alt="User" src="../assets/user_avatar.svg">
-      <div class="header-text">
-        <div class="header-title">Manual Control</div>
-        <div class="header-sub">Move the arm, then press Done</div>
+
+    <div class="tb">
+      <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
+      <div>
+        <div class="tb-n">Manual Control</div>
+        <div class="tb-s">Move the arm, then press Done</div>
       </div>
-      
-      <button class="menu-btn" @click="backToMenu()">Back to Menu</button>
+      <button class="btn sm ghost" style="margin-left:auto;height:6vh;padding:0 1.5vw" @click="backToMenu()">Back to Menu</button>
     </div>
 
     <div class="hla-banner" v-if="currentHla">
@@ -447,65 +446,51 @@ export default {
   max-width: 1140px;
   margin: 0 auto;
   font-family: Verdana, sans-serif;
-  background: #fff;
+  background: var(--g);
+  color: var(--t);
   padding: 8px 20px 10px;
   box-sizing: border-box;
-  
   height: 100vh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
-.header {
-  display: flex; align-items: center; gap: 12px;
-  background: #eee; border-radius: 8px;
-  padding: 6px 14px; margin-bottom: 8px;
-}
-.header .user { width: 36px; height: 36px; }
-.header-title { font-size: 20px; font-weight: 700; color: #1f2937; }
-.header-sub { font-size: 14px; color: #6e7e8e; }
-.menu-btn {
-  margin-left: auto; font-family: Verdana, sans-serif; font-size: 15px;
-  font-weight: 700; padding: 10px 18px; border: none; border-radius: 8px;
-  background: #6e7e8e; color: #fff; cursor: pointer; min-height: 44px;
-}
-
-.tabbar { display: flex; gap: 8px; margin-bottom: 8px; }
+.tabbar { display: flex; gap: 8px; margin: 8px 0; }
 .tab {
   flex: 1; font-family: Verdana, sans-serif; font-size: 16px; padding: 11px 0;
-  color: #1f2937; background: #fff; border: 1px solid #ccc; border-radius: 8px;
+  color: var(--t); background: var(--s2); border: 1px solid var(--s3); border-radius: 8px;
   cursor: pointer;
 }
 .tab.active {
-  font-weight: 700; background: #6e7e8e; color: #fff; border-color: #6e7e8e;
+  font-weight: 700; background: var(--a); color: var(--g); border-color: var(--a);
 }
 
 .stepsize { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.stepsize-label { font-size: 14px; color: #6e7e8e; min-width: 70px; }
+.stepsize-label { font-size: 14px; color: var(--tm); min-width: 70px; }
 .step {
   flex: 1; font-family: Verdana, sans-serif; font-size: 14px; padding: 11px 0;
-  border: 1px solid #ccc; border-radius: 8px; background: #fff; color: #1f2937;
+  border: 1px solid var(--s3); border-radius: 8px; background: var(--s2); color: var(--t);
   cursor: pointer;
 }
 .step.active {
-  font-weight: 700; background: #6e7e8e; color: #fff; border-color: #6e7e8e;
+  font-weight: 700; background: var(--s3); color: var(--t); border-color: var(--s3);
 }
 
 .status {
   font-size: 14px; padding: 7px 10px; border-radius: 8px; margin-bottom: 8px;
   text-align: center;
 }
-.status.idle { background: #eee; color: #6e7e8e; }
-.status.moving { background: #FFE699; color: #6b5900; }
-.status.aborted { background: #ffd6d6; color: #c0392b; }
+.status.idle { background: var(--s2); color: var(--tm); }
+.status.moving { background: rgba(240, 165, 0, .15); color: var(--a); }
+.status.aborted { background: rgba(220, 60, 60, .15); color: #e88; }
 
 .hla-banner {
   font-size: 15px; padding: 8px 10px; border-radius: 8px; margin-bottom: 8px;
-  text-align: center; background: #e3edf7; color: #2c5777;
+  text-align: center; background: rgba(46, 196, 182, .12); color: var(--a2);
 }
 
-.pad-label { font-size: 14px; font-weight: 700; margin: 0 0 6px; color: #6e7e8e; }
+.pad-label { font-size: 14px; font-weight: 700; margin: 0 0 6px; color: var(--tm); }
 
 .tab-content { flex: 1; min-height: 0; }
 
@@ -525,10 +510,10 @@ export default {
 
 .jog {
   font-family: Verdana, sans-serif; font-size: 17px; font-weight: 700;
-  border: 1px solid #e6c95c; border-radius: 12px; color: #1f2937;
-  background: #FFE699; cursor: pointer; min-height: 56px;
+  border: 1px solid var(--s3); border-radius: 12px; color: var(--t);
+  background: var(--s2); cursor: pointer; min-height: 56px;
 }
-.jog:active { background: #f5d36b; }
+.jog:active { background: var(--s3); }
 .jog:disabled, button:disabled { opacity: 0.4; cursor: default; }
 
 .move-grid .up      { grid-column: 1 / 4; grid-row: 1; }
@@ -551,9 +536,9 @@ export default {
   display: flex; flex-direction: column; gap: 8px;
   align-items: stretch; border-radius: 8px; padding: 6px;
 }
-.joint-col.moving { background: #fff4d6; }
+.joint-col.moving { background: rgba(240, 165, 0, .1); }
 .joint-label {
-  font-size: 14px; color: #1f2937; text-align: center; line-height: 1.2;
+  font-size: 14px; color: var(--t); text-align: center; line-height: 1.2;
   min-height: 40px; display: flex; align-items: center; justify-content: center;
 }
 .joint-col .jog { flex: 1; padding: 0; font-size: 46px; line-height: 1; }
@@ -564,25 +549,25 @@ export default {
 
 .bottom {
   display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
-  border-top: 1px solid #ddd; padding-top: 10px; margin-top: 10px;
+  border-top: 1px solid var(--bd); padding-top: 10px; margin-top: 10px;
 }
 
 .bottom.three-col { grid-template-columns: 1fr 1fr 1fr; }
 
-.done.redo { background: #6e7e8e; }
+.done.redo { background: var(--s2); color: var(--t); }
 .retract {
   font-family: Verdana, sans-serif; font-size: 16px; font-weight: 700;
-  padding: 12px 0; border: none; border-radius: 8px;
-  background: #6e7e8e; color: #fff; cursor: pointer; min-height: 56px;
+  padding: 12px 0; border: 2px solid rgba(46, 196, 182, .22); border-radius: 8px;
+  background: rgba(46, 196, 182, .12); color: var(--a2); cursor: pointer; min-height: 56px;
 }
 .stop {
   font-family: Verdana, sans-serif; font-size: 16px; font-weight: 700;
   padding: 12px 0; border: none; border-radius: 8px;
-  background: #ff4d4f; color: #fff; cursor: pointer; min-height: 56px;
+  background: #c0392b; color: #fff; cursor: pointer; min-height: 56px;
 }
 .done {
   font-family: Verdana, sans-serif; font-size: 16px; font-weight: 700;
   padding: 12px 0; border: none; border-radius: 8px;
-  background: #28a745; color: #fff; cursor: pointer; min-height: 56px;
+  background: var(--a); color: var(--g); cursor: pointer; min-height: 56px;
 }
 </style>

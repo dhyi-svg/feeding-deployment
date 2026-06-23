@@ -142,16 +142,16 @@ export default {
 </script>
 
 <style scoped>
-.mic-test { font-family: -apple-system, system-ui, sans-serif; margin: 1.2rem; line-height: 1.4; }
-.hint { color: #666; max-width: 40rem; }
+.mic-test { font-family: -apple-system, system-ui, sans-serif; margin: 1.2rem; line-height: 1.4; background: var(--g); color: var(--t); min-height: 100vh; padding: 1.2rem; }
+.hint { color: var(--tm); max-width: 40rem; }
 .row { margin: .9rem 0; }
 .status { margin-left: .5rem; }
-.meter-wrap { width: 100%; max-width: 40rem; height: 44px; background: #eee; border-radius: 8px; overflow: hidden; }
-.meter { height: 100%; background: #4caf50; }
-.press { font-size: 1.6rem; font-weight: 700; color: #bbb; }
-.press.hit { color: #e53935; }
-button { font-size: 1.1rem; padding: .6rem 1rem; border-radius: 8px; }
-.log-panel { margin-top: .8rem; max-width: 40rem; height: 220px; overflow-y: auto; background: #1e1e1e; color: #ccc; font-family: monospace; font-size: .8rem; padding: .5rem; border-radius: 8px; }
-.log-panel .press { color: #f44336; font-weight: 700; }
-.log-panel .peak  { color: #aaa; }
+.meter-wrap { width: 100%; max-width: 40rem; height: 44px; background: var(--s1); border-radius: 8px; overflow: hidden; }
+.meter { height: 100%; background: var(--a2); }
+.press { font-size: 1.6rem; font-weight: 700; color: var(--tm); }
+.press.hit { color: #e88; }
+button { font-size: 1.1rem; padding: .6rem 1rem; border-radius: 8px; border: 2px solid var(--s3); background: var(--s2); color: var(--t); cursor: pointer; }
+.log-panel { margin-top: .8rem; max-width: 40rem; height: 220px; overflow-y: auto; background: var(--g); border: 1px solid var(--bd); color: var(--tm); font-family: monospace; font-size: .8rem; padding: .5rem; border-radius: 8px; }
+.log-panel .press { color: #e88; font-weight: 700; }
+.log-panel .peak  { color: var(--tm); }
 </style>

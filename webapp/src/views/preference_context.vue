@@ -1,76 +1,73 @@
 <template>
   <div class="page">
-    <header class="topbar">
-      <div class="user-block">
-        <img class="avatar" alt="User" src="../assets/user_avatar.svg">
-        <div>
-          <div class="username">{{ username }}</div>
-          <div class="subtitle">Tell the robot about this meal before we begin.</div>
-        </div>
+    <div class="tb">
+      <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
+      <div>
+        <div class="tb-n">{{ username }}</div>
+        <div class="tb-s">Tell the robot about this meal before we begin.</div>
       </div>
-    </header>
+    </div>
 
-    <main class="content">
-      
+    <div class="bd">
       <div v-if="!hasOptions" class="waiting-card">
         <p class="eyebrow">Meal Context</p>
         <h1>Waiting for meal context options from the backend...</h1>
       </div>
 
-      <div v-else class="pref-page">
-        
-        <div class="progress-bar">
+      <template v-else>
+        <div class="prg">
           <div
-            class="progress-step"
+            class="pip"
             v-for="(step, i) in steps"
             :key="step.key"
-            :class="{
-              active: i === currentIndex,
-              done: i < currentIndex
-            }"
+            :class="{ a: i === currentIndex, d: i < currentIndex }"
           ></div>
         </div>
 
-        <p class="step-count">{{ currentIndex + 1 }} of {{ steps.length }}</p>
+        <p class="sc">Step {{ currentIndex + 1 }} of {{ steps.length }}</p>
 
-        <h1 class="pref-title">{{ currentStep.label }}</h1>
-
-        <div class="options-list" :class="{ 'two-col': currentStep.key === 'meal' || currentStep.key === 'setting' }">
-          <div
-            class="option-btn"
-            v-for="option in currentOptions"
-            :key="option"
-            :class="{ selected: selection[currentStep.key] === option }"
-            @click="selectOption(option)"
-          >
-            <span class="option-text">{{ option }}</span>
-            <div class="option-check" v-if="selection[currentStep.key] === option">✓</div>
+        <div class="pref-body">
+          <div class="pref-q">
+            <h1 class="pq">{{ currentStep.label }}</h1>
+            <p class="pref-help">Select one to continue.</p>
+          </div>
+          <div class="opts" :class="{ 'two-col': currentStep.key === 'meal' || currentStep.key === 'setting' }">
+            <div
+              class="oc"
+              v-for="option in currentOptions"
+              :key="option"
+              :class="{ sel: selection[currentStep.key] === option }"
+              @click="selectOption(option)"
+            >
+              <span class="ot">{{ option }}</span>
+              <div class="och" v-if="selection[currentStep.key] === option">✓</div>
+            </div>
           </div>
         </div>
-      </div>
-    </main>
+      </template>
 
-    <footer v-if="hasOptions" class="footer">
-      <button class="nav-btn back-nav" @click="goBack" :disabled="currentIndex === 0">
-        Go Back
-      </button>
-      <button
-        v-if="currentIndex < steps.length - 1"
-        class="nav-btn continue-nav"
-        :disabled="!currentSelected"
-        @click="goNext"
-      >
-        Continue
-      </button>
-      <button
-        v-else
-        class="nav-btn confirm-nav"
-        :disabled="!isComplete"
-        @click="submitSelection"
-      >
-        Confirm Meal Context
-      </button>
-    </footer>
+      <div v-if="hasOptions" class="footer">
+        <button class="btn lg ghost" @click="goBack" :disabled="currentIndex === 0">
+          Go Back
+        </button>
+        <button
+          v-if="currentIndex < steps.length - 1"
+          class="btn lg amber"
+          :disabled="!currentSelected"
+          @click="goNext"
+        >
+          Continue
+        </button>
+        <button
+          v-else
+          class="btn lg amber"
+          :disabled="!isComplete"
+          @click="submitSelection"
+        >
+          Confirm Meal Context
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -278,273 +275,15 @@ export default {
 </script>
 
 <style scoped>
-.page {
-  height: 100vh;
-  overflow: hidden;
-  background:
-    radial-gradient(circle at top right, rgba(110, 231, 183, 0.28), transparent 28%),
-    linear-gradient(155deg, #fffef6 0%, #eef7f3 45%, #edf4ff 100%);
-  color: #1f2937;
-  padding: 24px;
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-}
-
-.topbar {
-  max-width: 1100px;
-  width: 100%;
-  margin: 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.user-block {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.avatar {
-  width: 52px;
-  height: 52px;
-}
-
-.username {
-  font-size: 24px;
-  font-weight: 700;
-}
-
-.subtitle {
-  color: #5b6472;
-  font-size: 15px;
-}
-
-.back-button {
-  border: 1px solid #d1d5db;
-  border-radius: 999px;
-  padding: 14px 22px;
-  font-size: 16px;
-  font-weight: 700;
-  cursor: pointer;
-  background: #fff;
-  color: #1f2937;
-}
-
-.content {
-  flex: 1;
-  min-height: 0;
-  max-width: 1100px;
-  width: 100%;
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 12px 0;
-  overflow: hidden;
-}
-
-.waiting-card {
-  background: rgba(255, 255, 255, 0.9);
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  border-radius: 24px;
-  padding: 40px;
-  box-shadow: 0 18px 40px rgba(31, 41, 55, 0.08);
-  backdrop-filter: blur(8px);
-  width: 100%;
-  text-align: center;
-}
-
-.waiting-card h1 {
-  font-size: clamp(28px, 4vw, 44px);
-  margin: 0 0 16px;
-}
-
-.eyebrow {
-  margin: 0 0 12px;
-  color: #0f766e;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-size: 14px;
-}
-
-.pref-page {
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 16px;
-  overflow: hidden;
-}
-
-.progress-bar {
-  display: flex;
-  gap: 10px;
-}
-
-.progress-step {
-  width: 14px;
-  height: 14px;
-  border-radius: 999px;
-  background: #d1d5db;
-  transition: background 0.25s, width 0.25s;
-}
-
-.progress-step.done {
-  background: #10b981;
-}
-
-.progress-step.active {
-  background: #0f766e;
-  width: 36px;
-}
-
-.step-count {
-  color: #6b7280;
-  font-size: 15px;
-  margin: 0;
-}
-
-.pref-title {
-  font-size: clamp(32px, 5vw, 56px);
-  font-weight: 800;
-  margin: 0;
-  text-align: center;
-}
-
-.options-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  width: 100%;
-  max-width: 700px;
+.opts {
   overflow-y: auto;
   min-height: 0;
+  align-content: start;
 }
 
-.options-list.two-col {
+.opts.two-col {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  max-width: 900px;
-  overflow-y: auto;
-}
-
-.option-btn {
-  background: #FFE699;
-  border-radius: 16px;
-  width: 100%;
-  min-height: 7vh;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 24px;
-  cursor: pointer;
-  border: 3px solid transparent;
-  transition: border-color 0.2s, background 0.2s, transform 0.1s;
-  box-sizing: border-box;
-}
-
-.option-btn:hover {
-  transform: scale(1.02);
-  border-color: #0f766e;
-}
-
-.option-btn.selected {
-  background: #6ee7b7;
-  border-color: #0f766e;
-}
-
-.option-text {
-  font-family: Verdana, sans-serif;
-  font-size: clamp(16px, 1.8vw, 22px);
-  font-weight: 700;
-  color: #1f2937;
-}
-
-.option-check {
-  font-size: 20px;
-  font-weight: 900;
-  color: #1f2937;
-}
-
-.footer {
-  max-width: 1100px;
-  width: 100%;
-  margin: 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding-top: 16px;
-}
-
-.nav-btn {
-  border: none;
-  border-radius: 20px;
-  font-family: Verdana, sans-serif;
-  font-size: clamp(20px, 2vw, 28px);
-  font-weight: 700;
-  cursor: pointer;
-  height: 12vh;
-  min-width: 26vw;
-  transition: opacity 0.2s, transform 0.1s;
-}
-
-.nav-btn:hover {
-  transform: scale(1.02);
-}
-
-.nav-btn:active {
-  transform: scale(0.98);
-}
-
-.nav-btn:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-  transform: none;
-}
-
-.back-nav {
-  background: #d9d9d9;
-  color: #1f2937;
-}
-
-.continue-nav {
-  background: #FFE699;
-  color: #1f2937;
-}
-
-.confirm-nav {
-  background: linear-gradient(135deg, #0f766e, #2563eb);
-  color: #fff;
-}
-
-@media (max-width: 720px) {
-  .page {
-    padding: 16px;
-  }
-
-  .topbar,
-  .footer {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .user-block {
-    justify-content: center;
-    text-align: center;
-  }
-
-  .nav-btn {
-    min-width: unset;
-    width: 100%;
-    height: 10vh;
-  }
+  gap: 1vh 1.5vw;
 }
 </style>
