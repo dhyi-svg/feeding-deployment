@@ -12,8 +12,8 @@ TebLocalPlannerROS:
   max_samples: 500
   global_plan_overwrite_orientation: true
   allow_init_with_backwards_motion: true
-  max_global_plan_lookahead_dist: 2.0
-  global_plan_viapoint_sep: -1
+  max_global_plan_lookahead_dist: 1.0
+  global_plan_viapoint_sep: 0.3
   global_plan_prune_distance: 1.0
   exact_arc_length: false
   feasibility_check_no_poses: 4 # was 8
@@ -23,7 +23,7 @@ TebLocalPlannerROS:
   # Robot kinematics (must match your physical limits + diff-drive model)
   # =====================================================================
   max_vel_x: 0.2
-  max_vel_x_backwards: 0.15
+  max_vel_x_backwards: 0.18
   max_vel_y: 0.0
   max_vel_theta: 0.5
   acc_lim_x: 0.7
@@ -39,8 +39,8 @@ TebLocalPlannerROS:
   # =====================================================================
   # Goal tolerance
   # =====================================================================
-  xy_goal_tolerance: 0.03
-  yaw_goal_tolerance: 0.02
+  xy_goal_tolerance: 0.05
+  yaw_goal_tolerance: 0.05
   free_goal_vel: false
   complete_global_plan: true
 
@@ -49,7 +49,7 @@ TebLocalPlannerROS:
   # =====================================================================
   # Hard minimum distance from any obstacle to robot footprint edge.
   # 0.05 m means TEB will plan trajectories that come within 5 cm of walls.
-  min_obstacle_dist: 0.02
+  min_obstacle_dist: 0.01
 
   # Soft cushion. Inside this distance, obstacle cost rises smoothly.
   # Encourages staying centered in corridors.
@@ -88,7 +88,7 @@ TebLocalPlannerROS:
   weight_inflation: 0.2
   weight_dynamic_obstacle: 10.0
   weight_dynamic_obstacle_inflation: 0.2
-  weight_viapoint: 1.0
+  weight_viapoint: 5.0
   weight_adapt_factor: 2.0
 
   # =====================================================================
@@ -96,9 +96,9 @@ TebLocalPlannerROS:
   # Lets TEB consider multiple distinct routes (left/right around obstacle)
   # in parallel. Big win for cluttered/narrow environments.
   # =====================================================================
-  enable_homotopy_class_planning: true
+  enable_homotopy_class_planning: false
   enable_multithreading: true
-  max_number_classes: 4
+  max_number_classes: 2
   selection_cost_hysteresis: 1.0
   selection_prefer_initial_plan: 0.95
   selection_obst_cost_scale: 1.0

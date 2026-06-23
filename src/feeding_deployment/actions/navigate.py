@@ -44,6 +44,24 @@ class NavigateHLA(HighLevelAction):
     _MAP_FRAME = "map"
     _BASE_FRAME = "vention_base_link"
 
+    # Localization-stall watchdog. While driving autonomously, if the map->base
+    # transform stops updating (e.g. Cartographer/VIO drops out and move_base
+    # starts logging "Unable to get starting pose"), wait up to
+    # _LOCALIZATION_STALL_TIMEOUT_S for it to recover before giving up. The timer
+    # RESETS the instant localization is healthy again, so every dropout gets a
+    # fresh window -- this is per-incident, not a cumulative whole-leg budget.
+    _LOCALIZATION_STALL_TIMEOUT_S = 30.0   # stop if localization is gone this long
+    _LOCALIZATION_STALE_AFTER_S = 1.0      # map->base older than this == dropped
+
+    # Kitchen-egress staging. The kitchen is reached through a narrow corridor
+    # the robot cannot turn around in. The microwave->table leg (navigate_to_
+    # table) is therefore routed through an intermediate "open area" waypoint, so
+    # TEB drives it as "reverse out to the open area, then turn and go" instead
+    # of oscillating while trying to turn inside the corridor. The staging pose
+    # lives in nav_named_locations.yaml; until a real pose is captured there
+    # (placeholder: false) the via-waypoint is skipped and we go direct.
+    _STAGING_WAYPOINT = "kitchen_exit"
+
     # Defaults for the post-nav refinement window. Overridden at runtime by
     # config/nav/custom_param.yaml (section: refinement); see that file for the
     # meaning of each field. These are the fallbacks if the file is
@@ -108,14 +126,55 @@ class NavigateHLA(HighLevelAction):
             "qy": float(orientation["y"]),
             "qz": float(orientation["z"]),
             "qw": float(orientation["w"]),
+            "placeholder": bool(target.get("placeholder", False)),
         }
 
-    def _speed_to_timeout(self, speed: str) -> float:
-        return {
-            "low": 300.0,
-            "medium": 300.0,
-            "high": 180.0,
-        }.get(speed, 300.0)
+    def _get_tf_buffer(self) -> "tf2_ros.Buffer":
+        """Persistent TF buffer/listener, kept warm across navigation legs."""
+        if not getattr(self, "_tf_buffer", None):
+            self._tf_buffer = tf2_ros.Buffer(cache_time=rospy.Duration(10.0))
+            self._tf_listener = tf2_ros.TransformListener(self._tf_buffer)
+        return self._tf_buffer
+
+    def _localization_fresh(self) -> bool:
+        """True if map->base is still publishing recent transforms.
+
+        Looks up the latest available map->base transform. If the chain
+        (map->odom from Cartographer, odom->base from VIO) has stalled, the
+        newest common timestamp falls behind now() and we report it stale. A
+        failed lookup (no common transform at all) also counts as stale.
+        """
+        try:
+            tf = self._get_tf_buffer().lookup_transform(
+                self._MAP_FRAME, self._BASE_FRAME, rospy.Time(0)
+            )
+        except tf2_ros.TransformException:
+            return False
+        age_s = (rospy.Time.now() - tf.header.stamp).to_sec()
+        return age_s <= self._LOCALIZATION_STALE_AFTER_S
+
+    def _resolve_via(self, via: list) -> list:
+        """Keep only the intermediate staging waypoints that are actually usable.
+
+        A staging waypoint that is missing from nav_named_locations.yaml, or is
+        still a placeholder, is dropped (with a note) so navigation safely falls
+        back to driving direct to the destination.
+        """
+        usable = []
+        for name in via:
+            try:
+                pose = self._load_target_pose(name)
+            except (KeyError, FileNotFoundError):
+                print(f"[nav] staging waypoint '{name}' not defined; going direct.")
+                continue
+            if pose.get("placeholder", False):
+                print(
+                    f"[nav] staging waypoint '{name}' is a placeholder "
+                    f"(capture a real pose to enable it); going direct."
+                )
+                continue
+            usable.append(name)
+        return usable
 
     def _get_move_base_client(self):
         if not ROS_NAV_IMPORTED:
@@ -169,7 +228,9 @@ class NavigateHLA(HighLevelAction):
     def _on_teleop_resume(self, _msg: "Empty") -> None:
         self._teleop_active = False
 
-    def _navigate_to_target(self, location_name: str, speed: str) -> None:
+    def _navigate_to_target(
+        self, location_name: str, speed: str, via: list = None
+    ) -> None:
         # if self.robot_interface is None:
         #     print(f"[SIM] Would navigate to {location_name} (speed={speed}).")
         #     return
@@ -180,7 +241,31 @@ class NavigateHLA(HighLevelAction):
                 "Please run in a ROS environment with move_base installed."
             )
 
-        pose = self._load_target_pose(location_name)
+        self._ensure_teleop_subscribers()
+        self._get_move_base_client()
+        self._get_tf_buffer()  # warm the TF listener (used by the stall watchdog)
+
+        # Drive any (usable) intermediate staging waypoints first, then the
+        # destination. `via` is set only by the legs that need it -- e.g.
+        # navigate_to_table routes through the kitchen-exit staging pose.
+        waypoints = self._resolve_via(list(via or [])) + [location_name]
+        if len(waypoints) > 1:
+            print(f"[nav] routing {' -> '.join(waypoints)}")
+
+        for i, wp in enumerate(waypoints):
+            pose = self._load_target_pose(wp)
+            self._drive_to_pose(wp, pose)
+            if i == len(waypoints) - 1:
+                # Fine-tune the parking pose only at the final destination;
+                # intermediate staging poses just need to be reached coarsely.
+                self._refinement_window(pose)
+
+    def _drive_to_pose(self, location_name: str, pose: dict[str, Any]) -> None:
+        """Drive to one pose under the localization-stall watchdog.
+
+        Raises RuntimeError if move_base ends non-SUCCEEDED, or TimeoutError if
+        localization (map->base) stays lost longer than the watchdog window.
+        """
         client = self._get_move_base_client()
 
         goal = MoveBaseGoal()
@@ -194,24 +279,28 @@ class NavigateHLA(HighLevelAction):
         goal.target_pose.pose.orientation.z = pose["qz"]
         goal.target_pose.pose.orientation.w = pose["qw"]
 
-        timeout_s = self._speed_to_timeout(speed)
         print(
-            f"Navigating to {location_name} with timeout={timeout_s:.1f}s "
-            f"using {self._location_yaml()} ..."
+            f"Navigating to {location_name} using {self._location_yaml()} ...\n"
+            f"  Localization-stall watchdog: stop only if map->{self._BASE_FRAME} "
+            f"is lost for > {self._LOCALIZATION_STALL_TIMEOUT_S:.0f}s of autonomous "
+            f"driving (resets the moment localization recovers)."
         )
         client.send_goal(goal)
         # The base is now driving (via the shared_autonomy_manager). Enable the
-        # webapp's Robot Base Control button for the duration of this action so
-        # the user can take over mid-drive. The navigation page publishes
+        # webapp's Robot Base Control button for the duration of this leg so the
+        # user can take over mid-drive. The navigation page publishes
         # /shared_autonomy/takeover, which the manager honors; on /done it reports
         # SUCCEEDED (blind success), on /resume it replans from the current pose.
-        self._ensure_teleop_subscribers()
         self._teleop_active = False  # this leg starts under autonomy
         self._set_base_control_available(True)
-        # Only autonomous driving counts against the timeout: pause the budget
-        # while a human takeover is active so a long rescue can't time us out.
+        # Per-incident localization watchdog (replaces the old cumulative whole-
+        # leg timeout). move_base stays alive through a localization dropout and
+        # auto-resumes when TF returns, so we only give up if the dropout PERSISTS
+        # for the full window. The counter resets the instant localization is
+        # healthy again, and is paused entirely during a human takeover -- so an
+        # earlier struggle can never shorten a later incident's recovery window.
         poll_s = 0.2
-        budget_s = timeout_s
+        stall_s = 0.0
         try:
             while True:
                 if client.wait_for_result(rospy.Duration(poll_s)):
@@ -219,13 +308,16 @@ class NavigateHLA(HighLevelAction):
                 if rospy.is_shutdown():
                     client.cancel_goal()
                     raise RuntimeError("ROS shutdown during navigation")
-                if not self._teleop_active:
-                    budget_s -= poll_s
-                if budget_s <= 0.0:
+                if self._teleop_active or self._localization_fresh():
+                    stall_s = 0.0  # human driving, or localization healthy -> reset
+                    continue
+                stall_s += poll_s
+                if stall_s >= self._LOCALIZATION_STALL_TIMEOUT_S:
                     client.cancel_goal()
                     raise TimeoutError(
-                        f"Navigation to {location_name} timed out after "
-                        f"{timeout_s:.1f}s of autonomous driving"
+                        f"Navigation to {location_name} stopped: localization "
+                        f"(map->{self._BASE_FRAME}) lost for "
+                        f">{self._LOCALIZATION_STALL_TIMEOUT_S:.0f}s."
                     )
         finally:
             self._set_base_control_available(False)
@@ -235,9 +327,7 @@ class NavigateHLA(HighLevelAction):
             raise RuntimeError(
                 f"move_base failed for {location_name}. Action state code={state}"
             )
-
         print(f"Reached {location_name}.")
-        self._refinement_window(pose)
 
     @staticmethod
     def _yaw_from_quat(qx: float, qy: float, qz: float, qw: float) -> float:
@@ -348,6 +438,32 @@ class NavigateHLA(HighLevelAction):
         gy = pose["y"]
         goal_yaw = self._yaw_from_quat(pose["qx"], pose["qy"], pose["qz"], pose["qw"])
 
+        def _residual(prefix: str) -> None:
+            """Print the signed map-frame pose error (current - goal) in x, y, yaw."""
+            try:
+                tfm = tf_buffer.lookup_transform(
+                    self._MAP_FRAME, self._BASE_FRAME,
+                    rospy.Time(0), rospy.Duration(1.0),
+                )
+            except (
+                tf2_ros.LookupException,
+                tf2_ros.ConnectivityException,
+                tf2_ros.ExtrapolationException,
+                tf2_ros.TimeoutException,
+            ) as exc:
+                print(f"  {prefix}: TF lookup failed ({exc}).")
+                return
+            tt = tfm.transform.translation
+            qq = tfm.transform.rotation
+            yy = self._yaw_from_quat(qq.x, qq.y, qq.z, qq.w)
+            dx = tt.x - gx
+            dy = tt.y - gy
+            dyaw = self._wrap(yy - goal_yaw)
+            print(
+                f"  {prefix}: dx={dx * 100:+.1f}cm dy={dy * 100:+.1f}cm "
+                f"dyaw={math.degrees(dyaw):+.2f}deg (|xy|={math.hypot(dx, dy) * 100:.1f}cm)"
+            )
+
         rate = rospy.Rate(float(cfg["rate_hz"]))
         if actuate:
             rospy.sleep(0.2)  # let the cmd_vel publisher connect before commanding
@@ -361,6 +477,10 @@ class NavigateHLA(HighLevelAction):
             f"Refinement window: {mode} (target xy<{success_xy_m*100:.1f}cm "
             f"yaw<{math.degrees(success_yaw_rad):.2f}deg)..."
         )
+
+        # Residual pose error the moment move_base declared the goal reached,
+        # BEFORE any refinement driving.
+        _residual("Goal reached. Residual error vs goal")
 
         try:
             while not rospy.is_shutdown():
@@ -446,6 +566,11 @@ class NavigateHLA(HighLevelAction):
                     cmd_pub.publish(Twist())
                     rospy.sleep(0.02)
 
+        # Residual pose error AFTER the refinement window ended and the base has
+        # stopped, so the before/after pair shows whether refinement helped.
+        rospy.sleep(0.3)  # let the base settle before the final read
+        _residual("Refinement ended.  Residual error vs goal")
+
     def _set_base_control_available(self, available: bool) -> None:
         """Tell the webapp whether the Robot Base Control button should be enabled."""
         if self.web_interface is None:
@@ -502,4 +627,9 @@ class NavigateHLA(HighLevelAction):
         self._navigate_to_target("sink", speed)
 
     def navigate_to_table(self, speed: str) -> None:
-        self._navigate_to_target("table", speed)
+        # microwave -> table is the kitchen egress: reverse out through the narrow
+        # corridor to the open staging area, then turn and drive to the table.
+        # Routing via the staging waypoint stops TEB from oscillating as it tries
+        # to turn inside the corridor. (Auto-skipped while the staging pose is an
+        # unset placeholder.)
+        self._navigate_to_target("table", speed, via=[self._STAGING_WAYPOINT])
