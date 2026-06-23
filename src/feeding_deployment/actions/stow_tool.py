@@ -17,6 +17,8 @@ from feeding_deployment.actions.base import (
     tool_type,
     GripperFree,
     Holding,
+    table_type,
+    InFrontOf,
 )
 
 class StowToolHLA(HighLevelAction):
@@ -27,12 +29,16 @@ class StowToolHLA(HighLevelAction):
 
     def get_operator(self) -> LiftedOperator:
         tool = Variable("?tool", tool_type)
+        table = Variable("?table", table_type)
         return LiftedOperator(
             self.get_name(),
-            parameters=[tool],
-            preconditions={Holding([tool])},
+            parameters=[tool, table],
+            preconditions={
+                LiftedAtom(Holding, [tool]),
+                LiftedAtom(InFrontOf, [table])
+            },
             add_effects={LiftedAtom(GripperFree, [])},
-            delete_effects={Holding([tool])},
+            delete_effects={LiftedAtom(Holding, [tool])},
         )
     
     def get_behavior_tree_filename(
@@ -41,48 +47,32 @@ class StowToolHLA(HighLevelAction):
         params: dict[str, Any],
     ) -> str:
         del params  # not used right now
-        assert len(objects) == 1
+        assert len(objects) == 2
         tool = objects[0]
-        assert tool.name in ["utensil", "drink", "wipe", "plate"]
+        table = objects[1]
+        assert tool.name in ["utensil", "drink", "wipe"]
+        assert table.name == "table"
         return f"stow_{tool.name}.yaml"
 
     def stow_utensil(self, speed: str) -> None:
-        assert self.sim.held_object_name == "utensil"
+        # assert self.sim.held_object_name == "utensil"
 
-        # if self.robot_interface is not None:
-        #     self.robot_interface.set_speed(speed)
-        
-        # # self.move_to_joint_positions(self.sim.scene_description.before_transfer_pos)
-
-        # if self.sim.scene_description.scene_label == "vention":
-        #     self.move_to_joint_positions(self.sim.scene_description.utensil_outside_above_mount_pos)
-        #     self.move_to_ee_pose(self.sim.scene_description.utensil_outside_mount)
-        # elif self.sim.scene_description.scene_label == "wheelchair":
-        #     self.move_to_joint_positions(self.sim.scene_description.utensil_outside_mount_pos)
-
-        # self.move_to_ee_pose(self.sim.scene_description.utensil_inside_mount)
-        # self.ungrasp_tool("utensil")
-        # self.move_to_ee_pose(self.sim.scene_description.utensil_above_mount)
-        # self.move_to_joint_positions(self.sim.scene_description.retract_pos)
+        print("Stowing utensil ...")
 
         if self.robot_interface is not None:
             self.robot_interface.set_speed(speed)
-            
-        self.move_to_joint_positions(self.sim.scene_description.retract_pos)
+        
+        # self.move_to_joint_positions(self.sim.scene_description.before_transfer_pos)
 
         if self.sim.scene_description.scene_label == "vention":
-            self.move_to_joint_positions(self.sim.scene_description.wipe_neutral_pos)
-            self.move_to_joint_positions(self.sim.scene_description.wipe_outside_mount_pos)
+            self.move_to_joint_positions(self.sim.scene_description.utensil_outside_above_mount_pos)
+            self.move_to_ee_pose(self.sim.scene_description.utensil_outside_mount)
         elif self.sim.scene_description.scene_label == "wheelchair":
-            self.move_to_joint_positions(self.sim.scene_description.wipe_outside_above_mount_pos)
-            self.move_to_ee_pose(self.sim.scene_description.wipe_outside_mount)
-        self.move_to_ee_pose(self.sim.scene_description.wipe_inside_mount)
+            self.move_to_joint_positions(self.sim.scene_description.utensil_outside_mount_pos)
+
+        self.move_to_ee_pose(self.sim.scene_description.utensil_inside_mount)
         self.ungrasp_tool("utensil")
-        self.move_to_ee_pose(self.sim.scene_description.wipe_above_mount)
-
-        if self.sim.scene_description.scene_label == "vention":
-            self.move_to_ee_pose(self.sim.scene_description.wipe_infront_mount)
-
+        self.move_to_ee_pose(self.sim.scene_description.utensil_above_mount)
         self.move_to_joint_positions(self.sim.scene_description.retract_pos)
 
     def stow_drink(self, speed: str) -> None:

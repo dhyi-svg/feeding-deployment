@@ -1,5 +1,5 @@
 '''
-Runs a server-side (run on NUC) watchdog to ensure robot is not in a state of emergency stop (from the user / experimentor emergency stop button).
+Runs a server-side (run on NUC) watchdog to ensure robot is not in a state of emergency stop (from the experimentor emergency stop button).
 '''
 
 import rospy
@@ -22,7 +22,6 @@ from std_msgs.msg import Bool
 
 from feeding_deployment.control.robot_controller.arm_interface import ArmInterface, ArmManager, NUC_HOSTNAME, ARM_RPC_PORT, RPC_AUTHKEY
 
-USER_ESTOP_FREQUENCY_THRESHOLD = 50 # expected is 60 Hz
 EXPERIMENTOR_ESTOP_FREQUENCY_THRESHOLD = 50 # expected is 60 Hz
 
 BULLDOG_RUN_FREQUENCY = 1000
@@ -43,10 +42,6 @@ class BullDog:
         self._arm_interface = self.manager.ArmInterface()
 
         queue_size = 1000
-        self.user_emergency_stop_sub = rospy.Subscriber('/user_estop', Bool, self.userEmergencyStopCallback, queue_size = queue_size, buff_size = 65536*queue_size)
-        self.user_emergency_stop_timestamps = PeekableQueue()
-        self.user_emergency_stop_pressed = False
-
         self.experimentor_emergency_stop_sub = rospy.Subscriber('/experimentor_estop', Bool, self.experimentorEmergencyStopCallback, queue_size = queue_size, buff_size = 65536*queue_size)
         self.experimentor_emergency_stop_timestamps = PeekableQueue()
         self.experimentor_emergency_stop_pressed = False
@@ -93,12 +88,6 @@ class BullDog:
 
         sftp.close()
 
-    def userEmergencyStopCallback(self, msg):
-
-        self.user_emergency_stop_timestamps.put(time.time())
-        if msg.data:
-            self.user_emergency_stop_pressed = True
-
     def experimentorEmergencyStopCallback(self, msg):
 
         self.experimentor_emergency_stop_timestamps.put(time.time())
@@ -111,8 +100,7 @@ class BullDog:
         anomaly = AnomalyStatus.NO_ANOMALY
         start_time = time.time()
         frequencies = []
-        for _queue, _threshold, _anomaly in [(self.user_emergency_stop_timestamps, USER_ESTOP_FREQUENCY_THRESHOLD, AnomalyStatus.USER_ESTOP_FREQUENCY), 
-                                            (self.experimentor_emergency_stop_timestamps, EXPERIMENTOR_ESTOP_FREQUENCY_THRESHOLD, AnomalyStatus.EXPERIMENTOR_ESTOP_FREQUENCY)]:
+        for _queue, _threshold, _anomaly in [(self.experimentor_emergency_stop_timestamps, EXPERIMENTOR_ESTOP_FREQUENCY_THRESHOLD, AnomalyStatus.EXPERIMENTOR_ESTOP_FREQUENCY)]:
             while _queue.peek() < start_time - 1.0:
                 _queue.get()
             queue_size = _queue.qsize()
@@ -125,11 +113,11 @@ class BullDog:
 
         if self.second_counter == BULLDOG_RUN_FREQUENCY:
             print("Bulldog running at expected frequency.")
-            print(f"Frequencies: User EStop: {frequencies[0]}, Experimentor EStop: {frequencies[1]}")
+            if frequencies:
+                print(f"Frequencies: Experimentor EStop: {frequencies[0]}")
             self.second_counter = 0
 
-        for _unexpected, _anomaly in [(self.user_emergency_stop_pressed, AnomalyStatus.USER_ESTOP_PRESSED),
-                                    (self.experimentor_emergency_stop_pressed, AnomalyStatus.EXPERIMENTOR_ESTOP_PRESSED)]:
+        for _unexpected, _anomaly in [(self.experimentor_emergency_stop_pressed, AnomalyStatus.EXPERIMENTOR_ESTOP_PRESSED)]:
             if _unexpected:
                 print(f"Unexpected: {_anomaly}")
                 rospy.loginfo(f"Unexpected: {_anomaly}")

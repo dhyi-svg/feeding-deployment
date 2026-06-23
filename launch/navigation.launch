@@ -1,0 +1,50 @@
+<launch>
+  <!-- Make sure TF + /map + scans are already running:
+       - Cartographer (publishing map->odom)
+       - UKF/VSLAM (publishing odom->vention_base_link)
+       - lidar topics: /lidar_l/scan and /lidar_r/scan
+  -->
+
+  <!-- move_base -->
+  <!-- move_base -->
+  <node pkg="move_base" type="move_base" name="move_base" output="screen">
+    <!-- <param name="base_local_planner" value="dwa_local_planner/DWAPlannerROS"/> -->
+    <param name="base_local_planner" value="teb_local_planner/TebLocalPlannerROS"/>
+
+    <rosparam file="$(find feeding_deployment)/config/nav/costmap_common.yaml" command="load" ns="global_costmap"/>
+    <rosparam file="$(find feeding_deployment)/config/nav/costmap_common.yaml" command="load" ns="local_costmap"/>
+    <rosparam file="$(find feeding_deployment)/config/nav/global_costmap.yaml" command="load"/>
+    <rosparam file="$(find feeding_deployment)/config/nav/local_costmap.yaml" command="load"/>
+    <!-- <rosparam file="$(find feeding_deployment)/config/nav/dwa_local_planner.yaml" command="load"/> -->
+    <rosparam file="$(find feeding_deployment)/config/nav/teb_local_planner.yaml" command="load"/>
+
+    <param name="planner_patience" value="5.0"/>
+    <param name="controller_patience" value="5.0"/>
+
+    <!-- optional but often helpful for your exact symptom -->
+    <param name="planner_frequency" value="1.0"/>
+    <param name="controller_frequency" value="10.0"/>
+  </node>
+
+
+
+
+
+  <!-- cmd_vel bridge: /cmd_vel -> Basicmicro -->
+  <node pkg="feeding_deployment"
+        type="cmd_vel_bridge_basicmicro.py"
+        name="cmd_vel_bridge_basicmicro"
+        output="screen"
+        cwd="node">
+    
+    <!-- conservative defaults; tune these. linear_scale is kept low on purpose:
+         autonomous nav stays slow, which helps localization. -->
+    <param name="linear_scale" value="800.0"/>
+    <param name="angular_scale" value="600.0"/>
+    <param name="max_speed_units" value="2500"/>
+    <param name="cmd_timeout" value="0.3"/>
+    <!-- Ratio-preserving stiction floor (units); scales both wheels together so
+         slow commands still move without flattening arcs. 0 disables. -->
+    <param name="min_move_units" value="250"/>
+  </node>
+</launch>

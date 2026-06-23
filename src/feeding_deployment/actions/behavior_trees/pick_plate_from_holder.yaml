@@ -1,0 +1,12 @@
+name: "PickPlateFromHolder"
+description: "Pick up the plate from the holder."
+type: "Behavior"
+parameters:
+  - name: "Speed"
+    description: "Speed of the robot during picking up the plate."
+    space:
+      type: Enum
+      elements: ["low", "medium", "high"]
+    is_user_editable: True
+    value: "medium"
+fn: !hla pick_plate_from_holder

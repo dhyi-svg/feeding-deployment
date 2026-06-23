@@ -1,5 +1,9 @@
 """Soft E-stop with a button."""
 
+# Defer annotation evaluation so 3.9+/3.10+ hints (e.g. `tuple[bytes, int]`,
+# `npt.NDArray | None`) don't fail to import on Python 3.8 (ROS Noetic / NUC).
+from __future__ import annotations
+
 import time
 
 import numpy as np
@@ -23,13 +27,22 @@ class Button:
         "Note that until this is addressed, the e-stop button will not be working."
     )
 
-    def __init__(self, input_device_index) -> None:
+    def __init__(
+        self,
+        input_device_index,
+        max_threshold: int = 10000,
+        min_threshold: int = -10000,
+    ) -> None:
 
         self.start_time = time.time()
         self.prev_data_arr: npt.NDArray | None = None
         self.detection_time: float | None = None
-        self.max_threshold = 10000
-        self.min_threshold = -10000
+        # Detection thresholds depend on the audio adapter's gain. The lab's
+        # NUC hardware spikes to ~+/-10000 on a press (the defaults). Other
+        # adapters (e.g. a Mac USB dongle) are much quieter (~+/-200), so pass
+        # lower thresholds for those rather than editing these defaults.
+        self.max_threshold = max_threshold
+        self.min_threshold = min_threshold
 
         self.audio = pyaudio.PyAudio()
 
@@ -190,6 +203,10 @@ if __name__ == "__main__":
     # add argument parser
     parser = argparse.ArgumentParser()
     parser.add_argument("--id", type=int, help="The index of the input device")
+    parser.add_argument("--max_threshold", type=int, default=10000,
+                        help="Rising-edge detection threshold (lower for quiet adapters, e.g. 200 on a Mac dongle)")
+    parser.add_argument("--min_threshold", type=int, default=-10000,
+                        help="Falling-edge detection threshold (e.g. -200 on a Mac dongle)")
     args = parser.parse_args()
 
     # -1 is user emergency stop button
@@ -206,7 +223,7 @@ if __name__ == "__main__":
                 print(f"Device {i}: {device_info['name']}")
         raise ValueError("Please provide the input device index")
 
-    button = Button(args.id)
+    button = Button(args.id, max_threshold=args.max_threshold, min_threshold=args.min_threshold)
     while True:
         if button.check():
             print("E-stop pressed!")

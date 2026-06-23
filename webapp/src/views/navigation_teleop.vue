@@ -1,0 +1,287 @@
+<template>
+  <div class="navteleop">
+    <div class="tb">
+      <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
+      <div>
+        <div class="tb-n">{{ username }}</div>
+        <div class="tb-s">Base navigation — push to drive, Resume to let autonomy finish, Done when parked</div>
+      </div>
+      <button class="btn sm teal" style="margin-left:auto;height:6vh;padding:0 1.5vw" @click="resume()">Resume</button>
+      <button class="btn sm amber" style="height:6vh;padding:0 1.5vw" @click="finish()">Done</button>
+    </div>
+
+    <div class="banner" :class="{ bad: !connected }">{{ bannerText }}</div>
+
+    <div class="hla-banner" v-if="currentHla">
+      Robot is currently: <b>{{ skillLabel(currentHla) }}</b>
+    </div>
+
+    <div class="joystick-area">
+      <div
+        class="pad"
+        ref="pad"
+        @pointerdown="onDown"
+        @pointermove="onMove"
+        @pointerup="center"
+        @pointercancel="center"
+        @lostpointercapture="center"
+      >
+        <div class="axis ax-v"></div>
+        <div class="axis ax-h"></div>
+        <div class="knob" ref="knob" :class="{ dragging }">&#9209;</div>
+      </div>
+
+      <div class="readout">
+        <span>drive&nbsp; <b>{{ lin.toFixed(2) }}</b> m/s</span>
+        <span>turn&nbsp; <b>{{ ang.toFixed(2) }}</b> rad/s</span>
+      </div>
+      <div class="hint">push to drive · release to stop</div>
+    </div>
+  </div>
+</template>
+
+<script>
+import ROSLIB from 'roslib'
+import routeMap from '@/router/routeMap'
+import { ROS_URL, USER } from '@/config/parameterConfig'
+import { skillLabel } from '@/config/skillLabels'
+
+const MAX_LIN = 0.30   
+const MAX_ANG = 0.60   
+const SEND_HZ = 10     
+const R = 96           
+const KCENTER = 96     
+const DEADZONE = 0.05  
+
+export default {
+  name: 'NavigationTeleop',
+  data () {
+    return {
+      username: USER,
+      lin: 0,
+      ang: 0,
+      dragging: false,
+      connected: true,
+      activePid: null,
+      sendTimer: null,
+      ros: null,
+      cmdVelPub: null,
+      takeoverPub: null,
+      donePub: null,
+      resumePub: null,
+      listener: null,
+      skillPlanListener: null,
+
+      currentHla: null
+    }
+  },
+  computed: {
+    bannerText () {
+      return this.connected ? 'connected' : 'connection lost — base stopping'
+    }
+  },
+  mounted () {
+
+    if (this.$route.query.hla) {
+      this.currentHla = this.$route.query.hla
+    }
+    this.ros = new ROSLIB.Ros({ url: ROS_URL })
+    this.ros.on('connection', () => { this.connected = true })
+    this.ros.on('close', () => this.setLinkHealthy(false))
+    this.ros.on('error', () => this.setLinkHealthy(false))
+
+    this.cmdVelPub = new ROSLIB.Topic({ ros: this.ros, name: '/cmd_vel', messageType: 'geometry_msgs/Twist' })
+
+    this.takeoverPub = new ROSLIB.Topic({ ros: this.ros, name: '/shared_autonomy/takeover', messageType: 'std_msgs/Empty' })
+    this.donePub = new ROSLIB.Topic({ ros: this.ros, name: '/shared_autonomy/done', messageType: 'std_msgs/Empty' })
+    // Resume: hand back to autonomy, which replans from the current pose to the
+    // original goal (manager re-sends the goal). Distinct from done/blind-success.
+    this.resumePub = new ROSLIB.Topic({ ros: this.ros, name: '/shared_autonomy/resume', messageType: 'std_msgs/Empty' })
+
+    // Follow the executive's page jumps like every other page.
+    this.listener = new ROSLIB.Topic({ ros: this.ros, name: '/robot_to_webapp', messageType: 'std_msgs/String' })
+    this.listener.subscribe((msg) => this.handleRosMessage(msg))
+
+    this.skillPlanListener = new ROSLIB.Topic({ ros: this.ros, name: '/skill_plan', messageType: 'std_msgs/String' })
+    this.skillPlanListener.subscribe((msg) => this.handleSkillPlan(msg))
+
+    this.takeoverPub.publish(new ROSLIB.Message({}))
+
+    this.sendTimer = setInterval(() => this.sendVelocity(), 1000 / SEND_HZ)
+
+    window.addEventListener('blur', this.center)
+    document.addEventListener('visibilitychange', this.onVisibility)
+  },
+  beforeUnmount () {
+    this.teardown()
+  },
+  beforeRouteLeave (to, from, next) {
+    this.teardown()
+    next()
+  },
+  methods: {
+    onDown (e) {
+      this.activePid = e.pointerId
+      this.$refs.pad.setPointerCapture(this.activePid)
+      this.dragging = true
+      this.updateFromPoint(e.clientX, e.clientY)
+      e.preventDefault()
+    },
+    onMove (e) {
+      if (this.activePid === e.pointerId) {
+        this.updateFromPoint(e.clientX, e.clientY)
+        e.preventDefault()
+      }
+    },
+    setKnob (dx, dy) {
+      const knob = this.$refs.knob
+      if (!knob) return
+      knob.style.left = (KCENTER + dx) + 'px'
+      knob.style.top = (KCENTER + dy) + 'px'
+    },
+    updateFromPoint (cx, cy) {
+      const r = this.$refs.pad.getBoundingClientRect()
+      let dx = cx - (r.left + r.width / 2)
+      let dy = cy - (r.top + r.height / 2)
+      const d = Math.hypot(dx, dy)
+      if (d > R) { dx = dx / d * R; dy = dy / d * R }
+      this.setKnob(dx, dy)
+
+      let fy = -dy / R   
+      let fx = -dx / R   
+      if (Math.abs(fy) < DEADZONE) fy = 0
+      if (Math.abs(fx) < DEADZONE) fx = 0
+
+      this.lin = fy * MAX_LIN
+      this.ang = fx * MAX_ANG
+    },
+    center () {
+      this.activePid = null
+      this.dragging = false
+      this.setKnob(0, 0)
+      this.lin = 0
+      this.ang = 0
+    },
+    onVisibility () {
+      if (document.hidden) this.center()
+    },
+    sendVelocity () {
+      if (!this.cmdVelPub) return
+      this.cmdVelPub.publish(new ROSLIB.Message({
+        linear: { x: this.lin, y: 0, z: 0 },
+        angular: { x: 0, y: 0, z: this.ang }
+      }))
+    },
+    setLinkHealthy (ok) {
+      this.connected = ok
+      if (!ok) this.center()
+    },
+    handleRosMessage (msg) {
+      try {
+        const parsed = JSON.parse(msg.data)
+        if (parsed.state === 'navigation_teleop') return
+        const route = routeMap[parsed.state]?.[parsed.status]
+        if (route) this.$router.push(route)
+      } catch (e) {
+      }
+    },
+    handleSkillPlan (msg) {
+      try {
+        const parsed = JSON.parse(msg.data)
+        const plan = Array.isArray(parsed.plan) ? parsed.plan : []
+        const idx = parsed.current
+        this.currentHla = (typeof idx === 'number' && idx >= 0 && idx < plan.length) ? plan[idx] : null
+      } catch (e) {
+      }
+    },
+    skillLabel (name) {
+      return skillLabel(name)
+    },
+    finish () {
+      // Stop the base and tell the manager the human has parked the robot at the
+      // goal (blind success). The executive then continues to the NEXT skill in
+      // the plan, so return to the skill-plan (explanation) page -- NOT the task
+      // menu -- so the user sees what's next and the executive can page-jump on.
+      // Same destination as resume(); only the published intent differs.
+      this.center()
+      this.sendVelocity()
+      if (this.donePub) this.donePub.publish(new ROSLIB.Message({}))
+      this.$router.push('/robot_executing')
+    },
+    resume () {
+      // Stop driving, tell the manager to hand back to autonomy (it replans from
+      // the current pose to the original goal), and return to the skill-plan
+      // (explanation) page -- the same place manipulation teleop returns to.
+      // The takeover button is available there, so the user can take over again
+      // if the robot gets stuck again on the way to the goal.
+      this.center()
+      this.sendVelocity()
+      if (this.resumePub) this.resumePub.publish(new ROSLIB.Message({}))
+      this.$router.push('/robot_executing')
+    },
+    teardown () {
+      this.center()
+      if (this.cmdVelPub) this.sendVelocity()  
+      if (this.sendTimer) { clearInterval(this.sendTimer); this.sendTimer = null }
+      window.removeEventListener('blur', this.center)
+      document.removeEventListener('visibilitychange', this.onVisibility)
+      if (this.listener) { this.listener.unsubscribe(); this.listener = null }
+      if (this.skillPlanListener) { this.skillPlanListener.unsubscribe(); this.skillPlanListener = null }
+    }
+  }
+}
+</script>
+
+<style scoped>
+.navteleop {
+  width: 100%;
+  font-family: Verdana, sans-serif;
+  background: var(--g);
+  color: var(--t);
+  padding: 8px 3vw 10px;
+  box-sizing: border-box;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.banner {
+  text-align: center; font-size: 14px; padding: 8px; border-radius: 8px;
+  color: var(--a2); background: rgba(46, 196, 182, .12); margin: 8px 0;
+}
+.banner.bad { color: #e88; background: rgba(220, 60, 60, .12); }
+
+.hla-banner {
+  text-align: center; font-size: 15px; padding: 8px; border-radius: 8px;
+  color: var(--a2); background: rgba(46, 196, 182, .12); margin-bottom: 8px;
+}
+
+.joystick-area {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 24px;
+  flex: 1; min-height: 0;
+}
+
+.pad {
+  position: relative; width: 300px; height: 300px; border-radius: 50%;
+  background: var(--s2); border: 1px solid var(--s3); touch-action: none;
+}
+.axis { position: absolute; background: var(--s3); }
+.ax-v { width: 1px; height: 100%; left: 50%; }
+.ax-h { height: 1px; width: 100%; top: 50%; }
+
+.knob {
+  position: absolute; width: 108px; height: 108px; border-radius: 50%;
+  background: rgba(46, 196, 182, .15); border: 2px solid var(--a2);
+  left: 96px; top: 96px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--a2); font-size: 26px;
+  transition: left 0.08s ease-out, top 0.08s ease-out;
+}
+.knob.dragging { transition: none; }
+
+.readout { display: flex; gap: 32px; font-size: 16px; color: var(--tm); }
+.readout b { color: var(--t); font-weight: 700; }
+.hint { font-size: 13px; color: var(--tm); }
+</style>

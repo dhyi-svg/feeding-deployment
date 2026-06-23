@@ -1,0 +1,12 @@
+name: "NavigateToTable"
+description: "Navigate to the table."
+type: "Behavior"
+parameters:
+  - name: "Speed"
+    description: "Speed of the robot during navigation to the table."
+    space:
+      type: Enum
+      elements: ["low", "medium", "high"]
+    is_user_editable: True
+    value: "medium"
+fn: !hla navigate_to_table

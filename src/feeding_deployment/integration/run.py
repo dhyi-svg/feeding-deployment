@@ -42,6 +42,17 @@ from tomsutils.spaces import EnumSpace
 from pybullet_helpers.geometry import Pose
 
 from feeding_deployment.actions.base import (
+    object_type,
+    tool_type,
+    plate_type,
+    plate_location_type,
+    nav_target_type,
+    table_type,
+    sink_type,
+    appliance_type,
+    fridge_type,
+    microwave_type,
+    holder_type,
     GripperFree,
     Holding,
     IsUtensil,
@@ -50,14 +61,17 @@ from feeding_deployment.actions.base import (
     ToolTransferDone,
     EmulateTransferDone,
     ResetPos,
-    tool_type,
-    appliance_type,
-    nav_target_type,
+    HomePos,
     InFrontOf,
     DoorOpen,
     DoorClosed,
+    PlateAt,
+    FoodHeated,
+    SafeToNavigate,
+    TableSeen,
     GroundHighLevelAction,
     ResetHLA,
+    HomeHLA,
     pddl_plan_to_hla_plan,
     interpret_user_update_request,
     load_behavior_tree,
@@ -65,16 +79,30 @@ from feeding_deployment.actions.base import (
     NodeModificationUserUpdateRequest,
     NodeAdditionUserRequest,
     UserUpdateRequest,
-    ParameterizedActionBehaviorTreeNode
+    ParameterizedActionBehaviorTreeNode,
+    TeleopTakeoverException,
 )
 from feeding_deployment.actions.navigate import NavigateHLA
 from feeding_deployment.actions.open_door import OpenDoorHLA
 from feeding_deployment.actions.close_door import CloseDoorHLA
+from feeding_deployment.actions.pick_plate import (
+    PickPlateFromApplianceHLA,
+    PickPlateFromHolderHLA,
+    PickPlateFromTableHLA,
+)
+from feeding_deployment.actions.place_plate import (
+    PlacePlateOnHolderHLA,
+    PlacePlateInApplianceHLA,
+    PlacePlateOnTableHLA,
+    PlacePlateInSinkHLA,
+)
+from feeding_deployment.actions.press_microwave_button import PressMicrowaveButtonHLA
 from feeding_deployment.actions.pick_tool import PickToolHLA
 from feeding_deployment.actions.stow_tool import StowToolHLA
 from feeding_deployment.actions.transfer_tool import TransferToolHLA
 from feeding_deployment.actions.emulate_transfer import EmulateTransferHLA
 from feeding_deployment.actions.acquisition import AcquireBiteHLA
+from feeding_deployment.actions.gaze_at_table import GazeAtTableHLA
 from feeding_deployment.interfaces.perception_interface import PerceptionInterface
 from feeding_deployment.interfaces.web_interface import WebInterface
 from feeding_deployment.interfaces.rviz_interface import RVizInterface
@@ -87,13 +115,38 @@ from feeding_deployment.simulation.scene_description import (
 from feeding_deployment.simulation.simulator import (
     FeedingDeploymentPyBulletSimulator,
     FeedingDeploymentWorldState,
+    NullSimulator,
 )
 from feeding_deployment.actions.flair.flair import FLAIR
 from feeding_deployment.transparency.query_llm import TransparencyQuery
-
+from feeding_deployment.integration.preference_context import build_preference_context
+from feeding_deployment.preference_learning.methods.prediction_model import PredictionModel, PREF_OPTIONS
+from feeding_deployment.preference_learning.config.physical_capabilities import (
+    PHYSICAL_CAPABILITY_PROFILES,
+)
 
 # All the high level actions we want to consider.
-HLAS = {NavigateHLA, OpenDoorHLA, CloseDoorHLA, PickToolHLA, StowToolHLA, AcquireBiteHLA, TransferToolHLA, EmulateTransferHLA, ResetHLA}
+HLAS = {
+    NavigateHLA,
+    OpenDoorHLA,
+    CloseDoorHLA,
+    PickToolHLA,
+    StowToolHLA,
+    PickPlateFromApplianceHLA,
+    PickPlateFromHolderHLA,
+    PickPlateFromTableHLA,
+    PlacePlateOnHolderHLA,
+    PlacePlateInApplianceHLA,
+    PlacePlateOnTableHLA,
+    PlacePlateInSinkHLA,
+    PressMicrowaveButtonHLA,
+    AcquireBiteHLA,
+    TransferToolHLA,
+    EmulateTransferHLA,
+    ResetHLA,
+    HomeHLA,
+    GazeAtTableHLA,
+}
 
 assert os.environ.get("PYTHONHASHSEED") == "0", \
         "Please add `export PYTHONHASHSEED=0` to your bash profile!"
@@ -102,12 +155,21 @@ class _Runner:
     """A class for running the integrated system."""
 
     def __init__(self, scene_config: str, user: str, scenario:str, transfer_type: str, run_on_robot: bool, use_interface: bool, use_gui: bool, simulate_head_perception: bool, max_motion_planning_time: float,
-                 resume_from_state: str = "", no_waits: bool = False) -> None:
+                 resume_from_state: str = "", no_waits: bool = False,
+                 physical_profile_label: str | None = None,
+                 pref_day: int | None = None,
+                 pref_mode: str = "none") -> None:
         self.run_on_robot = run_on_robot
-        self.use_interface = use_interface  
+        self.use_interface = use_interface
         self.simulate_head_perception = simulate_head_perception
         self.max_motion_planning_time = max_motion_planning_time
         self.no_waits = no_waits
+        self.deployment_user = user
+        self.physical_profile_label = physical_profile_label.strip() if physical_profile_label else None
+        self._pref_day = pref_day
+        self._pref_mode = pref_mode
+        self._prediction_model: PredictionModel | None = None
+        self.predicted_bundle: dict[str, str] | None = None
 
         # logs are saved in user/scenario directory
         self.log_dir = Path(__file__).parent / "log" / user / scenario
@@ -154,12 +216,13 @@ class _Runner:
         if run_on_robot:
             self.robot_interface = ArmInterfaceClient()  # type: ignore  # pylint: disable=no-member
             self.wrist_interface = WristInterface()
+            self.robot_interface.set_speed("medium")
         else:
             self.robot_interface = None
             self.wrist_interface = None
 
         self.llm = OpenAILLM(
-            model_name="gpt-4.1-2025-04-14",
+            model_name="gpt-5.4",
             cache_dir=self.log_dir / "llm_cache",
         )
 
@@ -179,14 +242,18 @@ class _Runner:
         else:
             print("Running in simulation mode.")
 
-        self.flair = FLAIR(self.log_dir)
+        grounded_sam = self.perception_interface._grounded_sam if hasattr(self.perception_interface, '_grounded_sam') else None
+        self.flair = FLAIR(self.log_dir, grounded_sam=grounded_sam)
 
         if self.run_on_robot:
             self.rviz_interface = RVizInterface(self.scene_description)
         else:
             self.rviz_interface = None
 
-        self.sim = FeedingDeploymentPyBulletSimulator(self.scene_description, use_gui=use_gui, ignore_user=True)
+        if self.no_waits:
+            self.sim = NullSimulator(self.scene_description)
+        else:
+            self.sim = FeedingDeploymentPyBulletSimulator(self.scene_description, use_gui=use_gui, ignore_user=True)
 
         if self.use_interface:
             # Initialize the web interface.
@@ -194,6 +261,10 @@ class _Runner:
             self.web_interface = WebInterface(self.task_selection_queue, self.log_dir)
         else:
             self.web_interface = None
+
+        # Let a "Take Over" request best-effort abort the in-flight arm move.
+        if self.web_interface is not None and self.robot_interface is not None:
+            self.web_interface.register_takeover_stop(self.robot_interface.stop_action)
 
         # Create skills for high-level planning.
         hla_hyperparams = {"max_motion_planning_time": max_motion_planning_time}
@@ -215,24 +286,44 @@ class _Runner:
             IsUtensil,
             PlateInView,
             ResetPos,
+            HomePos,
             InFrontOf,
             DoorOpen,
             DoorClosed,
+            PlateAt,
+            FoodHeated,
+            SafeToNavigate,
+            TableSeen,
         }
-        self.types = {tool_type, nav_target_type, appliance_type}
+        self.types = {
+            object_type,
+            plate_type,
+            tool_type,
+            plate_location_type,
+            nav_target_type,
+            sink_type,
+            table_type,
+            appliance_type,
+            fridge_type,
+            microwave_type,
+            holder_type,
+        }
         self.domain = PDDLDomain(
             "AssistedFeeding", self.operators, self.predicates, self.types
         )
+
         self.drink = Object("drink", tool_type)
         self.wipe = Object("wipe", tool_type)
         self.utensil = Object("utensil", tool_type)
-        self.plate = Object("plate", tool_type)
+        self.plate = Object("plate", plate_type)
 
-        self.fridge = Object("fridge", appliance_type)
-        self.microwave = Object("microwave", appliance_type)
+        self.fridge = Object("fridge", fridge_type)
+        self.microwave = Object("microwave", microwave_type)
 
-        self.sink = Object("sink", nav_target_type)
-        self.feeding_table = Object("feeding_table", nav_target_type)
+        self.holder = Object("holder", holder_type)
+
+        self.sink = Object("sink", sink_type)
+        self.table = Object("table", table_type)
 
         self.all_objects = {
             self.drink,
@@ -242,7 +333,8 @@ class _Runner:
             self.fridge,
             self.microwave,
             self.sink,
-            self.feeding_table,
+            self.table,
+            self.holder,
         }
         self.object_name_to_object = {
             "drink": self.drink,
@@ -252,7 +344,8 @@ class _Runner:
             "fridge": self.fridge,
             "microwave": self.microwave,
             "sink": self.sink,
-            "feeding_table": self.feeding_table,
+            "table": self.table,
+            "holder": self.holder,
         }
         # Create all ground HLAs that will be used.
         self._all_ground_hlas = []
@@ -260,11 +353,47 @@ class _Runner:
             types = [p.type for p in hla.get_operator().parameters]
             for obj_combo in get_object_combinations(sorted(self.all_objects), types):
                 # Major hack. The proper way to do this would be to define subtypes
-                # but I am too scared to make any change like that at this point.
                 if "AcquireBite" in hla_name:
-                    assert len(obj_combo) == 1
-                    if obj_combo[0].name != "utensil":
+                    assert len(obj_combo) == 2
+                    if obj_combo[0].name != "utensil" or obj_combo[1].name != "table":
+                        # print(f"Skipping invalid HLA grounding: {hla_name} with object {obj_combo[0].name}")
                         continue
+                if hla_name == "Navigate":
+                    assert len(obj_combo) == 2
+                    if obj_combo[0] == obj_combo[1]:
+                        # print(f"Skipping invalid HLA grounding: {hla_name} with identical nav targets {obj_combo[0].name}")
+                        continue
+                if hla_name == "PressMicrowaveButton":
+                    assert len(obj_combo) == 1
+                    if obj_combo[0].name != "microwave":
+                        # print(f"Skipping invalid HLA grounding: {hla_name} with object {obj_combo[0].name}")
+                        continue
+                if hla_name == "PickPlateFromTable" or hla_name == "PlacePlateOnTable":
+                    assert len(obj_combo) == 2
+                    if obj_combo[0].name != "plate" or obj_combo[1].name != "table":
+                        # print(f"Skipping invalid HLA grounding: {hla_name} with objects {obj_combo[0].name}, {obj_combo[1].name}")
+                        continue
+                if hla_name == "PickPlateFromHolder" or hla_name == "PlacePlateOnHolder":
+                    assert len(obj_combo) == 2
+                    if obj_combo[0].name != "plate" or obj_combo[1].name != "holder":
+                        # print(f"Skipping invalid HLA grounding: {hla_name} with objects {obj_combo[0].name}, {obj_combo[1].name}")
+                        continue
+                if hla_name == "PlacePlateInSinkHLA":
+                    assert len(obj_combo) == 2
+                    if obj_combo[0].name != "plate" or obj_combo[1].name != "sink":
+                        # print(f"Skipping invalid HLA grounding: {hla_name} with objects {obj_combo[0].name}, {obj_combo[1].name}")
+                        continue
+                if hla_name in {"PlacePlateInAppliance", "PickPlateFromAppliance"}:
+                    assert len(obj_combo) == 2
+                    if obj_combo[0].name != "plate" or obj_combo[1].name not in {"fridge", "microwave"}:
+                        # print(f"Skipping invalid HLA grounding: {hla_name} with objects {obj_combo[0].name}, {obj_combo[1].name}")
+                        continue
+                if hla_name in {"PickTool", "StowTool", "TransferTool"}:
+                    assert len(obj_combo) == 2
+                    if obj_combo[0].name == "plate" or obj_combo[1].name != "table":
+                        # print(f"Skipping invalid HLA grounding: {hla_name} with object {obj_combo[0].name}")
+                        continue
+                # print(f"Adding ground HLA: {hla_name} with objects {[obj.name for obj in obj_combo]}")
                 ground_hla = (hla, obj_combo)
                 self._all_ground_hlas.append(ground_hla)
         # Rewrite the behavior trees to avoid any inconsistencies.
@@ -281,14 +410,17 @@ class _Runner:
 
         # Track the current high-level state.
         self.current_atoms = {
-            LiftedAtom(GripperFree, []),
-            ToolPrepared([self.wipe]),
-            ToolPrepared([self.drink]),
-            ToolPrepared([self.plate]),
-            IsUtensil([self.utensil]),
-            DoorClosed([self.fridge]),
-            DoorClosed([self.microwave]),
-            InFrontOf([self.feeding_table])
+            GroundAtom(GripperFree, []),
+            GroundAtom(ToolPrepared, [self.wipe]),
+            GroundAtom(ToolPrepared, [self.drink]),
+            GroundAtom(IsUtensil, [self.utensil]),
+            GroundAtom(DoorClosed, [self.fridge]),
+            GroundAtom(DoorClosed, [self.microwave]),
+            GroundAtom(InFrontOf, [self.microwave]),
+            GroundAtom(PlateAt, [self.holder]),
+            # GroundAtom(Holding, [self.plate]),
+            GroundAtom(SafeToNavigate, []),
+            # GroundAtom(FoodHeated, []),
         }
 
         self.transparency_query = TransparencyQuery(self.log_dir)
@@ -307,14 +439,143 @@ class _Runner:
 
         print("Runner is ready.")
         self.active = True
+        self.preference_context: dict[str, str] | None = None
+
+    def ensure_preference_context(self) -> dict[str, str]:
+        """Require a valid preference context before the web session; no implicit defaults."""
+        if self.preference_context is None:
+            raise RuntimeError(
+                "preference_context is required but unset. Each run must set it explicitly "
+                "(e.g. non-empty --pref_meal with --use_interface, or call "
+                "set_meal_preference_context(meal, setting, time_of_day) before run()). "
+                "Context is not loaded from or saved to disk; after a crash, supply it again."
+            )
+        return self.preference_context
+
+    def set_meal_preference_context(
+        self,
+        meal: str,
+        setting: str,
+        time_of_day: str,
+    ) -> dict[str, str]:
+        """Validated observable context for this run (meal / setting / time); in-memory only."""
+        self.preference_context = build_preference_context(
+            meal=meal,
+            setting=setting,
+            time_of_day=time_of_day,
+        )
+        return self.preference_context
 
     def run(self, continuous = True) -> None:
 
         assert self.web_interface is not None, "Run takes user commands from the web interface which is None."
-        
-        self.web_interface.ready_for_task_selection()
+
+        if self._pref_mode == "none":
+            self.web_interface.ready_for_task_selection()
+        else:
+            # --- Step 1: Collect context ---
+            if self._pref_mode == "terminal":
+                from feeding_deployment.integration.terminal_preferences import (
+                    terminal_collect_context,
+                    terminal_correct_preferences,
+                )
+                ctx_dict = terminal_collect_context()
+                self.set_meal_preference_context(
+                    meal=ctx_dict["meal"],
+                    setting=ctx_dict["setting"],
+                    time_of_day=ctx_dict["time_of_day"],
+                )
+
+            ctx = self.ensure_preference_context()
+            print("Preference context (meal / setting / time_of_day):", ctx)
+            # --- Step 2: Predict ---
+            assert self.physical_profile_label is not None, (
+                "physical_profile_label is required for preference prediction "
+                "(pass --physical_profile_file)."
+            )
+            pref_logs = self.log_dir / "preference_learning"
+            self._prediction_model = PredictionModel(
+                user=self.deployment_user,
+                physical_profile_label="deployment_physical_profile",
+                logs_dir=pref_logs,
+                physical_profile_description=self.physical_profile_label,
+            )
+            self.predicted_bundle = self._prediction_model.predict_bundle(dict(ctx), {})
+            print("Predicted preference bundle (initial):", json.dumps(self.predicted_bundle, indent=2))
+
+            # --- Step 3: Correct ---
+            if self._pref_mode == "terminal":
+                user_bundle = terminal_correct_preferences(
+                    self.predicted_bundle, dict(PREF_OPTIONS),
+                )
+            else:
+                user_bundle = self.web_interface.get_preference_corrections(
+                    self.predicted_bundle, dict(PREF_OPTIONS),
+                )
+            self.ground_truth_bundle = user_bundle
+            self.corrected = {
+                k: v for k, v in user_bundle.items()
+                if v != self.predicted_bundle.get(k)
+            }
+            print("Ground truth bundle:", json.dumps(self.ground_truth_bundle, indent=2))
+            print("Corrected fields:", json.dumps(self.corrected, indent=2))
+
+            # --- Step 4: Apply ---
+            from feeding_deployment.integration.apply_preferences import (
+                apply_bundle_to_behavior_trees,
+                apply_transfer_mode,
+                apply_microwave_preference,
+                apply_dip_preference,
+                apply_occlusion_preference,
+            )
+            bt_warnings = apply_bundle_to_behavior_trees(
+                self.ground_truth_bundle, self.run_behavior_tree_dir,
+            )
+            for w in bt_warnings:
+                print(f"[preference-apply] WARNING: {w}")
+            apply_transfer_mode(
+                self.ground_truth_bundle,
+                self.sim.scene_description,
+                self.hla_name_to_hla,
+            )
+            microwave_duration = apply_microwave_preference(
+                self.ground_truth_bundle,
+                self.current_atoms,
+                GroundAtom(FoodHeated, []),
+            )
+            if microwave_duration is None:
+                print("Microwave preference: no microwave (FoodHeated added to planner state).")
+            else:
+                print(f"Microwave preference: {microwave_duration}s (planner will include microwave steps).")
+            apply_dip_preference(self.ground_truth_bundle, self.flair)
+            apply_occlusion_preference(self.ground_truth_bundle, self.flair)
+            print("Applied ground-truth bundle to behavior trees and scene config.")
+
+            # --- Step 5: Learn ---
+            day = self._prediction_model.next_day() if self._pref_day is None else self._pref_day
+            print(f"[learn] Updating memory models (day {day}) ...")
+            self._prediction_model.update(
+                day=day,
+                context=dict(ctx),
+                corrected=self.corrected,
+                ground_truth_bundle=self.ground_truth_bundle,
+            )
+            print(f"[learn] Memory update complete (day {day}).")
+
+            self.web_interface.ready_for_task_selection()
         last_task_type = None
         while self.active:
+            # Take-Over pressed while idle (no skill running): launch teleop here,
+            # then return to task selection. (Mid-skill takeovers are handled in
+            # execute_robot_command, not here.)
+            if self.web_interface is not None and self.web_interface.consume_takeover():
+                print("User-initiated takeover while idle; launching teleop ...")
+                try:
+                    self.hla_name_to_hla["Reset"].run_manual_teleop_recovery(failure_context="user_initiated_idle")
+                except Exception as e:
+                    print(f"Manual teleop recovery error: {e}")
+                self.web_interface.ready_for_task_selection()
+                continue
             if not continuous:
                 resp = input("Press 'y' to continue RUNNER, 'n' to stop: ")
                 while resp not in ["y", "n"]:
@@ -328,13 +589,16 @@ class _Runner:
                 if task == "reset":
                     self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["Reset"], ()))
                     last_task_type = None
+                elif task == "finish_feeding":
+                    self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["PlacePlateInSink"], (self.plate, self.sink)))
+                    last_task_type = None
                 elif task == "meal_assistance":
                     if task_type == "bite":
-                        self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["TransferTool"], (self.utensil,)))
+                        self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["TransferTool"], (self.utensil,self.table)))
                     elif task_type == "sip":
-                        self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["TransferTool"], (self.drink,)))
+                        self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["TransferTool"], (self.drink,self.table)))
                     elif task_type == "wipe":
-                        self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["TransferTool"], (self.wipe,)))
+                        self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["TransferTool"], (self.wipe,self.table)))
                     last_task_type = task_type
                 elif task == "personalization":
                     if task_type == "transparency":
@@ -376,6 +640,16 @@ class _Runner:
                         else: # test
                             self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["EmulateTransfer"], (), {"test_mode": True} ))
                     last_task_type = task_type
+                elif task == "teleop":
+                    # User-initiated manual teleop recovery (between-tasks).
+                    # Blocks until the user taps Done on the teleop screen.
+                    print("Launching user-initiated manual teleop recovery ...")
+                    try:
+                        self.hla_name_to_hla["Reset"].run_manual_teleop_recovery(failure_context="user_initiated")
+                    except Exception as e:
+                        # Never let a teleop hiccup crash the executive loop.
+                        print(f"Manual teleop recovery error: {e}")
+                    last_task_type = None
                 else:
                     print(f"Invalid task selection: {task_selection_command}")
                     last_task_type = None
@@ -425,13 +699,13 @@ class _Runner:
                 goal_atoms,
             )
 
-            print("Current atoms:", sorted(self.current_atoms))
-            print("Goal atoms:", sorted(goal_atoms))
-            print("Operators:", [op.name for op in self.operators])
-            print("DOMAIN:")
-            print(str(self.domain))
-            print("PROBLEM:")
-            print(str(problem))
+            # print("Current atoms:", sorted(self.current_atoms))
+            # print("Goal atoms:", sorted(goal_atoms))
+            # print("Operators:", [op.name for op in self.operators])
+            # print("DOMAIN:")
+            # print(str(self.domain))
+            # print("PROBLEM:")
+            # print(str(problem))
 
             plan_strs = run_pddl_planner(
                 str(self.domain), str(problem), planner="fd-opt",
@@ -447,15 +721,47 @@ class _Runner:
         if isinstance(user_command, GroundHighLevelAction):
             plan_hlas.append(user_command)
 
-        for ground_hla in plan_hlas:
+        # Build the ordered list of skill names (snake_case behavior-tree names,
+        # e.g. "acquire_bite") so the web interface can show last/current/next.
+        skill_plan_names = []
+        for gh in plan_hlas:
+            try:
+                skill_plan_names.append(
+                    gh.hla.get_behavior_tree_filename(gh.objects, gh.params).removesuffix(".yaml")
+                )
+            except Exception:
+                skill_plan_names.append(gh.hla.get_name())
+
+        for i, ground_hla in enumerate(plan_hlas):
             print(f"Refining {ground_hla}")
+            # Tell the web interface which skill is now executing.
+            if self.web_interface is not None:
+                self.web_interface.publish_skill_plan(skill_plan_names, i)
             operator = ground_hla.get_operator()
 
             # import ipdb; ipdb.set_trace()
             assert operator.preconditions.issubset(self.current_atoms)
 
-            # Execute the high-level plan in simulation
-            ground_hla.execute_action()
+            # Execute the high-level plan in simulation. On a mid-skill takeover
+            # the user chooses, via the teleop Done button, whether to redo this
+            # skill (re-run it) or continue to the next (treat it as done, so we
+            # fall through and apply its effects below).
+            while True:
+                try:
+                    ground_hla.execute_action()
+                    break
+                except TeleopTakeoverException as e:
+                    if e.redo_current:
+                        print(f"User chose to redo {ground_hla} after teleop; re-running the skill.")
+                        continue
+                    print(f"User chose to continue past {ground_hla} after teleop; treating it as done.")
+                    break
+                except RuntimeError as e:
+                    print(f"HLA execution failed: {e}")
+                    print(f"Aborting task and returning to task selection page.")
+                    if self.web_interface is not None:
+                        self.web_interface.ready_for_task_selection()
+                    return
 
             sim_state = self.sim.get_current_state()
 
@@ -463,17 +769,16 @@ class _Runner:
             self.current_atoms -= operator.delete_effects
             self.current_atoms |= operator.add_effects
 
-            if ground_hla.hla.get_name() == "Navigate":
-                known_nav_targets = {self.fridge, self.microwave, self.sink, self.feeding_table}
-                target = ground_hla.objects[0]
-                for obj in known_nav_targets:
-                    if obj != target:
-                        self.current_atoms.discard(InFrontOf([obj]))
+            # if ground_hla.hla.get_name() == "Navigate":
+            #     known_nav_targets = {self.fridge, self.microwave, self.sink, self.table}
+            #     target = ground_hla.objects[0]
+            #     for obj in known_nav_targets:
+            #         if obj != target:
+            #             self.current_atoms.discard(InFrontOf([obj]))
 
-            # Super hack: the drink, wipe and plate are always prepared.
+            # Super hack: the drink and wipe are always prepared.
             self.current_atoms.add(ToolPrepared([self.wipe]))
             self.current_atoms.add(ToolPrepared([self.drink]))
-            self.current_atoms.add(ToolPrepared([self.plate]))
 
             # Save the latest state in case we want to resume execution
             # after a crash.
@@ -687,6 +992,39 @@ if __name__ == "__main__":
     parser.add_argument("--meal_id", type=int, default=1)
     parser.add_argument("--results_dir", type=Path, default=Path("feast_default_user"), help="Directory for saving and loading results and user responses. Make one of these directories per user.")
     parser.add_argument("--load", action="store_true")
+    parser.add_argument(
+        "--pref_mode",
+        type=str,
+        choices=["none", "terminal", "interface"],
+        default="none",
+        help="Preference interaction mode. "
+             "'none': no personalization (default). "
+             "'terminal': predict + correct via terminal prompts. "
+             "'interface': predict + correct via web interface (requires frontend).",
+    )
+    parser.add_argument(
+        "--pref_meal",
+        type=str,
+        default="",
+        help="Meal label (preference_learning.config.MEALS). "
+             "Required with --pref_mode=interface. With --pref_mode=terminal, "
+             "context is collected interactively and this flag is ignored.",
+    )
+    parser.add_argument(
+        "--physical_profile_file",
+        type=str,
+        default="",
+        help="UTF-8 text file describing the user's physical capabilities. "
+             "Required with --pref_mode=terminal or --pref_mode=interface.",
+    )
+    parser.add_argument("--pref_setting", type=str, default="Personal", help="Dining setting (must match preference_learning.config.SETTINGS).")
+    parser.add_argument(
+        "--pref_time_of_day", type=str, default="morning", help="Time of day (must match preference_learning.config.TIMES_OF_DAY).")
+    parser.add_argument(
+        "--pref_day", type=int, default=None,
+        help="Override the deployment day number for preference learning. "
+             "If omitted, auto-detected from existing log files (next unused day).",
+    )
     args = parser.parse_args()
 
     if args.user == "":
@@ -698,23 +1036,87 @@ if __name__ == "__main__":
         else:
             rospy.init_node("feeding_deployment", anonymous=True)
 
+    physical_profile_label: str | None = None
+    if args.pref_mode in ("terminal", "interface"):
+        if not args.physical_profile_file.strip():
+            raise ValueError(
+                f"With --pref_mode={args.pref_mode}, pass --physical_profile_file "
+                "pointing to a UTF-8 .txt file with freeform physical-capability text."
+            )
+        profile_path = Path(args.physical_profile_file.strip())
+        if not profile_path.is_file():
+            raise ValueError(f"physical profile file not found: {profile_path}")
+        physical_profile_label = profile_path.read_text(encoding="utf-8").strip()
+        if not physical_profile_label:
+            raise ValueError(f"physical profile file is empty: {profile_path}")
+
     runner = _Runner(args.scene_config,
                      args.user,
                      args.scenario,
                      args.transfer_type,
-                     args.run_on_robot, 
+                     args.run_on_robot,
                      args.use_interface,
                      args.use_gui,
                      args.simulate_head_perception,
                      args.max_motion_planning_time,
                      args.resume_from_state,
-                     args.no_waits)
-    
+                     args.no_waits,
+                     physical_profile_label=physical_profile_label,
+                     pref_day=args.pref_day,
+                     pref_mode=args.pref_mode)
+
+    if args.pref_mode == "interface":
+        if not args.pref_meal.strip():
+            raise ValueError(
+                "With --pref_mode=interface, pass a non-empty --pref_meal every run "
+                "(exact MEALS label), with --pref_setting and --pref_time_of_day "
+                "matching config vocabularies. "
+                "Preference context is not stored on disk; after a crash, pass them again."
+            )
+        runner.set_meal_preference_context(
+            meal=args.pref_meal.strip(),
+            setting=args.pref_setting,
+            time_of_day=args.pref_time_of_day,
+        )
+        print("Meal preference context (this run only):", runner.preference_context)
+
     # Handle Ctrl+C gracefully
     signal.signal(signal.SIGINT, runner.signal_handler)
 
+    # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateInSink"], (runner.plate, runner.sink)))
+    # for i in range(5):
+    #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateOnTable"], (runner.plate, runner.table)))
+    #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateOnHolder"], (runner.plate, runner.holder)))
+
+    # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromAppliance"], (runner.plate, runner.fridge)))
+    # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.fridge,)))
+    # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["CloseDoor"], (runner.fridge,)))
+
     if not args.use_interface:
-        runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.fridge,)))
+        # for i in range(3):
+        #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromHolder"], (runner.plate, runner.holder)))
+            # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateOnHolder"], (runner.plate, runner.holder)))
+        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.microwave,)))
+        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromAppliance"], (runner.plate, runner.fridge)))
+        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateInAppliance"], (runner.plate, runner.microwave)))
+        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["CloseDoor"], (runner.fridge,)))
+        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickPlateFromAppliance"], (runner.plate, runner.microwave)))
+        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.fridge,)))
+        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["TransferTool"], (runner.utensil,runner.table)))
+        
+        for i in range(3):
+            input("Press Enter to execute open and close the microwave door ...")
+            runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["OpenDoor"], (runner.microwave,)))
+            runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["CloseDoor"], (runner.microwave,)))
+        # for i in range(10):
+        #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["Reset"], ()))
+        #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["Home"], ()))
+        #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PickTool"], (runner.utensil,runner.table)))
+        #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["StowTool"], (runner.utensil,runner.table)))
+        # runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateInSink"], (runner.plate, runner.sink)))
+        # for i in range(3):
+        #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateOnTable"], (runner.plate, runner.table)))
+        #     runner.process_user_command(GroundHighLevelAction(runner.hla_name_to_hla["PlacePlateOnHolder"], (runner.plate, runner.holder)))
     else:
         runner.run()
 

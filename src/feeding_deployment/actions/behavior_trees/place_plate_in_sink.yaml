@@ -1,0 +1,12 @@
+name: "PlacePlateInSink"
+description: "Place the plate in the sink."
+type: "Behavior"
+parameters:
+  - name: "Speed"
+    description: "Speed of the robot during placing the plate."
+    space:
+      type: Enum
+      elements: ["low", "medium", "high"]
+    is_user_editable: True
+    value: "medium"
+fn: !hla place_plate_in_sink

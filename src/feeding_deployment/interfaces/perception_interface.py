@@ -1,10 +1,13 @@
 """An interface for perception (robot joints, human head poses, etc.)."""
 
+import os
+import inspect
 import threading
 import time
 from pathlib import Path
+import cv2
 import numpy as np
-from pybullet_helpers.geometry import Pose
+from pybullet_helpers.geometry import Pose, Pose3D
 from pybullet_helpers.joint import JointPositions
 from scipy.spatial.transform import Rotation as R
 import json
@@ -23,9 +26,12 @@ try:
     from geometry_msgs.msg import WrenchStamped, Point, Pose as PoseMsg
     from netft_rdt_driver.srv import String_cmd
 
+    from feeding_deployment.interfaces.realsense_interface import RealSenseInterface
+    from feeding_deployment.perception.grounded_sam import GroundedSAM
     from feeding_deployment.perception.head_perception.ros_wrapper import HeadPerceptionROSWrapper
     from feeding_deployment.perception.drink_perception.drink_perception import DrinkPerception
-    from feeding_deployment.perception.handle_perception.handle_perception import HandlePerception
+    from feeding_deployment.perception.appliance_perception.appliance_perception import AppliancePerception
+    from feeding_deployment.perception.attachment_perception.attachment_perception import AttachmentPerception
 except ModuleNotFoundError:
     ROSPY_IMPORTED = False
 
@@ -45,23 +51,36 @@ class PerceptionInterface:
             self.simulation = True
             self._head_perception = None
             self._drink_perception = None
-            self._handle_perception = None
+            self._appliance_perception = None
+            self._attachment_perception = None
+            self._realsense = None
+            self._grounded_sam = None
         else:
             self.simulation = False
             self.tfBuffer = tf2_ros.Buffer()
             self.listener = tf2_ros.TransformListener(self.tfBuffer)
 
-            self._head_perception = HeadPerceptionROSWrapper(record_goal_pose)
-            
-            # warm start head perception only if we're not recording the goal pose
-            if not record_goal_pose:
-                self._head_perception.set_tool("fork")
-                for _ in range(10):
-                    self._head_perception.run_head_perception()
+            print("Initializing RealSense interface ...")
+            self._realsense = RealSenseInterface(record_goal_pose=record_goal_pose)
+            print("RealSense interface initialized")
 
-            # Rajat ToDo: pass perception queues to all perception classes instead of having them use ros subscribers which spawn threads
+            print("Initializing shared GroundedSAM ...")
+            self._grounded_sam = GroundedSAM()
+            print("GroundedSAM initialized")
+
+            print("Initializing head perception ROS wrapper ...")
+            self._head_perception = HeadPerceptionROSWrapper(record_goal_pose)
+            print("Head perception ROS wrapper initialized")
+
+            print("Initializing drink perception ...")
             self._drink_perception = DrinkPerception()
-            self._handle_perception = HandlePerception()
+            print("Initializing handle perception ...")
+            self._appliance_perception = AppliancePerception(self._grounded_sam, log_dir=self.log_dir)
+            print("Initializing attachment perception ...")
+            self._attachment_perception = AttachmentPerception()
+            print("Perception interface initialized")
+
+            self._head_perception_warm_started = False
 
             self.speak_pub = rospy.Publisher('/speak', String, queue_size=1)
 
@@ -214,16 +233,47 @@ class PerceptionInterface:
             step_time = t_now - t_init
             if step_time >= 0.02:  # 50 Hz
                 if self._head_perception is not None and not self._simulate_head_perception:
-                    head_perception_data = self._head_perception.run_head_perception()
-                    # print("Head pose: ", head_perception_data["head_pose"])
+                    cam_data = self._realsense.get_camera_data()
+                    rgb_image = cam_data["rgb_image"]
+                    camera_info = cam_data["camera_info"]
+                    depth_image = cam_data["depth_image"]
+
+                    if rgb_image is not None and camera_info is not None and depth_image is not None:
+                        transform = self._head_perception.get_base_to_camera_transform(camera_info)
+                        if transform is not None:
+                            base_to_camera = np.zeros((4, 4))
+                            base_to_camera[:3, :3] = R.from_quat([
+                                transform.transform.rotation.x,
+                                transform.transform.rotation.y,
+                                transform.transform.rotation.z,
+                                transform.transform.rotation.w,
+                            ]).as_matrix()
+                            base_to_camera[:3, 3] = np.array([
+                                transform.transform.translation.x,
+                                transform.transform.translation.y,
+                                transform.transform.translation.z,
+                            ]).reshape(1, 3)
+                            base_to_camera[3, 3] = 1
+
+                            if not self._head_perception_warm_started:
+                                print("Warming up head perception ...")
+                                self._head_perception.set_tool(self.tool if hasattr(self, 'tool') else "fork")
+                                for _ in range(10):
+                                    self._head_perception.run_head_perception(rgb_image, camera_info, depth_image, base_to_camera, visualize=False)
+                                self._head_perception_warm_started = True
+
+                            head_perception_data = self._head_perception.run_head_perception(rgb_image, camera_info, depth_image, base_to_camera)
+                        else:
+                            head_perception_data = None
+                    else:
+                        head_perception_data = None
                 else:
                     try:
-                        # read from logged data
                         with open(self.log_dir / f'head_perception_data_{self.tool}.pkl', 'rb') as f:
                             head_perception_data = pickle.load(f)
                     except FileNotFoundError:
                         raise FileNotFoundError("No transfer logged data found for tool: ", self.tool)
-                    time.sleep(0.1) # Maintain 10 Hz rate that real perception would have
+                    time.sleep(0.1)
                 if self.log_head_perception:
                     self.log_head_perception_data.append((time.time(), head_perception_data))
                 with self.head_perception_data_lock:
@@ -305,8 +355,8 @@ class PerceptionInterface:
     
     def _generate_door_arc_waypoints(
         self,
-        handle_pose: Pose,
-        hinge_pose: Pose,
+        start_pose: Pose,
+        hinge_position: Pose3D,
         arc_length_m: float,
         waypoint_spacing_m: float,
         direction: int = 1,
@@ -317,7 +367,7 @@ class PerceptionInterface:
         Assumptions:
         - Door rotates in the xy plane.
         - Hinge axis is vertical (z-axis).
-        - Arc is centered at hinge_pose.position[:2].
+        - Arc is centered at hinge_position[:2].
         """
         if arc_length_m <= 0:
             return []
@@ -326,8 +376,8 @@ class PerceptionInterface:
         if direction not in (-1, 1):
             raise ValueError("direction must be either +1 or -1")
 
-        hx, hy, hz = handle_pose.position
-        cx, cy, _ = hinge_pose.position
+        hx, hy, hz = start_pose.position
+        cx, cy, _ = hinge_position
 
         radius_vec = np.array([hx - cx, hy - cy], dtype=float)
         radius = np.linalg.norm(radius_vec)
@@ -338,7 +388,7 @@ class PerceptionInterface:
         total_angle = arc_length_m / radius
         num_segments = max(1, int(np.ceil(arc_length_m / waypoint_spacing_m)))
 
-        start_rot = R.from_quat(handle_pose.orientation)
+        start_rot = R.from_quat(start_pose.orientation)
         waypoints: list[Pose] = []
 
         for i in range(1, num_segments + 1):
@@ -354,7 +404,7 @@ class PerceptionInterface:
                 yaw_rot = R.from_euler("z", delta_angle)
                 orientation = (yaw_rot * start_rot).as_quat()
             else:
-                orientation = handle_pose.orientation
+                orientation = start_pose.orientation
 
             waypoints.append(
                 Pose(
@@ -365,7 +415,79 @@ class PerceptionInterface:
 
         return waypoints
     
-    def perceive_handle_opening_poses(self):
+    def _terminal_confirmation(self, detection_type: str, vis_image=None) -> bool:
+        if vis_image is not None:
+            display = vis_image.copy()
+            cv2.putText(display, "Press 'y' to confirm, any other key to redo",
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            cv2.imshow(f"{detection_type} detection", display)
+            key = cv2.waitKey(0) & 0xFF
+            cv2.destroyAllWindows()
+            return key == ord('y')
+        response = input(f"Is the {detection_type} detection correct? [y/N]: ").strip().lower()
+        return response == "y"
+
+    def perceive_button_pressing_poses(self, web_interface=None):
+
+        if self.simulation:
+            with open(self.log_dir / 'button_pressing_pose.pkl', 'rb') as f:
+                button_pressing_pose = pickle.load(f)
+            handle_poses = button_pressing_pose["last_button_pressing_poses"]
+
+        else:
+            while True:
+                button_pose = None
+                for _ in range(20):
+                    cam_data = self._realsense.get_camera_data()
+                    rgb_image = cam_data["rgb_image"]
+                    camera_info = cam_data["camera_info"]
+                    depth_image = cam_data["depth_image"]
+
+                    if rgb_image is not None and camera_info is not None and depth_image is not None:
+                        button_pose = self._appliance_perception.detect_start_button(rgb_image, camera_info, depth_image)
+                        if button_pose is not None:
+                            break
+                    time.sleep(0.1)
+
+                if button_pose is None:
+                    raise RuntimeError("Could not detect button pressing pose")
+
+                appliance_dir = os.path.dirname(inspect.getfile(self._appliance_perception.__class__))
+                vis_image = cv2.imread(os.path.join(appliance_dir, "rgb_keypoint.png"))
+                if web_interface is None:
+                    confirmed = self._terminal_confirmation("button", vis_image)
+                else:
+                    confirmed = web_interface.get_detection_confirmation("button", vis_image)
+                if confirmed:
+                    break
+                print("Button detection rejected by user. Re-running button perception ...")
+
+            button_transform = self.pose_to_matrix(button_pose)
+            offset = np.eye(4)
+            offset[:3, 3] = np.array([0.005, 0.0, -0.051])
+            press_pose = self.matrix_to_pose(button_transform @ offset)
+
+            pre_press_offset = np.eye(4)
+            pre_press_offset[:3, 3] = np.array([0.005, 0.0, -0.12])
+            pre_press_pose = self.matrix_to_pose(button_transform @ pre_press_offset)
+
+            intermediate_offset = np.eye(4)
+            intermediate_offset[:3, 3] = np.array([0.005, 0.0, -0.08])
+            intermediate_pose = self.matrix_to_pose(button_transform @ intermediate_offset)
+
+            return {
+                "press_pose": press_pose,
+                "pre_press_pose": pre_press_pose,
+                "intermediate_pose": intermediate_pose,
+            }
+
+
+
+    def perceive_handle_opening_poses(self, handle_type: str, web_interface=None):
+
+        # if self.last_handle_poses is not None:
+        #     print("Using last handle opening poses from perception cache")
+        #     return self.last_handle_poses
 
         if self.simulation:
             # load them from a pickle file
@@ -374,48 +496,608 @@ class PerceptionInterface:
             handle_poses = handle_opening_pos["last_handle_poses"]
 
         else:
-            self._handle_perception.turn_on()
-            # Rajat Hack: Wait three seconds
-            time.sleep(3)
+            while True:
+                handle_pose = None
+                for _ in range(20):
+                    cam_data = self._realsense.get_camera_data()
+                    rgb_image = cam_data["rgb_image"]
+                    camera_info = cam_data["camera_info"]
+                    depth_image = cam_data["depth_image"]
 
-            handle_pose_msg = rospy.wait_for_message("/handle_pose", PoseMsg)
-            hinge_pose_msg = rospy.wait_for_message("/hinge_pose", PoseMsg)
-            self._handle_perception.turn_off()
+                    if rgb_image is not None and camera_info is not None and depth_image is not None:
+                        handle_pose, hinge_pose, placement_pose, top_of_appliance_pose = self._appliance_perception.detect_handle_and_placement(handle_type, rgb_image, camera_info, depth_image)
+                        if handle_pose is not None:
+                            break
+                    time.sleep(0.1)
 
-            grasp_pose = Pose(
-                position=(handle_pose_msg.position.x - 0.02, handle_pose_msg.position.y, handle_pose_msg.position.z),
-                orientation=(handle_pose_msg.orientation.x, handle_pose_msg.orientation.y, handle_pose_msg.orientation.z, handle_pose_msg.orientation.w)
-            )
+                if handle_pose is None:
+                    raise RuntimeError(f"Could not detect handle opening poses for {handle_type}")
 
-            hinge_pose = Pose(
-                position=(hinge_pose_msg.position.x, hinge_pose_msg.position.y, hinge_pose_msg.position.z),
-                orientation=(hinge_pose_msg.orientation.x, hinge_pose_msg.orientation.y, hinge_pose_msg.orientation.z, hinge_pose_msg.orientation.w)
-            )
+                vis_image = cv2.imread(os.path.join(os.getcwd(), "handle_hinge_pixels.png"))
+                # The camera is mounted upside down, so rotate the visualization
+                # 180 degrees to show it right-side up to the user.
+                if vis_image is not None:
+                    vis_image = cv2.rotate(vis_image, cv2.ROTATE_180)
+                if web_interface is None:
+                    confirmed = self._terminal_confirmation("handle", vis_image)
+                else:
+                    confirmed = web_interface.get_detection_confirmation("handle", vis_image)
+                if confirmed:
+                    break
+                print("Handle detection rejected by user. Re-running handle perception ...")
 
-            pre_grasp_pose = Pose(
-                position=(grasp_pose.position[0] - 0.12, grasp_pose.position[1], grasp_pose.position[2]),
-                orientation=(grasp_pose.orientation[0], grasp_pose.orientation[1], grasp_pose.orientation[2], grasp_pose.orientation[3])
-            )
+            if handle_type == "microwave":
+                top_offset = 0.03
+            elif handle_type == "bottom textured fridge door":
+                top_offset = 0.05
+
+            offset = np.eye(4)
+            offset[:3, 3] = np.array([0, -0.055, 0.0]) # x axis is left, y axis is up, z axis is forward.
+            placement_pose = self.matrix_to_pose(self.pose_to_matrix(placement_pose) @ offset)
+
+            # behind placement pose
+            offset = np.eye(4)
+            offset[:3, 3] = np.array([0, 0, -0.05]) # x axis is left, y axis is up, z axis is forward.
+            behind_placement_pose = self.matrix_to_pose(self.pose_to_matrix(placement_pose) @ offset)
+
+            handle_transform = self.pose_to_matrix(handle_pose)
+            offset = np.eye(4)
+            if handle_type == "bottom textured fridge door":
+                offset[:3, 3] = np.array([0.01, 0.0, -0.035]) # x axis is left, y axis is up, z axis is forward. 
+            else:
+                offset[:3, 3] = np.array([0.0, 0.0, -0.045]) # x axis is left, y axis is up, z axis is forward. 
+            grasp_pose = self.matrix_to_pose(handle_transform @ offset)
+
+            pre_grasp_offset = np.eye(4)
+            if handle_type == "bottom textured fridge door":
+                pre_grasp_offset[:3, 3] = np.array([0.01, 0.0, -0.12]) # x axis is left, y axis is up, z axis is forward. 
+            else:
+                pre_grasp_offset[:3, 3] = np.array([0.0, 0.0, -0.12])
+            pre_grasp_pose = self.matrix_to_pose(handle_transform @ pre_grasp_offset)
 
             opening_waypoints = self._generate_door_arc_waypoints(
-                handle_pose=grasp_pose,
-                hinge_pose=hinge_pose,
-                arc_length_m=0.3,
+                start_pose=grasp_pose,
+                hinge_position=hinge_pose.position,
+                arc_length_m=0.55 if handle_type == "microwave" else 0.35,
                 waypoint_spacing_m=0.05,
-                direction=1,
+                direction=1 if handle_type == "bottom textured fridge door" else -1, # microwave is left hinged
                 rotate_orientation=True,
             )
 
+            will_be_used_for_closing_waypoints = self._generate_door_arc_waypoints(
+                start_pose=grasp_pose,
+                hinge_position=hinge_pose.position,
+                arc_length_m=0.65,
+                waypoint_spacing_m=0.05,
+                direction=1, 
+                rotate_orientation=True,
+            )
+
+            # set z of post_release_pose to top_of_appliance to avoid collision with the microwave handle
+            post_release_pose = Pose(
+                position=(opening_waypoints[-1].position[0], opening_waypoints[-1].position[1], top_of_appliance_pose.position[2] + 0.05),
+                orientation=opening_waypoints[-1].orientation,
+            )
+            # copy.deepcopy(opening_waypoints[-1])
+            # offset = np.eye(4)
+            # offset[:3, 3] = np.array([0, 0.15, 0])
+            # post_release_pose_mat = self.pose_to_matrix(post_release_pose)
+            # post_release_pose_mat = post_release_pose_mat @ offset
+            # post_release_pose = self.matrix_to_pose(post_release_pose_mat)
+
+            # rotate the sixth-to-last (assuming thickness is 35cm) opening waypoint by 180 degrees so that the gripper can push the door open instead of pulling it
+            push_pose = copy.deepcopy(opening_waypoints[-6])
+            push_pose_mat = self.pose_to_matrix(push_pose)
+            if handle_type == "bottom textured fridge door":
+                push_pose_mat[:3, :3] = push_pose_mat[:3, :3] @ R.from_euler("y", -np.pi/2).as_matrix()
+            else:
+                push_pose_mat[:3, :3] = push_pose_mat[:3, :3] @ R.from_euler("y", np.pi/2).as_matrix()
+            push_pose = self.matrix_to_pose(push_pose_mat)
+
+            push_pose = Pose(
+                position=(push_pose.position[0], push_pose.position[1], top_of_appliance_pose.position[2]  - top_offset),  
+                orientation=push_pose.orientation,
+            )
+            
+            second_waypoints = self._generate_door_arc_waypoints(
+                start_pose=push_pose,
+                hinge_position=hinge_pose.position,
+                arc_length_m=0.5 if handle_type == "microwave" else 0.85, # the microwave is already partially open at the push waypoint
+                waypoint_spacing_m=0.05,
+                direction=1 if handle_type == "bottom textured fridge door" else -1, # microwave is left hinged
+                rotate_orientation=True,
+            )
+            print("Number of second waypoints: ", len(second_waypoints))
+            push_waypoints = second_waypoints[:-6]
+            len_push_waypoints = len(push_waypoints)
+            print("Number of push waypoints: ", len_push_waypoints)
+
+            # set z of push_waypoints to top_of_appliance_pose.position[2]  - top_offset 
+            for i in range(len(push_waypoints)):
+                push_waypoints[i] = Pose(
+                    position=(push_waypoints[i].position[0], push_waypoints[i].position[1], top_of_appliance_pose.position[2]  - top_offset),
+                    orientation=push_waypoints[i].orientation,
+                )
+
+            # pre_push_offset = np.eye(4)
+            # pre_push_offset[:3, 3] = np.array([0, 0.15, 0])
+            # pre_push_pose_mat = self.pose_to_matrix(push_pose) @ pre_push_offset
+            # pre_push_pose = self.matrix_to_pose(pre_push_pose_mat)
+            pre_push_pose = Pose(
+                position=(push_pose.position[0], push_pose.position[1], top_of_appliance_pose.position[2] + 0.05),
+                orientation=push_pose.orientation,
+            )
+
+            closing_waypoints = copy.deepcopy(second_waypoints)
+            print("Number of closing waypoints: ", len(closing_waypoints))
+            closing_waypoints.reverse()
+
+            for i in range(len(closing_waypoints)):
+                closing_waypoints[i] = Pose(
+                    position=(closing_waypoints[i].position[0], closing_waypoints[i].position[1], top_of_appliance_pose.position[2]  - top_offset),
+                    orientation=closing_waypoints[i].orientation,
+                )
+
+            closing_waypoint = closing_waypoints[0]
+
+            last_push = Pose(
+                position=(push_waypoints[-1].position[0], push_waypoints[-1].position[1], top_of_appliance_pose.position[2] + 0.05),
+                orientation=push_waypoints[-1].orientation,
+            )
+            # last_push = push_waypoints[-1]
+            # last_push = self.pose_to_matrix(last_push)
+            # offset = np.eye(4)
+            # offset[:3, 3] = np.array([0, 0.15, 0])
+            # last_push = last_push @ offset
+            # last_push = self.matrix_to_pose(last_push)
+
+            above_closing_waypoint = Pose(
+                position=(closing_waypoint.position[0], closing_waypoint.position[1], top_of_appliance_pose.position[2] + 0.05),
+                orientation=closing_waypoint.orientation,
+            )
+            # above_closing_waypoint = closing_waypoint
+            # above_closing_waypoint_mat = self.pose_to_matrix(above_closing_waypoint)
+            # offset = np.eye(4)
+            # offset[:3, 3] = np.array([0, 0.15, 0])
+            # above_closing_waypoint_mat = above_closing_waypoint_mat @ offset
+            # above_closing_waypoint = self.matrix_to_pose(above_closing_waypoint_mat)
+
+            more_closing_waypoints = copy.deepcopy(opening_waypoints[:-2])
+            more_closing_waypoints.reverse()
+            more_closing_waypoints.append(copy.deepcopy(grasp_pose))
+
+            offset_closing_waypoints = []
+            offset = np.eye(4)
+            # offset[:3, 3] = np.array([0, 0.0, 0.0])
+            offset[:3, 3] = np.array([0, 0.0, -0.025])
+            for waypoint in more_closing_waypoints:
+                waypoint_mat = self.pose_to_matrix(waypoint)
+                offset_closing_waypoints.append(self.matrix_to_pose(waypoint_mat @ offset))
+
+            temp = copy.deepcopy(second_waypoints[:-3])
+            temp.reverse()
+            pull_closing_waypoints = []
+            for waypoint in temp[:8]:
+                waypoint_mat = self.pose_to_matrix(waypoint)
+                waypoint_mat[:3, :3] = waypoint_mat[:3, :3] @ R.from_euler("y", -np.pi/2).as_matrix()
+                offset = np.eye(4)
+                offset[:3, 3] = np.array([0.03, -0.09, -0.14])
+                pull_closing_waypoints.append(self.matrix_to_pose(waypoint_mat @ offset))
+
+            pull_closing_waypoint = pull_closing_waypoints[0]
+
+            pre_pull_offset = np.eye(4)
+            pre_pull_offset[:3, 3] = np.array([0, 0.0, -0.1])
+            pre_pull_pose_mat = self.pose_to_matrix(pull_closing_waypoint) @ pre_pull_offset
+            pre_pull_pose = self.matrix_to_pose(pre_pull_pose_mat)
+
+            behind_pull_closing_waypoint = pull_closing_waypoints[-1]
+            offset = np.eye(4)
+            offset[:3, 3] = np.array([0, 0.0, -0.03])
+            behind_pull_closing_waypoint_mat = self.pose_to_matrix(behind_pull_closing_waypoint) @ offset
+            behind_pull_closing_waypoint = self.matrix_to_pose(behind_pull_closing_waypoint_mat)
+
+            above_pull_closing_waypoint = pull_closing_waypoints[-1] # last 
+            offset = np.eye(4)
+            offset[:3, 3] = np.array([0, 0.24, -0.02])
+            above_pull_closing_waypoint_mat = self.pose_to_matrix(above_pull_closing_waypoint) @ offset
+            above_pull_closing_waypoint = self.matrix_to_pose(above_pull_closing_waypoint_mat)
+
+            push_closing_waypoints = []
+            for waypoint in will_be_used_for_closing_waypoints:
+                waypoint_mat = self.pose_to_matrix(waypoint)
+                waypoint_mat[:3, :3] = waypoint_mat[:3, :3] @ R.from_euler("y", -np.pi/2).as_matrix()
+                offset = np.eye(4)
+                offset[:3, 3] = np.array([0.02, 0.0, 0.0])
+                push_closing_waypoints.append(self.matrix_to_pose(waypoint_mat @ offset))
+            push_closing_waypoints.reverse()
+
+            above_push_closing_waypoint = Pose(
+                position=(push_closing_waypoints[0].position[0], push_closing_waypoints[0].position[1], top_of_appliance_pose.position[2] + 0.05),
+                orientation=push_closing_waypoints[0].orientation,
+            )
+            # above_push_closing_waypoint = push_closing_waypoints[0]
+            # offset = np.eye(4)
+            # offset[:3, 3] = np.array([0, 0.15, 0])
+            # above_push_closing_waypoint_mat = self.pose_to_matrix(above_push_closing_waypoint) @ offset
+            # above_push_closing_waypoint = self.matrix_to_pose(above_push_closing_waypoint_mat)
+
+            # beginning_closing_waypoint = offset_closing_waypoints[0]
+            # beginning_closing_waypoint_mat = self.pose_to_matrix(beginning_closing_waypoint)
+            # offset = np.eye(4)
+            # offset[:3, 3] = np.array([0, 0.0, -0.05])
+            # beginning_closing_waypoint_mat = beginning_closing_waypoint_mat @ offset
+            # beginning_closing_waypoint = self.matrix_to_pose(beginning_closing_waypoint_mat)
+
             handle_poses = {
+                "placement_pose": placement_pose,
+                "behind_placement_pose": behind_placement_pose,
                 "pre_grasp_pose": pre_grasp_pose,
                 "grasp_pose": grasp_pose,
                 "opening_waypoints": opening_waypoints,
+                "post_release_pose": post_release_pose,
+                "pre_push_pose": pre_push_pose,
+                "push_pose": push_pose,
+                "push_waypoints": push_waypoints,
+                "before_above_closing_waypoint": last_push,
+                "above_closing_waypoint": above_closing_waypoint,
+                "closing_waypoint": closing_waypoint,
+                "closing_waypoints": closing_waypoints,
+                # "beginning_closing_waypoint": beginning_closing_waypoint,
+                "offset_closing_waypoints": offset_closing_waypoints,
+                # "pull_pose": pull_pose,
+                # "pre_pull_pose": pre_pull_pose,
+                "pull_closing_waypoints": pull_closing_waypoints,
+                "pull_closing_waypoint": pull_closing_waypoint,
+                "pre_pull_pose": pre_pull_pose,
+                "behind_pull_closing_waypoint": behind_pull_closing_waypoint,
+                "above_pull_closing_waypoint": above_pull_closing_waypoint,
+                "above_push_closing_waypoint": above_push_closing_waypoint,
+                "push_closing_waypoints": push_closing_waypoints,
             }
 
-        self.last_handle_poses = handle_poses
+        # self.last_handle_poses = handle_poses
+        # Save in temp pickle file just for testing, we can remove this later if we don't need it
+        if self.log_dir is not None:
+            with open(self.log_dir / 'handle_opening_pos.pkl', 'wb') as f:
+                pickle.dump({"last_handle_poses": handle_poses}, f)
         self.sync_rviz()
 
         return handle_poses
+
+    def get_perceived_poses(self):
+        if self.log_dir is not None:
+            with open(self.log_dir / 'handle_opening_pos.pkl', 'rb') as f:
+                handle_opening_pos = pickle.load(f)
+            handle_poses = handle_opening_pos["last_handle_poses"]
+        else:
+            raise ValueError("No log directory provided, cannot load handle opening poses to compute closing poses. Please provide a log directory or run perceive_handle_opening_poses first to save the opening poses.")
+        return handle_poses
+
+    def perceive_handle_closing_poses(self, handle_type: str):
+        assert handle_type in ["bottom textured fridge door", "microwave"]
+        if self.log_dir is not None:
+            with open(self.log_dir / 'handle_opening_pos.pkl', 'rb') as f:
+                handle_opening_pos = pickle.load(f)
+            handle_poses = handle_opening_pos["last_handle_poses"]
+        else:
+            raise ValueError("No log directory provided, cannot load handle opening poses to compute closing poses. Please provide a log directory or run perceive_handle_opening_poses first to save the opening poses.")
+        return handle_poses
+        # return self.last_handle_poses
+
+    @staticmethod
+    def _rgb_to_hsv_color(r: int, g: int, b: int) -> list:
+        """Convert RGB (0-255) to OpenCV HSV [H:0-179, S:0-255, V:0-255]."""
+        bgr = np.array([[[b, g, r]]], dtype=np.uint8)
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+        return hsv[0, 0].tolist()
+
+    def _interactive_color_correction(
+        self,
+        web_interface,
+        rgb_image,
+        camera_info,
+        depth_image,
+        initial_color,
+        initial_range: float,
+        handle_orientation: str,
+        attachment_dir: str,
+        initial_attachment_pose,
+    ):
+        """Run the interactive color correction loop on the web interface.
+
+        Returns (confirmed, color, color_range, attachment_pose).
+        confirmed=False means the user pressed Back; caller should redo detection.
+        """
+        current_color = list(initial_color) if hasattr(initial_color, '__iter__') else initial_color
+        current_range = float(initial_range)
+        last_attachment_pose = initial_attachment_pose
+
+        vis_image = cv2.imread(os.path.join(attachment_dir, "attachment_corners.png"))
+        web_interface.start_color_correction(
+            rgb_image,
+            initial_vis_image=None,
+            initial_color_range=current_range,
+        )
+
+        while True:
+            msg = web_interface.wait_for_color_correction_message()
+            if msg is None:
+                return False, initial_color, initial_range, initial_attachment_pose
+
+            status = msg.get("status", "")
+
+            if status in ("rerun", "confirm"):
+                r = int(msg.get("r", 0))
+                g = int(msg.get("g", 0))
+                b = int(msg.get("b", 0))
+                current_color = self._rgb_to_hsv_color(r, g, b)
+                current_range = float(msg.get("color_range", current_range))
+
+                # Use a fresh camera frame so the TF lookup timestamp is current.
+                # Reusing the original camera_info.header.stamp causes TF
+                # extrapolation errors once the user has spent >10 s on the page.
+                fresh_cam = self._realsense.get_camera_data()
+                fresh_rgb   = fresh_cam.get("rgb_image")
+                fresh_info  = fresh_cam.get("camera_info")
+                fresh_depth = fresh_cam.get("depth_image")
+                if fresh_rgb is None or fresh_info is None or fresh_depth is None:
+                    fresh_rgb, fresh_info, fresh_depth = rgb_image, camera_info, depth_image
+
+                new_pose = self._attachment_perception.detect_attachment(
+                    fresh_rgb, fresh_info, fresh_depth, handle_orientation,
+                    handle_color=current_color, color_range=current_range,
+                )
+                if new_pose is not None:
+                    last_attachment_pose = new_pose
+
+                result_vis = cv2.imread(os.path.join(attachment_dir, "attachment_corners.png"))
+                web_interface.send_color_correction_result(result_vis, new_pose is not None)
+
+                if status == "confirm":
+                    if last_attachment_pose is not None:
+                        web_interface.switch_to_explanation_page()
+                        return True, current_color, current_range, last_attachment_pose
+                    # No pose yet (rerun failed) — stay in loop so user can adjust
+                    print("Confirm pressed but no valid detection — ask user to adjust and rerun.")
+
+            elif status == "back":
+                return False, initial_color, initial_range, initial_attachment_pose
+
+    def perceive_attachment_poses(self, handle_type: str, handle_color, color_range, handle_orientation: str = "front", web_interface=None):
+
+        if self.simulation:
+            with open(self.log_dir / 'attachment_poses.pkl', 'rb') as f:
+                attachment_poses = pickle.load(f)
+            # Ensure keys are present for callers that read them.
+            attachment_poses.setdefault(
+                "handle_color",
+                list(handle_color) if hasattr(handle_color, '__iter__') else handle_color,
+            )
+            attachment_poses.setdefault("color_range", float(color_range))
+            return attachment_poses
+
+        current_color = list(handle_color) if hasattr(handle_color, '__iter__') else handle_color
+        current_range = float(color_range)
+
+        while True:
+            attachment_pose = None
+            last_rgb_image = None
+            last_camera_info = None
+            last_depth_image = None
+            for _ in range(20):
+                cam_data = self._realsense.get_camera_data()
+                rgb_image = cam_data["rgb_image"]
+                camera_info = cam_data["camera_info"]
+                depth_image = cam_data["depth_image"]
+
+                if rgb_image is not None and camera_info is not None and depth_image is not None:
+                    attachment_pose = self._attachment_perception.detect_attachment(
+                        rgb_image, camera_info, depth_image, handle_orientation,
+                        handle_color=current_color, color_range=current_range,
+                    )
+                    if attachment_pose is not None:
+                        last_rgb_image = rgb_image
+                        last_camera_info = camera_info
+                        last_depth_image = depth_image
+                        break
+                time.sleep(0.1)
+
+            if attachment_pose is None:
+                raise RuntimeError("Could not detect attachment pose")
+
+            attachment_dir = os.path.dirname(inspect.getfile(self._attachment_perception.__class__))
+            vis_image = cv2.imread(os.path.join(attachment_dir, "attachment_corners.png"))
+
+            if web_interface is None:
+                confirmed = self._terminal_confirmation("attachment", vis_image)
+                if confirmed:
+                    break
+                print("Attachment detection rejected by user. Re-running attachment perception ...")
+                continue
+
+            action = web_interface.get_attachment_detection_action("attachment", vis_image)
+
+            if action == "confirm":
+                web_interface.switch_to_explanation_page()
+                break
+            elif action == "redo":
+                print("Attachment detection rejected by user. Re-running attachment perception ...")
+                continue
+            elif action == "correct_color":
+                confirmed, current_color, current_range, attachment_pose = self._interactive_color_correction(
+                    web_interface,
+                    last_rgb_image,
+                    last_camera_info,
+                    last_depth_image,
+                    current_color,
+                    current_range,
+                    handle_orientation,
+                    attachment_dir,
+                    attachment_pose,
+                )
+                if confirmed:
+                    break
+                print("Color correction cancelled. Re-running attachment perception ...")
+
+        offset = np.eye(4)
+        if handle_type == "microwave":
+            offset[:3, 3] = np.array([0, 0.009, -0.01])
+        elif handle_type == "bottom textured fridge door":
+            offset[:3, 3] = np.array([0, -0.003, 0.0])
+        elif handle_type == "table":
+            offset[:3, 3] = np.array([0, -0.008, 0.0])
+        else:
+            raise ValueError(f"Unknown handle type: {handle_type}")
+        pickup_pose = self.matrix_to_pose(self.pose_to_matrix(attachment_pose) @ offset)
+
+        if handle_type == "microwave":
+            offset[:3, 3] = np.array([0, 0.009, -0.11])
+        elif handle_type == "bottom textured fridge door":
+            offset[:3, 3] = np.array([0, -0.003, -0.11])
+        elif handle_type == "table":
+            offset[:3, 3] = np.array([0, -0.008, -0.11])
+        else:
+            raise ValueError(f"Unknown handle type: {handle_type}")
+
+        pre_pickup_pose = self.matrix_to_pose(self.pose_to_matrix(attachment_pose) @ offset)
+
+        offset_for_above = np.eye(4)
+        offset_for_above[:3, 3] = np.array([0, 0.1, 0.0])
+        above_pickup_pose = self.matrix_to_pose(self.pose_to_matrix(pickup_pose) @ offset_for_above)
+
+        attachment_poses = {
+            "pickup_pose": pickup_pose,
+            "pre_pickup_pose": pre_pickup_pose,
+            "above_pickup_pose": above_pickup_pose,
+            "handle_color": current_color,
+            "color_range": current_range,
+        }
+        with open(self.log_dir / 'attachment_poses.pkl', 'wb') as f:
+            pickle.dump(attachment_poses, f)
+
+        return attachment_poses
+
+    def perceive_sink_placement_poses(self, web_interface=None):
+
+        if self.simulation:
+            # load them from a pickle file
+            with open(self.log_dir / 'sink_placement_poses.pkl', 'rb') as f:
+                sink_placement_poses = pickle.load(f)
+
+        else:
+            while True:
+                sink_placement_pose = None
+                for _ in range(20):
+                    cam_data = self._realsense.get_camera_data()
+                    rgb_image = cam_data["rgb_image"]
+                    camera_info = cam_data["camera_info"]
+                    depth_image = cam_data["depth_image"]
+
+                    if rgb_image is not None and camera_info is not None and depth_image is not None:
+                        sink_placement_pose = self._appliance_perception.detect_sink_placement(rgb_image, camera_info, depth_image)
+                        if sink_placement_pose is not None:
+                            break
+                    time.sleep(0.1)
+
+                if sink_placement_pose is None:
+                    raise RuntimeError("Could not detect sink placement pose")
+
+                vis_image = cv2.imread(os.path.join(os.getcwd(), "sink_back_pixel.png"))
+                if web_interface is None:
+                    confirmed = self._terminal_confirmation("sink", vis_image)
+                else:
+                    confirmed = web_interface.get_detection_confirmation("sink", vis_image)
+                if confirmed:
+                    break
+                print("Sink placement detection rejected by user. Re-running sink placement perception ...")
+
+            offset = np.eye(4)
+            offset[:3, 3] = np.array([0.0, 0.15, -0.45])
+            sink_placement_pose = self.matrix_to_pose(self.pose_to_matrix(sink_placement_pose) @ offset)
+
+            sink_placement_poses = {
+                "sink_placement_pose": sink_placement_pose,
+            }
+
+            with open(self.log_dir / 'sink_placement_poses.pkl', 'wb') as f:
+                pickle.dump(sink_placement_poses, f)
+
+        return sink_placement_poses
+
+    def perceive_table_placement_poses(self, web_interface=None):
+
+        if self.simulation:
+            # load them from a pickle file
+            with open(self.log_dir / 'table_placement_poses.pkl', 'rb') as f:
+                table_placement_poses = pickle.load(f)
+
+        else:
+            while True:
+                table_placement_pose = None
+                for _ in range(20):
+                    cam_data = self._realsense.get_camera_data()
+                    rgb_image = cam_data["rgb_image"]
+                    camera_info = cam_data["camera_info"]
+                    depth_image = cam_data["depth_image"]
+
+                    if rgb_image is not None and camera_info is not None and depth_image is not None:
+                        table_placement_pose = self._appliance_perception.detect_table_placement(rgb_image, camera_info, depth_image)
+                        if table_placement_pose is not None:
+                            break
+                    time.sleep(0.1)
+
+                if table_placement_pose is None:
+                    raise RuntimeError("Could not detect table placement pose")
+
+                # detect_table_placement saves the annotated frame (red dot = placement
+                # center, blue = surrounding pixels used for depth) to the cwd.
+                vis_image = cv2.imread(os.path.join(os.getcwd(), "table_placement_pixel.png"))
+                # The camera is mounted upside down, so rotate the visualization
+                # 180 degrees to show it right-side up to the user.
+                if vis_image is not None:
+                    vis_image = cv2.rotate(vis_image, cv2.ROTATE_180)
+                if web_interface is None:
+                    confirmed = self._terminal_confirmation("plate", vis_image)
+                else:
+                    confirmed = web_interface.get_detection_confirmation("plate", vis_image)
+                if confirmed:
+                    break
+                print("Table placement detection rejected by user. Re-running table placement perception ...")
+
+            offset = np.eye(4)
+            offset[:3, 3] = np.array([0.0, 0.075, -0.23])
+            table_placement_pose = self.matrix_to_pose(self.pose_to_matrix(table_placement_pose) @ offset)
+
+            offset_for_pre_place = np.eye(4)
+            offset_for_pre_place[:3, 3] = np.array([0.0, 0.1, 0.0])
+            pre_table_placement_pose = self.matrix_to_pose(self.pose_to_matrix(table_placement_pose) @ offset_for_pre_place)
+
+            # behind table placement pose
+            offset_for_behind = np.eye(4)
+            offset_for_behind[:3, 3] = np.array([0.0, 0.0, -0.1])
+            behind_table_placement_pose = self.matrix_to_pose(self.pose_to_matrix(table_placement_pose) @ offset_for_behind)
+
+            table_placement_poses = {
+                "table_placement_pose": table_placement_pose,
+                "pre_table_placement_pose": pre_table_placement_pose,
+                "behind_table_placement_pose": behind_table_placement_pose
+            }
+
+            self.last_table_placement_poses = table_placement_poses
+
+            with open(self.log_dir / 'table_placement_poses.pkl', 'wb') as f:
+                pickle.dump(table_placement_poses, f)
+
+        return table_placement_poses
+
+    def get_perceived_table_placement_poses(self):
+        if self.log_dir is not None:
+            with open(self.log_dir / 'table_placement_poses.pkl', 'rb') as f:
+                table_placement_poses = pickle.load(f)
+            return table_placement_poses
+        else:
+            raise ValueError("No log directory provided, cannot load table placement poses. Please provide a log directory or run perceive_table_placement_poses first to save the poses.")
 
     def perceive_drink_pickup_poses(self):
 
@@ -466,15 +1148,28 @@ class PerceptionInterface:
             drink_poses = drink_pickup_pos["last_drink_poses"]
 
         else:
-            self._drink_perception.turn_on()
-            # Rajat Hack: Wait one second for the aruco mean to be correct, does this actually help though?
-            time.sleep(3)
+            aruco_pose_msg = None
+            for _ in range(100):
+                cam_data = self._realsense.get_camera_data()
+                rgb_image = cam_data["rgb_image"]
+                camera_info = cam_data["camera_info"]
+                depth_image = cam_data["depth_image"]
 
-            aruco_pose_msg = rospy.wait_for_message("/aruco_pose_0", PoseMsg)
+                if rgb_image is not None and camera_info is not None and depth_image is not None:
+                    self._drink_perception.update(rgb_image, camera_info, depth_image)
+
+                try:
+                    aruco_pose_msg = rospy.wait_for_message("/aruco_pose_0", PoseMsg, timeout=0.1)
+                    break
+                except rospy.ROSException:
+                    pass
+
+            if aruco_pose_msg is None:
+                raise RuntimeError("Could not detect drink pickup pose")
+
             position = (aruco_pose_msg.position.x, aruco_pose_msg.position.y, aruco_pose_msg.position.z)
             orientation = (aruco_pose_msg.orientation.x, aruco_pose_msg.orientation.y, aruco_pose_msg.orientation.z, aruco_pose_msg.orientation.w)
             self.aruco_pose = (position, orientation)
-            self._drink_perception.turn_off()
 
             drink_poses  = {}
             drink_poses['drink_pose'] = self.get_aruco_relative_pose(get_drink_transform(), "drink")
@@ -659,7 +1354,7 @@ class PerceptionInterface:
             # save in pickle file
             with open(self.log_dir / 'aruco_pose.pkl', 'wb') as f:
                 pickle.dump(aruco_pose_msg, f)
-            
+
             position = (aruco_pose_msg.position.x, aruco_pose_msg.position.y, aruco_pose_msg.position.z)
             orientation = (aruco_pose_msg.orientation.x, aruco_pose_msg.orientation.y, aruco_pose_msg.orientation.z, aruco_pose_msg.orientation.w)
             self.aruco_pose = (position, orientation)
@@ -706,9 +1401,9 @@ class PerceptionInterface:
     def sync_rviz(self):
         if self.last_plate_poses:
             plate_poses = self.last_plate_poses
-            self._drink_perception.updateTF("base_link", "plate", self.pose_to_matrix(plate_poses['plate_pose']))
-            self._drink_perception.updateTF("base_link", "plate_pre", self.pose_to_matrix(plate_poses['pre_grasp_pose']))
+            self._drink_perception.updateTF("arm_base_link", "plate", self.pose_to_matrix(plate_poses['plate_pose']))
+            self._drink_perception.updateTF("arm_base_link", "plate_pre", self.pose_to_matrix(plate_poses['pre_grasp_pose']))
         if self.last_drink_poses:
             drink_poses = self.last_drink_poses
-            self._drink_perception.updateTF("base_link", "drink", self.pose_to_matrix(drink_poses['drink_pose']))
-            self._drink_perception.updateTF("base_link", "drink_pre", self.pose_to_matrix(drink_poses['pre_grasp_pose']))
+            self._drink_perception.updateTF("arm_base_link", "drink", self.pose_to_matrix(drink_poses['drink_pose']))
+            self._drink_perception.updateTF("arm_base_link", "drink_pre", self.pose_to_matrix(drink_poses['pre_grasp_pose']))

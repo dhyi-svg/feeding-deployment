@@ -24,23 +24,29 @@
              - `cd ~/feeding-deployment/src/feeding_deployment/robot_controller`
              - `python kinova.py`
    - run the controller server:
-        - Alias `run_server` on NUC
+        - Alias `launch_arm` on NUC
         - Otherwise, run the following commands:
              - `conda activate controller`
              - `cd feeding-deployment/src/feeding_deployment/robot_controller`
              - `python arm_server.py`
 2. Run bulldog on the NUC:
    - ssh to the NUC: `sshnuc` with lab password
-   - run bulldog with alias `run_bulldog`
-2. Run a roscore on the compute system: `roscore`
-3. Launch all the sensors on the compute system using `launch_sensors`
-3. Launch the roslaunch on compute system for visualization / publish tfs:
-   - Alias `launch_robot` on compute system
+   - run bulldog with alias `launch_bulldog`
+3. Run a roscore on the compute system: `roscore`
+4. Launch the roslaunch on compute system for sensors / visualizations:
+   - Alias `launch_sensors` on compute system
    - Otherwise,run the following commands from the root of your ROS workspace:
         - `conda activate feed`
         - `source devel/setup.bash`
-        - `cd src/feeding-deployment/launch`
-        - `roslaunch robot.launch`
+        - `roslaunch feeding_deployment sensors.launch`
+5. Launch the watchdog on compute system:
+   - Alias `launch_watchdog` on compute system
+   - Otherwise,run the following commands from the root of your ROS workspace:
+        - `conda activate feed`
+        - `source devel/setup.bash`
+        - `cd ~/deployment_ws/src/feeding-deployment/src/feeding_deployment/integration`
+        - `chmod +x launch_robot.sh`
+        - `./launch_robot.sh`
 4. Start feeding utensil:
    - Alias `launch_utensil` on compute system
    - Otherwise, run the following commands from the root of your ROS workspace:
@@ -57,16 +63,19 @@
         - `cd ~/deployment_ws/src/feedingpage/vue-ros-demo`
         - `npm run serve`
    - On a browser connected to FeedingDeployment-5G (on the laptop or the iPad), open the following webpage: `http://192.168.1.2:8080/#/task_selection`  
+6. Start the cluster:
+   - If not on cornell network, make sure that CISCO VPN is on.
+   - ssh to the cluster: `sshcluster` or (ssh rj277@unicorn-login-01.coecis.cornell.edu)
+   - launch the molmo server: `launch_molmo`
 6. Run the feeding demo:
-   - Make sure that the feeding laptop's WiFi is on and connected to the internet so that ChatGPT API works (use KortexWiFi if available)
+   - Make sure that the feeding laptop's WiFi is on and connected to the internet so that ChatGPT API works 
    - Alias `run_demo` on compute system
    - Otherwise,run the following commands from the root of your ROS workspace:
         - `conda activate feed`
         - `source devel/setup.bash`
         - `cd src/feeding-deployment/src/feeding_deployment/integration`
-        - `python run.py --user tests --run_on_robot --use_interface --no_waits`
-   - _Important Note 1:_ If you want to resume from some state (state names: after_utensil_pickup, after_bite_pickup, last_state), use: `python run.py --user tests --run_on_robot --use_interface --no_waits --resume_from_state after_utensil_pickup` (replace after_utensil_pickup with appropriate state name).
-   - _Important Note 2:_ The preset food item for `tests` user is bananas. If you want to try some other food item, just change the user name to a new one. For example, `python run.py --user tests_new --run_on_robot --use_interface --no_waits`
+        - `python run.py --user feeding_deployment --run_on_robot --use_interface --no_waits`
+   - _Important Note:_ If you want to resume from some state (state names: after_utensil_pickup, after_bite_pickup, last_state), use: `python run.py --user tests --run_on_robot --use_interface --no_waits --resume_from_state after_utensil_pickup` (replace after_utensil_pickup with appropriate state name).
 
 ### Moving the robot to preset configurations
 
@@ -106,7 +115,171 @@ You can move the robot to preset configurations by running:
 - To check FT readings: `rostopic echo /forque/forqueSensor`
 - IP for robot: 192.168..10
 - IP for webapp: `http://192.168.1.2:8080/#/task_selection`
+- To check if wrist controller is working: `rostopic pub -1 /cmd_wrist_joint_angles wrist_driver_interfaces/SimpleJointAngleCommand '{q0: 0.0, q1: 0.0}'`
+
+## Build navigation map + save named base locations (feeding_deployment)
+
+`roslaunch feeding_deployment vention_navigation.launch` does **not** load map files by itself.
+It starts `move_base`, which uses whatever `/map` and `map -> odom` are currently published.
+
+The workflow below uses Cartographer-native saved state (`.pbstream`).
+
+### Part 1: First-time mapping + save map state + save named locations
+
+From `/home/isacc/deployment_ws`, source your workspace in each terminal: `source devel/setup.bash`
+
+1. Start core and robot sources:
+   - `roscore`
+   - `roslaunch feeding_deployment vention_description.launch`
+   - `roslaunch feeding_deployment vention_rplidar_a1.launch`
+   - `roslaunch feeding_deployment vention_odm_d435.launch`
+   - `roslaunch feeding_deployment vention_cartographer_lidar.launch`
+2. Build map and save Cartographer state (`.pbstream`):
+   - `cd src/feeding-deployment`
+   - `python src/feeding_deployment/integration/build_map_interactive.py --pbstream-file /home/isacc/deployment_ws/src/feeding-deployment/config/maps/vention_map.pbstream`
+   - Optional: also export YAML/PGM snapshot: add `--save-occupancy-snapshot`
+   - By default this script does **not** call `/finish_trajectory`, so Cartographer can keep publishing `map -> odom` for follow-up steps like named location capture.
+   - Optional: if you explicitly want to finish the trajectory during save, add `--finish-trajectory-before-save`
+3. Save named navigation locations:
+   - `python src/feeding_deployment/integration/capture_named_locations.py --locations-file /home/isacc/deployment_ws/src/feeding-deployment/config/nav_named_locations.yaml`
+   - This captures in order: `fridge`, `microwave`, `table`, `sink`.
+
+### Part 2: Actual deployment (reuse saved map)
+
+From `/home/isacc/deployment_ws`, source your workspace in each terminal: `source devel/setup.bash`
+
+1. Start core and robot sources:
+   - `roscore`
+   - `roslaunch feeding_deployment vention_description.launch`
+   - `roslaunch feeding_deployment vention_rplidar_a1.launch`
+   - `roslaunch feeding_deployment vention_odm_d435.launch`
+2. Start Cartographer localization from saved state:
+   - `roslaunch feeding_deployment vention_cartographer_localization.launch load_state_filename:=/home/isacc/deployment_ws/src/feeding-deployment/config/maps/vention_map.pbstream`
+3. Start navigation:
+   - `roslaunch feeding_deployment vention_navigation.launch`
+
+In deployment mode, Cartographer publishes `/map` and `map -> odom` from the saved `.pbstream`, and `move_base` consumes that.
+
+By default, named locations are written to `config/nav_named_locations.yaml`.
+`NavigateHLA` reads this file automatically. To use a different file, set:
+`export FEEDING_NAV_LOCATIONS_FILE=/absolute/path/to/your_locations.yaml`
 
 ## Check Installation
 
 Run `./run_ci_checks.sh`. It should complete with all green successes in 5-10 seconds.
+
+
+# Setting up Vention Navigation Stack
+
+# Navigation Dependencies
+Create a ROS workspace in your home directory:
+```
+mkdir vention_dependencies_ws
+```
+We use Cartographer for multi-lidar SLAM. Follow their instructions at https://google-cartographer-ros.readthedocs.io/en/latest/compilation.html.
+Be sure to set this up in vention_dependencies_ws.
+
+Source vention_dependencies_ws before continuing.
+
+# feeding_deployment
+
+Download the Vention ROS package, and put it into catkin_ws.
+
+Download the URDF at
+```
+https://drive.google.com/file/d/1OZAdcuAua0Nr7p6ITxTQDwUMFzZjeR8F/view?usp=sharing
+```
+Put the URDF into feeding_deployment/urdf/meshes.
+
+build the workspace with
+
+```
+catkin build
+```
+
+
+# Teleoperation with Xbox
+```
+python src/feeding_deployment/src/controllers/basicmicro_arduino/vention_controller.py
+```
+
+# Navigation 
+
+## Load Vention RobotModel
+```
+roslaunch feeding_deployment description.launch
+```
+
+## Start Lidar
+You may need to change the usb id/path of lidars in the launch file.
+```
+roslaunch feeding_deployment vention_rplidar_a1.launch
+```
+
+## Start ZED Camera
+We are using the ZED built-in VIO.
+We use the IMU for odom -> vention_base_link.
+```
+roslaunch feeding_deployment vention_zed_pose.launch
+```
+
+## Start Cartographer For SLAM
+
+We use cartographer for map -> odom
+
+For building map:
+```
+roslaunch feeding_deployment vention_cartographer_lidar.launch
+```
+Save map using 
+```
+python src/feeding_deployment/scripts/build_map_interactive.py --pbstream-file /home/isacc/deployment_ws/src/feeding_deployment/maps/emprise_572_map.pbstream
+```
+
+For using against existing map:
+```
+python src/feeding_deployment/scripts/build_map_interactive.py --pbstream-file /home/isacc/deployment_ws/src/feeding_deployment/maps/emprise_572_map.pbstream
+```
+
+## Start move_base For Navigation
+
+First make sure we are publishing the odom link required:
+
+```
+python src/feeding_deployment/scripts/zed_pose_to_odom_feedback.py
+```
+
+You may need to change the Arduino usb id cmd_vel_bridge_basicmicro.py.
+```
+roslaunch feeding_deployment vention_navigation.launch
+```
+
+## Rviz
+
+Open RViz and use the config in rviz/vention.rviz
+
+You can move the base by giving it a 2D nav goal in RViz.
+
+## Capture Named Locations
+
+```
+python src/feeding_deployment/scripts/capture_named_locations.py --locations sink_easy --locations-file /home/isacc/deployment_ws/src/feeding-deployment/config/nav_named_locations.yaml
+```
+
+## [Feeding-Deployment] Test Navigation
+
+Check that you are in feed conda env
+```
+python /home/isacc/deployment_ws/src/feeding-deployment/src/feeding_deployment/integration/test_navigate_action.py
+```
+
+
+1. ```roslaunch feeding_deployment sensors.launch```
+2. navigation.launch + 
+ - cartographer_localization.launch
+ - cartographer_mapping.launch (map for the first time)
+
+python src/feeding_deployment/scripts/build_map_interactive.py \
+    --pbstream-file /home/isacc/deployment_ws/src/feeding_deployment/maps/4-28.pbstream
+
+Teleoperate with a controller: ```python src/feeding_deployment/src/controllers/basicmicro_arduino/vention_controller.py```
