@@ -319,8 +319,18 @@ Notes:
 ```
 PYTHONPATH=src python -m pytest tests/test_preference_session.py tests/test_preference_integration.py tests/test_apply_preferences.py -q
 ```
-Requires `openai` importable (it's a transitive import; only the client is constructed,
-never called, in these tests). 107 tests pass.
+Requires `anthropic` and `openai` importable (both are transitive imports after the
+Claude-chat migration on `main`: chat runs on the Anthropic Messages API, embeddings stay
+on OpenAI). The tests mock both clients, so no real API key is needed. 107 tests pass.
+
+**Merge note:** this branch was merged with `origin/main`, which migrated the LLM chat
+calls from OpenAI to Claude (`src/feeding_deployment/utils/anthropic_llm.py`,
+`prediction_model.py`, `long_term_memory.py`). The color-prediction logic merged cleanly on
+top: `predict_bundle` still takes `color_seeds` and validates color dims, and now calls
+`self.client.messages.create(...)` (Anthropic) for chat while `self.embed_client` (OpenAI)
+serves embeddings. `claude-opus-4-8` rejects the `temperature` parameter — the wrapper and
+`predict_bundle` correctly omit it. Set `ANTHROPIC_API_KEY` (chat) and `OPENAI_API_KEY`
+(embeddings) on the robot.
 
 ### Planner routing (offline, needs the PDDL planner, no perception)
 Drive the planner directly: with `FoodHeated` unset, `PlacePlateOnTable` should plan
