@@ -18,7 +18,6 @@ from feeding_deployment.integration.apply_preferences import (
     apply_transfer_mode,
     apply_microwave_preference,
     apply_dip_preference,
-    apply_occlusion_preference,
     _SPEED_MAP,
     _CONFIRMATION_MAP,
     _AUTOCONTINUE_MAP,
@@ -345,7 +344,6 @@ class TestApplyBundleFullBundle:
             "detect_user_completed_transfer_wiping": "button",
             "transfer_mode": "inside mouth transfer",
             "microwave_time": "no microwave",
-            "occlusion_relevance": "do not consider occlusion",
             "skewering_axis": "parallel to major axis",
             "retract_between_bites": "yes",
             "bite_dipping_preference": "do not dip",
@@ -526,58 +524,3 @@ class TestApplyDipPreference:
 
     def test_none_flair_is_noop(self):
         apply_dip_preference({"bite_dipping_preference": "do not dip"}, None)
-
-
-# -------------------------------------------------------------------
-# apply_occlusion_preference
-# -------------------------------------------------------------------
-
-
-class _FakeFlairWithPreference:
-    """Minimal stand-in for FLAIR with get/set_preference."""
-
-    def __init__(self, initial: str | None = None) -> None:
-        self._preference = initial
-
-    def get_preference(self):
-        return self._preference
-
-    def set_preference(self, pref: str):
-        self._preference = pref
-
-
-class TestApplyOcclusionPreference:
-
-    def test_minimize_left_sets_hint(self):
-        flair = _FakeFlairWithPreference()
-        apply_occlusion_preference({"occlusion_relevance": "minimize left occlusion"}, flair)
-        assert "left" in flair._preference
-
-    def test_minimize_front_sets_hint(self):
-        flair = _FakeFlairWithPreference()
-        apply_occlusion_preference({"occlusion_relevance": "minimize front occlusion"}, flair)
-        assert "front" in flair._preference
-
-    def test_minimize_right_sets_hint(self):
-        flair = _FakeFlairWithPreference()
-        apply_occlusion_preference({"occlusion_relevance": "minimize right occlusion"}, flair)
-        assert "right" in flair._preference
-
-    def test_do_not_consider_is_noop(self):
-        flair = _FakeFlairWithPreference()
-        apply_occlusion_preference({"occlusion_relevance": "do not consider occlusion"}, flair)
-        assert flair._preference is None
-
-    def test_appends_to_existing_preference(self):
-        flair = _FakeFlairWithPreference("I prefer chicken")
-        apply_occlusion_preference({"occlusion_relevance": "minimize left occlusion"}, flair)
-        assert flair._preference.startswith("I prefer chicken")
-        assert "left" in flair._preference
-
-    def test_missing_key_is_noop(self):
-        flair = _FakeFlairWithPreference()
-        apply_occlusion_preference({}, flair)
-        assert flair._preference is None
-
-    def test_none_flair_is_noop(self):
-        apply_occlusion_preference({"occlusion_relevance": "minimize left occlusion"}, None)

@@ -412,36 +412,3 @@ def apply_dip_preference(
     if dip_pref is None or flair is None:
         return
     flair.set_allow_dip(dip_pref != "do not dip")
-
-
-_OCCLUSION_TEXT_MAP = {
-    "do not consider occlusion": None,
-    "minimize left occlusion": "When choosing which food to pick, prefer items that minimize the robot arm blocking the user's view from the left.",
-    "minimize front occlusion": "When choosing which food to pick, prefer items that minimize the robot arm blocking the user's view from the front.",
-    "minimize right occlusion": "When choosing which food to pick, prefer items that minimize the robot arm blocking the user's view from the right.",
-}
-
-
-def apply_occlusion_preference(
-    bundle: dict[str, str],
-    flair: Any,
-) -> None:
-    """Append occlusion_relevance as a soft hint to FLAIR's user_preference string.
-
-    This injects text into the LLM preference planner prompt. It's a soft
-    hint — the LLM may or may not factor it into food selection. There is
-    no geometric enforcement of occlusion minimization.
-    """
-    occlusion = bundle.get("occlusion_relevance")
-    if occlusion is None or flair is None:
-        return
-
-    hint = _OCCLUSION_TEXT_MAP.get(occlusion)
-    if hint is None:
-        return
-
-    current = flair.get_preference()
-    if current:
-        flair.set_preference(f"{current} {hint}")
-    else:
-        flair.set_preference(hint)

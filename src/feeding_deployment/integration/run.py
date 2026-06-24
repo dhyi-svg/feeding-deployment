@@ -536,7 +536,6 @@ class _Runner:
                 apply_transfer_mode,
                 apply_microwave_preference,
                 apply_dip_preference,
-                apply_occlusion_preference,
             )
             bt_warnings = apply_bundle_to_behavior_trees(
                 self.ground_truth_bundle, self.run_behavior_tree_dir,
@@ -558,7 +557,6 @@ class _Runner:
             else:
                 print(f"Microwave preference: {microwave_duration}s (planner will include microwave steps).")
             apply_dip_preference(self.ground_truth_bundle, self.flair)
-            apply_occlusion_preference(self.ground_truth_bundle, self.flair)
             print("Applied ground-truth bundle to behavior trees and scene config.")
 
             # --- Step 5: Learn ---
