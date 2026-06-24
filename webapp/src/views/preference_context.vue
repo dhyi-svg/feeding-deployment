@@ -284,9 +284,15 @@ export default {
 </script>
 
 <style scoped>
+/* Make the option list a bounded, scrollable window instead of growing tall
+   and running under the footer. The parent .pref-body grid uses
+   align-items:start, which would size this cell to its content; align-self:
+   stretch makes it fill the (bounded) row so overflow-y can scroll. */
 .opts {
   overflow-y: auto;
   min-height: 0;
+  align-self: stretch;
   align-content: start;
+  padding-right: 0.5vw;   /* a little room so the scrollbar doesn't overlap cards */
 }
 </style>
