@@ -6,6 +6,7 @@ from pathlib import Path
 from datetime import datetime
 
 from openai import OpenAI
+import anthropic
 
 import feeding_deployment.preference_learning.config as root_config  # type: ignore
 from feeding_deployment.preference_learning.config.preference_bundle import (
@@ -117,7 +118,7 @@ class PredictionModel:
         use_long_term_memory: bool = True,
         use_episodic_memory: bool = True,
         k_retrieve: int = 5,
-        chat_model: str = "gpt-5.4",
+        chat_model: str = "claude-opus-4-8",
         embed_model: str = "text-embedding-3-small",
         physical_profile_description: str | None = None,
     ) -> None:
@@ -125,7 +126,8 @@ class PredictionModel:
         self.user = user
         self.physical_profile_label = physical_profile_label
         self.physical_profile_description = physical_profile_description
-        self.client = OpenAI(api_key=_resolve_api_key())
+        self.client = anthropic.Anthropic()  # chat (reads ANTHROPIC_API_KEY)
+        self.embed_client = OpenAI(api_key=_resolve_api_key())  # embeddings stay on OpenAI
         self.chat_model = chat_model
         self.embed_model = embed_model
         self._retry = retry_fn
@@ -149,7 +151,7 @@ class PredictionModel:
             self.episodic_memory_dir = self.logs_dir / user / "episodic_memory"
             self.episodic_memory_dir.mkdir(parents=True, exist_ok=True)
             self.episodic_memory_model = EpisodicMemoryModel(
-                client=self.client,
+                client=self.embed_client,
                 embed_model=self.embed_model,
                 cache_path=self.logs_dir / "embeddings.json",
                 retry_fn=self._retry,
@@ -251,18 +253,17 @@ class PredictionModel:
         )
 
         def _call() -> Any:
-            return self.client.chat.completions.create(
+            return self.client.messages.create(
                 model=self.chat_model,
+                max_tokens=15000,
+                system="Return JSON only. No extra text.",
                 messages=[
-                    {"role": "system", "content": "Return JSON only. No extra text."},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0,
-                max_completion_tokens=15000,
             )
 
         resp = self._retry(_call)
-        raw = (resp.choices[0].message.content or "").strip()
+        raw = ("".join(b.text for b in resp.content if b.type == "text")).strip()
         raw = _strip_code_fences(raw)
         data = _safe_json_load(raw) or {}
             

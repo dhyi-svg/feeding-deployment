@@ -6,9 +6,9 @@ import sys
 from typing import Any, Dict, List, Optional
 
 try:
-    from openai import OpenAI
+    import anthropic
 except ImportError:
-    print("Error: openai package not installed. Install it with: pip install openai", file=sys.stderr)
+    print("Error: anthropic package not installed. Install it with: pip install anthropic", file=sys.stderr)
     sys.exit(1)
 
 from feeding_deployment.preference_learning.config.preference_bundle import PREFERENCE_BUNDLE
@@ -17,7 +17,7 @@ from feeding_deployment.preference_learning.data_generation.prompts.user_prefere
     get_user_preference_encoding_prompt,
 )
 
-DEFAULT_MODEL = "gpt-5.4"
+DEFAULT_MODEL = "claude-opus-4-8"
 
 
 def _extract_json_object(text: str) -> str:
@@ -92,34 +92,29 @@ def _validate_preferences_strict(prefs: Any) -> Dict[str, Dict[str, str]]:
 
 
 def generate_user_preference_encoding_llm(
-    client: OpenAI,
+    client: anthropic.Anthropic,
     physical_profile_key: str,
     model: str = DEFAULT_MODEL,
     print_raw: bool = False,
 ) -> Dict[str, Dict[str, str]]:
     prompt = get_user_preference_encoding_prompt(physical_profile_key)
 
-    response = client.chat.completions.create(
+    response = client.messages.create(
         model=model,
+        max_tokens=15000,
+        system=(
+            "You generate structured user preference encodings for a robot-assisted mealtime system.\n"
+            "Return ONLY valid JSON (no markdown, no extra text).\n"
+            'Schema: dict[field] = {"default": <one allowed option>, "user_tendencies": <non-empty string>}.\n'
+            "You must include all fields and no extra fields.\n"
+            f"Fields (exact): {[dim.field for dim in PREFERENCE_BUNDLE]}"
+        ),
         messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You generate structured user preference encodings for a robot-assisted mealtime system.\n"
-                    "Return ONLY valid JSON (no markdown, no extra text).\n"
-                    'Schema: dict[field] = {"default": <one allowed option>, "user_tendencies": <non-empty string>}.\n'
-                    "You must include all fields and no extra fields.\n"
-                    f"Fields (exact): {[dim.field for dim in PREFERENCE_BUNDLE]}"
-                ),
-            },
             {"role": "user", "content": prompt},
         ],
-        temperature=0.5,
-        max_completion_tokens=15000,
-        response_format={"type": "json_object"},
     )
 
-    raw = response.choices[0].message.content or ""
+    raw = "".join(b.text for b in response.content if b.type == "text")
     if print_raw:
         print("Raw LLM output:")
         print(raw)
@@ -172,8 +167,8 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     )
     parser.add_argument("--num-users", type=int, required=True, help="Number of user encodings to generate (>= 1).")
     parser.add_argument("--output-dir", required=True, help="Directory to write output files into.")
-    parser.add_argument("--api-key", default=None, help="OpenAI API key (overrides env var)")
-    parser.add_argument("--model", default=DEFAULT_MODEL, help=f"OpenAI model (default: {DEFAULT_MODEL})")
+    parser.add_argument("--api-key", default=None, help="Anthropic API key (overrides env var)")
+    parser.add_argument("--model", default=DEFAULT_MODEL, help=f"Claude model (default: {DEFAULT_MODEL})")
     parser.add_argument("--print-raw", action="store_true", help="Print raw model output for debugging.")
     return parser.parse_args(argv)
 
@@ -184,12 +179,12 @@ def main(argv: List[str]) -> int:
     if args.num_users < 1:
         raise ValueError("--num-users must be >= 1")
 
-    api_key = args.api_key or os.getenv("OPENAI_API_KEY")
+    api_key = args.api_key or os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
-        raise ValueError("OPENAI_API_KEY is not set. Set it in the environment or pass --api-key.")
+        raise ValueError("ANTHROPIC_API_KEY is not set. Set it in the environment or pass --api-key.")
 
     output_dir = _ensure_output_dir(args.output_dir)
-    client = OpenAI(api_key=api_key)
+    client = anthropic.Anthropic(api_key=api_key)
 
     all_profiles = _profile_labels()
     if not all_profiles:

@@ -1,5 +1,6 @@
 from typing import Any, Dict, List, Optional
 from openai import RateLimitError as OpenAIRateLimitError
+from anthropic import RateLimitError as AnthropicRateLimitError
 import time
 import os
 import feeding_deployment.preference_learning.config as root_config  # type: ignore
@@ -10,7 +11,7 @@ def _retry_on_rate_limit(fn, max_retries: int = 5, base_wait: float = 60.0):
     for attempt in range(max_retries):
         try:
             return fn()
-        except OpenAIRateLimitError as e:
+        except (OpenAIRateLimitError, AnthropicRateLimitError) as e:
             last_err = e
             if attempt == max_retries - 1:
                 raise
@@ -34,6 +35,15 @@ def _resolve_api_key(cli_key: Optional[str]) -> str:
     except Exception:
         pass
     raise RuntimeError("OpenAI API key not found. Set OPENAI_API_KEY env var or pass --api-key.")
+
+
+def _resolve_anthropic_key(cli_key: Optional[str] = None) -> str:
+    if cli_key and cli_key.strip():
+        return cli_key.strip()
+    env_key = os.getenv("ANTHROPIC_API_KEY")
+    if env_key and env_key.strip():
+        return env_key.strip()
+    raise RuntimeError("Anthropic API key not found. Set ANTHROPIC_API_KEY env var or pass --api-key.")
 
 
 def _episode_text(day: int, context: Dict[str, Any], prefs: Dict[str, str]) -> str:

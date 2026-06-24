@@ -1,5 +1,4 @@
 import os
-from openai import OpenAI
 import numpy as np
 import math
 import time

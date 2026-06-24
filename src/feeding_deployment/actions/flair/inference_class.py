@@ -3,7 +3,7 @@ import time
 import os
 import numpy as np
 import os
-from openai import OpenAI
+import anthropic
 import ast
 import sys
 import cmath
@@ -129,21 +129,18 @@ class BiteAcquisitionInference:
 
     def chat_with_openai(self, prompt):
         """
-        Sends the prompt to OpenAI API using the chat interface and gets the model's response.
+        Sends the prompt to Claude via the Messages API and returns the response text.
+        (Method name kept for backward compatibility with callers.)
         """
-        message = {
-                    'role': 'user',
-                    'content': prompt
-                  }
-    
-        response = self.client.chat.completions.create(
-                   model='gpt-3.5-turbo-1106',
-                   messages=[message]
+        if getattr(self, "client", None) is None:
+            self.client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
+
+        response = self.client.messages.create(
+                   model='claude-opus-4-8',
+                   max_tokens=1024,
+                   messages=[{'role': 'user', 'content': prompt}],
                   )
-        
-        # Extract the chatbot's message from the response.
-        # Assuming there's at least one response and taking the last one as the chatbot's reply.
-        chatbot_response = response.choices[0].message.content
+        chatbot_response = "".join(b.text for b in response.content if b.type == "text")
         return chatbot_response.strip()
 
     def run_minispanet_inference(self, u, v, cv_img, crop_dim=15):

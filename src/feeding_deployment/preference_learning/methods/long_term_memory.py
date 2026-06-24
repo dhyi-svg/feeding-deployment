@@ -7,14 +7,14 @@ from typing import Any, Dict, List
 from pathlib import Path
 from datetime import datetime
 
-from openai import OpenAI
+import anthropic
 
 from feeding_deployment.preference_learning.methods.prompts.ltm_update import (
     get_ltm_update_prompt,
 )
 from feeding_deployment.preference_learning.methods.utils import (
     _retry_on_rate_limit,
-    _resolve_api_key,
+    _resolve_anthropic_key,
     _episode_text,
     _extract_truth_bundle,
 )
@@ -28,7 +28,7 @@ class LongTermMemoryModel:
     def __init__(
         self,
         physical_profile_label: str,
-        client: OpenAI,
+        client: anthropic.Anthropic,
         chat_model: str,
         retry_fn,
         logs_dir: Path = None,
@@ -59,18 +59,17 @@ class LongTermMemoryModel:
         )
 
         def _call() -> Any:
-            return self.client.chat.completions.create(
+            return self.client.messages.create(
                 model=self.chat_model,
+                max_tokens=15000,
+                system="You write concise, faithful preference summaries.",
                 messages=[
-                    {"role": "system", "content": "You write concise, faithful preference summaries."},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0,
-                max_completion_tokens=15000,
             )
 
         resp = self._retry(_call)
-        new_ltm_summary = (resp.choices[0].message.content or "").strip()
+        new_ltm_summary = ("".join(b.text for b in resp.content if b.type == "text")).strip()
     
         if self.logs_dir:
             self.logs_dir.mkdir(parents=True, exist_ok=True)
@@ -94,8 +93,8 @@ def parse_args_ltm() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Generate and log LTM summaries day-by-day from a dataset file.")
     p.add_argument("--data-file", required=True, help="Path to one JSON dataset file.")
     p.add_argument("--log-dir", required=True, help="Directory to write logs (will be created).")
-    p.add_argument("--openai-model", default="gpt-5.4", help="Chat model for LTM (default: gpt-5.4).")
-    p.add_argument("--api-key", default="", help="OpenAI API key (optional).")
+    p.add_argument("--openai-model", default="claude-opus-4-8", help="Chat model for LTM (default: claude-opus-4-8).")
+    p.add_argument("--api-key", default="", help="Anthropic API key (optional).")
     return p.parse_args()
 
 
@@ -118,7 +117,7 @@ def main() -> int:
     days: List[Dict[str, Any]] = list(data.get("days", []))
     days.sort(key=lambda r: int(r.get("day", 0)))
 
-    client = OpenAI(api_key=_resolve_api_key(args.api_key))
+    client = anthropic.Anthropic(api_key=_resolve_anthropic_key(args.api_key))
     ltm = LongTermMemoryModel(
         physical_profile_label=physical_profile_label,
         client=client,
