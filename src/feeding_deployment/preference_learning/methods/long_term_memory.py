@@ -20,6 +20,43 @@ from feeding_deployment.preference_learning.methods.utils import (
 )
 
 
+def _extract_json_object(text: str) -> str:
+    """Return the outermost JSON object embedded in ``text``.
+
+    Tolerates models that wrap the JSON in prose and/or ```json fences. Scans
+    for the first balanced ``{...}`` (ignoring braces inside strings) and
+    returns it. Falls back to the stripped input if no object is found, so the
+    caller's json.loads still raises a meaningful error.
+    """
+    s = text.strip()
+    start = s.find("{")
+    if start == -1:
+        return s
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for i in range(start, len(s)):
+        ch = s[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return s[start : i + 1]
+    return s
+
+
 class LongTermMemoryModel:
     """
     Stateful LTM that updates EVERY meal (online).
@@ -62,14 +99,21 @@ class LongTermMemoryModel:
             return self.client.messages.create(
                 model=self.chat_model,
                 max_tokens=15000,
-                system="You write concise, faithful preference summaries.",
+                system="You write concise, faithful preference summaries. Respond with a single JSON object and nothing else.",
                 messages=[
                     {"role": "user", "content": prompt},
+                    # Prefill forces the model to start the JSON object immediately,
+                    # preventing any prose preamble before the JSON.
+                    {"role": "assistant", "content": "{"},
                 ],
             )
 
         resp = self._retry(_call)
-        new_ltm_summary = ("".join(b.text for b in resp.content if b.type == "text")).strip()
+        raw = ("".join(b.text for b in resp.content if b.type == "text")).strip()
+        # Re-attach the prefilled "{" that the model continues from.
+        if not raw.startswith("{"):
+            raw = "{" + raw
+        new_ltm_summary = _extract_json_object(raw)
     
         if self.logs_dir:
             self.logs_dir.mkdir(parents=True, exist_ok=True)
