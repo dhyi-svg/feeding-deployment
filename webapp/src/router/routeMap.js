@@ -1,4 +1,7 @@
 const routeMap = {
+  home: {
+    jump: '/home'
+  },
   task_selection: {
     jump: '/task_selection'
   },

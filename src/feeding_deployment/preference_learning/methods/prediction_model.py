@@ -148,7 +148,7 @@ class PredictionModel:
         self.physical_profile_label = physical_profile_label
         self.physical_profile_description = physical_profile_description
         self.client = anthropic.Anthropic()  # chat (reads ANTHROPIC_API_KEY)
-        self.embed_client = OpenAI(api_key=_resolve_api_key())  # embeddings stay on OpenAI
+        self.embed_client = OpenAI(api_key=_resolve_api_key(None))  # embeddings stay on OpenAI (falls back to OPENAI_API_KEY)
         self.chat_model = chat_model
         self.embed_model = embed_model
         self._retry = retry_fn

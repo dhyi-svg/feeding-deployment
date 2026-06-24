@@ -90,7 +90,7 @@ export default {
       device: '—',
       peak: 0,
       maxSeen: 0,
-      threshold: 0.02,
+      threshold: 0.1,
       count: 0,
       singleCount: 0,
       doubleCount: 0,

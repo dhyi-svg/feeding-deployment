@@ -16,7 +16,7 @@
         <div class="h-sub">Your robot is connected and ready to begin.</div>
       </div>
       <div class="home-right">
-        <button class="btn xl amber" style="width:60%" @click="handleButtonClick">Start Meal</button>
+        <button class="btn xl amber" style="width:60%" :disabled="starting" @click="handleButtonClick">{{ starting ? 'Starting…' : 'Start Meal' }}</button>
       </div>
     </div>
   </div>
@@ -34,6 +34,7 @@ export default {
       username: USER,
       listener: null,
       publisher: null,
+      starting: false,
     }
   },
   mounted () {
@@ -64,8 +65,14 @@ export default {
       }
     },
     handleButtonClick () {
+      // Signal the backend that the user is ready. The backend (run.py
+      // wait_for_start_meal) is blocked on this press; once it receives it, it
+      // drives the next page jump (preference_context in personalization mode,
+      // task_selection otherwise), which our listener below routes via routeMap.
+      // We intentionally do NOT navigate client-side so the backend stays the
+      // single source of truth for the next page.
+      this.starting = true;
       this.publishMessage();
-      this.$router.push('/preference_context');
     },
     initPublisher () {
       this.publisher = new ROSLIB.Topic({
@@ -78,7 +85,7 @@ export default {
       const message = new ROSLIB.Message({
         data: JSON.stringify({
           state: 'home',
-          status: 'move_to_above_plate'
+          status: 'start_meal'
         })
       })
       this.publisher.publish(message);

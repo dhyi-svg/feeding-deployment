@@ -128,6 +128,15 @@ from feeding_deployment.preference_learning.config.physical_capabilities import 
 )
 from feeding_deployment.preference_learning.config import MEALS, SETTINGS, TIMES_OF_DAY
 
+# Used for preference prediction when --physical_profile_file is not passed.
+DEFAULT_PHYSICAL_PROFILE = (
+    "This user has moderate voluntary control of their arms and is able to press "
+    "physical buttons. They can lean forward to reach food during outside-mouth "
+    "transfers. They have good neck and head control and can open their mouth wide "
+    "and perform head gestures. They interact with the web interface on their "
+    "personal device using their arms."
+)
+
 # Preference dimensions asked at the start of the meal (before fetching the
 # plate). The finalized wait drives the autocontinue of later correction pages.
 _INITIAL_PREF_DIMS = ["robot_speed", "wait_before_autocontinue_seconds"]
@@ -615,6 +624,12 @@ class _Runner:
 
         assert self.web_interface is not None, "Run takes user commands from the web interface which is None."
 
+        # Gate the meal on the user pressing "Start Meal" on the home page. Home
+        # is the webapp's default/refresh route, so waiting for this user-initiated
+        # press (rather than blindly jumping forward) keeps startup robust against
+        # refreshes and slow webapp connections.
+        self.web_interface.wait_for_start_meal()
+
         if self._pref_mode == "none":
             self.web_interface.ready_for_task_selection()
         else:
@@ -1070,18 +1085,15 @@ if __name__ == "__main__":
     parser.add_argument("--max_motion_planning_time", type=float, default=10.0)
     parser.add_argument("--resume_from_state", type=str, default="")
     parser.add_argument("--no_waits", action="store_true")
-    parser.add_argument("--cbtl", action="store_true")
-    parser.add_argument("--meal_id", type=int, default=1)
-    parser.add_argument("--results_dir", type=Path, default=Path("feast_default_user"), help="Directory for saving and loading results and user responses. Make one of these directories per user.")
-    parser.add_argument("--load", action="store_true")
     parser.add_argument(
         "--pref_mode",
         type=str,
         choices=["none", "terminal", "interface"],
-        default="none",
-        help="Preference interaction mode. "
-             "'none': no personalization (default). "
-             "'terminal': predict + correct via terminal prompts. "
+        default=None,
+        help="Preference interaction mode. If omitted, defaults to 'interface' "
+             "when --use_interface is set and 'none' otherwise. "
+             "'none': no personalization. "
+             "'terminal': predict + correct via terminal prompts (must be passed explicitly). "
              "'interface': predict + correct via web interface (requires frontend).",
     )
     parser.add_argument(
@@ -1115,6 +1127,12 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    # Resolve pref_mode when not passed explicitly: interface runs personalize via
+    # the web interface; everything else defaults to no personalization. Terminal
+    # mode must always be requested explicitly.
+    if args.pref_mode is None:
+        args.pref_mode = "interface" if args.use_interface else "none"
+
     if args.user == "":
         raise ValueError("Please provide a user name.")
 
@@ -1126,17 +1144,16 @@ if __name__ == "__main__":
 
     physical_profile_label: str | None = None
     if args.pref_mode in ("terminal", "interface"):
-        if not args.physical_profile_file.strip():
-            raise ValueError(
-                f"With --pref_mode={args.pref_mode}, pass --physical_profile_file "
-                "pointing to a UTF-8 .txt file with freeform physical-capability text."
-            )
-        profile_path = Path(args.physical_profile_file.strip())
-        if not profile_path.is_file():
-            raise ValueError(f"physical profile file not found: {profile_path}")
-        physical_profile_label = profile_path.read_text(encoding="utf-8").strip()
-        if not physical_profile_label:
-            raise ValueError(f"physical profile file is empty: {profile_path}")
+        if args.physical_profile_file.strip():
+            profile_path = Path(args.physical_profile_file.strip())
+            if not profile_path.is_file():
+                raise ValueError(f"physical profile file not found: {profile_path}")
+            physical_profile_label = profile_path.read_text(encoding="utf-8").strip()
+            if not physical_profile_label:
+                raise ValueError(f"physical profile file is empty: {profile_path}")
+        else:
+            # No file passed: fall back to the default deployment profile.
+            physical_profile_label = DEFAULT_PHYSICAL_PROFILE
 
     runner = _Runner(args.scene_config,
                      args.user,
