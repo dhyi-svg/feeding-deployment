@@ -35,14 +35,33 @@
         </div>
 
         <div class="mic-row">
-          <span>Detector
-            <span class="press-state" :class="{ hit: pressActive }">{{ pressActive ? 'PRESS!' : '— idle —' }}</span>
+          <span>Raw click
+            <span class="press-state" :class="{ hit: pressActive }">{{ pressActive ? 'CLICK!' : '— idle —' }}</span>
           </span>
-          <b>{{ count }} presses</b>
+          <b>{{ count }} clicks</b>
+        </div>
+
+        <div class="event-banner"
+             :class="{ single: lastEvent === 'SINGLE', double: lastEvent === 'DOUBLE' }">
+          {{ lastEvent ? lastEvent + ' PRESS' : 'tap once = single · tap twice quickly = double' }}
+        </div>
+
+        <div class="mic-row">
+          <span>Single presses</span><b>{{ singleCount }}</b>
+        </div>
+        <div class="mic-row">
+          <span>Double presses</span><b>{{ doubleCount }}</b>
+        </div>
+
+        <div class="threshold-row">
+          <span class="threshold-lbl">Double window</span>
+          <input type="range" min="200" max="1500" step="10" v-model.number="doubleWindowMs" />
+          <b>{{ doubleWindowMs }}ms</b>
         </div>
 
         <div class="mic-enable-row">
           <button class="btn sm ghost" style="flex:1" @click="maxSeen = 0">Reset max</button>
+          <button class="btn sm ghost" style="flex:1" @click="singleCount = 0; doubleCount = 0; count = 0">Reset counts</button>
           <button class="btn sm ghost" style="flex:1" @click="logs = []">Clear log</button>
         </div>
 
@@ -61,6 +80,7 @@
 </template>
 
 <script>
+import { PressClassifier, DOUBLE_WINDOW } from '@/utils/pressClassifier'
 
 export default {
   name: 'MicTest',
@@ -72,12 +92,17 @@ export default {
       maxSeen: 0,
       threshold: 0.02,
       count: 0,
+      singleCount: 0,
+      doubleCount: 0,
+      lastEvent: '',
+      doubleWindowMs: DOUBLE_WINDOW,
       pressActive: false,
       logs: [],
       _analyser: null,
       _data: null,
       _prevAbove: false,
-      _lastHit: 0,
+      _press: null,
+      _eventFlash: null,
       _raf: null
     }
   },
@@ -86,6 +111,7 @@ export default {
   },
   beforeUnmount () {
     if (this._raf) cancelAnimationFrame(this._raf)
+    if (this._press) this._press.reset()
   },
   methods: {
     async enableMic () {
@@ -114,6 +140,10 @@ export default {
         this._analyser.fftSize = 2048
         this._data = new Float32Array(this._analyser.fftSize)
         src.connect(this._analyser)
+        this._press = new PressClassifier({
+          onSingle: () => this.onSingle(),
+          onDouble: () => this.onDouble()
+        })
         this.loop()
       } catch (e) {
         this.status = 'ERROR: ' + e.name + ' — ' + e.message +
@@ -136,17 +166,36 @@ export default {
 
       if (p > 0.01) this.addLog('peak', 'peak: ' + p.toFixed(4) + ' | threshold: ' + this.threshold.toFixed(4))
 
+      // keep the classifier window in sync with the on-screen slider
+      this._press.doubleWindow = this.doubleWindowMs
+
       const above = p > this.threshold
-      const now = Date.now()
-      if (above && !this._prevAbove && (now - this._lastHit) > 1500) {
-        this._lastHit = now
-        this.count++
-        this.pressActive = true
-        this.addLog('press', 'PRESS #' + this.count + ' — peak: ' + p.toFixed(4) + ' | threshold: ' + this.threshold.toFixed(4))
-        setTimeout(() => { this.pressActive = false }, 500)
+      if (above && !this._prevAbove) {
+        const fresh = this._press.edge(Date.now())
+        if (fresh) {
+          this.count++
+          this.pressActive = true
+          this.addLog('click', 'click #' + this.count + ' — peak: ' + p.toFixed(4))
+          setTimeout(() => { this.pressActive = false }, 200)
+        }
       }
       this._prevAbove = above
       this._raf = requestAnimationFrame(this.loop)
+    },
+    flashEvent (kind) {
+      this.lastEvent = kind
+      if (this._eventFlash) clearTimeout(this._eventFlash)
+      this._eventFlash = setTimeout(() => { this.lastEvent = '' }, 900)
+    },
+    onSingle () {
+      this.singleCount++
+      this.flashEvent('SINGLE')
+      this.addLog('single', 'SINGLE PRESS #' + this.singleCount)
+    },
+    onDouble () {
+      this.doubleCount++
+      this.flashEvent('DOUBLE')
+      this.addLog('double', 'DOUBLE PRESS #' + this.doubleCount)
     }
   }
 }
@@ -226,6 +275,22 @@ export default {
   font-size: 1.5vh;
   color: var(--tm);
 }
-.mic-log .press { color: var(--a); font-weight: 700; }
+.mic-log .single { color: var(--a2); font-weight: 700; }
+.mic-log .double { color: var(--a); font-weight: 700; }
+.mic-log .click { color: var(--t); }
 .mic-log .peak { color: var(--tm); }
+.event-banner {
+  text-align: center;
+  font-family: Verdana, sans-serif;
+  font-weight: 700;
+  font-size: 2.4vh;
+  padding: 1.6vh 0;
+  border-radius: 10px;
+  background: var(--s1);
+  border: 1px solid var(--s3);
+  color: var(--tm);
+  transition: background .1s, color .1s, border-color .1s;
+}
+.event-banner.single { background: rgba(46, 196, 182, .18); border-color: var(--a2); color: var(--a2); }
+.event-banner.double { background: rgba(240, 165, 0, .18); border-color: var(--a); color: var(--a); }
 </style>
