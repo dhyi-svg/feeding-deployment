@@ -18,8 +18,8 @@
     <!-- <rosparam file="$(find feeding_deployment)/config/nav/dwa_local_planner.yaml" command="load"/> -->
     <rosparam file="$(find feeding_deployment)/config/nav/teb_local_planner.yaml" command="load"/>
 
-    <param name="planner_patience" value="5.0"/>
-    <param name="controller_patience" value="5.0"/>
+    <param name="planner_patience" value="15.0"/>
+    <param name="controller_patience" value="15.0"/>
 
     <!-- optional but often helpful for your exact symptom -->
     <param name="planner_frequency" value="1.0"/>
