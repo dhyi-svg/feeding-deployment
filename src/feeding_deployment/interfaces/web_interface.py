@@ -172,7 +172,10 @@ class WebInterface:
 
         self.task_selection_jump = False
 
-        if msg_dict["status"] == "finish_feeding":
+        # Some messages (e.g. *_response payloads) carry no "status"; use .get so
+        # they fall through to the queue instead of raising KeyError in this
+        # callback (which would silently drop them and hang the waiting caller).
+        if msg_dict.get("status") == "finish_feeding":
             task_selected = {
                 "task": "finish_feeding",
                 "type": "place_plate_in_sink",
@@ -603,19 +606,33 @@ class WebInterface:
                }
 
         Expected back from webapp (on WebAppComm):
-            {
-                "state": "preference_correction_response",
-                "bundle": {"field": "value", ...}
-            }
-            where "bundle" contains all fields with the user's final selections
-            (unchanged fields keep their predicted values).
+            a. {"state": "preference_correction", "status": "ready"}
+               sent once the page has mounted and subscribed; we wait for it
+               before sending the (non-latched) data so it can't be dropped.
+            b. {
+                   "state": "preference_correction_response",
+                   "bundle": {"field": "value", ...}
+               }
+               where "bundle" contains all fields with the user's final
+               selections (unchanged fields keep their predicted values).
 
         Currently stubbed: returns predicted_bundle unchanged (no frontend yet).
         """
 
         self.current_page = "preference_correction"
+        # Drop any stale messages so we wait for the ready that corresponds to
+        # this navigation, not one left over from a previous correction round.
+        self.clear_received_messages()
         self._send_message({"state": "preference_correction", "status": "jump"})
-        time.sleep(0.5)
+        # Wait for the page to announce it has subscribed before sending the
+        # data; replaces a blind sleep that raced the page's subscription
+        # (made worse by the per-page websocket + TLS reconnect on navigation).
+        self.get_required_web_interface_message(
+            lambda msg_dict: (
+                msg_dict.get("state") == "preference_correction"
+                and msg_dict.get("status") == "ready"
+            )
+        )
         self._send_message({
             "state": "preference_correction_data",
             "predicted_bundle": predicted_bundle,

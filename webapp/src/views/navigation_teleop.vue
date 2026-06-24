@@ -4,10 +4,8 @@
       <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
       <div>
         <div class="tb-n">{{ username }}</div>
-        <div class="tb-s">Base navigation — push to drive, Resume to let autonomy finish, Done when parked</div>
+        <div class="tb-s">{{ subtitle }}</div>
       </div>
-      <button class="btn sm teal" style="margin-left:auto;height:6vh;padding:0 1.5vw" @click="resume()">Resume</button>
-      <button class="btn sm amber" style="height:6vh;padding:0 1.5vw" @click="finish()">Done</button>
     </div>
 
     <div class="banner" :class="{ bad: !connected }">{{ bannerText }}</div>
@@ -37,6 +35,14 @@
       </div>
       <div class="hint">push to drive · release to stop</div>
     </div>
+
+    <div class="bottom" :class="{ 'two-col': navMode === 'skill' }">
+      <template v-if="navMode === 'skill'">
+        <button class="navbtn resume" @click="resume()">Resume</button>
+        <button class="navbtn done" @click="finish()">Done</button>
+      </template>
+      <button v-else class="navbtn return" @click="goBack()">Return</button>
+    </div>
   </div>
 </template>
 
@@ -45,13 +51,15 @@ import ROSLIB from 'roslib'
 import routeMap from '@/router/routeMap'
 import { ROS_URL, USER } from '@/config/parameterConfig'
 import { skillLabel } from '@/config/skillLabels'
+import { categoryOf } from '@/config/skillCategories'
 
-const MAX_LIN = 0.30   
-const MAX_ANG = 0.60   
-const SEND_HZ = 10     
-const R = 96           
-const KCENTER = 96     
-const DEADZONE = 0.05  
+const MAX_LIN = 0.30
+const MAX_ANG = 0.60
+const SEND_HZ = 10
+const R = 96
+const KCENTER = 96
+const DEADZONE = 0.05
+const HEARTBEAT_MS = 3000
 
 export default {
   name: 'NavigationTeleop',
@@ -69,22 +77,53 @@ export default {
       takeoverPub: null,
       donePub: null,
       resumePub: null,
+      cancelPub: null,
+      armPub: null,
+      heartbeatTimer: null,
       listener: null,
       skillPlanListener: null,
 
-      currentHla: null
+      currentHla: null,
+      // True when reached as a base-driving detour from the arm-teleop chooser
+      // (manipulation_done). The arm session is paused, not concluded, so we must
+      // keep its heartbeat alive and follow the shared-autonomy takeover/cancel
+      // protocol — Return goes back to the chooser, not the executive.
+      detour: false,
+      // 'skill' = teleop *during* a running navigation skill (Resume/Done hand-off);
+      // 'aux'   = idle / a manipulation skill is current → manual driving + Return.
+      navMode: 'aux',
+      // Page to return to in aux mode; set from the referrer in beforeRouteEnter.
+      referrer: '/robot_executing'
     }
   },
   computed: {
     bannerText () {
       return this.connected ? 'connected' : 'connection lost — base stopping'
+    },
+    subtitle () {
+      return this.navMode === 'skill'
+        ? 'Base navigation — push to drive, Resume to let autonomy finish, Done when parked'
+        : 'Manual base driving — push to drive, Return when finished'
     }
+  },
+  beforeRouteEnter (to, from, next) {
+    next(vm => {
+      vm.referrer = (from && from.fullPath && from.fullPath !== '/' && from.fullPath !== to.fullPath)
+        ? from.fullPath
+        : '/robot_executing'
+    })
   },
   mounted () {
 
     if (this.$route.query.hla) {
       this.currentHla = this.$route.query.hla
     }
+    this.detour = this.$route.query.detour === '1'
+    // Freeze the button set at entry: skill mode only when a navigation skill is
+    // actually running (callers pass ?hla for that). Everything else is aux
+    // (a base-driving detour from arm teleop is aux too — its hla is a
+    // manipulation skill, so categoryOf is never 'navigation').
+    this.navMode = (this.currentHla && categoryOf(this.currentHla) === 'navigation') ? 'skill' : 'aux'
     this.ros = new ROSLIB.Ros({ url: ROS_URL })
     this.ros.on('connection', () => { this.connected = true })
     this.ros.on('close', () => this.setLinkHealthy(false))
@@ -97,6 +136,12 @@ export default {
     // Resume: hand back to autonomy, which replans from the current pose to the
     // original goal (manager re-sends the goal). Distinct from done/blind-success.
     this.resumePub = new ROSLIB.Topic({ ros: this.ros, name: '/shared_autonomy/resume', messageType: 'std_msgs/Empty' })
+    // Cancel: end a takeover WITHOUT reporting goal-reached. Used by the base
+    // detour, where there is no navigation goal to "complete" — the manager
+    // aborts (never set_succeeded), so no spurious goal-reached is reported.
+    this.cancelPub = new ROSLIB.Topic({ ros: this.ros, name: '/shared_autonomy/cancel', messageType: 'std_msgs/Empty' })
+    // Heartbeat channel for the paused arm-teleop session (detour only).
+    this.armPub = new ROSLIB.Topic({ ros: this.ros, name: '/webapp_to_robot', messageType: 'std_msgs/String' })
 
     // Follow the executive's page jumps like every other page.
     this.listener = new ROSLIB.Topic({ ros: this.ros, name: '/robot_to_webapp', messageType: 'std_msgs/String' })
@@ -105,7 +150,25 @@ export default {
     this.skillPlanListener = new ROSLIB.Topic({ ros: this.ros, name: '/skill_plan', messageType: 'std_msgs/String' })
     this.skillPlanListener.subscribe((msg) => this.handleSkillPlan(msg))
 
-    this.takeoverPub.publish(new ROSLIB.Message({}))
+    // Announce a shared-autonomy takeover both when interrupting a running
+    // navigation skill (skill mode) and on a base detour from arm teleop, so the
+    // manager always sees the protocol. A plain idle aux drive (e.g. from the
+    // task menu) isn't taking anything over, so it stays silent.
+    if (this.navMode === 'skill' || this.detour) {
+      this.takeoverPub.publish(new ROSLIB.Message({}))
+    }
+
+    // On a detour the arm-teleop session is only paused; keep its heartbeat
+    // alive so the backend (10s no-heartbeat timeout) doesn't conclude it.
+    if (this.detour) {
+      this.heartbeatTimer = setInterval(() => {
+        if (this.armPub) {
+          this.armPub.publish(new ROSLIB.Message({
+            data: JSON.stringify({ state: 'teleop', status: 'heartbeat' })
+          }))
+        }
+      }, HEARTBEAT_MS)
+    }
 
     this.sendTimer = setInterval(() => this.sendVelocity(), 1000 / SEND_HZ)
 
@@ -219,9 +282,21 @@ export default {
       if (this.resumePub) this.resumePub.publish(new ROSLIB.Message({}))
       this.$router.push('/robot_executing')
     },
+    goBack () {
+      // Stop the base and return to whatever page sent us here. On a detour the
+      // human is ending the takeover without reaching any goal, so publish
+      // /shared_autonomy/cancel (NOT done — that would report a bogus
+      // goal-reached) and return to the chooser (the referrer). A plain idle aux
+      // drive took nothing over, so it just returns silently.
+      this.center()
+      this.sendVelocity()
+      if (this.detour && this.cancelPub) this.cancelPub.publish(new ROSLIB.Message({}))
+      this.$router.push(this.referrer || '/robot_executing')
+    },
     teardown () {
       this.center()
-      if (this.cmdVelPub) this.sendVelocity()  
+      if (this.cmdVelPub) this.sendVelocity()
+      if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null }
       if (this.sendTimer) { clearInterval(this.sendTimer); this.sendTimer = null }
       window.removeEventListener('blur', this.center)
       document.removeEventListener('visibilitychange', this.onVisibility)
@@ -241,6 +316,7 @@ export default {
   padding: 8px 3vw 10px;
   box-sizing: border-box;
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -284,4 +360,21 @@ export default {
 .readout { display: flex; gap: 32px; font-size: 16px; color: var(--tm); }
 .readout b { color: var(--t); font-weight: 700; }
 .hint { font-size: 13px; color: var(--tm); }
+
+/* Bottom action bar — mirrors the manipulation_teleop layout. */
+.bottom {
+  display: grid; grid-template-columns: 1fr; gap: 8px;
+  border-top: 1px solid var(--bd); padding-top: 10px; margin-top: 10px;
+}
+.bottom.two-col { grid-template-columns: 1fr 1fr; }
+.navbtn {
+  font-family: Verdana, sans-serif; font-size: 16px; font-weight: 700;
+  padding: 12px 0; border-radius: 8px; cursor: pointer; min-height: 56px; border: none;
+}
+.navbtn.resume {
+  background: rgba(46, 196, 182, .12); color: var(--a2);
+  border: 2px solid rgba(46, 196, 182, .22);
+}
+.navbtn.done { background: var(--a); color: var(--g); }
+.navbtn.return { background: var(--s2); color: var(--t); border: 1px solid var(--s3); }
 </style>

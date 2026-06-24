@@ -116,6 +116,11 @@ const routes = [
     component: () => import('../views/manipulation_teleop.vue')
   },
   {
+    path: '/manipulation_done',
+    name: 'manipulation_done',
+    component: () => import('../views/manipulation_done.vue')
+  },
+  {
     path: '/navigation_teleop',
     name: 'navigation_teleop',
     component: () => import('../views/navigation_teleop.vue')

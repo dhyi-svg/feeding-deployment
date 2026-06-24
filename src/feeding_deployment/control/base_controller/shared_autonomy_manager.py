@@ -24,6 +24,11 @@ real move_base and relays the outcome, with one twist:
     localization was never dropped, move_base simply replans from the robot's
     current pose to the goal -- i.e. "navigate from here to the goal." The
     takeover/resume cycle can repeat if it gets stuck again.
+  * On /shared_autonomy/cancel while in TELEOP: the human ended the takeover
+    WITHOUT parking at the goal (e.g. a base-driving detour during an unrelated
+    skill, where there is no navigation goal to "complete"). Report ABORTED, not
+    SUCCEEDED -- there is no goal-reached to claim. (If no goal is active, the
+    flag is simply cleared when the next goal starts.)
 
 This is why the manager exists: an action client only believes the terminal
 status from the server it is connected to, so when a human (not move_base)
@@ -63,6 +68,9 @@ class SharedAutonomyManager:
         self.resume_topic = rospy.get_param(
             "~resume_topic", "/shared_autonomy/resume"
         )
+        self.cancel_topic = rospy.get_param(
+            "~cancel_topic", "/shared_autonomy/cancel"
+        )
         self.loop_hz = float(rospy.get_param("~loop_hz", 20.0))
         self.move_base_wait_s = float(rospy.get_param("~move_base_wait_s", 30.0))
 
@@ -71,6 +79,7 @@ class SharedAutonomyManager:
         self._takeover_req = False
         self._done_req = False
         self._resume_req = False
+        self._cancel_req = False
 
         # Client to the real move_base.
         self.mb_client = actionlib.SimpleActionClient(
@@ -89,6 +98,7 @@ class SharedAutonomyManager:
         rospy.Subscriber(self.takeover_topic, Empty, self._on_takeover, queue_size=1)
         rospy.Subscriber(self.done_topic, Empty, self._on_done, queue_size=1)
         rospy.Subscriber(self.resume_topic, Empty, self._on_resume, queue_size=1)
+        rospy.Subscriber(self.cancel_topic, Empty, self._on_cancel, queue_size=1)
 
         # Our own action server. auto_start=False so we can start() after setup.
         self.server = actionlib.SimpleActionServer(
@@ -119,17 +129,23 @@ class SharedAutonomyManager:
         with self._lock:
             self._resume_req = True
 
+    def _on_cancel(self, _msg: Empty) -> None:
+        with self._lock:
+            self._cancel_req = True
+
     def _consume_flags(self):
         with self._lock:
-            takeover, done, resume = (
+            takeover, done, resume, cancel = (
                 self._takeover_req,
                 self._done_req,
                 self._resume_req,
+                self._cancel_req,
             )
             self._takeover_req = False
             self._done_req = False
             self._resume_req = False
-        return takeover, done, resume
+            self._cancel_req = False
+        return takeover, done, resume, cancel
 
     # ------------------------------------------------------------------ #
     # Action execution
@@ -157,7 +173,7 @@ class SharedAutonomyManager:
                 self.server.set_preempted()
                 return
 
-            takeover, done, resume = self._consume_flags()
+            takeover, done, resume, cancel = self._consume_flags()
 
             if takeover and state == AUTONOMOUS:
                 state = TELEOP
@@ -174,6 +190,18 @@ class SharedAutonomyManager:
                 )
                 self.server.set_succeeded(
                     MoveBaseResult(), "Goal completed by human teleoperation."
+                )
+                return
+
+            if cancel and state == TELEOP:
+                # Human ended the takeover without reaching the goal. Report
+                # ABORTED so the caller does NOT treat it as goal-reached.
+                rospy.loginfo(
+                    "shared_autonomy_manager: CANCEL -> reporting ABORTED "
+                    "(takeover ended without reaching the goal)."
+                )
+                self.server.set_aborted(
+                    MoveBaseResult(), "Teleop takeover cancelled by human."
                 )
                 return
 

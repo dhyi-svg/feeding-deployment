@@ -122,6 +122,10 @@ export default {
     this.initPublisher()
     this.initSubscriber()
     this.maybeLoadFromUrl()
+    // Tell the backend we've mounted and subscribed so it can send the
+    // (non-latched) preference_correction_data without racing our subscription.
+    // Sent on every (re)connection so a dropped socket re-announces readiness.
+    this.ros.on('connection', () => this.sendReady())
   },
   beforeUnmount() {
     this.teardownRos()
@@ -183,6 +187,12 @@ export default {
         name: '/webapp_to_robot',
         messageType: 'std_msgs/String'
       })
+    },
+    sendReady() {
+      if (!this.publisher) return
+      this.publisher.publish(new ROSLIB.Message({
+        data: JSON.stringify({ state: 'preference_correction', status: 'ready' })
+      }))
     },
     initSubscriber() {
       this.listener = new ROSLIB.Topic({

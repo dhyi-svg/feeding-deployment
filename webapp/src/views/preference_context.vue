@@ -243,8 +243,8 @@ export default {
       })
 
       this.publisher.publish(message)
-      
-      this.$router.push('/preference_correction')
+
+      this.$router.push('/robot_executing')
     },
     goToTaskSelection() {
       if (this.publisher) {

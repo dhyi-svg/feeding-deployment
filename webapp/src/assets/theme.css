@@ -17,8 +17,52 @@ button, input, textarea, select {
   color: inherit;
 }
 
+/* ── iPad kiosk lock ──────────────────────────────────────────────
+   The app is a fixed, full-screen touch UI (tuned for iPad Air,
+   ~1180×820 landscape / 820×1180 portrait). Pin the document to the
+   visible viewport so it can never scroll, rubber-band, or pinch-zoom,
+   and stop long-press / drag gestures on images that cause misclicks.
+   Inner scroll areas (e.g. .opts) keep their own overflow.            */
+html, body, #app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+html, body {
+  width: 100%;
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: manipulation;       /* no double-tap zoom, no pan */
+  background: var(--g);
+  -webkit-text-size-adjust: 100%;
+}
+#app { overflow: hidden; }
+
+* { -webkit-tap-highlight-color: transparent; }
+
+/* Block text selection + iOS callout that fire on long-press and feel
+   like the UI is "grabbable". Re-enabled for real text inputs below. */
+body {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+img {
+  -webkit-user-drag: none;          /* can't drag/peel images off (misclick source) */
+  user-select: none;
+  -webkit-touch-callout: none;      /* no long-press "Save Image" menu */
+}
+input, textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 .page {
-  min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;                   /* exclude Safari's dynamic toolbars */
+  overflow: hidden;
   background: var(--g);
   color: var(--t);
   font-family: Verdana, sans-serif;

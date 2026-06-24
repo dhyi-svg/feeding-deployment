@@ -7,7 +7,7 @@
     </div>
     <div v-if="showTakeOver" class="global-controls">
       <button
-        v-if="onTaskSelection || baseControlEnabled"
+        v-if="showBaseControl"
         class="global-btn base"
         @click="controlBase()"
       >Robot Base Control</button>
@@ -27,8 +27,6 @@ export default {
   data () {
     return {
       takeoverPublisher: null,
-      serverListener: null,
-      baseControlEnabled: false,
       takeoverMicEnabled: false,
       takeoverThreshold: 0.1,
       skillPlan: [],
@@ -44,7 +42,7 @@ export default {
     showTakeOver () {
       const p = this.$route.path
       const excluded = [
-        '/manipulation_teleop', '/navigation_teleop', '/mictest',
+        '/manipulation_teleop', '/manipulation_done', '/navigation_teleop', '/mictest',
         '/transparency', '/adaptability', '/personalization',
         '/gesture_menu', '/gesture_setup', '/gesture_test',
         '/gesture_record_positive', '/gesture_record_negative'
@@ -54,12 +52,21 @@ export default {
     onTaskSelection () {
       return this.$route.path === '/task_selection'
     },
+    showBaseControl () {
+      // Offer base teleop on the task menu, or whenever a *navigation* skill is the
+      // one currently executing (same skill-plan signal the physical takeover
+      // button uses to route base vs arm). Previously driven by a separate
+      // base_control enabled/disabled message; now it tracks the skill plan.
+      if (this.onTaskSelection) return true
+      const skill = this.skillCurrent >= 0 ? this.skillPlan[this.skillCurrent] : null
+      return !!skill && categoryOf(skill) === 'navigation'
+    },
     showTakeoverEnable () {
       // The takeover-mic enable is only meaningful during autonomous operation.
       // Hide it on pages where you've already taken over / it's irrelevant (and
       // where their longer headers would collide with the centered pill).
       if (this.takeoverMicEnabled) return false
-      const excluded = ['/manipulation_teleop', '/navigation_teleop', '/idle_takeover', '/mictest']
+      const excluded = ['/manipulation_teleop', '/manipulation_done', '/navigation_teleop', '/idle_takeover', '/mictest']
       return !excluded.includes(this.$route.path)
     },
   },
@@ -69,19 +76,6 @@ export default {
       ros,
       name: '/webapp_to_robot',
       messageType: 'std_msgs/String'
-    })
-    this.serverListener = new ROSLIB.Topic({
-      ros,
-      name: '/robot_to_webapp',
-      messageType: 'std_msgs/String'
-    })
-    this.serverListener.subscribe((msg) => {
-      try {
-        const parsed = JSON.parse(msg.data)
-        if (parsed.state === 'base_control') {
-          this.baseControlEnabled = parsed.status === 'enabled'
-        }
-      } catch (e) { /* ignore non-JSON */ }
     })
     this.skillPlanListener = new ROSLIB.Topic({
       ros,
@@ -109,7 +103,12 @@ export default {
       this.$router.push('/manipulation_teleop')
     },
     controlBase () {
-      this.$router.push('/navigation_teleop')
+      // Pass the running skill so navigation_teleop shows Resume/Done only when a
+      // navigation skill is actually executing; otherwise it enters aux mode
+      // (manual driving + Return).
+      const skill = this.skillCurrent >= 0 ? this.skillPlan[this.skillCurrent] : null
+      const query = (skill && categoryOf(skill) === 'navigation') ? { hla: skill } : {}
+      this.$router.push({ path: '/navigation_teleop', query })
     },
 
     async enableTakeoverMic () {

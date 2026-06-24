@@ -90,7 +90,7 @@
       </div>
     </div>
 
-    <div class="bottom" :class="{ 'three-col': currentHla }">
+    <div class="bottom">
       <button
         v-if="!retractRunning"
         id="retract-btn"
@@ -105,23 +105,10 @@
         @click="stopRetract()"
       >Stop</button>
 
-      <template v-if="currentHla">
-        <button
-          class="done redo"
-          :disabled="busy"
-          @click="finishTeleop('redo')"
-        >Done — Redo Skill</button>
-        <button
-          class="done"
-          :disabled="busy"
-          @click="finishTeleop('next')"
-        >Done — Next Skill</button>
-      </template>
       <button
-        v-else
         class="done"
         :disabled="busy"
-        @click="finishTeleop()"
+        @click="onDone()"
       >Done</button>
     </div>
   </div>
@@ -291,6 +278,17 @@ export default {
       this.$router.push('/task_selection')
     },
 
+    onDone () {
+      // During a running skill, Done opens a chooser (move base / redo / next).
+      // When idle, Done just concludes teleop and returns to the task menu.
+      if (this.currentHla) {
+        this.logEvent('tap', 'done_choices', {})
+        this.$router.push({ path: '/manipulation_done', query: { hla: this.currentHla } })
+      } else {
+        this.finishTeleop()
+      }
+    },
+
     finishTeleop (postAction = null) {
       this.logEvent('tap', 'done', { post_action: postAction })
       const msg = { state: 'teleop', status: 'done' }
@@ -447,17 +445,18 @@ export default {
   font-family: Verdana, sans-serif;
   background: var(--g);
   color: var(--t);
-  padding: 8px 3vw 10px;
+  padding: 6px 3vw 8px;
   box-sizing: border-box;
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
-.tabbar { display: flex; gap: 8px; margin: 8px 0; }
+.tabbar { display: flex; gap: 8px; margin: 6px 0; }
 .tab {
-  flex: 1; font-family: Verdana, sans-serif; font-size: 16px; padding: 11px 0;
+  flex: 1; font-family: Verdana, sans-serif; font-size: 15px; padding: 9px 0;
   color: var(--t); background: var(--s2); border: 1px solid var(--s3); border-radius: 8px;
   cursor: pointer;
 }
@@ -465,10 +464,10 @@ export default {
   font-weight: 700; background: var(--a); color: var(--g); border-color: var(--a);
 }
 
-.stepsize { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.stepsize-label { font-size: 14px; color: var(--tm); min-width: 70px; }
+.stepsize { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.stepsize-label { font-size: 13px; color: var(--tm); min-width: 70px; }
 .step {
-  flex: 1; font-family: Verdana, sans-serif; font-size: 14px; padding: 11px 0;
+  flex: 1; font-family: Verdana, sans-serif; font-size: 13px; padding: 9px 0;
   border: 1px solid var(--s3); border-radius: 8px; background: var(--s2); color: var(--t);
   cursor: pointer;
 }
@@ -477,7 +476,7 @@ export default {
 }
 
 .status {
-  font-size: 14px; padding: 7px 10px; border-radius: 8px; margin-bottom: 8px;
+  font-size: 13px; padding: 6px 10px; border-radius: 8px; margin-bottom: 6px;
   text-align: center;
 }
 .status.idle { background: var(--s2); color: var(--tm); }
@@ -485,11 +484,11 @@ export default {
 .status.aborted { background: rgba(220, 60, 60, .15); color: #e88; }
 
 .hla-banner {
-  font-size: 15px; padding: 8px 10px; border-radius: 8px; margin-bottom: 8px;
+  font-size: 14px; padding: 6px 10px; border-radius: 8px; margin-bottom: 6px;
   text-align: center; background: rgba(46, 196, 182, .12); color: var(--a2);
 }
 
-.pad-label { font-size: 14px; font-weight: 700; margin: 0 0 6px; color: var(--tm); }
+.pad-label { font-size: 13px; font-weight: 700; margin: 0 0 4px; color: var(--tm); }
 
 .tab-content { flex: 1; min-height: 0; }
 
@@ -508,9 +507,9 @@ export default {
 .rotate-grid { grid-template-rows: repeat(4, 1fr); }
 
 .jog {
-  font-family: Verdana, sans-serif; font-size: 17px; font-weight: 700;
+  font-family: Verdana, sans-serif; font-size: 16px; font-weight: 700;
   border: 1px solid var(--s3); border-radius: 12px; color: var(--t);
-  background: var(--s2); cursor: pointer; min-height: 56px;
+  background: var(--s2); cursor: pointer; min-height: 46px;
 }
 .jog:active { background: var(--s3); }
 .jog:disabled, button:disabled { opacity: 0.4; cursor: default; }
@@ -537,36 +536,33 @@ export default {
 }
 .joint-col.moving { background: rgba(240, 165, 0, .1); }
 .joint-label {
-  font-size: 14px; color: var(--t); text-align: center; line-height: 1.2;
-  min-height: 40px; display: flex; align-items: center; justify-content: center;
+  font-size: 13px; color: var(--t); text-align: center; line-height: 1.2;
+  min-height: 34px; display: flex; align-items: center; justify-content: center;
 }
-.joint-col .jog { flex: 1; padding: 0; font-size: 46px; line-height: 1; }
+.joint-col .jog { flex: 1; padding: 0; font-size: 38px; line-height: 1; }
 
-.gripper { margin-top: 10px; }
+.gripper { margin-top: 8px; }
 .gripper-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.gripper-row .jog { padding: 12px 0; min-height: 56px; }
+.gripper-row .jog { padding: 10px 0; min-height: 46px; }
 
 .bottom {
   display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
-  border-top: 1px solid var(--bd); padding-top: 10px; margin-top: 10px;
+  border-top: 1px solid var(--bd); padding-top: 8px; margin-top: 8px;
 }
 
-.bottom.three-col { grid-template-columns: 1fr 1fr 1fr; }
-
-.done.redo { background: var(--s2); color: var(--t); }
 .retract {
-  font-family: Verdana, sans-serif; font-size: 16px; font-weight: 700;
-  padding: 12px 0; border: 2px solid rgba(46, 196, 182, .22); border-radius: 8px;
-  background: rgba(46, 196, 182, .12); color: var(--a2); cursor: pointer; min-height: 56px;
+  font-family: Verdana, sans-serif; font-size: 15px; font-weight: 700;
+  padding: 10px 0; border: 2px solid rgba(46, 196, 182, .22); border-radius: 8px;
+  background: rgba(46, 196, 182, .12); color: var(--a2); cursor: pointer; min-height: 48px;
 }
 .stop {
-  font-family: Verdana, sans-serif; font-size: 16px; font-weight: 700;
-  padding: 12px 0; border: none; border-radius: 8px;
-  background: #c0392b; color: #fff; cursor: pointer; min-height: 56px;
+  font-family: Verdana, sans-serif; font-size: 15px; font-weight: 700;
+  padding: 10px 0; border: none; border-radius: 8px;
+  background: #c0392b; color: #fff; cursor: pointer; min-height: 48px;
 }
 .done {
-  font-family: Verdana, sans-serif; font-size: 16px; font-weight: 700;
-  padding: 12px 0; border: none; border-radius: 8px;
-  background: var(--a); color: var(--g); cursor: pointer; min-height: 56px;
+  font-family: Verdana, sans-serif; font-size: 15px; font-weight: 700;
+  padding: 10px 0; border: none; border-radius: 8px;
+  background: var(--a); color: var(--g); cursor: pointer; min-height: 48px;
 }
 </style>
