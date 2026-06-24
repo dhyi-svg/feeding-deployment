@@ -17,7 +17,7 @@
 # Prereq on the Mac:
 #   - estop_sender.py running and reaching this NUC's IP on udp/5005
 
-WAIT_TIMEOUT=120  # seconds to wait for the Mac sender before aborting
+WAIT_TIMEOUT=60  # seconds to wait for the Mac sender before aborting
 
 # Function to clean up background processes (re-entrant safe).
 cleanup() {
@@ -27,6 +27,7 @@ cleanup() {
     if kill -0 $bridge_pid 2>/dev/null; then
         kill $bridge_pid
     fi
+    exit 0
 }
 
 # Trap Ctrl+C, termination, and normal exit and call cleanup.
@@ -53,15 +54,19 @@ sleep 2
 # if the topic is silent at startup (e.g. the Mac sender isn't running yet) it
 # emergency-stops instantly. Wait for at least one message, then let the 1s
 # heartbeat window fill before launching bulldog. Abort rather than hang forever.
-echo "Waiting for /experimentor_estop to go live (start estop_sender.py on the Mac if you haven't)..."
-half_seconds=0
-until rostopic echo -n1 /experimentor_estop >/dev/null 2>&1; do
-    sleep 0.5
-    half_seconds=$((half_seconds + 1))
-    if [ $((half_seconds % 10)) -eq 0 ]; then
-        echo "  ... still waiting for the Mac sender ($((half_seconds / 2))s elapsed)."
+echo "Waiting for .. /experimentor_estop to go live (start estop_sender.py on the Mac if you haven't)..."
+rostopic echo -n1 /experimentor_estop >/dev/null 2>&1 &
+echo_pid=$!
+seconds=0
+while kill -0 $echo_pid 2>/dev/null; do
+    sleep 1
+    seconds=$((seconds + 1))
+    if [ $((seconds % 10)) -eq 0 ]; then
+        echo "  ... still waiting for the Mac sender (${seconds}s elapsed)."
     fi
-    if [ $((half_seconds / 2)) -ge $WAIT_TIMEOUT ]; then
+    if [ $seconds -ge $WAIT_TIMEOUT ]; then
+        kill -9 $echo_pid 2>/dev/null
+        wait $echo_pid 2>/dev/null
         echo "ERROR: /experimentor_estop never went live after ${WAIT_TIMEOUT}s."
         echo "       Is estop_sender.py running on the Mac and reaching this NUC on udp/5005? Aborting."
         exit 1  # triggers the EXIT trap -> cleanup

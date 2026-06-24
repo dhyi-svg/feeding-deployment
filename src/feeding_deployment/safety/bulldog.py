@@ -77,6 +77,7 @@ class BullDog:
 
         self.second_counter = 0
         time.sleep(1.0)
+        self._arm_interface.register_bulldog()
         print("BullDog is guarding the robot.")
 
     def write_to_remote(self, anomaly_message):
