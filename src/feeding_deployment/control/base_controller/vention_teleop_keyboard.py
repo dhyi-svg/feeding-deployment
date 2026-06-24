@@ -6,12 +6,10 @@ import termios
 import time
 import tty
 
-from vention_arduino_control import VentionBase
+from base_client import BaseInterfaceClient
 
 
 COMMAND_HZ = 20.0
-DEFAULT_PORT = "/dev/ttyACM0"
-DEFAULT_BAUD = 115200
 
 DEFAULT_MAX_TRANSLATION_SPEED = 500
 DEFAULT_MAX_ROTATION_SPEED = 400
@@ -63,8 +61,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="WASD terminal teleop for Vention base via Arduino bridge"
     )
-    parser.add_argument("--port", default=DEFAULT_PORT, help="Arduino serial port")
-    parser.add_argument("--baud", type=int, default=DEFAULT_BAUD, help="Arduino baud rate")
     parser.add_argument(
         "--max_translation",
         type=int,
@@ -85,9 +81,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    base = VentionBase(args.port, args.baud)
-    if not base.bridge.connection_status:
-        raise RuntimeError(f"Failed to connect to Arduino on {args.port}")
+    base = BaseInterfaceClient()
 
     print("WASD to drive, space=stop, q or ESC to quit. Hold a key to keep moving.")
 
@@ -143,12 +137,6 @@ def main() -> None:
 
             base.set_speeds(speed_a, speed_b)
 
-            if base.bridge.ser and base.bridge.ser.in_waiting:
-                data = base.bridge.ser.read(base.bridge.ser.in_waiting).decode(errors="replace")
-                for line in data.splitlines():
-                    if line.strip():
-                        print(f"[Arduino] {line.strip()}\r")
-
             time.sleep(period)
 
     except KeyboardInterrupt:
@@ -157,10 +145,6 @@ def main() -> None:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_termios)
         try:
             base.stop()
-        except Exception:
-            pass
-        try:
-            base.disconnect()
         except Exception:
             pass
 

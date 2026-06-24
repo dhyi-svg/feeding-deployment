@@ -11,6 +11,8 @@
 #
 # Prereqs on the NUC:
 #   - arm_server.py already running (bulldog connects to it over RPC at :5000)
+#   - base_server.py already running (bulldog connects to it over RPC at :5001;
+#     bulldog now REQUIRES the base and won't start if it can't connect)
 #   - ISACC_PASSWORD exported (bulldog sys.exit(1)s without it)
 #   - correct conda env active (same one run_bulldog.sh uses)
 #   - UDP port 5005 allowed through the firewall

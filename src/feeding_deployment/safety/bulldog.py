@@ -21,6 +21,7 @@ import rospy
 from std_msgs.msg import Bool
 
 from feeding_deployment.control.robot_controller.arm_interface import ArmInterface, ArmManager, NUC_HOSTNAME, ARM_RPC_PORT, RPC_AUTHKEY
+from feeding_deployment.control.base_controller.base_interface import BaseManager, BASE_RPC_PORT
 
 EXPERIMENTOR_ESTOP_FREQUENCY_THRESHOLD = 50 # expected is 60 Hz
 
@@ -40,6 +41,14 @@ class BullDog:
         
         # This will now use the single, shared instance of ArmInterface
         self._arm_interface = self.manager.ArmInterface()
+
+        # Base RPC client setup (symmetric with the arm). Required: if the base
+        # server is down, connect() raises and bulldog refuses to start, exactly
+        # like the arm today.
+        BaseManager.register("BaseInterface")
+        self.base_manager = BaseManager(address=(NUC_HOSTNAME, BASE_RPC_PORT), authkey=RPC_AUTHKEY)
+        self.base_manager.connect()
+        self._base_interface = self.base_manager.BaseInterface()
 
         queue_size = 1000
         self.experimentor_emergency_stop_sub = rospy.Subscriber('/experimentor_estop', Bool, self.experimentorEmergencyStopCallback, queue_size = queue_size, buff_size = 65536*queue_size)
@@ -78,6 +87,7 @@ class BullDog:
         self.second_counter = 0
         time.sleep(1.0)
         self._arm_interface.register_bulldog()
+        self._base_interface.register_bulldog()
         print("BullDog is guarding the robot.")
 
     def write_to_remote(self, anomaly_message):
@@ -98,6 +108,7 @@ class BullDog:
     def check_status(self):
         self.second_counter += 1
         self._arm_interface.is_alive()
+        self._base_interface.is_alive()
         anomaly = AnomalyStatus.NO_ANOMALY
         start_time = time.time()
         frequencies = []
@@ -127,6 +138,7 @@ class BullDog:
 
         if anomaly != AnomalyStatus.NO_ANOMALY:
             self._arm_interface.emergency_stop()
+            self._base_interface.emergency_stop()  # idempotent; safe if heartbeat monitor also fired
             print(f"AnomalyStatus detected: {anomaly}")
             rospy.loginfo(f"AnomalyStatus detected: {anomaly}")
             self.write_to_remote(f"Anomaly Detected: {AnomalyStatus.get_error_message(anomaly)}")

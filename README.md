@@ -29,6 +29,19 @@
              - `conda activate controller`
              - `cd feeding-deployment/src/feeding_deployment/robot_controller`
              - `python arm_server.py`
+1b. Run the base controller server on the NUC:
+   - The base Arduino is plugged into the **NUC** (not the compute box), so the
+     Bulldog e-stop also stops the base. The cmd_vel bridge and teleop scripts on
+     the compute box drive the base over RPC.
+   - ssh to the NUC: `sshnuc` with lab password
+   - run the base server:
+        - Alias `launch_base` on NUC
+        - Otherwise, run the following commands:
+             - `conda activate controller`
+             - `cd feeding-deployment/src/feeding_deployment/control/base_controller`
+             - `python base_server.py`
+   - _Note:_ bulldog now **requires** both `arm_server.py` and `base_server.py`;
+     it refuses to start if either RPC server is down.
 2. Run bulldog on the NUC:
    - ssh to the NUC: `sshnuc` with lab password
    - run bulldog with alias `launch_bulldog`

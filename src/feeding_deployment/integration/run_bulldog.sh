@@ -1,4 +1,9 @@
 #!/bin/bash
+#
+# Prereqs on the NUC (launched separately, e.g. via aliases):
+#   - arm_server.py  running (bulldog connects over RPC at :5000)
+#   - base_server.py running (bulldog connects over RPC at :5001; bulldog now
+#     REQUIRES the base and won't start if it can't connect)
 
 # Function to clean up background processes
 cleanup() {
