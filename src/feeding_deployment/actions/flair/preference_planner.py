@@ -8,27 +8,25 @@ import base64
 import requests
 import json
 
-from openai import OpenAI
+import anthropic
 import ast
 
 class GPTInterface:
     def __init__(self):
-        self.api_key =  os.environ.get('OPENAI_API_KEY')
-        self.client = OpenAI(api_key=self.api_key)
-        
+        # Reads ANTHROPIC_API_KEY from the environment.
+        self.client = anthropic.Anthropic()
+
     def chat_with_openai(self, prompt):
         """
-        Sends the prompt to OpenAI API using the chat interface and gets the model's response.
+        Sends the prompt to Claude via the Messages API and returns the response text.
+        (Method name kept for backward compatibility with callers.)
         """
-        message = {
-                    'role': 'user',
-                    'content': prompt
-                  }
-        response = self.client.chat.completions.create(
-                   model='gpt-5.4',
-                   messages=[message]
+        response = self.client.messages.create(
+                   model='claude-opus-4-8',
+                   max_tokens=8192,
+                   messages=[{'role': 'user', 'content': prompt}],
                   )
-        chatbot_response = response.choices[0].message.content
+        chatbot_response = "".join(b.text for b in response.content if b.type == "text")
         return chatbot_response.strip()
 
 class PreferencePlanner:

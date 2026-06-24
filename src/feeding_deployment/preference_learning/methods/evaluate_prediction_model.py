@@ -11,8 +11,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
-from openai import OpenAI
-
 from feeding_deployment.preference_learning.methods.metrics import _generate_metrics
 from feeding_deployment.preference_learning.methods.utils import (
     _extract_truth_bundle,
@@ -45,7 +43,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-meals", type=int, default=0)
     p.add_argument("--num-rollouts", type=int, default=1)
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--openai-model", default="gpt-5.4")
+    p.add_argument("--openai-model", default="claude-opus-4-8")
     p.add_argument("--embed-model", default="text-embedding-3-small")
     p.add_argument("--ablation", choices=["full", "ltm_only", "em_only", "no_memory"], default="full")
     p.add_argument("--days", type=int, default=0, help="Evaluate only the first N days (0 = use all days in dataset).")
@@ -171,7 +169,7 @@ def main() -> int:
                     print(f"  Ground truth bundle: {json.dumps(truth, indent=2)}", flush=True)
 
                     while True:
-                        print(f"  [Predict] Calling OpenAI for bundle (day {day}, m={m}) ...", flush=True)
+                        print(f"  [Predict] Calling Claude for bundle (day {day}, m={m}) ...", flush=True)
                         
                         pred = prediction_model.predict_bundle(
                             context=context,

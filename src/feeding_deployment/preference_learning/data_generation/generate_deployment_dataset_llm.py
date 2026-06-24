@@ -6,9 +6,9 @@ import sys
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
-    from openai import OpenAI
+    import anthropic
 except ImportError:
-    print("Error: openai package not installed. Install it with: pip install openai", file=sys.stderr)
+    print("Error: anthropic package not installed. Install it with: pip install anthropic", file=sys.stderr)
     sys.exit(1)
 
 from feeding_deployment.preference_learning.config.affective_state import AFFECTIVE_STATES
@@ -23,7 +23,7 @@ from feeding_deployment.preference_learning.data_generation.prompts.preference_g
     get_preference_generation_prompt,
 )
 
-DEFAULT_MODEL = "gpt-5.4"
+DEFAULT_MODEL = "claude-opus-4-8"
 
 
 def _strip_json_fences(raw: str) -> str:
@@ -127,7 +127,7 @@ def _validate_joint_output_strict(data: Any) -> Tuple[Dict[str, str], Dict[str, 
 
 
 def generate_joint_preferences_with_llm(
-    client: OpenAI,
+    client: anthropic.Anthropic,
     physical_profile_label: str,
     user_preference_encoding: Dict[str, Any],
     meal_info: Dict[str, Any],
@@ -150,28 +150,23 @@ def generate_joint_preferences_with_llm(
         affective_state=affective_state,
     )
 
-    response = client.chat.completions.create(
+    response = client.messages.create(
         model=model,
+        max_tokens=15000,
+        system=(
+            "You are an expert at reasoning about robotic mealtime-assistance preferences based on "
+            "user capabilities, user preference encodings, context, and affective state. "
+            "Return ONLY valid JSON (no markdown, no extra text). "
+            'The JSON must match exactly: {"preferences": {field: {"choice": <exact option>, "rationale": <string>}}} '
+            "Include all dimensions exactly once and no extra fields."
+        ),
         messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are an expert at reasoning about robotic mealtime-assistance preferences based on "
-                    "user capabilities, user preference encodings, context, and affective state. "
-                    "Return ONLY valid JSON (no markdown, no extra text). "
-                    'The JSON must match exactly: {"preferences": {field: {"choice": <exact option>, "rationale": <string>}}} '
-                    "Include all dimensions exactly once and no extra fields."
-                ),
-            },
             {"role": "user", "content": prompt},
         ],
-        temperature=0.3,
-        max_completion_tokens=15000,
-        response_format={"type": "json_object"},
     )
 
-    raw = response.choices[0].message.content
-    if raw is None:
+    raw = "".join(b.text for b in response.content if b.type == "text")
+    if not raw:
         raise RuntimeError("LLM returned empty content.")
 
     parsed = json.loads(_strip_json_fences(raw))
@@ -303,21 +298,21 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=None, help="Base random seed (varied per file in dir mode).")
     parser.add_argument("--days", type=int, default=30, help="Number of days (default: 30)")
     parser.add_argument("--output-dir", default="out", help="Output directory (default: out)")
-    parser.add_argument("--api-key", default=None, help="OpenAI API key (overrides env)")
-    parser.add_argument("--model", default=DEFAULT_MODEL, help=f"OpenAI model (default: {DEFAULT_MODEL})")
+    parser.add_argument("--api-key", default=None, help="Anthropic API key (overrides env)")
+    parser.add_argument("--model", default=DEFAULT_MODEL, help=f"Claude model (default: {DEFAULT_MODEL})")
     return parser.parse_args(argv)
 
 
 def main(argv: List[str]) -> int:
     args = parse_args(argv)
 
-    api_key = args.api_key or os.getenv("OPENAI_API_KEY")
+    api_key = args.api_key or os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
-        print("Error: OpenAI API key not found. Set OPENAI_API_KEY or pass --api-key.", file=sys.stderr)
+        print("Error: Anthropic API key not found. Set ANTHROPIC_API_KEY or pass --api-key.", file=sys.stderr)
         return 1
 
     try:
-        client = OpenAI(api_key=api_key)
+        client = anthropic.Anthropic(api_key=api_key)
         out_dir = os.path.abspath(args.output_dir)
         os.makedirs(out_dir, exist_ok=True)
 
