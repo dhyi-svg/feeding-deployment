@@ -70,7 +70,7 @@ class AnthropicLLM(LargeLanguageModel):
         temperature: float,
         seed: int,
         num_completions: int = 1,
-    ) -> tuple[list[str], dict[str, Any]]:
+    ) -> list[str]:
         assert imgs is None, "AnthropicLLM is text-only; use a VLM for images."
         assert num_completions == 1, "Only num_completions=1 is supported."
         # Anthropic has no message-level `seed`; determinism is not guaranteed
@@ -87,13 +87,11 @@ class AnthropicLLM(LargeLanguageModel):
         # Concatenate any text blocks (a refusal yields no text block, leaving
         # an empty string — callers see "" rather than an index error).
         text = "".join(b.text for b in response.content if b.type == "text")
-        metadata = {
-            "input_tokens": response.usage.input_tokens,
-            "output_tokens": response.usage.output_tokens,
-            "model": response.model,
-            "stop_reason": response.stop_reason,
-        }
-        return [text], metadata
+        # NOTE: this tomsutils version expects _sample_completions to return a
+        # bare list[str] (its own OpenAILLM does the same); returning a
+        # (completions, metadata) tuple breaks the disk-cache join. Token usage
+        # is intentionally dropped here.
+        return [text]
 
     def get_multiple_choice_logprobs(
         self, prompt: str, choices: list[str], seed: int

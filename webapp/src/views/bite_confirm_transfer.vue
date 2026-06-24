@@ -40,8 +40,16 @@ export default {
     this.ros = new ROSLIB.Ros({ url: ROS_URL })
     this.initSubscriber()
     this.initPublisher()
+    // A single press of the physical switch-button confirms the transfer,
+    // same as tapping "Continue — Transfer Bite".
+    window.addEventListener('takeover-single-press', this.handleButtonClick)
+  },
+  beforeUnmount () {
+    window.removeEventListener('takeover-single-press', this.handleButtonClick)
   },
   beforeRouteLeave (to, from, next) {
+    window.removeEventListener('takeover-single-press', this.handleButtonClick)
+
     if (this.listener) {
       this.listener.unsubscribe();
       this.listener = null;
@@ -52,7 +60,7 @@ export default {
       this.publisher = null;
     }
 
-    next(); 
+    next();
   },
   methods: {
     handleRosMessage(message) {
