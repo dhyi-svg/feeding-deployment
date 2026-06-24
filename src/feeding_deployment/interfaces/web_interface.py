@@ -308,6 +308,28 @@ class WebInterface:
         else:
             self._send_message({"state": "task_selection", "status": "jump"})
 
+    def wait_for_start_meal(self) -> None:
+        """Block on the home page until the user presses "Start Meal".
+
+        Home is the webapp's default route (and the page a refresh returns to),
+        so gating the meal on a user-initiated press here -- rather than firing a
+        one-shot jump the app might miss -- makes startup robust against refreshes
+        and slow webapp connections. The home page sends
+        {"state":"home","status":"start_meal"} on the press; we drain any stale
+        messages first so an old press can't satisfy this immediately.
+        """
+        self.current_page = "home"
+        self.clear_received_messages()
+        # Best-effort nudge to pull a connected client sitting on another page
+        # (e.g. left on task_selection from a prior run) back to home. Non-latched,
+        # so a disconnected/refreshing client won't get it -- the user press on
+        # home is still the actual gate, and home is the default/refresh route.
+        self._send_message({"state": "home", "status": "jump"})
+        print("Waiting for the user to press 'Start Meal' on the home page ...")
+        self.get_required_web_interface_message(
+            lambda m: m.get("state") == "home" and m.get("status") == "start_meal"
+        )
+
     def get_required_web_interface_message(self, condition) -> dict[str, Any]:
         """Parses through all messages received from the web interface and returns the oldest one satisfying the condition."""
         print_once = True
