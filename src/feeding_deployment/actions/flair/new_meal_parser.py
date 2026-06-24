@@ -1,13 +1,13 @@
 import re
 import ast
 from pathlib import Path
-from tomsutils.llm import OpenAILLM
+from feeding_deployment.utils.anthropic_llm import AnthropicLLM
 
 class NewMealParser:
     def __init__(self, log_dir):
 
-        self.llm = OpenAILLM(
-            model_name="gpt-5.4",
+        self.llm = AnthropicLLM(
+            model_name="claude-opus-4-8",
             cache_dir=log_dir / "llm_cache",
         )
 

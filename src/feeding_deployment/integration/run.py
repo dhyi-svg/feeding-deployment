@@ -11,7 +11,7 @@ import sys
 import signal
 import shutil
 import numpy as np
-from tomsutils.llm import OpenAILLM
+from feeding_deployment.utils.anthropic_llm import AnthropicLLM
 import time
 import types
 import inspect
@@ -224,8 +224,8 @@ class _Runner:
             self.robot_interface = None
             self.wrist_interface = None
 
-        self.llm = OpenAILLM(
-            model_name="gpt-5.4",
+        self.llm = AnthropicLLM(
+            model_name="claude-opus-4-8",
             cache_dir=self.log_dir / "llm_cache",
         )
 

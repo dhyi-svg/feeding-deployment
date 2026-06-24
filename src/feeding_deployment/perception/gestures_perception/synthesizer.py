@@ -6,7 +6,8 @@ import time
 from pathlib import Path
 import textwrap
 import pickle
-from tomsutils.llm import OpenAILLM, synthesize_python_function_with_llm, GridSearchSynthesizedProgramArgumentOptimizer
+from tomsutils.llm import synthesize_python_function_with_llm, GridSearchSynthesizedProgramArgumentOptimizer
+from feeding_deployment.utils.anthropic_llm import AnthropicLLM
 from gymnasium.spaces import Box
 
 from feeding_deployment.perception.gestures_perception.in_context_examples import detect_mouth_open, detect_head_nod
@@ -39,8 +40,8 @@ class MockPerceptionInterface:
 class PersonalizedGestureDetectorSynthesizer:
     def __init__(self, log_dir):
 
-        self.llm = OpenAILLM(
-            model_name="gpt-5.4",
+        self.llm = AnthropicLLM(
+            model_name="claude-opus-4-8",
             cache_dir=log_dir / "llm_cache",
             max_tokens=2500,
         )

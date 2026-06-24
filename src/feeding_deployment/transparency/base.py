@@ -6,13 +6,13 @@ import numpy as np
 import math
 import time
 from pathlib import Path
-from tomsutils.llm import OpenAILLM
+from feeding_deployment.utils.anthropic_llm import AnthropicLLM
 
 class TransparencyBase(abc.ABC):
     def __init__(self, log_dir, cache_name = "llm_cache"):
 
-        self.llm = OpenAILLM(
-            model_name="gpt-5.4",
+        self.llm = AnthropicLLM(
+            model_name="claude-opus-4-8",
             cache_dir = log_dir / cache_name,
         )
 
