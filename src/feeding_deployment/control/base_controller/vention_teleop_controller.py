@@ -4,13 +4,11 @@ import argparse
 
 import pygame
 
-from vention_arduino_control import VentionBase
+from base_client import BaseInterfaceClient
 
 
 DEADBAND = 0.12
 COMMAND_HZ = 5.0
-DEFAULT_PORT = "/dev/ttyACM0"
-DEFAULT_BAUD = 115200
 
 # Reasonable starting values; tune on robot if needed.
 # DEFAULT_MAX_TRANSLATION_SPEED = 500
@@ -87,8 +85,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Joystick teleop for Vention base via Arduino bridge"
     )
-    parser.add_argument("--port", default=DEFAULT_PORT, help="Arduino serial port")
-    parser.add_argument("--baud", type=int, default=DEFAULT_BAUD, help="Arduino baud rate")
     parser.add_argument(
         "--max_translation",
         type=int,
@@ -113,9 +109,7 @@ def main() -> None:
     joystick.init()
     print(f"Controller: {joystick.get_name()}")
 
-    base = VentionBase(args.port, args.baud)
-    if not base.bridge.connection_status:
-        raise RuntimeError(f"Failed to connect to Arduino on {args.port}")
+    base = BaseInterfaceClient()
 
     period = 1.0 / COMMAND_HZ
     last_sent: tuple[int, int] | None = None
@@ -144,13 +138,6 @@ def main() -> None:
 
             base.set_speeds(speed_a, speed_b)
 
-            # Print any pending Arduino output every loop tick (runs even after dedup stops sends)
-            if base.bridge.ser and base.bridge.ser.in_waiting:
-                data = base.bridge.ser.read(base.bridge.ser.in_waiting).decode(errors="replace")
-                for line in data.splitlines():
-                    if line.strip():
-                        print(f"[Arduino] {line.strip()}")
-
             time.sleep(period)
 
     except KeyboardInterrupt:
@@ -158,10 +145,6 @@ def main() -> None:
     finally:
         try:
             base.stop()
-        except Exception:
-            pass
-        try:
-            base.disconnect()
         except Exception:
             pass
         try:

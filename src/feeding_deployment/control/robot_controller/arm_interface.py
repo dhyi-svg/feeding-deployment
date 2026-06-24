@@ -16,6 +16,7 @@ from multiprocess.managers import BaseManager as MPBaseManager
 RPC_AUTHKEY = b"secret-key"
 NUC_HOSTNAME = "192.168.1.3"
 ARM_RPC_PORT = 5000
+BULLDOG_HEARTBEAT_TIMEOUT = 1.0  # seconds
 
 class ArmInterface:
     def __init__(self, arm_instance):
@@ -30,6 +31,9 @@ class ArmInterface:
 
         self.emergency_stop_active = False
         self.controller = None
+        self.bulldog_ready = False
+        self.last_bulldog_heartbeat = None
+        self._bulldog_monitor_thread = None
 
         # log file
         self.log_file = Path(__file__).parent / "safety_log" / "arm_commands_log.txt"
@@ -43,7 +47,28 @@ class ArmInterface:
         self.gravity_compensation_external_event_lock = threading.Lock()  
 
     def is_alive(self):
+        self.last_bulldog_heartbeat = time.time()
         return True
+
+    def register_bulldog(self):
+        self.bulldog_ready = True
+        self.last_bulldog_heartbeat = time.time()
+        self._bulldog_monitor_thread = threading.Thread(target=self._bulldog_monitor, daemon=True)
+        self._bulldog_monitor_thread.start()
+        print("Bulldog registered — arm commands unlocked.")
+
+    def _require_bulldog(self):
+        assert self.bulldog_ready, "Bulldog is not running — arm commands are locked"
+
+    def _bulldog_monitor(self):
+        while not self.emergency_stop_active:
+            time.sleep(0.2)
+            if self.last_bulldog_heartbeat is not None:
+                if time.time() - self.last_bulldog_heartbeat > BULLDOG_HEARTBEAT_TIMEOUT:
+                    print("ERROR: Bulldog heartbeat lost — triggering emergency stop.")
+                    if not self.emergency_stop_active:
+                        self.emergency_stop()
+                    break
 
     def get_state(self):
         try:
@@ -65,6 +90,7 @@ class ArmInterface:
         return current_state
 
     def reset(self):
+        self._require_bulldog()
         # Go to home position
         print("Moving to home position")
         try:
@@ -75,6 +101,7 @@ class ArmInterface:
             raise Exception(f"Error in reset: {str(e)}") from None # suppress original exception
 
     def set_tool(self, tool: str):
+        self._require_bulldog()
         print(f"Setting tool to {tool}")
         try:
             self.arm.set_tool(tool)
@@ -85,6 +112,7 @@ class ArmInterface:
 
     def set_speed(self, speed: str):
         """ speed: "low", "medium", "high" """
+        self._require_bulldog()
         assert speed in ["low", "medium", "high"], "Invalid speed"
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert not self.in_compliant_mode, "Cannot set speed while in compliant mode"
@@ -98,6 +126,7 @@ class ArmInterface:
             raise Exception(f"Error in choose_from_speed_presets: {str(e)}") from None
         
     def get_speed(self):
+        self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert not self.in_compliant_mode, "Cannot get speed while in compliant mode"
 
@@ -112,7 +141,7 @@ class ArmInterface:
 
 
     def switch_to_task_compliant_mode(self):
-
+        self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert not self.in_compliant_mode, "Already in compliant mode"
 
@@ -137,7 +166,7 @@ class ArmInterface:
             self.in_compliant_mode = True
 
     def switch_to_joint_compliant_mode(self):
-
+        self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert not self.in_compliant_mode, "Already in compliant mode"
 
@@ -163,7 +192,7 @@ class ArmInterface:
             self.in_compliant_mode = True
 
     def switch_out_of_compliant_mode(self):
-
+        self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert self.in_compliant_mode, "Not in compliant mode"
 
@@ -195,7 +224,7 @@ class ArmInterface:
             self.gravity_compensation_external_event.clear()
 
     def compliant_set_joint_position(self, command_pos):
-
+        self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert self.in_compliant_mode, "Not in compliant mode"
 
@@ -208,7 +237,7 @@ class ArmInterface:
         self.command_queue.put((command_pos, gripper_pos))
 
     def compliant_set_ee_pose(self, xyz, xyz_quat):
-            
+        self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert self.in_compliant_mode, "Not in compliant mode"
 
@@ -225,7 +254,7 @@ class ArmInterface:
         self.command_queue.put((command_pose, gripper_pos))
 
     def set_joint_position(self, command_pos):
-        
+        self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert not self.in_compliant_mode, "In compliant mode"
 
@@ -245,7 +274,7 @@ class ArmInterface:
         return success
 
     def set_joint_trajectory(self, trajectory_command):
-
+        self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert not self.in_compliant_mode, "In compliant mode"
 
@@ -262,7 +291,7 @@ class ArmInterface:
         return success
 
     def set_ee_pose(self, xyz, xyz_quat):
-
+        self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert not self.in_compliant_mode, "In compliant mode"
 
@@ -281,7 +310,7 @@ class ArmInterface:
         return success
         
     def set_cartesian_trajectory(self, trajectory_command):
-
+        self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert not self.in_compliant_mode, "In compliant mode"
 
@@ -298,7 +327,7 @@ class ArmInterface:
         return success
 
     def set_gripper(self, gripper_pos):
-
+        self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert not self.in_compliant_mode, "In compliant mode"
 
@@ -312,7 +341,7 @@ class ArmInterface:
             raise Exception(f"Error in set_gripper: {str(e)}") from None # suppress original exception
 
     def open_gripper(self):
-
+        self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert not self.in_compliant_mode, "In compliant mode"
 
@@ -326,7 +355,7 @@ class ArmInterface:
             raise Exception(f"Error in open_gripper: {str(e)}") from None # suppress original exception
 
     def close_gripper(self):
-
+        self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert not self.in_compliant_mode, "In compliant mode"
 
@@ -357,7 +386,7 @@ class ArmInterface:
             raise Exception(f"Error in close: {str(e)}") from None # suppress original exception
 
     def retract(self):
-
+        self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert not self.in_compliant_mode, "In compliant mode"
 
