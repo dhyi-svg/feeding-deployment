@@ -21,6 +21,7 @@
 import ROSLIB from 'roslib'
 import { ROS_URL } from '@/config/parameterConfig'
 import { categoryOf } from '@/config/skillCategories'
+import { PressClassifier } from '@/utils/pressClassifier'
 
 export default {
   name: 'app',
@@ -34,7 +35,7 @@ export default {
       _analyser: null,
       _audioBuf: null,
       _prevAbove: false,
-      _lastHit: 0,
+      _press: null,
       _raf: null
     }
   },
@@ -89,9 +90,16 @@ export default {
         this.skillCurrent = (typeof parsed.current === 'number') ? parsed.current : -1
       } catch (e) { /* ignore non-JSON */ }
     })
+    // Single press -> bite-transfer confirm (latency-tolerant); double press ->
+    // stop autonomous & take over (fires fast, on the 2nd click).
+    this._press = new PressClassifier({
+      onSingle: () => this.onSinglePress(),
+      onDouble: () => this.onDoublePress()
+    })
   },
   beforeUnmount () {
     if (this._raf) cancelAnimationFrame(this._raf)
+    if (this._press) this._press.reset()
   },
   methods: {
     controlArm () {
@@ -138,13 +146,17 @@ export default {
         if (a > peak) peak = a
       }
       const above = peak > this.takeoverThreshold
-      const now = Date.now()
-      if (above && !this._prevAbove && (now - this._lastHit) > 1500) {
-        this._lastHit = now
-        this.onTakeoverButton()
-      }
+      if (above && !this._prevAbove) this._press.edge(Date.now())
       this._prevAbove = above
       this._raf = requestAnimationFrame(this.audioLoop)
+    },
+    onSinglePress () {
+      // Decoupled from the page: any view that wants the physical button (e.g.
+      // bite_confirm_transfer) listens for this event and runs its own action.
+      window.dispatchEvent(new CustomEvent('takeover-single-press'))
+    },
+    onDoublePress () {
+      this.onTakeoverButton()
     },
     onTakeoverButton () {
       if (!this.showTakeOver || this.$route.path === '/idle_takeover') return
