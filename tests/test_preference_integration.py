@@ -7,8 +7,9 @@ Note: run.py and web_interface.py have heavy robot dependencies (tomsutils,
 pybullet_helpers, cv2, rospy, ...) that are not available outside the robot
 environment.  The tests below therefore exercise the *logic* of Steps 1-5
 without importing those modules: preference_context.py is tested directly,
-PredictionModel is tested with mocked OpenAI, and the runner/web-interface
-contracts are tested against the same functions those classes delegate to.
+PredictionModel is tested with the Anthropic chat client mocked (chat migrated
+to Claude; embeddings stay on OpenAI), and the runner/web-interface contracts
+are tested against the same functions those classes delegate to.
 """
 
 from __future__ import annotations
@@ -161,13 +162,35 @@ class TestRunnerPreferenceContextContract:
 # ===================================================================
 
 
-def _fake_openai_response(bundle: dict[str, str]) -> MagicMock:
-    """Build a MagicMock that mimics an openai ChatCompletion response."""
-    choice = MagicMock()
-    choice.message.content = json.dumps(bundle)
+def _fake_anthropic_response(bundle: dict) -> MagicMock:
+    """Mimic an anthropic Messages response: .content is a list of blocks, each
+    with .type and .text (predict_bundle joins the text blocks)."""
+    block = MagicMock()
+    block.type = "text"
+    block.text = json.dumps(bundle)
     resp = MagicMock()
-    resp.choices = [choice]
+    resp.content = [block]
     return resp
+
+
+def _fake_anthropic_text(text: str) -> MagicMock:
+    block = MagicMock()
+    block.type = "text"
+    block.text = text
+    resp = MagicMock()
+    resp.content = [block]
+    return resp
+
+
+@pytest.fixture(autouse=True)
+def _mock_anthropic():
+    """Patch the Anthropic chat client for every test in this module so
+    PredictionModel construction never needs a real ANTHROPIC_API_KEY. Chat
+    tests configure ``_mock_anthropic.messages.create.return_value``."""
+    with patch(f"{_PM_MODULE}.anthropic.Anthropic") as mock_cls:
+        client = MagicMock()
+        mock_cls.return_value = client
+        yield client
 
 
 def _default_bundle() -> dict:
@@ -186,11 +209,9 @@ class TestPredictionModelPredictBundle:
 
     @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
     @patch(f"{_PM_MODULE}.OpenAI")
-    def test_returns_all_fields(self, mock_openai_cls, _key, tmp_path):
+    def test_returns_all_fields(self, mock_openai_cls, _key, _mock_anthropic, tmp_path):
         bundle = _default_bundle()
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = _fake_openai_response(bundle)
-        mock_openai_cls.return_value = mock_client
+        _mock_anthropic.messages.create.return_value = _fake_anthropic_response(bundle)
 
         from feeding_deployment.preference_learning.methods.prediction_model import (
             PredictionModel,
@@ -215,11 +236,9 @@ class TestPredictionModelPredictBundle:
 
     @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
     @patch(f"{_PM_MODULE}.OpenAI")
-    def test_physical_profile_description_in_prompt(self, mock_openai_cls, _key, tmp_path):
+    def test_physical_profile_description_in_prompt(self, mock_openai_cls, _key, _mock_anthropic, tmp_path):
         bundle = _default_bundle()
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = _fake_openai_response(bundle)
-        mock_openai_cls.return_value = mock_client
+        _mock_anthropic.messages.create.return_value = _fake_anthropic_response(bundle)
 
         desc = "This user has limited arm control and cannot press buttons."
 
@@ -239,19 +258,19 @@ class TestPredictionModelPredictBundle:
         ctx = {"meal": MEALS[0], "setting": SETTINGS[0], "time_of_day": TIMES_OF_DAY[0]}
         model.predict_bundle(ctx, {})
 
-        call_args = mock_client.chat.completions.create.call_args
-        prompt = call_args.kwargs["messages"][1]["content"]
+        # Anthropic Messages API: the user prompt is the first (only) user
+        # message; the JSON-only instruction is the separate `system` kwarg.
+        call_args = _mock_anthropic.messages.create.call_args
+        prompt = call_args.kwargs["messages"][0]["content"]
         assert desc in prompt, (
             "Freeform physical-profile description must appear verbatim in the LLM prompt"
         )
 
     @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
     @patch(f"{_PM_MODULE}.OpenAI")
-    def test_corrected_fields_override_prediction(self, mock_openai_cls, _key, tmp_path):
+    def test_corrected_fields_override_prediction(self, mock_openai_cls, _key, _mock_anthropic, tmp_path):
         bundle = _default_bundle()
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = _fake_openai_response(bundle)
-        mock_openai_cls.return_value = mock_client
+        _mock_anthropic.messages.create.return_value = _fake_anthropic_response(bundle)
 
         from feeding_deployment.preference_learning.methods.prediction_model import (
             PredictionModel,
@@ -275,15 +294,8 @@ class TestPredictionModelPredictBundle:
 
     @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
     @patch(f"{_PM_MODULE}.OpenAI")
-    def test_malformed_llm_json_falls_back(self, mock_openai_cls, _key, tmp_path):
-        choice = MagicMock()
-        choice.message.content = "not valid json {{{"
-        resp = MagicMock()
-        resp.choices = [choice]
-
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        mock_openai_cls.return_value = mock_client
+    def test_malformed_llm_json_falls_back(self, mock_openai_cls, _key, _mock_anthropic, tmp_path):
+        _mock_anthropic.messages.create.return_value = _fake_anthropic_text("not valid json {{{")
 
         from feeding_deployment.preference_learning.methods.prediction_model import (
             PredictionModel,
@@ -308,11 +320,9 @@ class TestPredictionModelPredictBundle:
 
     @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
     @patch(f"{_PM_MODULE}.OpenAI")
-    def test_predict_bundle_logs_to_disk(self, mock_openai_cls, _key, tmp_path):
+    def test_predict_bundle_logs_to_disk(self, mock_openai_cls, _key, _mock_anthropic, tmp_path):
         bundle = _default_bundle()
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = _fake_openai_response(bundle)
-        mock_openai_cls.return_value = mock_client
+        _mock_anthropic.messages.create.return_value = _fake_anthropic_response(bundle)
 
         from feeding_deployment.preference_learning.methods.prediction_model import (
             PredictionModel,
@@ -542,14 +552,10 @@ class TestUpdateWritesLogs:
 
     @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
     @patch(f"{_PM_MODULE}.OpenAI")
-    def test_update_with_ltm_creates_ltm_log(self, mock_openai_cls, _key, tmp_path):
-        mock_client = MagicMock()
-        choice = MagicMock()
-        choice.message.content = json.dumps({"summary": "test"})
-        resp = MagicMock()
-        resp.choices = [choice]
-        mock_client.chat.completions.create.return_value = resp
-        mock_openai_cls.return_value = mock_client
+    def test_update_with_ltm_creates_ltm_log(self, mock_openai_cls, _key, _mock_anthropic, tmp_path):
+        # LTM summarization runs on the Anthropic chat client; it must return
+        # valid JSON text for the summary to be stored.
+        _mock_anthropic.messages.create.return_value = _fake_anthropic_response({"summary": "test"})
 
         from feeding_deployment.preference_learning.methods.prediction_model import (
             PredictionModel,
