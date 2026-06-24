@@ -120,6 +120,7 @@ from feeding_deployment.simulation.simulator import (
 from feeding_deployment.actions.flair.flair import FLAIR
 from feeding_deployment.transparency.query_llm import TransparencyQuery
 from feeding_deployment.integration.preference_context import build_preference_context
+from feeding_deployment.integration.data_logger import DataLogger
 from feeding_deployment.preference_learning.methods.prediction_model import PredictionModel, PREF_OPTIONS
 from feeding_deployment.preference_learning.config.physical_capabilities import (
     PHYSICAL_CAPABILITY_PROFILES,
@@ -154,11 +155,12 @@ assert os.environ.get("PYTHONHASHSEED") == "0", \
 class _Runner:
     """A class for running the integrated system."""
 
-    def __init__(self, scene_config: str, user: str, scenario:str, transfer_type: str, run_on_robot: bool, use_interface: bool, use_gui: bool, simulate_head_perception: bool, max_motion_planning_time: float,
+    def __init__(self, scene_config: str, user: str, transfer_type: str, run_on_robot: bool, use_interface: bool, use_gui: bool, simulate_head_perception: bool, max_motion_planning_time: float,
                  resume_from_state: str = "", no_waits: bool = False,
                  physical_profile_label: str | None = None,
                  pref_day: int | None = None,
-                 pref_mode: str = "none") -> None:
+                 pref_mode: str = "none",
+                 day: int | None = None) -> None:
         self.run_on_robot = run_on_robot
         self.use_interface = use_interface
         self.simulate_head_perception = simulate_head_perception
@@ -171,37 +173,38 @@ class _Runner:
         self._prediction_model: PredictionModel | None = None
         self.predicted_bundle: dict[str, str] | None = None
 
-        # logs are saved in user/scenario directory
-        self.log_dir = Path(__file__).parent / "log" / user / scenario
+        # Cross-day persistent state (behavior trees, gesture detectors, llm
+        # cache, preference memory, latest perception poses) lives directly under
+        # the user directory -- there is no scenario level. The per-day release
+        # record goes in log/<user>/day_<NN>/ (see self.data_logger below).
+        self.log_dir = Path(__file__).parent / "log" / user
         self.execution_log = Path(__file__).parent / "log" / "execution_log.txt" # in root log directory
         self.run_behavior_tree_dir = self.log_dir / "behavior_trees"
         self.gesture_detectors_dir = self.log_dir / "gesture_detectors"
         self._gesture_detection_filepath = self.gesture_detectors_dir / "synthesized_gesture_detectors.py"
-        
-        if not self.log_dir.exists():
-            if not (self.log_dir.parent).exists(): # new user
-                assert scenario == "default", "First run with a new user must be in default scenario."
-                os.makedirs(self.log_dir, exist_ok=True)
-                
-                # Copy the initial behavior trees into a directory for this run, where
-                # they will be modified based on user feedback.
-                self.run_behavior_tree_dir.mkdir(exist_ok=True)
-                original_behavior_tree_dir = Path(__file__).parents[1] / "actions" / "behavior_trees"
-                assert original_behavior_tree_dir.exists()
-                for original_bt_filename in original_behavior_tree_dir.glob("*.yaml"):
-                    shutil.copy(original_bt_filename, self.run_behavior_tree_dir)
 
-                # Copy the initial gesture detection file into a directory for this run,
-                # where it will be updated from LLM-based few-shot learning.
-                self.gesture_detectors_dir.mkdir(exist_ok=True)
-                original_gesture_detection_filepath = Path(__file__).parents[1] / "perception" / "gestures_perception" / "synthesized_gesture_detectors.py"
-                assert original_gesture_detection_filepath.exists()
-                shutil.copy(original_gesture_detection_filepath, self.gesture_detectors_dir)
+        if not self.log_dir.exists():  # new user: seed persistent state from defaults
+            os.makedirs(self.log_dir, exist_ok=True)
 
-            elif not (self.log_dir).exists(): # new scenario
-                assert (Path(__file__).parent / "log" / user / "default").exists(), "Do not have default scenario for this user."
-                os.makedirs(self.log_dir, exist_ok=True)
-                shutil.copytree(Path(__file__).parent / "log" / user / "default", self.log_dir, dirs_exist_ok=True)
+            # Copy the initial behavior trees into the user directory, where they
+            # will be modified based on user feedback.
+            self.run_behavior_tree_dir.mkdir(exist_ok=True)
+            original_behavior_tree_dir = Path(__file__).parents[1] / "actions" / "behavior_trees"
+            assert original_behavior_tree_dir.exists()
+            for original_bt_filename in original_behavior_tree_dir.glob("*.yaml"):
+                shutil.copy(original_bt_filename, self.run_behavior_tree_dir)
+
+            # Copy the initial gesture detection file into the user directory,
+            # where it will be updated from LLM-based few-shot learning.
+            self.gesture_detectors_dir.mkdir(exist_ok=True)
+            original_gesture_detection_filepath = Path(__file__).parents[1] / "perception" / "gestures_perception" / "synthesized_gesture_detectors.py"
+            assert original_gesture_detection_filepath.exists()
+            shutil.copy(original_gesture_detection_filepath, self.gesture_detectors_dir)
+
+        # Single logs handle: owns the shared state dir (== self.log_dir) and, when
+        # --day is given, the per-day release record under log/<user>/day_<NN>/.
+        # Disabled (no-op for release logging) when --day is omitted.
+        self.data_logger = DataLogger(state_dir=self.log_dir, day=day)
 
         if resume_from_state == "":
             # clear behavior tree execution log
@@ -227,7 +230,7 @@ class _Runner:
         )
 
         # Initialize the perceiver (e.g., get joint states or human head poses).
-        self.perception_interface = PerceptionInterface(robot_interface=self.robot_interface, simulate_head_perception=self.simulate_head_perception, log_dir=self.log_dir)
+        self.perception_interface = PerceptionInterface(robot_interface=self.robot_interface, simulate_head_perception=self.simulate_head_perception, data_logger=self.data_logger)
 
         # Initialize the simulator.
         scene_config_path = Path(__file__).parent.parent / "simulation" / "configs" / f"{scene_config}.yaml"
@@ -258,7 +261,7 @@ class _Runner:
         if self.use_interface:
             # Initialize the web interface.
             self.task_selection_queue = queue.Queue()
-            self.web_interface = WebInterface(self.task_selection_queue, self.log_dir)
+            self.web_interface = WebInterface(self.task_selection_queue, self.data_logger)
         else:
             self.web_interface = None
 
@@ -519,6 +522,13 @@ class _Runner:
             }
             print("Ground truth bundle:", json.dumps(self.ground_truth_bundle, indent=2))
             print("Corrected fields:", json.dumps(self.corrected, indent=2))
+            self.data_logger.log_event(
+                "preference_bundle",
+                context=dict(ctx),
+                predicted_bundle=self.predicted_bundle,
+                ground_truth_bundle=self.ground_truth_bundle,
+                corrected=self.corrected,
+            )
 
             # --- Step 4: Apply ---
             from feeding_deployment.integration.apply_preferences import (
@@ -586,6 +596,7 @@ class _Runner:
                 task_selection_command = self.task_selection_queue.get(timeout=1)
                 self.web_interface.clear_received_messages() # So that only the latest message is processed
                 task, task_type = task_selection_command["task"], task_selection_command["type"]
+                self.data_logger.log_event("task_command", task=task, task_type=task_type)
                 if task == "reset":
                     self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["Reset"], ()))
                     last_task_type = None
@@ -667,6 +678,7 @@ class _Runner:
         self.active = False
         if self.web_interface is not None:
             self.web_interface.stop_all_threads()
+        self.data_logger.close()
 
     def signal_handler(self, signal, frame):
         print("\nReceived SIGINT.")
@@ -977,7 +989,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--scene_config", type=str, default="vention") # name of the scene config (rough head-plate-robot setup)
     parser.add_argument("--user", type=str, default="") # name of the user
-    parser.add_argument("--scenario", type=str, default="default") # name of the scenario
     # parser.add_argument("--transfer_type", type=str, default="inside")
     parser.add_argument("--transfer_type", type=str, default="outside")
     parser.add_argument("--run_on_robot", action="store_true")
@@ -1025,6 +1036,12 @@ if __name__ == "__main__":
         help="Override the deployment day number for preference learning. "
              "If omitted, auto-detected from existing log files (next unused day).",
     )
+    parser.add_argument(
+        "--day", type=int, default=None,
+        help="Deployment day number. When provided, all images, user inputs, and "
+             "events for the meal are logged to log/<user>/day_<NN>/ for release. "
+             "If omitted, per-day data logging is disabled.",
+    )
     args = parser.parse_args()
 
     if args.user == "":
@@ -1052,7 +1069,6 @@ if __name__ == "__main__":
 
     runner = _Runner(args.scene_config,
                      args.user,
-                     args.scenario,
                      args.transfer_type,
                      args.run_on_robot,
                      args.use_interface,
@@ -1063,7 +1079,8 @@ if __name__ == "__main__":
                      args.no_waits,
                      physical_profile_label=physical_profile_label,
                      pref_day=args.pref_day,
-                     pref_mode=args.pref_mode)
+                     pref_mode=args.pref_mode,
+                     day=args.day)
 
     if args.pref_mode == "interface":
         if not args.pref_meal.strip():

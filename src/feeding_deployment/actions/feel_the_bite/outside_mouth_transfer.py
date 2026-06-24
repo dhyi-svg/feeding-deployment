@@ -38,6 +38,19 @@ class OutsideMouthTransfer(Transfer):
         forque_target_base = head_perception_data["tool_tip_target_pose"]
         head_pose = head_perception_data["head_pose"]
 
+        # Log the single RGB frame used to compute the bite-transfer pose, with
+        # the resulting pose as metadata, for the daily data release.
+        data_logger = getattr(self.perception_interface, "data_logger", None)
+        if data_logger is not None:
+            data_logger.log_image(
+                "transfer_pose",
+                head_perception_data.get("camera_color_data"),
+                is_rgb=True,
+                tool=getattr(self.perception_interface, "tool", None),
+                tool_tip_target_pose=np.asarray(forque_target_base).tolist(),
+                head_pose=np.asarray(head_pose).tolist(),
+            )
+
         if self.log_dir is not None:
             file_name = "head_perception_data"
             id = 0

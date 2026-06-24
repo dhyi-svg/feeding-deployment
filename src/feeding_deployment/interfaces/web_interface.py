@@ -30,7 +30,13 @@ class WebInterface:
     '''
     An interface to interact with the web interface.
     '''
-    def __init__(self, task_selection_queue: queue.Queue, log_dir: Path) -> None:
+    def __init__(self, task_selection_queue: queue.Queue, data_logger) -> None:
+
+        # Single logs handle: `.state_dir` is the shared user log directory and the
+        # logger captures every user input + image shown for the daily release
+        # (no-op when its day is disabled).
+        self.data_logger = data_logger
+        log_dir = data_logger.state_dir
 
         # Used for generating continuous explanations.
         self.transparency_continuous = TransparencyContinuous(log_dir)
@@ -136,6 +142,10 @@ class WebInterface:
                 f.write(json.dumps(msg_dict) + "\n")
 
     def _send_image(self, image) -> None:
+        # Every key image shown to the user (plate image, bite-selection image,
+        # detection-confirmation vis, color-correction frame) flows through here.
+        if self.data_logger is not None:
+            self.data_logger.log_image("webapp_sent", image)
         self.web_interface_image_publisher.publish(self.image_bridge.cv2_to_compressed_imgmsg(image))
 
     def _message_callback(self, msg: "String") -> None:
@@ -153,6 +163,8 @@ class WebInterface:
             print("Received message on /webapp_to_robot: ", msg.data)
             with open(self.webapp_received_messages_log, "a") as f:
                 f.write(msg.data + "\n")
+            if self.data_logger is not None:
+                self.data_logger.log_user_input("webapp_to_robot", msg_dict)
 
         # Mid-skill manual takeover request: flag it (and best-effort abort the
         # in-flight move) so the executive hands control to the teleop screen.
@@ -824,9 +836,10 @@ class WebInterface:
 
 if __name__ == "__main__":
     rospy.init_node("web_interface")
+    from feeding_deployment.integration.data_logger import DataLogger
     log_dir = Path(__file__).parent.parent / "integration" / "log" / "web_interface_log"
     task_selection_queue = queue.Queue()
-    web_interface = WebInterface(task_selection_queue, log_dir)
+    web_interface = WebInterface(task_selection_queue, DataLogger(state_dir=log_dir))
     
     with open(log_dir / "food_detection_data.pkl", "rb") as f:
         food_detection_data = pickle.load(f)

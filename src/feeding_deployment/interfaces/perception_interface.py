@@ -41,10 +41,14 @@ from feeding_deployment.utils.camera_utils import CustomCameraInfo
 class PerceptionInterface:
     """An interface for perception (robot joints, human head poses, etc.)."""
 
-    def __init__(self, robot_interface: ArmInterfaceClient | None, record_goal_pose: bool = False, simulate_head_perception: bool = False, log_dir: str | None = None) -> None:
+    def __init__(self, robot_interface: ArmInterfaceClient | None, record_goal_pose: bool = False, simulate_head_perception: bool = False, data_logger=None) -> None:
         self.robot_interface = robot_interface
         self._simulate_head_perception = simulate_head_perception
-        self.log_dir = log_dir
+        # Single logs handle: `.state_dir` is the shared user log directory (used
+        # for the perception pose pickles) and the logger captures release images
+        # (no-op when disabled). May be None for entry points that don't log.
+        self.data_logger = data_logger
+        self.log_dir = data_logger.state_dir if data_logger is not None else None
 
         # run head perception
         if self.robot_interface is None:

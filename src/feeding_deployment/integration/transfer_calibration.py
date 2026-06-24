@@ -33,6 +33,7 @@ from feeding_deployment.actions.transfer_tool import TransferToolHLA
 from feeding_deployment.interfaces.perception_interface import PerceptionInterface
 from feeding_deployment.interfaces.rviz_interface import RVizInterface
 from feeding_deployment.interfaces.web_interface import WebInterface
+from feeding_deployment.integration.data_logger import DataLogger
 from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceClient
 from feeding_deployment.control.wrist_controller.wrist_controller import WristInterface
 from feeding_deployment.simulation.scene_description import create_scene_description_from_config
@@ -77,7 +78,7 @@ def _main(
     # Initialize the interface to the robot.
     robot_interface = ArmInterfaceClient()  # type: ignore  # pylint: disable=no-member
     task_selection_queue = queue.Queue()
-    web_interface = WebInterface(task_selection_queue=task_selection_queue, log_dir=log_dir)
+    web_interface = WebInterface(task_selection_queue=task_selection_queue, data_logger=DataLogger(state_dir=log_dir))
 
     # Initialize the perceiver (e.g., get joint states or human head poses).
     if record_rom:

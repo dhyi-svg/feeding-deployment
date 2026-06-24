@@ -33,6 +33,7 @@ from feeding_deployment.actions.transfer_tool import TransferToolHLA
 from feeding_deployment.actions.acquisition import AcquireBiteHLA
 from feeding_deployment.interfaces.perception_interface import PerceptionInterface
 from feeding_deployment.interfaces.web_interface import WebInterface
+from feeding_deployment.integration.data_logger import DataLogger
 from feeding_deployment.interfaces.rviz_interface import RVizInterface
 from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceClient
 from feeding_deployment.control.wrist_controller.wrist_controller import WristInterface
@@ -154,14 +155,18 @@ def _main(
         robot_interface = None
         wrist_interface = None
 
+    # Logs handle with per-day release logging disabled; exposes the shared
+    # state dir as `.state_dir` for both interfaces.
+    data_logger = DataLogger(state_dir=log_dir)
+
     if use_interface:
         task_selection_queue = queue.Queue()
-        web_interface = WebInterface(task_selection_queue=task_selection_queue, log_dir=log_dir)
+        web_interface = WebInterface(task_selection_queue=task_selection_queue, data_logger=data_logger)
     else:
         web_interface = None
 
     # Initialize the perceiver (e.g., get joint states or human head poses).
-    perception_interface = PerceptionInterface(robot_interface=robot_interface, simulate_head_perception=simulate_head_perception, log_dir=log_dir)
+    perception_interface = PerceptionInterface(robot_interface=robot_interface, simulate_head_perception=simulate_head_perception, data_logger=data_logger)
 
     grounded_sam = perception_interface._grounded_sam if hasattr(perception_interface, '_grounded_sam') else None
     flair = FLAIR(log_dir, grounded_sam=grounded_sam)
