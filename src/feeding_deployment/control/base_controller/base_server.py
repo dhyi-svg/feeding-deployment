@@ -19,8 +19,15 @@ from feeding_deployment.control.base_controller.base_interface import (
 ARDUINO_PORT = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__0043_03536383236351603052-if00"
 ARDUINO_BAUD = 115200
 
-# Create a single instance of VentionBase and BaseInterface
+# Create a single instance of VentionBase and BaseInterface.
+# VentionBase only logs (does not raise) when the Arduino fails to open, so check
+# explicitly and refuse to serve a dead base — otherwise the server would come up
+# fine and bulldog would connect to a base that cannot actually move/stop.
 vention_base_instance = VentionBase(port_id=ARDUINO_PORT, baud=ARDUINO_BAUD)
+if not vention_base_instance.bridge.connection_status:
+    print(f"ERROR: failed to open the base Arduino at {ARDUINO_PORT}. "
+          "Not starting the base RPC server.")
+    sys.exit(1)
 base_interface_instance = BaseInterface(vention_base_instance)
 
 # Register BaseInterface but return the existing instance
