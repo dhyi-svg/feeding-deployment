@@ -26,6 +26,14 @@ except ModuleNotFoundError:
 
 from feeding_deployment.transparency.continuous_llm import TransparencyContinuous
 
+try:
+    from feeding_deployment.preference_learning.config.preference_bundle import (
+        PREFERENCE_BUNDLE as _PREF_BUNDLE_DIMS,
+    )
+    _PREF_LABELS = {dim.field: dim.label for dim in _PREF_BUNDLE_DIMS}
+except Exception:
+    _PREF_LABELS = {}
+
 class WebInterface:
     '''
     An interface to interact with the web interface.
@@ -598,65 +606,119 @@ class WebInterface:
         assert self.current_page == "adaptability", "Cannot update adaptability response when not on the adaptability page."
         self._send_message({"state": "adaptability_response", "status": response})
 
+    #### Preference Context Page ####
+
+    def get_meal_context(
+        self,
+        meals: list[str],
+        settings: list[str],
+        times_of_day: list[str],
+        defaults: dict[str, str] | None = None,
+    ) -> dict[str, str]:
+        """Drive the preference_context page to collect observable meal context.
+
+        Sends the option lists, waits for the user's meal/setting/time_of_day.
+        Mirrors the ready-handshake used by the correction page so the
+        (non-latched) data can't race the page's subscription.
+        """
+        self.current_page = "preference_context"
+        self.clear_received_messages()
+        self._send_message({"state": "preference_context", "status": "jump"})
+        self.get_required_web_interface_message(
+            lambda m: (
+                m.get("state") == "preference_context"
+                and m.get("status") == "ready"
+            )
+        )
+        self._send_message({
+            "state": "preference_context_data",
+            "meals": list(meals),
+            "settings": list(settings),
+            "time_of_day": list(times_of_day),
+            "defaults": defaults or {},
+        })
+        msg = self.get_required_web_interface_message(
+            lambda m: m.get("state") == "preference_context_response"
+        )
+        return {
+            "meal": msg["meal"],
+            "setting": msg["setting"],
+            "time_of_day": msg["time_of_day"],
+        }
+
     #### Preference Correction Pages ####
 
-    def get_preference_corrections(
-        self,
-        predicted_bundle: dict[str, str],
-        pref_options: dict[str, list[str]],
-    ) -> dict[str, str]:
-        """Send predicted preference bundle to the webapp and wait for user corrections.
+    # The preference correction page is driven ONE dimension at a time within a
+    # single page mount, so the backend (PreferenceSession) can repredict the
+    # still-open dims between steps. Protocol:
+    #
+    #   start_preference_correction(total, secs):
+    #       BE -> app: {"state":"preference_correction","status":"jump",
+    #                   "total":M, "autocontinue_seconds":N}
+    #       app -> BE: {"state":"preference_correction","status":"ready"}
+    #   send_preference_step(...) (called once per dim):
+    #       BE -> app: {"state":"preference_correction_data", "field":..,
+    #                   "label":.., "predicted":.., "options":[..],
+    #                   "step":i, "total":M, "autocontinue_seconds":N}
+    #       app -> BE: {"state":"preference_correction_response",
+    #                   "field":.., "value":..}
+    #   finish_preference_correction():
+    #       BE -> app: {"state":"preference_correction","status":"done"}
 
-        Message contract (for frontend implementation):
-
-        Sent to webapp (on /ServerComm):
-            1. {"state": "preference_correction", "status": "jump"}
-            2. {
-                   "state": "preference_correction_data",
-                   "predicted_bundle": {"field": "value", ...},
-                   "options": {"field": ["opt1", "opt2", ...], ...}
-               }
-
-        Expected back from webapp (on WebAppComm):
-            a. {"state": "preference_correction", "status": "ready"}
-               sent once the page has mounted and subscribed; we wait for it
-               before sending the (non-latched) data so it can't be dropped.
-            b. {
-                   "state": "preference_correction_response",
-                   "bundle": {"field": "value", ...}
-               }
-               where "bundle" contains all fields with the user's final
-               selections (unchanged fields keep their predicted values).
-
-        Currently stubbed: returns predicted_bundle unchanged (no frontend yet).
-        """
-
+    def start_preference_correction(self, total: int, autocontinue_seconds: float) -> None:
+        """Navigate to the correction page for a stage of ``total`` dims and wait
+        until it has mounted/subscribed."""
         self.current_page = "preference_correction"
-        # Drop any stale messages so we wait for the ready that corresponds to
-        # this navigation, not one left over from a previous correction round.
+        # Drop stale messages so we wait for the ready for THIS navigation.
         self.clear_received_messages()
-        self._send_message({"state": "preference_correction", "status": "jump"})
-        # Wait for the page to announce it has subscribed before sending the
-        # data; replaces a blind sleep that raced the page's subscription
-        # (made worse by the per-page websocket + TLS reconnect on navigation).
+        self._send_message({
+            "state": "preference_correction",
+            "status": "jump",
+            "total": int(total),
+            "autocontinue_seconds": float(autocontinue_seconds),
+        })
         self.get_required_web_interface_message(
             lambda msg_dict: (
                 msg_dict.get("state") == "preference_correction"
                 and msg_dict.get("status") == "ready"
             )
         )
+
+    def send_preference_step(
+        self,
+        field: str,
+        predicted: str,
+        options: list[str],
+        step: int,
+        total: int,
+        autocontinue_seconds: float,
+    ) -> str:
+        """Show one preference dim (predicted value highlighted) and return the
+        user's selection. On autocontinue/no-change the page echoes ``predicted``."""
+        label = _PREF_LABELS.get(field, field.replace("_", " ").title())
         self._send_message({
             "state": "preference_correction_data",
-            "predicted_bundle": predicted_bundle,
-            "options": pref_options,
+            "field": field,
+            "label": label,
+            "predicted": predicted,
+            "options": list(options),
+            "step": int(step),
+            "total": int(total),
+            "autocontinue_seconds": float(autocontinue_seconds),
         })
         msg_dict = self.get_required_web_interface_message(
-            lambda msg_dict: msg_dict.get("state") == "preference_correction_response"
+            lambda m: (
+                m.get("state") == "preference_correction_response"
+                and m.get("field") == field
+            )
         )
-        return msg_dict["bundle"]
+        if msg_dict is None:
+            return predicted
+        return msg_dict.get("value", predicted)
 
-        # print("[STUB] Preference correction page not yet implemented; returning predicted bundle as-is.")
-        # return dict(predicted_bundle)
+    def finish_preference_correction(self) -> None:
+        """Tell the page the correction stage is done (it returns to its caller)."""
+        self._send_message({"state": "preference_correction", "status": "done"})
 
     #### Gesture Pages ####
 

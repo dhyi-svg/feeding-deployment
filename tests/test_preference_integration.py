@@ -32,10 +32,24 @@ from feeding_deployment.preference_learning.config import (
 )
 from feeding_deployment.preference_learning.methods.prediction_model import (
     PREF_OPTIONS,
+    PREF_KIND,
 )
 from feeding_deployment.preference_learning.methods.utils import PREF_FIELDS
+from feeding_deployment.preference_learning.config.preference_bundle import (
+    COLOR_FIELDS,
+    DEFAULT_COLOR,
+)
 
 _PM_MODULE = "feeding_deployment.preference_learning.methods.prediction_model"
+
+
+def _assert_valid_value(field, value):
+    """Categorical fields must be an allowed option; color fields must be a
+    canonical HSV dict."""
+    if PREF_KIND.get(field) == "color":
+        assert isinstance(value, dict) and {"h", "s", "v", "range"} <= set(value)
+    else:
+        assert value in PREF_OPTIONS[field], f"{field}={value} not in allowed options"
 
 
 # ===================================================================
@@ -156,8 +170,16 @@ def _fake_openai_response(bundle: dict[str, str]) -> MagicMock:
     return resp
 
 
-def _default_bundle() -> dict[str, str]:
-    return {field: opts[0] for field, opts in PREF_OPTIONS.items()}
+def _default_bundle() -> dict:
+    """A valid full bundle: first option for categorical dims, an HSV object for
+    color dims (matches the LLM output shape predict_bundle expects)."""
+    bundle = {}
+    for field in PREF_FIELDS:
+        if PREF_KIND.get(field) == "color":
+            bundle[field] = dict(DEFAULT_COLOR)
+        else:
+            bundle[field] = PREF_OPTIONS[field][0]
+    return bundle
 
 
 class TestPredictionModelPredictBundle:
@@ -189,9 +211,7 @@ class TestPredictionModelPredictBundle:
         assert isinstance(result, dict)
         assert set(result.keys()) == set(PREF_FIELDS)
         for field in PREF_FIELDS:
-            assert result[field] in PREF_OPTIONS[field], (
-                f"{field}={result[field]} not in allowed options"
-            )
+            _assert_valid_value(field, result[field])
 
     @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
     @patch(f"{_PM_MODULE}.OpenAI")
@@ -284,7 +304,7 @@ class TestPredictionModelPredictBundle:
         assert isinstance(result, dict)
         assert len(result) == len(PREF_FIELDS)
         for field in PREF_FIELDS:
-            assert result[field] in PREF_OPTIONS[field]
+            _assert_valid_value(field, result[field])
 
     @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
     @patch(f"{_PM_MODULE}.OpenAI")
@@ -399,8 +419,13 @@ class TestPrefOptionsConsistency:
     def test_fields_match_options_keys(self):
         assert set(PREF_FIELDS) == set(PREF_OPTIONS.keys())
 
-    def test_every_field_has_at_least_two_options(self):
+    def test_every_categorical_field_has_at_least_two_options(self):
+        # Color dims are continuous (no option list); only categorical dims
+        # must offer a real choice.
         for field, opts in PREF_OPTIONS.items():
+            if PREF_KIND.get(field) == "color":
+                assert opts == []
+                continue
             assert len(opts) >= 2, f"{field} has fewer than 2 options"
 
     def test_no_empty_option_strings(self):

@@ -11,7 +11,13 @@ def render_preference_dimensions(bundle: List[PreferenceDim]) -> str:
     for i, dim in enumerate(bundle, start=1):
         lines.append(f"{i}. {dim.label}")
         lines.append(f"Field name: {dim.field}")
-        lines.append(f"Allowed options: [{', '.join(dim.options)}]")
+        if getattr(dim, "kind", "categorical") == "color":
+            lines.append(
+                "Value type: HSV color. Emit an object "
+                '{"h": <0-179>, "s": <0-255>, "v": <0-255>, "range": <0.0-1.0>}.'
+            )
+        else:
+            lines.append(f"Allowed options: [{', '.join(dim.options)}]")
         lines.append(dim.description)
         lines.append("")  # blank line between dimensions
 

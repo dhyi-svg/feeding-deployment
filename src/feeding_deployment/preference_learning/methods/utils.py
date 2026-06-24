@@ -3,7 +3,21 @@ from openai import RateLimitError as OpenAIRateLimitError
 import time
 import os
 import feeding_deployment.preference_learning.config as root_config  # type: ignore
+from feeding_deployment.preference_learning.config.preference_bundle import (
+    PREFERENCE_BUNDLE as _PREF_DIMS,
+    COLOR_FIELDS,
+    format_color,
+)
 PREF_FIELDS: List[str] = [name for (name, _, _) in root_config.PREFERENCE_BUNDLE]
+_COLOR_FIELD_SET = set(COLOR_FIELDS)
+
+
+def _format_pref_value(field: str, value: Any) -> str:
+    """Stringify a bundle value for episode text. Color dims (dict HSV+range)
+    get a stable compact encoding; everything else is str()."""
+    if field in _COLOR_FIELD_SET:
+        return format_color(value if isinstance(value, dict) else {})
+    return str(value)
 
 def _retry_on_rate_limit(fn, max_retries: int = 5, base_wait: float = 60.0):
     last_err: Optional[Exception] = None
@@ -41,7 +55,7 @@ def _episode_text(day: int, context: Dict[str, Any], prefs: Dict[str, str]) -> s
         f"day={day}; meal={context.get('meal')}; setting={context.get('setting')}; "
         f"time_of_day={context.get('time_of_day')};"
     )
-    pref_str = "; ".join(f"{k}={prefs.get(k,'')}" for k in PREF_FIELDS)
+    pref_str = "; ".join(f"{k}={_format_pref_value(k, prefs.get(k, ''))}" for k in PREF_FIELDS)
     return f"{ctx}\npreferences: {pref_str}"
 
 
@@ -50,5 +64,9 @@ def _extract_truth_bundle(day_rec: Dict[str, Any]) -> Dict[str, str]:
     out: Dict[str, str] = {}
     for field in PREF_FIELDS:
         val = prefs.get(field, {})
-        out[field] = str(val.get("choice", "")).strip() if isinstance(val, dict) else ""
+        choice = val.get("choice", "") if isinstance(val, dict) else ""
+        if field in _COLOR_FIELD_SET:
+            out[field] = format_color(choice if isinstance(choice, dict) else {})
+        else:
+            out[field] = str(choice).strip()
     return out

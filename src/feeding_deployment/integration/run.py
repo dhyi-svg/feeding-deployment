@@ -121,10 +121,34 @@ from feeding_deployment.actions.flair.flair import FLAIR
 from feeding_deployment.transparency.query_llm import TransparencyQuery
 from feeding_deployment.integration.preference_context import build_preference_context
 from feeding_deployment.integration.data_logger import DataLogger
+from feeding_deployment.integration.preference_session import PreferenceSession
 from feeding_deployment.preference_learning.methods.prediction_model import PredictionModel, PREF_OPTIONS
 from feeding_deployment.preference_learning.config.physical_capabilities import (
     PHYSICAL_CAPABILITY_PROFILES,
 )
+from feeding_deployment.preference_learning.config import MEALS, SETTINGS, TIMES_OF_DAY
+
+# Preference dimensions asked at the start of the meal (before fetching the
+# plate). The finalized wait drives the autocontinue of later correction pages.
+_INITIAL_PREF_DIMS = ["robot_speed", "wait_before_autocontinue_seconds"]
+
+# Preference dimensions asked at the table, just before feeding begins.
+_TABLE_PREF_DIMS = [
+    "skewering_axis",
+    "web_interface_confirmation",
+    "bite_dipping_preference",
+    "transfer_mode",
+    "outside_mouth_distance",
+    "convey_robot_ready_for_initiating_transfer",
+    "convey_robot_ready_for_completing_transfer",
+    "detect_user_ready_for_initiating_transfer_feeding",
+    "detect_user_ready_for_initiating_transfer_drinking",
+    "detect_user_ready_for_initiating_transfer_wiping",
+    "detect_user_completed_transfer_feeding",
+    "detect_user_completed_transfer_drinking",
+    "detect_user_completed_transfer_wiping",
+    "retract_between_bites",
+]
 
 # All the high level actions we want to consider.
 HLAS = {
@@ -171,6 +195,7 @@ class _Runner:
         self._pref_day = pref_day
         self._pref_mode = pref_mode
         self._prediction_model: PredictionModel | None = None
+        self._pref_session: PreferenceSession | None = None
         self.predicted_bundle: dict[str, str] | None = None
 
         # Cross-day persistent state (behavior trees, gesture detectors, llm
@@ -412,6 +437,10 @@ class _Runner:
             save_behavior_tree(bt, bt_filepath, hla)
 
         # Track the current high-level state.
+        # Staged personalization starts the plate in the fridge so the meal
+        # begins with the robot retrieving it (and the fridge color correction).
+        # With no personalization, keep the legacy start (plate on the holder).
+        plate_start = self.fridge if self._pref_mode != "none" else self.holder
         self.current_atoms = {
             GroundAtom(GripperFree, []),
             GroundAtom(ToolPrepared, [self.wipe]),
@@ -420,7 +449,7 @@ class _Runner:
             GroundAtom(DoorClosed, [self.fridge]),
             GroundAtom(DoorClosed, [self.microwave]),
             GroundAtom(InFrontOf, [self.microwave]),
-            GroundAtom(PlateAt, [self.holder]),
+            GroundAtom(PlateAt, [plate_start]),
             # GroundAtom(Holding, [self.plate]),
             GroundAtom(SafeToNavigate, []),
             # GroundAtom(FoodHeated, []),
@@ -469,6 +498,119 @@ class _Runner:
         )
         return self.preference_context
 
+    # ------------------------------------------------------------------ #
+    # Staged personalization
+    # ------------------------------------------------------------------ #
+    def _collect_preference_context(self) -> dict[str, str]:
+        """Observable meal context for this run. Honors an explicit
+        --pref_meal preset; otherwise collects it via terminal or the web
+        preference_context page."""
+        if self.preference_context is not None:
+            return self.preference_context  # preset via --pref_meal (debug/replay)
+
+        if self._pref_mode == "terminal":
+            from feeding_deployment.integration.terminal_preferences import (
+                terminal_collect_context,
+            )
+            ctx_dict = terminal_collect_context()
+        else:
+            ctx_dict = self.web_interface.get_meal_context(
+                meals=list(MEALS),
+                settings=list(SETTINGS),
+                times_of_day=list(TIMES_OF_DAY),
+            )
+        return self.set_meal_preference_context(
+            meal=ctx_dict["meal"],
+            setting=ctx_dict["setting"],
+            time_of_day=ctx_dict["time_of_day"],
+        )
+
+    def _start_preference_session(self) -> None:
+        """Collect context, predict the full bundle, ask the initial dims, then
+        run the staged meal preparation (fetch plate, microwave, place on
+        table) asking the relevant prefs at each stage."""
+        ctx = self._collect_preference_context()
+        print("Preference context (meal / setting / time_of_day):", ctx)
+
+        assert self.physical_profile_label is not None, (
+            "physical_profile_label is required for preference prediction "
+            "(pass --physical_profile_file)."
+        )
+        self._prediction_model = PredictionModel(
+            user=self.deployment_user,
+            physical_profile_label="deployment_physical_profile",
+            logs_dir=self.log_dir / "preference_learning",
+            physical_profile_description=self.physical_profile_label,
+        )
+
+        # Terminal mode reuses the staged session via a stdin correction adapter.
+        correction_interface = self.web_interface
+        if self._pref_mode == "terminal":
+            from feeding_deployment.integration.terminal_preferences import (
+                TerminalCorrectionInterface,
+            )
+            correction_interface = TerminalCorrectionInterface()
+
+        self._pref_session = PreferenceSession(
+            self._prediction_model,
+            self.run_behavior_tree_dir,
+            dict(ctx),
+            web_interface=correction_interface,
+            data_logger=self.data_logger,
+            scene_description=self.sim.scene_description,
+            hla_map=self.hla_name_to_hla,
+            flair=self.flair,
+        )
+
+        # Predict everything, then ask the initial dims (speed + autocontinue
+        # wait). The finalized wait drives the autocontinue of later pages.
+        self._pref_session.start()
+        print("Predicted preference bundle (initial):",
+              json.dumps(self._pref_session._loggable_bundle(), indent=2))
+        self._pref_session.ask(_INITIAL_PREF_DIMS)
+
+        self._run_meal_preparation()
+
+    def _run_meal_preparation(self) -> None:
+        """Fetch the plate from the fridge, ask the microwave preference, route
+        through the microwave (or not) per the planner, and place on the table,
+        asking the table dims once the plate is down."""
+        session = self._pref_session
+
+        # 1. Fridge -> holder (fridge color correction happens during pickup).
+        self.process_user_command(
+            GroundHighLevelAction(self.hla_name_to_hla["PlacePlateOnHolder"], (self.plate, self.holder))
+        )
+
+        # 2. Microwave preference (single dim). "no microwave" sets FoodHeated
+        #    so the planner serves directly; a duration leaves it unset so the
+        #    planner routes through the microwave and writes the BT duration.
+        session.ask(["microwave_time"])
+        microwave_duration = session.apply_microwave(self.current_atoms, GroundAtom(FoodHeated, []))
+        if microwave_duration is None:
+            print("Microwave preference: no microwave (FoodHeated added to planner state).")
+        else:
+            print(f"Microwave preference: {microwave_duration}s (planner will include microwave steps).")
+
+        # 3. (Holder ->) [microwave ->] table. Microwave color correction
+        #    happens during the microwave pickup if the plate is routed there.
+        self.process_user_command(
+            GroundHighLevelAction(self.hla_name_to_hla["PlacePlateOnTable"], (self.plate, self.table))
+        )
+
+        # 4. Table dims, just before feeding.
+        session.ask(_TABLE_PREF_DIMS)
+
+    def _finalize_preference_session(self) -> None:
+        """One memory update at meal end with the full finalized bundle."""
+        if self._pref_session is None:
+            return
+        day = self._pref_day if self._pref_day is not None else self._prediction_model.next_day()
+        print(f"[learn] Updating memory models (day {day}) ...")
+        self._pref_session.finalize_meal(day)
+        print(f"[learn] Memory update complete (day {day}).")
+        self._pref_session = None
+
     def run(self, continuous = True) -> None:
 
         assert self.web_interface is not None, "Run takes user commands from the web interface which is None."
@@ -476,100 +618,11 @@ class _Runner:
         if self._pref_mode == "none":
             self.web_interface.ready_for_task_selection()
         else:
-            # --- Step 1: Collect context ---
-            if self._pref_mode == "terminal":
-                from feeding_deployment.integration.terminal_preferences import (
-                    terminal_collect_context,
-                    terminal_correct_preferences,
-                )
-                ctx_dict = terminal_collect_context()
-                self.set_meal_preference_context(
-                    meal=ctx_dict["meal"],
-                    setting=ctx_dict["setting"],
-                    time_of_day=ctx_dict["time_of_day"],
-                )
-
-            ctx = self.ensure_preference_context()
-            print("Preference context (meal / setting / time_of_day):", ctx)
-            # --- Step 2: Predict ---
-            assert self.physical_profile_label is not None, (
-                "physical_profile_label is required for preference prediction "
-                "(pass --physical_profile_file)."
-            )
-            pref_logs = self.log_dir / "preference_learning"
-            self._prediction_model = PredictionModel(
-                user=self.deployment_user,
-                physical_profile_label="deployment_physical_profile",
-                logs_dir=pref_logs,
-                physical_profile_description=self.physical_profile_label,
-            )
-            self.predicted_bundle = self._prediction_model.predict_bundle(dict(ctx), {})
-            print("Predicted preference bundle (initial):", json.dumps(self.predicted_bundle, indent=2))
-
-            # --- Step 3: Correct ---
-            if self._pref_mode == "terminal":
-                user_bundle = terminal_correct_preferences(
-                    self.predicted_bundle, dict(PREF_OPTIONS),
-                )
-            else:
-                user_bundle = self.web_interface.get_preference_corrections(
-                    self.predicted_bundle, dict(PREF_OPTIONS),
-                )
-            self.ground_truth_bundle = user_bundle
-            self.corrected = {
-                k: v for k, v in user_bundle.items()
-                if v != self.predicted_bundle.get(k)
-            }
-            print("Ground truth bundle:", json.dumps(self.ground_truth_bundle, indent=2))
-            print("Corrected fields:", json.dumps(self.corrected, indent=2))
-            self.data_logger.log_event(
-                "preference_bundle",
-                context=dict(ctx),
-                predicted_bundle=self.predicted_bundle,
-                ground_truth_bundle=self.ground_truth_bundle,
-                corrected=self.corrected,
-            )
-
-            # --- Step 4: Apply ---
-            from feeding_deployment.integration.apply_preferences import (
-                apply_bundle_to_behavior_trees,
-                apply_transfer_mode,
-                apply_microwave_preference,
-                apply_dip_preference,
-            )
-            bt_warnings = apply_bundle_to_behavior_trees(
-                self.ground_truth_bundle, self.run_behavior_tree_dir,
-            )
-            for w in bt_warnings:
-                print(f"[preference-apply] WARNING: {w}")
-            apply_transfer_mode(
-                self.ground_truth_bundle,
-                self.sim.scene_description,
-                self.hla_name_to_hla,
-            )
-            microwave_duration = apply_microwave_preference(
-                self.ground_truth_bundle,
-                self.current_atoms,
-                GroundAtom(FoodHeated, []),
-            )
-            if microwave_duration is None:
-                print("Microwave preference: no microwave (FoodHeated added to planner state).")
-            else:
-                print(f"Microwave preference: {microwave_duration}s (planner will include microwave steps).")
-            apply_dip_preference(self.ground_truth_bundle, self.flair)
-            print("Applied ground-truth bundle to behavior trees and scene config.")
-
-            # --- Step 5: Learn ---
-            day = self._prediction_model.next_day() if self._pref_day is None else self._pref_day
-            print(f"[learn] Updating memory models (day {day}) ...")
-            self._prediction_model.update(
-                day=day,
-                context=dict(ctx),
-                corrected=self.corrected,
-                ground_truth_bundle=self.ground_truth_bundle,
-            )
-            print(f"[learn] Memory update complete (day {day}).")
-
+            # --- Staged personalization: predict full bundle, then ask the
+            # initial dims. The rest are asked just-in-time during the meal
+            # (microwave at the holder, table dims at the table) and colors at
+            # each pickup. A single memory update happens at meal end. ---
+            self._start_preference_session()
             self.web_interface.ready_for_task_selection()
         last_task_type = None
         while self.active:
@@ -599,7 +652,11 @@ class _Runner:
                     self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["Reset"], ()))
                     last_task_type = None
                 elif task == "finish_feeding":
+                    # PlacePlateInSink plans PickPlateFromTable first, so the
+                    # table color correction happens here. After the plate is
+                    # away, write the single per-day memory update.
                     self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["PlacePlateInSink"], (self.plate, self.sink)))
+                    self._finalize_preference_session()
                     last_task_type = None
                 elif task == "meal_assistance":
                     if task_type == "bite":
@@ -789,6 +846,22 @@ class _Runner:
             # Super hack: the drink and wipe are always prepared.
             self.current_atoms.add(ToolPrepared([self.wipe]))
             self.current_atoms.add(ToolPrepared([self.drink]))
+
+            # Color is a preference dimension: after a plate pickup, finalize
+            # the location's plate color (the pickup wrote any user color
+            # correction back to its BT YAML). A change propagates to the still-
+            # open color dims via reprediction (same physical plate).
+            if self._pref_session is not None:
+                try:
+                    bt_name = ground_hla.hla.get_behavior_tree_filename(
+                        ground_hla.objects, ground_hla.params
+                    ).removesuffix(".yaml")
+                except Exception:
+                    bt_name = ""
+                if bt_name.startswith("pick_plate_from_"):
+                    location = bt_name[len("pick_plate_from_"):]
+                    if location in ("fridge", "microwave", "table"):
+                        self._pref_session.record_color(location)
 
             # Save the latest state in case we want to resume execution
             # after a crash.
@@ -1080,14 +1153,10 @@ if __name__ == "__main__":
                      pref_mode=args.pref_mode,
                      day=args.day)
 
-    if args.pref_mode == "interface":
-        if not args.pref_meal.strip():
-            raise ValueError(
-                "With --pref_mode=interface, pass a non-empty --pref_meal every run "
-                "(exact MEALS label), with --pref_setting and --pref_time_of_day "
-                "matching config vocabularies. "
-                "Preference context is not stored on disk; after a crash, pass them again."
-            )
+    if args.pref_mode == "interface" and args.pref_meal.strip():
+        # Optional preset (debug/replay): if --pref_meal is given, skip the web
+        # context page and use it directly. Otherwise context is collected from
+        # the preference_context page at the start of the meal.
         runner.set_meal_preference_context(
             meal=args.pref_meal.strip(),
             setting=args.pref_setting,

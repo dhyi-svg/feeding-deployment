@@ -36,6 +36,46 @@ def terminal_collect_context() -> dict[str, str]:
     return {"meal": meal, "setting": setting, "time_of_day": time_of_day}
 
 
+class TerminalCorrectionInterface:
+    """stdin/stdout implementation of the stepwise correction contract used by
+    PreferenceSession (start_preference_correction / send_preference_step /
+    finish_preference_correction). Lets --pref_mode=terminal reuse the exact
+    same staged session flow as the web interface."""
+
+    def start_preference_correction(self, total: int, autocontinue_seconds: float) -> None:
+        print(f"\n=== Preferences ({total}) — press Enter to accept the prediction ===")
+
+    def send_preference_step(
+        self,
+        field: str,
+        predicted: str,
+        options: list[str],
+        step: int,
+        total: int,
+        autocontinue_seconds: float,
+    ) -> str:
+        opts = list(options)
+        pred_idx = opts.index(predicted) + 1 if predicted in opts else "?"
+        print(f"\n[{step + 1}/{total}] {field}")
+        for j, opt in enumerate(opts, 1):
+            marker = " <-- predicted" if opt == predicted else ""
+            print(f"  {j}. {opt}{marker}")
+        while True:
+            raw = input(f"Choice [{pred_idx}]: ").strip()
+            if raw == "":
+                return predicted
+            try:
+                idx = int(raw)
+                if 1 <= idx <= len(opts):
+                    return opts[idx - 1]
+            except ValueError:
+                pass
+            print(f"  Invalid. Enter a number 1-{len(opts)} or press Enter to keep.")
+
+    def finish_preference_correction(self) -> None:
+        print("=== Preferences confirmed ===")
+
+
 def terminal_correct_preferences(
     predicted_bundle: dict[str, str],
     pref_options: dict[str, list[str]],

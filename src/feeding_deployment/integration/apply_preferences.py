@@ -86,6 +86,7 @@ _ALL_BT_YAMLS: list[str] = [
     "close_fridge.yaml",
     "close_microwave.yaml",
     "emulate_transfer.yaml",
+    "gaze_at_table.yaml",
     "navigate_to_fridge.yaml",
     "navigate_to_microwave.yaml",
     "navigate_to_sink.yaml",

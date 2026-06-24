@@ -10,6 +10,10 @@ from openai import OpenAI
 import feeding_deployment.preference_learning.config as root_config  # type: ignore
 from feeding_deployment.preference_learning.config.preference_bundle import (
     PREFERENCE_BUNDLE as _PREF_BUNDLE_DIMS,
+    COLOR_FIELDS,
+    DEFAULT_COLOR,
+    parse_color,
+    format_color,
 )
 from feeding_deployment.preference_learning.methods.episodic_memory import EpisodicMemoryModel
 from feeding_deployment.preference_learning.methods.long_term_memory import LongTermMemoryModel
@@ -20,6 +24,8 @@ from feeding_deployment.preference_learning.methods.utils import _episode_text, 
 
 PREF_OPTIONS: Dict[str, List[str]] = {name: opts for (name, _, opts) in root_config.PREFERENCE_BUNDLE}
 PREF_DESCRIPTIONS: Dict[str, str] = {dim.field: dim.description for dim in _PREF_BUNDLE_DIMS}
+PREF_KIND: Dict[str, str] = {dim.field: getattr(dim, "kind", "categorical") for dim in _PREF_BUNDLE_DIMS}
+_COLOR_FIELD_SET = set(COLOR_FIELDS)
 
 
 def _strip_code_fences(s: str) -> str:
@@ -69,26 +75,41 @@ def _apply_hard_rules(prefs: Dict[str, str], meal: str, corrected: Dict[str, str
 
     return out
 
-def _build_options_block() -> str:
+def _build_options_block(color_seeds: Optional[Dict[str, Any]] = None) -> str:
     """
-    Bundle-prediction options block. Match the format used in your prompt-printer script:
-    - field: [opt1, opt2, ...]
+    Bundle-prediction options block.
+    - categorical field: ``- field: [opt1, opt2, ...]``
+    - color field:       ``- field: HSV object {...}; seed = h=..,s=..,v=..,range=..``
     """
+    color_seeds = color_seeds or {}
     lines: List[str] = []
     for field in PREF_FIELDS:
-        opts = PREF_OPTIONS[field]
-        lines.append(f"- {field}: [{', '.join(opts)}]")
+        if PREF_KIND.get(field) == "color":
+            seed = parse_color(color_seeds.get(field), seed=DEFAULT_COLOR)
+            lines.append(
+                f'- {field}: HSV object {{"h":0-179,"s":0-255,"v":0-255,"range":0.0-1.0}}; '
+                f"seed = {format_color(seed)}"
+            )
+        else:
+            opts = PREF_OPTIONS[field]
+            lines.append(f"- {field}: [{', '.join(opts)}]")
     return "\n".join(lines)
 
 
-def _format_corrected_block(corrected: Dict[str, str]) -> str:
+def _format_corrected_block(corrected: Dict[str, Any]) -> str:
     """
-    Match the format used by your get_bundle_prediction_prompt printer:
-    each line is key=value.
+    Each line is key=value. Color corrections are rendered with the compact
+    HSV encoding so the model sees the corrected handle color.
     """
     if not corrected:
         return "(none)"
-    return "\n".join(f"{k}={v}" for k, v in corrected.items())
+    out = []
+    for k, v in corrected.items():
+        if k in _COLOR_FIELD_SET:
+            out.append(f"{k}={format_color(v if isinstance(v, dict) else {})}")
+        else:
+            out.append(f"{k}={v}")
+    return "\n".join(out)
 
 def _day_path(dir_path: Path, day: int) -> Path:
     return dir_path / f"day_{day:04d}.json"
@@ -222,12 +243,18 @@ class PredictionModel:
     def predict_bundle(
         self,
         context: Dict[str, Any],
-        corrected: Dict[str, str],
-    ) -> Dict[str, str]:
+        corrected: Dict[str, Any],
+        color_seeds: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
         Returns predicted_bundle.
+
+        ``color_seeds`` maps each plate_color_* field to its current saved color
+        (canonical dict / BT YAML value). Color predictions are seeded with these
+        and fall back to them when the LLM output cannot be parsed.
         """
-        
+        color_seeds = color_seeds or {}
+
         episodic_memory = ""
         if self.episodic_memory_model:
             episodic_memory = self.episodic_memory_model.retrieve(context, corrected)
@@ -237,7 +264,7 @@ class PredictionModel:
             long_term_memory = self.long_term_memory_model.get_ltm()  # JSON string (or empty)
 
         # Prompt blocks
-        options_block = _build_options_block()
+        options_block = _build_options_block(color_seeds)
         corrected_block = _format_corrected_block(corrected)
 
         prompt = get_bundle_prediction_prompt(
@@ -273,23 +300,33 @@ class PredictionModel:
             else:
                 log_file.write_text(f"===PROMPT===\n{prompt}\n\n===RESPONSE===\nFailed to parse response as JSON. Raw response:\n{resp}", encoding="utf-8")
 
-        # Validate against allowed options, fallback to corrected or default
-        out: Dict[str, str] = {}
+        # Validate each field; categorical -> allowed option (fallback to
+        # corrected/default), color -> parsed HSV (fallback to seed).
+        out: Dict[str, Any] = {}
         for field in PREF_FIELDS:
-            val = str(data.get(field, "")).strip()
-            if val in PREF_OPTIONS[field]:
-                out[field] = val
+            if PREF_KIND.get(field) == "color":
+                seed = parse_color(color_seeds.get(field), seed=DEFAULT_COLOR)
+                out[field] = parse_color(data.get(field), seed=seed)
             else:
-                out[field] = corrected.get(field, PREF_OPTIONS[field][0])
+                val = str(data.get(field, "")).strip()
+                if val in PREF_OPTIONS[field]:
+                    out[field] = val
+                else:
+                    out[field] = corrected.get(field, PREF_OPTIONS[field][0])
 
         out = _apply_hard_rules(out, meal=str(context.get("meal", "")), corrected=corrected)
 
-        # Corrected always overrides
+        # Corrected always overrides (canonicalize color corrections).
         for k, v in corrected.items():
-            out[k] = v
+            if k in _COLOR_FIELD_SET:
+                out[k] = parse_color(v, seed=parse_color(color_seeds.get(k), seed=DEFAULT_COLOR))
+            else:
+                out[k] = v
 
-        # Final validation
+        # Final validation (categorical only; color values are already canonical).
         for field in PREF_FIELDS:
+            if PREF_KIND.get(field) == "color":
+                continue
             if out[field] not in PREF_OPTIONS[field]:
                 out[field] = PREF_OPTIONS[field][0]
         return out

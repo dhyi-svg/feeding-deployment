@@ -7,6 +7,11 @@ class PreferenceDim:
     label: str
     options: List[str]
     description: str
+    # "categorical": value is one of `options` (LLM picks from the list).
+    # "color":       value is a continuous HSV color + range (LLM emits
+    #                {"h","s","v","range"}); `options` is empty and the dim is
+    #                seeded from / validated against the per-user BT YAML color.
+    kind: str = "categorical"
 
 PREFERENCE_BUNDLE: List[PreferenceDim] = [
     PreferenceDim(
@@ -111,4 +116,116 @@ PREFERENCE_BUNDLE: List[PreferenceDim] = [
         options=["10 sec", "100 sec", "1000 sec"],
         description="How long the robot waits before automatically continuing to the next bite, sip, or mouth wiping if the user does not intervene. Some users may prefer a shorter wait time to reduce meal time, while others may prefer a longer wait time to give themselves more time to intervene if needed, especially in contexts where they might be more distracted (e.g., when eating in a social setting with a partner or when watching TV)."
     ),
+    # --- Color dimensions (kind="color") -------------------------------------
+    # The robot picks up the plate by detecting a colored handle. The detection
+    # color is an HSV value (+ a tolerance range). These three dims are the
+    # SAME physical plate handle seen at three pickup locations under different
+    # lighting/backgrounds (fridge, microwave, table), so a correction at one
+    # location is strong evidence for the others. Values are continuous HSV, not
+    # a fixed option-list: predictions are seeded from the user's current saved
+    # color in the dynamic behavior tree (factory default on day 1) and the user
+    # corrects them with the on-screen color picker during pickup.
+    PreferenceDim(
+        field="plate_color_fridge",
+        label="Plate handle color (fridge pickup)",
+        options=[],
+        kind="color",
+        description="HSV color of the plate handle used for attachment detection when picking the plate up from inside the fridge. This is the same physical plate handle as plate_color_microwave and plate_color_table, but the fridge interior lighting may shift its apparent color. Predict the handle's HSV color and a tolerance range; default to the provided seed value when there is no evidence to change it."
+    ),
+    PreferenceDim(
+        field="plate_color_microwave",
+        label="Plate handle color (microwave pickup)",
+        options=[],
+        kind="color",
+        description="HSV color of the plate handle used for attachment detection when picking the plate up from inside the microwave. This is the same physical plate handle as plate_color_fridge and plate_color_table, but microwave interior lighting may shift its apparent color. Predict the handle's HSV color and a tolerance range; default to the provided seed value when there is no evidence to change it."
+    ),
+    PreferenceDim(
+        field="plate_color_table",
+        label="Plate handle color (table pickup)",
+        options=[],
+        kind="color",
+        description="HSV color of the plate handle used for attachment detection when picking the plate up from the table. This is the same physical plate handle as plate_color_fridge and plate_color_microwave, but table lighting may shift its apparent color. Predict the handle's HSV color and a tolerance range; default to the provided seed value when there is no evidence to change it."
+    ),
 ]
+
+# ---------------------------------------------------------------------------
+# Color-dimension helpers
+#
+# A color value is the canonical dict {"h": int, "s": int, "v": int,
+# "range": float} (HSV, H in [0,179], S/V in [0,255], range in [0,1]). This is
+# what the LLM emits for kind="color" dims and what flows through the bundle,
+# episode text, and the per-user behavior-tree YAML (HandleColor=[H,S,V],
+# ColorRange=range). The factory default matches
+# AttachmentPerception.detect_attachment_color.
+# ---------------------------------------------------------------------------
+
+COLOR_FIELDS: List[str] = [dim.field for dim in PREFERENCE_BUNDLE if dim.kind == "color"]
+
+DEFAULT_COLOR: dict = {"h": 82, "s": 55, "v": 84, "range": 0.1}
+
+# pickup location <-> color field (location names match HLA/perception usage).
+COLOR_FIELD_BY_LOCATION: dict = {
+    "fridge": "plate_color_fridge",
+    "microwave": "plate_color_microwave",
+    "table": "plate_color_table",
+}
+
+
+def _clip_int(x, lo: int, hi: int, default: int) -> int:
+    try:
+        return max(lo, min(hi, int(round(float(x)))))
+    except (TypeError, ValueError):
+        return default
+
+
+def _clip_float(x, lo: float, hi: float, default: float) -> float:
+    try:
+        return max(lo, min(hi, float(x)))
+    except (TypeError, ValueError):
+        return default
+
+
+def parse_color(obj, seed: Optional[dict] = None) -> dict:
+    """Coerce an LLM/JSON value into a canonical, clipped color dict.
+
+    Accepts a dict with any of h/s/v/range, or a string like
+    "h=82,s=55,v=84,range=0.10". Missing/invalid components fall back to
+    ``seed`` (or DEFAULT_COLOR). Always returns a fully-populated, clipped dict.
+    """
+    base = dict(seed) if seed else dict(DEFAULT_COLOR)
+
+    parsed: dict = {}
+    if isinstance(obj, dict):
+        parsed = obj
+    elif isinstance(obj, str):
+        for part in obj.replace(";", ",").split(","):
+            if "=" in part:
+                k, _, v = part.partition("=")
+                parsed[k.strip().lower()] = v.strip()
+
+    return {
+        "h": _clip_int(parsed.get("h", base["h"]), 0, 179, int(base["h"])),
+        "s": _clip_int(parsed.get("s", base["s"]), 0, 255, int(base["s"])),
+        "v": _clip_int(parsed.get("v", base["v"]), 0, 255, int(base["v"])),
+        "range": _clip_float(parsed.get("range", base["range"]), 0.0, 1.0, float(base["range"])),
+    }
+
+
+def format_color(c: dict) -> str:
+    """Stable compact string for episode text / logs: ``h=82,s=55,v=84,range=0.10``."""
+    c = parse_color(c)
+    return f"h={c['h']},s={c['s']},v={c['v']},range={c['range']:.2f}"
+
+
+def color_to_bt(c: dict):
+    """Canonical color dict -> (HandleColor list [H,S,V], ColorRange float)."""
+    c = parse_color(c)
+    return [c["h"], c["s"], c["v"]], c["range"]
+
+
+def color_from_bt(handle_color, color_range) -> dict:
+    """(HandleColor [H,S,V], ColorRange) from the BT YAML -> canonical color dict."""
+    hc = list(handle_color) if handle_color is not None else [DEFAULT_COLOR["h"], DEFAULT_COLOR["s"], DEFAULT_COLOR["v"]]
+    if len(hc) < 3:
+        hc = (hc + [0, 0, 0])[:3]
+    return parse_color({"h": hc[0], "s": hc[1], "v": hc[2], "range": color_range})

@@ -20,6 +20,7 @@ from feeding_deployment.actions.base import (
     DoorOpen,
     PlateAt,
     TableSeen,
+    FoodHeated,
 )
 
 class PlacePlateInApplianceHLA(HighLevelAction):
@@ -220,6 +221,11 @@ class PlacePlateOnTableHLA(HighLevelAction):
                 LiftedAtom(Holding, [plate]),
                 LiftedAtom(InFrontOf, [table]),
                 LiftedAtom(TableSeen, []),
+                # Food must be heated before it reaches the table. With
+                # FoodHeated unset, planning-to-preconditions routes the plate
+                # through the microwave; the "no microwave" preference adds
+                # FoodHeated up front so the planner serves directly.
+                LiftedAtom(FoodHeated, []),
             },
             add_effects={
                 LiftedAtom(GripperFree, []),

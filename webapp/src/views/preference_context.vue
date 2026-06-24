@@ -137,6 +137,9 @@ export default {
     this.initPublisher()
     this.initSubscriber()
     this.maybeLoadFromUrl()
+    // Announce readiness so the backend can send the (non-latched) context
+    // options without racing our subscription. Re-announced on every reconnect.
+    this.ros.on('connection', () => this.sendReady())
   },
   beforeUnmount() {
     this.teardownRos()
@@ -165,6 +168,12 @@ export default {
         name: '/webapp_to_robot',
         messageType: 'std_msgs/String'
       })
+    },
+    sendReady() {
+      if (!this.publisher) return
+      this.publisher.publish(new ROSLIB.Message({
+        data: JSON.stringify({ state: 'preference_context', status: 'ready' })
+      }))
     },
     initSubscriber() {
       this.listener = new ROSLIB.Topic({
