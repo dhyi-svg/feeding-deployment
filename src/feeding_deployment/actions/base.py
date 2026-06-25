@@ -50,7 +50,7 @@ from pybullet_helpers.gui import visualize_pose
 from tomsutils.llm import LargeLanguageModel
 
 from feeding_deployment.interfaces.perception_interface import PerceptionInterface
-from feeding_deployment.interfaces.web_interface import WebInterface
+from feeding_deployment.interfaces.web_interface import WebInterface, WebInterfaceTakeoverInterrupt
 from feeding_deployment.interfaces.rviz_interface import RVizInterface
 from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceClient
 from feeding_deployment.control.wrist_controller.wrist_controller import WristInterface
@@ -194,7 +194,24 @@ class HighLevelAction(abc.ABC):
         bt_filepath = self.behavior_tree_dir / bt_filename
         assert bt_filepath.exists()
         bt = load_behavior_tree(bt_filepath, self)
-        bt.tick()
+        try:
+            bt.tick()
+        except WebInterfaceTakeoverInterrupt:
+            # The user took over while the skill was blocked in a perception
+            # confirmation wait. Run the teleop recovery session, then surface
+            # the user's choice as the same TeleopTakeoverException the executive
+            # already handles (redo -> rerun whole HLA; next -> apply effects).
+            choice = self._maybe_handle_mid_skill_takeover()
+            if choice is None:
+                # Feature disabled / no web_interface: don't leave the event
+                # latched (it would re-raise on the next wait). Clear + treat as
+                # "next".
+                self.web_interface.consume_takeover()
+                choice = "next"
+            raise TeleopTakeoverException(
+                "User took over during a perception confirmation wait",
+                redo_current=(choice == "redo"),
+            )
 
     def process_behavior_tree_node_addition(
         self,

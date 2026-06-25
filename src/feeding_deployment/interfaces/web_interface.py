@@ -34,6 +34,12 @@ try:
 except Exception:
     _PREF_LABELS = {}
 
+class WebInterfaceTakeoverInterrupt(Exception):
+    """Raised out of a blocking web-interface wait when a mid-skill takeover is
+    requested, so the HLA layer can run teleop recovery instead of the wait
+    silently dropping the takeover message."""
+
+
 class WebInterface:
     '''
     An interface to interact with the web interface.
@@ -334,6 +340,12 @@ class WebInterface:
         """Parses through all messages received from the web interface and returns the oldest one satisfying the condition."""
         print_once = True
         while self.active:
+            # A mid-skill takeover must break a blocking confirm wait. Checked
+            # before draining the queue so it fires even when the queue is full
+            # of non-matching messages (which this loop otherwise discards). The
+            # HLA layer clears the event via consume_takeover(); we only read it.
+            if self.takeover_event.is_set():
+                raise WebInterfaceTakeoverInterrupt()
             if self.task_selection_jump:
                 return None
             try:

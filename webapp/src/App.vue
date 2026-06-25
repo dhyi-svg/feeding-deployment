@@ -36,7 +36,10 @@ export default {
       _audioBuf: null,
       _prevAbove: false,
       _press: null,
-      _raf: null
+      _raf: null,
+      _ros: null,
+      _destroyed: false,
+      _reconnectTimer: null
     }
   },
   computed: {
@@ -72,24 +75,7 @@ export default {
     },
   },
   mounted () {
-    const ros = new ROSLIB.Ros({ url: ROS_URL })
-    this.takeoverPublisher = new ROSLIB.Topic({
-      ros,
-      name: '/webapp_to_robot',
-      messageType: 'std_msgs/String'
-    })
-    this.skillPlanListener = new ROSLIB.Topic({
-      ros,
-      name: '/skill_plan',
-      messageType: 'std_msgs/String'
-    })
-    this.skillPlanListener.subscribe((msg) => {
-      try {
-        const parsed = JSON.parse(msg.data)
-        this.skillPlan = parsed.plan || []
-        this.skillCurrent = (typeof parsed.current === 'number') ? parsed.current : -1
-      } catch (e) { /* ignore non-JSON */ }
-    })
+    this.connectRos()
     // Single press -> bite-transfer confirm (latency-tolerant); double press ->
     // stop autonomous & take over (fires fast, on the 2nd click).
     this._press = new PressClassifier({
@@ -98,10 +84,49 @@ export default {
     })
   },
   beforeUnmount () {
+    this._destroyed = true
+    if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null }
     if (this._raf) cancelAnimationFrame(this._raf)
     if (this._press) this._press.reset()
   },
   methods: {
+    connectRos () {
+      // App.vue is the persistent root: unlike the views (which build a fresh
+      // connection on every mount), this socket would otherwise live and die
+      // once. If it drops with no reconnect, takeoverPublisher and the
+      // /skill_plan listener silently go dead -> the global Take Over buttons and
+      // base-control visibility stop working. Reconnect on close so they heal.
+      const ros = new ROSLIB.Ros({ url: ROS_URL })
+      this._ros = ros
+      ros.on('error', () => { /* a 'close' follows; reconnect is handled there */ })
+      ros.on('close', () => {
+        if (this._destroyed) return
+        if (this._reconnectTimer) return
+        this._reconnectTimer = setTimeout(() => {
+          this._reconnectTimer = null
+          this.connectRos()
+        }, 1000)
+      })
+      this.takeoverPublisher = new ROSLIB.Topic({
+        ros,
+        name: '/webapp_to_robot',
+        messageType: 'std_msgs/String'
+      })
+      this.skillPlanListener = new ROSLIB.Topic({
+        ros,
+        name: '/skill_plan',
+        messageType: 'std_msgs/String'
+      })
+      // /skill_plan is latched on the backend, so re-subscribing after a
+      // reconnect immediately re-delivers the current plan (no state lost).
+      this.skillPlanListener.subscribe((msg) => {
+        try {
+          const parsed = JSON.parse(msg.data)
+          this.skillPlan = parsed.plan || []
+          this.skillCurrent = (typeof parsed.current === 'number') ? parsed.current : -1
+        } catch (e) { /* ignore non-JSON */ }
+      })
+    },
     controlArm () {
       if (this.takeoverPublisher) {
         this.takeoverPublisher.publish(new ROSLIB.Message({

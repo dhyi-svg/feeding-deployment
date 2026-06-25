@@ -171,6 +171,13 @@ export default {
     this.ros = new ROSLIB.Ros({ url: ROS_URL })
     this.initRos()
 
+    // Announce the takeover from THIS view's own connection (the one that also
+    // sends heartbeats), so the backend reliably sets its takeover_event. The
+    // global App.vue button publishes this too, but on a separate long-lived
+    // socket that can be stale -> the message gets silently dropped. Backend
+    // de-dupes repeated takeovers, so this is idempotent.
+    this.publish({ state: 'teleop', status: 'takeover' })
+
     if (this.$route.query.hla) {
       this.currentHla = this.$route.query.hla
     }
