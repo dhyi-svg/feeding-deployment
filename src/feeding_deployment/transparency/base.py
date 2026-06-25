@@ -17,8 +17,8 @@ class TransparencyBase(abc.ABC):
 
         self.behavior_log_path = log_dir / "behavior_trees"
         self.sensor_log_path = log_dir
-        self.execution_log_path = log_dir.parent.parent / "execution_log.txt"
-        self.nuc_execution_log_path = log_dir.parent.parent / "nuc_execution_log.txt"
+        self.execution_log_path = log_dir.parent / "execution_log.txt"
+        self.nuc_execution_log_path = log_dir.parent / "nuc_execution_log.txt"
 
     def load_behavior(self):
         """

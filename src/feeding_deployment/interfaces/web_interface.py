@@ -924,10 +924,15 @@ class WebInterface:
         while self.active:
             # Only provide continuous explanations if no one has fixed an explanation
             if not self.explanation_lock.locked():
-                response = self.transparency_continuous.get_explanation()
-                if response != "No new explanation to provide" and response != current_explanation:
-                    current_explanation = response
-                self._send_message({"state": "explanation", "status": current_explanation}, explanation=True)
+                try:
+                    response = self.transparency_continuous.get_explanation()
+                    if response != "No new explanation to provide" and response != current_explanation:
+                        current_explanation = response
+                    self._send_message({"state": "explanation", "status": current_explanation}, explanation=True)
+                except Exception as e:
+                    # An LLM/API or file error must not kill the explanation thread;
+                    # log it and keep going so explanations resume on the next tick.
+                    print("Error generating continuous explanation: ", e)
             time.sleep(1.0)  # Provide explanations at a rate of 1 Hz
 
 if __name__ == "__main__":
