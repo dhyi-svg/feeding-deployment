@@ -185,13 +185,80 @@ class PredictionModel:
         self.working_memory_calls_dir = self.logs_dir / user / "prediction_model_llm_calls"
         self.working_memory_calls_dir.mkdir(parents=True, exist_ok=True)
 
-    def next_day(self) -> int:
-        """Return the next unused day number by scanning existing ``day_NNNN.json`` files."""
-        existing = sorted(self.working_memory_dir.glob("day_*.json"))
-        if not existing:
-            return 1
-        last_stem = existing[-1].stem          # e.g. "day_0003"
-        return int(last_stem.split("_", 1)[1]) + 1
+    @staticmethod
+    def _scan_day_files(dir_path: Path, current_day: int):
+        """Yield ``(day, path)`` for ``day_*.json`` files with day < current_day,
+        in ascending day order. Files with an unparseable stem are skipped."""
+        found = []
+        for p in sorted(dir_path.glob("day_*.json")):
+            try:
+                d = int(p.stem.split("_", 1)[1])
+            except (ValueError, IndexError):
+                continue
+            if d < current_day:
+                found.append((d, p))
+        found.sort(key=lambda t: t[0])
+        return found
+
+    def existing_days(self) -> set[int]:
+        """All finalized day numbers, from the canonical ``working_memory`` marker
+        (written unconditionally at finalize)."""
+        days: set[int] = set()
+        for p in self.working_memory_dir.glob("day_*.json"):
+            try:
+                days.add(int(p.stem.split("_", 1)[1]))
+            except (ValueError, IndexError):
+                continue
+        return days
+
+    def validate_sequential_day(self, current_day: int) -> None:
+        """Reject day gaps: every day in ``1..current_day-1`` must already be
+        finalized. The deployment runs strictly sequentially, so a hole (a skipped
+        day, or a prior day that crashed before finalize) is an error. Re-running
+        or resuming ``current_day`` itself is allowed."""
+        missing = sorted(set(range(1, current_day)) - self.existing_days())
+        if missing:
+            raise ValueError(
+                f"Cannot start day {current_day}: missing finalized memory for "
+                f"day(s) {missing}. Deployment days must be sequential with no "
+                f"gaps -- run the missing day(s) first."
+            )
+
+    def load_prior_memory(self, current_day: int) -> None:
+        """Re-hydrate cross-day memory from disk for days strictly before
+        ``current_day``. Each daily run is a fresh process; without this the LTM
+        summary and episodic history start empty and prior days' learning is lost.
+
+        LTM is cumulative, so only the latest prior day's summary is needed;
+        episodic history needs every prior episode_text. The strictly-less-than
+        cutoff keeps a re-run/resume of ``current_day`` from folding its own prior
+        record back into itself."""
+        if self.long_term_memory_model:
+            ltm_files = self._scan_day_files(self.long_term_memory_dir, current_day)
+            if ltm_files:
+                _, latest_path = ltm_files[-1]
+                try:
+                    record = json.loads(latest_path.read_text(encoding="utf-8"))
+                    raw = record.get("ltm_summary_raw", "")
+                    summary = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
+                    if summary.strip():
+                        self.long_term_memory_model.load_summary(summary)
+                except Exception as e:
+                    print(f"Warning: failed to load LTM summary from {latest_path}: {e}", flush=True)
+
+        if self.episodic_memory_model:
+            texts: List[str] = []
+            for _, path in self._scan_day_files(self.episodic_memory_dir, current_day):
+                try:
+                    record = json.loads(path.read_text(encoding="utf-8"))
+                except Exception as e:
+                    print(f"Warning: skipping unreadable episodic record {path}: {e}", flush=True)
+                    continue
+                txt = record.get("episode_text", "")
+                if txt:
+                    texts.append(txt)
+            if texts:
+                self.episodic_memory_model.load_history(texts)
 
     def update(self, day: int, context: Dict[str, Any], corrected: Dict[str, str], ground_truth_bundle: Dict[str, str]) -> None:
         

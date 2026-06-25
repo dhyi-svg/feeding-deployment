@@ -174,14 +174,14 @@ export default {
 }
 
 .p-nm {
-  font-size: 2.9vh;
+  font-size: 3.4vh;
   font-weight: 700;
   color: var(--t);
   margin-bottom: 0.4vh;
 }
 
 .p-ds {
-  font-size: 2.1vh;
+  font-size: 2.5vh;
   color: var(--tm);
 }
 

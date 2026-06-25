@@ -323,13 +323,13 @@ export default {
 }
 
 .banner {
-  text-align: center; font-size: 14px; padding: 8px; border-radius: 8px;
+  text-align: center; font-size: 16px; padding: 8px; border-radius: 8px;
   color: var(--a2); background: rgba(46, 196, 182, .12); margin: 8px 0;
 }
 .banner.bad { color: #e88; background: rgba(220, 60, 60, .12); }
 
 .hla-banner {
-  text-align: center; font-size: 15px; padding: 8px; border-radius: 8px;
+  text-align: center; font-size: 17px; padding: 8px; border-radius: 8px;
   color: var(--a2); background: rgba(46, 196, 182, .12); margin-bottom: 8px;
 }
 
@@ -357,9 +357,9 @@ export default {
 }
 .knob.dragging { transition: none; }
 
-.readout { display: flex; gap: 32px; font-size: 16px; color: var(--tm); }
+.readout { display: flex; gap: 32px; font-size: 19px; color: var(--tm); }
 .readout b { color: var(--t); font-weight: 700; }
-.hint { font-size: 13px; color: var(--tm); }
+.hint { font-size: 15px; color: var(--tm); }
 
 /* Bottom action bar — mirrors the manipulation_teleop layout. */
 .bottom {
@@ -368,8 +368,8 @@ export default {
 }
 .bottom.two-col { grid-template-columns: 1fr 1fr; }
 .navbtn {
-  font-family: Verdana, sans-serif; font-size: 16px; font-weight: 700;
-  padding: 12px 0; border-radius: 8px; cursor: pointer; min-height: 56px; border: none;
+  font-family: Verdana, sans-serif; font-size: 19px; font-weight: 700;
+  padding: 12px 0; border-radius: 8px; cursor: pointer; min-height: 64px; border: none;
 }
 .navbtn.resume {
   background: rgba(46, 196, 182, .12); color: var(--a2);

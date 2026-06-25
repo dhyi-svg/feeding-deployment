@@ -340,7 +340,7 @@ through the microwave; after adding `FoodHeated`, it should plan holder→table 
 One full meal: context → speed/wait asks → fridge retrieval + fridge color → microwave
 ask → [microwave route + microwave color | direct] → table → table dims → eat → finish
 (table color) → one episode written to `log/<user>/preference_learning/.../day_NNNN.json`.
-Then a second "day" (`--pref_day N`) to confirm day-2 predictions reflect day-1
+Then a second "day" (`--day N`) to confirm day-2 predictions reflect day-1
 corrections (LTM/EM) and corrected plate colors carry over via the BT YAML.
 
 ---

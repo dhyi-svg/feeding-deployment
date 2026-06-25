@@ -84,6 +84,16 @@ class LongTermMemoryModel:
     def get_ltm(self) -> str:
         return self._ltm_summary
 
+    def load_summary(self, summary: str) -> None:
+        """Seed the running LTM summary from a persisted prior-day value.
+
+        The summary is cumulative (each ``add_episode`` folds the new episode
+        into the previous summary), so restoring the latest prior day's summary
+        restores the full accumulated state. No LLM call -- this seeds, it does
+        not re-summarize."""
+        self._ltm_summary = summary
+        self._initialized = True
+
     def add_episode(self, episode_text: str) -> None:
         # Single-prompt behavior: if we don't have a previous summary, use N/A (cold-start).
         previous = self._ltm_summary.strip() if self._initialized and self._ltm_summary.strip() else "N/A"

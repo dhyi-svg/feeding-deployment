@@ -79,6 +79,13 @@ class EpisodicMemoryModel:
         # Just cache the embedding for this episode text. Retrieval will happen later.
         self._history_texts.append(episode_text)
 
+    def load_history(self, texts: List[str]) -> None:
+        """Seed the retrieval history from persisted prior-day episode texts.
+
+        Embeddings are computed lazily in ``retrieve`` (and cached on disk), so
+        this makes no API calls."""
+        self._history_texts = list(texts)
+
     def _embed(self, text: str) -> List[float]:
         cached = self.cache.get(text)
         if cached is not None:

@@ -447,58 +447,64 @@ class TestPrefOptionsConsistency:
 
 
 # ===================================================================
-# Step 5 — Learn: PredictionModel.next_day + update wiring
+# Step 5 — Learn: PredictionModel sequential-day guard + update wiring
 # ===================================================================
 
 
-class TestNextDay:
-    """Verify PredictionModel.next_day auto-detects the next unused day."""
+class TestSequentialDay:
+    """Verify existing_days() and the no-gap validate_sequential_day guard."""
 
-    @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
-    @patch(f"{_PM_MODULE}.OpenAI")
-    def test_empty_logs_returns_1(self, mock_openai_cls, _key, tmp_path):
-        mock_openai_cls.return_value = MagicMock()
+    @staticmethod
+    def _model(tmp_path):
         from feeding_deployment.preference_learning.methods.prediction_model import (
             PredictionModel,
         )
-        model = PredictionModel(
+        return PredictionModel(
             user="u", physical_profile_label="p",
             logs_dir=tmp_path / "pref",
             use_long_term_memory=False, use_episodic_memory=False,
         )
-        assert model.next_day() == 1
 
     @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
     @patch(f"{_PM_MODULE}.OpenAI")
-    def test_after_three_days_returns_4(self, mock_openai_cls, _key, tmp_path):
+    def test_existing_days_scans_working_memory(self, mock_openai_cls, _key, tmp_path):
         mock_openai_cls.return_value = MagicMock()
-        from feeding_deployment.preference_learning.methods.prediction_model import (
-            PredictionModel,
-        )
-        model = PredictionModel(
-            user="u", physical_profile_label="p",
-            logs_dir=tmp_path / "pref",
-            use_long_term_memory=False, use_episodic_memory=False,
-        )
+        model = self._model(tmp_path)
+        assert model.existing_days() == set()
+        for d in [1, 2, 5]:
+            (model.working_memory_dir / f"day_{d:04d}.json").write_text("{}")
+        assert model.existing_days() == {1, 2, 5}
+
+    @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
+    @patch(f"{_PM_MODULE}.OpenAI")
+    def test_day_1_ok_when_empty(self, mock_openai_cls, _key, tmp_path):
+        mock_openai_cls.return_value = MagicMock()
+        model = self._model(tmp_path)
+        model.validate_sequential_day(1)  # no prerequisites; must not raise
+
+    @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
+    @patch(f"{_PM_MODULE}.OpenAI")
+    def test_sequential_next_day_ok_and_rerun_ok(self, mock_openai_cls, _key, tmp_path):
+        mock_openai_cls.return_value = MagicMock()
+        model = self._model(tmp_path)
         for d in [1, 2, 3]:
             (model.working_memory_dir / f"day_{d:04d}.json").write_text("{}")
-        assert model.next_day() == 4
+        model.validate_sequential_day(4)  # next sequential day
+        model.validate_sequential_day(3)  # re-run an existing day
+        model.validate_sequential_day(2)  # resume an earlier day
 
     @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
     @patch(f"{_PM_MODULE}.OpenAI")
-    def test_gap_in_days_uses_max(self, mock_openai_cls, _key, tmp_path):
+    def test_gap_raises(self, mock_openai_cls, _key, tmp_path):
         mock_openai_cls.return_value = MagicMock()
-        from feeding_deployment.preference_learning.methods.prediction_model import (
-            PredictionModel,
-        )
-        model = PredictionModel(
-            user="u", physical_profile_label="p",
-            logs_dir=tmp_path / "pref",
-            use_long_term_memory=False, use_episodic_memory=False,
-        )
+        model = self._model(tmp_path)
+        (model.working_memory_dir / "day_0001.json").write_text("{}")
+        with pytest.raises(ValueError, match="missing finalized memory"):
+            model.validate_sequential_day(3)  # day 2 missing
         for d in [1, 5]:
             (model.working_memory_dir / f"day_{d:04d}.json").write_text("{}")
-        assert model.next_day() == 6
+        with pytest.raises(ValueError, match=r"\[2, 3, 4\]"):
+            model.validate_sequential_day(6)
 
 
 class TestUpdateWritesLogs:
@@ -531,7 +537,7 @@ class TestUpdateWritesLogs:
 
     @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
     @patch(f"{_PM_MODULE}.OpenAI")
-    def test_update_increments_next_day(self, mock_openai_cls, _key, tmp_path):
+    def test_update_grows_existing_days(self, mock_openai_cls, _key, tmp_path):
         mock_openai_cls.return_value = MagicMock()
         from feeding_deployment.preference_learning.methods.prediction_model import (
             PredictionModel,
@@ -544,11 +550,11 @@ class TestUpdateWritesLogs:
         ctx = {"meal": MEALS[0], "setting": SETTINGS[0], "time_of_day": TIMES_OF_DAY[0]}
         bundle = _default_bundle()
 
-        assert model.next_day() == 1
+        assert model.existing_days() == set()
         model.update(day=1, context=ctx, corrected={}, ground_truth_bundle=bundle)
-        assert model.next_day() == 2
+        assert model.existing_days() == {1}
         model.update(day=2, context=ctx, corrected={}, ground_truth_bundle=bundle)
-        assert model.next_day() == 3
+        assert model.existing_days() == {1, 2}
 
     @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
     @patch(f"{_PM_MODULE}.OpenAI")

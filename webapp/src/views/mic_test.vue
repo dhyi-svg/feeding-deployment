@@ -214,7 +214,7 @@ export default {
   gap: 1.6vh;
 }
 .mic-hint {
-  font-size: 1.9vh;
+  font-size: 2.3vh;
   color: var(--tm);
   line-height: 1.5;
   text-align: center;
@@ -225,7 +225,7 @@ export default {
   gap: 1.5vw;
 }
 .mic-status {
-  font-size: 2vh;
+  font-size: 2.4vh;
   color: var(--tm);
 }
 .mic-row {
@@ -233,7 +233,7 @@ export default {
   justify-content: space-between;
   align-items: center;
   gap: 1vw;
-  font-size: 2vh;
+  font-size: 2.4vh;
   color: var(--tm);
   padding: 1.2vh 0;
   border-bottom: 1px solid var(--bd);
@@ -251,7 +251,7 @@ export default {
   display: flex;
   align-items: center;
   gap: 1.5vw;
-  font-size: 2vh;
+  font-size: 2.4vh;
   color: var(--tm);
 }
 .threshold-lbl { flex-shrink: 0; }
@@ -272,7 +272,7 @@ export default {
   border-radius: 10px;
   padding: 1.5vh;
   font-family: monospace;
-  font-size: 1.5vh;
+  font-size: 1.75vh;
   color: var(--tm);
 }
 .mic-log .single { color: var(--a2); font-weight: 700; }
@@ -283,7 +283,7 @@ export default {
   text-align: center;
   font-family: Verdana, sans-serif;
   font-weight: 700;
-  font-size: 2.4vh;
+  font-size: 2.8vh;
   padding: 1.6vh 0;
   border-radius: 10px;
   background: var(--s1);

@@ -30,7 +30,7 @@ once, in ``finalize_meal``.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from feeding_deployment.preference_learning.config.preference_bundle import (
     COLOR_FIELDS,
@@ -90,6 +90,7 @@ class PreferenceSession:
         scene_description: Any = None,
         hla_map: Optional[Dict[str, Any]] = None,
         flair: Any = None,
+        on_change: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> None:
         self._model = prediction_model
         self._bt_dir = Path(run_behavior_tree_dir)
@@ -99,6 +100,9 @@ class PreferenceSession:
         self._scene = scene_description
         self._hla_map = hla_map or {}
         self._flair = flair
+        # Called with capture_state() whenever a correction is locked, so the
+        # latest preference state is persisted immediately (see _finalize).
+        self._on_change = on_change
 
         # Live bundle: categorical fields -> str, color fields -> canonical dict.
         self.bundle: Dict[str, Any] = {}
@@ -385,6 +389,13 @@ class PreferenceSession:
         self.finalized.add(field)
         if changed:
             self.corrected[field] = value
+        # Persist the latest preference state immediately so a crash after this
+        # correction (but before the next sub-skill checkpoint) loses nothing.
+        if self._on_change is not None:
+            try:
+                self._on_change(self.capture_state())
+            except Exception as e:  # persistence must never break the meal
+                print(f"[preference-session] on_change persist failed: {e}")
 
     def _loggable_bundle(self, only: Optional[List[str]] = None) -> Dict[str, Any]:
         fields = only if only is not None else list(self.bundle.keys())

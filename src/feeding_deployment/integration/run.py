@@ -191,7 +191,6 @@ class _Runner:
     def __init__(self, scene_config: str, user: str, transfer_type: str, run_on_robot: bool, use_interface: bool, use_gui: bool, simulate_head_perception: bool, max_motion_planning_time: float,
                  resume_from_state: str = "", no_waits: bool = False,
                  physical_profile_label: str | None = None,
-                 pref_day: int | None = None,
                  pref_mode: str = "none",
                  day: int | None = None) -> None:
         self.run_on_robot = run_on_robot
@@ -201,7 +200,9 @@ class _Runner:
         self.no_waits = no_waits
         self.deployment_user = user
         self.physical_profile_label = physical_profile_label.strip() if physical_profile_label else None
-        self._pref_day = pref_day
+        # The deployment day number (mandatory CLI --day): the single source of
+        # truth for both per-day release logging and the preference-learning day.
+        self._day = day
         self._pref_mode = pref_mode
         self._prediction_model: PredictionModel | None = None
         self._pref_session: PreferenceSession | None = None
@@ -253,6 +254,7 @@ class _Runner:
         self._resume_phase: str | None = None
         self._resume_pref_state: dict | None = None
         self._resume_physical_profile: str | None = None
+        self._resume_day: int | None = None
 
         if resume_from_state == "":
             # clear behavior tree execution log
@@ -262,6 +264,9 @@ class _Runner:
             # numbering is only valid within one meal's plan). last_state.p,
             # after_*_pickup.p, and manual *.pkl files are preserved.
             self._ckpt.clear_ephemeral()
+            # Also drop the standalone preference snapshot so a new meal never
+            # inherits the previous meal's in-progress corrections.
+            self._ckpt.clear_pref()
 
         # Initialize the interface to the robot.
         if run_on_robot:
@@ -502,6 +507,19 @@ class _Runner:
                     self.stop_all_threads()
                     sys.exit(0)
 
+            # Day mismatch: the checkpoint records the day it was produced on.
+            # Resuming under a different --day would log this meal's release data
+            # and write its preference memory under the wrong day number.
+            if self._resume_day is not None and self._resume_day != self._day:
+                print("WARNING: --day DIFFERS from the checkpoint's day!")
+                print("  checkpoint day:", self._resume_day)
+                print("  current --day: ", self._day)
+                print("  Continuing logs release data and writes preference memory "
+                      "under the current --day, not the day this meal started on.")
+                if not self._confirm("Continue despite the day mismatch? [y/n] "):
+                    self.stop_all_threads()
+                    sys.exit(0)
+
             if not self._confirm("Are you sure you want to continue from here? [y/n] "):
                 self.stop_all_threads()
                 sys.exit(0)
@@ -569,12 +587,19 @@ class _Runner:
             "physical_profile_label is required for preference prediction "
             "(pass --physical_profile_file)."
         )
-        return PredictionModel(
+        assert self._day is not None, "--day is required for preference prediction"
+        model = PredictionModel(
             user=self.deployment_user,
             physical_profile_label="deployment_physical_profile",
             logs_dir=self.log_dir / "preference_learning",
             physical_profile_description=self.physical_profile_label,
         )
+        # Reject day gaps, then re-hydrate cross-day memory (LTM summary +
+        # episodic history) from days strictly before today, so this fresh
+        # process predicts with the accumulated learning of days 1..N-1.
+        model.validate_sequential_day(self._day)
+        model.load_prior_memory(self._day)
+        return model
 
     def _build_preference_session(self, model: PredictionModel, ctx: dict) -> PreferenceSession:
         """Construct a PreferenceSession wired to this run's interfaces. Terminal
@@ -594,6 +619,9 @@ class _Runner:
             scene_description=self.sim.scene_description,
             hla_map=self.hla_name_to_hla,
             flair=self.flair,
+            # Persist the session on every locked correction so a crash before the
+            # next sub-skill checkpoint loses nothing (see _save_state / resume).
+            on_change=self._ckpt.save_pref,
         )
 
     def _restore_preference_session(self, state: dict) -> None:
@@ -675,7 +703,12 @@ class _Runner:
         """One memory update at meal end with the full finalized bundle."""
         if self._pref_session is None:
             return
-        day = self._pref_day if self._pref_day is not None else self._prediction_model.next_day()
+        assert self._day is not None, "--day is required"
+        day = self._day
+        existing = self._prediction_model.working_memory_dir / f"day_{day:04d}.json"
+        if existing.exists():
+            print(f"[learn] NOTE: day {day} memory already exists; finalize will OVERWRITE "
+                  f"day_{day:04d}.json (working/episodic/long_term).")
         print(f"[learn] Updating memory models (day {day}) ...")
         self._pref_session.finalize_meal(day)
         print(f"[learn] Memory update complete (day {day}).")
@@ -997,6 +1030,7 @@ class _Runner:
             "sim_state": sim_state,
             "atoms": atoms,
             "physical_profile": self.physical_profile_label,
+            "day": self._day,
             "preference_session": (
                 self._pref_session.capture_state() if self._pref_session is not None else None
             ),
@@ -1008,8 +1042,13 @@ class _Runner:
         payload = self._ckpt.load(self._resume_state_name)
         self.current_atoms = payload["atoms"]
         self._resume_phase = payload["phase"]
-        self._resume_pref_state = payload["preference_session"]
         self._resume_physical_profile = payload["physical_profile"]
+        self._resume_day = payload.get("day")  # absent in pre-existing checkpoints
+        # Prefer the standalone preference snapshot (written on every correction)
+        # over the sim checkpoint's embedded copy (only as fresh as the last
+        # sub-skill), so the latest corrections are restored regardless of which
+        # skill boundary the crash fell on. Fall back to the embedded copy.
+        self._resume_pref_state = self._ckpt.load_pref() or payload["preference_session"]
         sim_state = payload["sim_state"]
         if sim_state is not None:
             assert isinstance(sim_state, FeedingDeploymentWorldState)
@@ -1235,15 +1274,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--pref_time_of_day", type=str, default="morning", help="Time of day (must match preference_learning.config.TIMES_OF_DAY).")
     parser.add_argument(
-        "--pref_day", type=int, default=None,
-        help="Override the deployment day number for preference learning. "
-             "If omitted, auto-detected from existing log files (next unused day).",
-    )
-    parser.add_argument(
-        "--day", type=int, default=None,
-        help="Deployment day number. When provided, all images, user inputs, and "
-             "events for the meal are logged to log/<user>/day_<NN>/ for release. "
-             "If omitted, per-day data logging is disabled.",
+        "--day", type=int, required=True,
+        help="Deployment day number (mandatory). The single source of truth for "
+             "BOTH per-day release logging (log/<user>/day_<NN>/) and the "
+             "preference-learning memory day (log/<user>/preference_learning/.../"
+             "day_<NNNN>.json). Days must be run sequentially with no gaps; a "
+             "fresh run re-runs the whole meal and OVERWRITES that day's memory, "
+             "while --resume_from_state continues a crashed meal of the same day.",
     )
     args = parser.parse_args()
 
@@ -1286,7 +1323,6 @@ if __name__ == "__main__":
                      args.resume_from_state,
                      args.no_waits,
                      physical_profile_label=physical_profile_label,
-                     pref_day=args.pref_day,
                      pref_mode=args.pref_mode,
                      day=args.day)
 

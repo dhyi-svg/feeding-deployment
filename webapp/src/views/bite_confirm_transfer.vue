@@ -146,12 +146,12 @@ export default {
 }
 .cf-left strong {
   display: block;
-  font: normal 3.4vh/1.3 Georgia, serif;
+  font: normal 4vh/1.3 Georgia, serif;
   color: var(--t);
   margin-bottom: 1.5vh;
 }
 .cf-left p {
-  font-size: 2vh;
+  font-size: 2.4vh;
   color: var(--tm);
   line-height: 1.6;
 }

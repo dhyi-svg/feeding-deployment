@@ -63,9 +63,6 @@ class FakeModel:
             "day": day, "corrected": dict(corrected), "gt": dict(ground_truth_bundle),
         })
 
-    def next_day(self):
-        return 1
-
 
 class FakeWeb:
     """Scripted stepwise correction interface. ``answers`` maps field -> value;
@@ -250,6 +247,47 @@ def test_resume_then_finalize_meal_keeps_precrash_corrections(bt_dir):
 
     assert len(model2.update_calls) == 1
     assert model2.update_calls[0]["corrected"].get("robot_speed") == "fast"
+
+
+def test_on_change_persists_every_correction(bt_dir):
+    # The durability hook must fire the instant each correction is locked, so a
+    # crash before the next sub-skill checkpoint loses nothing. The latest
+    # snapshot must round-trip into a resumed session.
+    saved = []
+    web = FakeWeb({"robot_speed": "fast"})
+    s = PreferenceSession(
+        FakeModel(), bt_dir, CTX, web_interface=web,
+        on_change=lambda state: saved.append(state),
+    )
+    s.start()  # prediction only -> no _finalize, no persist
+    assert saved == []
+
+    s.ask(["robot_speed", "wait_before_autocontinue_seconds"])
+    assert saved, "ask() must persist on each finalize"
+    assert saved[-1]["corrected"].get("robot_speed") == "fast"
+
+    _set_yaml_color(bt_dir, "fridge", {"h": 7, "s": 8, "v": 9, "range": 0.1})
+    s.record_color("fridge")
+    assert "plate_color_fridge" in saved[-1]["finalized"]
+
+    # The most recent snapshot fully restores the session (the resume contract).
+    s2 = PreferenceSession(FakeModel(), bt_dir, CTX)
+    s2.resume_from_state(saved[-1])
+    assert s2.corrected == s.corrected
+    assert s2.finalized == s.finalized
+
+
+def test_on_change_failure_does_not_break_meal(bt_dir):
+    # Persistence is best-effort: a failing hook must not abort a correction.
+    def boom(_state):
+        raise RuntimeError("disk full")
+
+    s = PreferenceSession(
+        FakeModel(), bt_dir, CTX, web_interface=FakeWeb(), on_change=boom,
+    )
+    s.start()
+    s.ask(["robot_speed"])  # must not raise
+    assert "robot_speed" in s.finalized
 
 
 def test_resume_does_not_reask_finalized_color(bt_dir):

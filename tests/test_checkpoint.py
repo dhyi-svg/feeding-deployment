@@ -20,6 +20,7 @@ from feeding_deployment.integration.checkpoint import (
     CheckpointStore,
     FEEDING_PICKUP_CHECKPOINTS,
     LAST_STATE,
+    PREF_SNAPSHOT,
 )
 
 
@@ -118,6 +119,37 @@ def test_clear_ephemeral_preserves_named_and_manual_files(tmp_path: Path):
     assert "last_state.p" in remaining
     assert "after_drink_pickup.p" in remaining
     assert "study_drink_pickup_pos.pkl" in remaining
+
+
+def test_pref_snapshot_roundtrip_and_clear(tmp_path: Path):
+    s = CheckpointStore(tmp_path)
+    # Absent snapshot -> None.
+    assert s.load_pref() is None
+
+    snap = {"context": {"meal": "x"}, "bundle": {"transfer_mode": "fork"},
+            "finalized": {"transfer_mode"}, "corrected": {"transfer_mode": "fork"}}
+    s.save_pref(snap)
+    assert (tmp_path / f"{PREF_SNAPSHOT}.p").exists()
+    assert s.load_pref() == snap
+
+    # Overwrites in place (latest correction wins).
+    snap2 = {**snap, "corrected": {"transfer_mode": "spoon"}}
+    s.save_pref(snap2)
+    assert s.load_pref()["corrected"] == {"transfer_mode": "spoon"}
+
+    s.clear_pref()
+    assert s.load_pref() is None
+    s.clear_pref()  # idempotent / missing_ok
+
+
+def test_clear_ephemeral_does_not_touch_pref_snapshot(tmp_path: Path):
+    s = CheckpointStore(tmp_path)
+    s.save(_core(), phase="prep", completed_skill="open_fridge")  # 01_*
+    s.save_pref({"bundle": {}, "finalized": set(), "corrected": {}, "context": {}})
+    # The standalone snapshot survives the numbered-checkpoint sweep; it is only
+    # dropped by the explicit clear_pref() on a fresh run.
+    s.clear_ephemeral()
+    assert s.load_pref() is not None
 
 
 def _run_all():

@@ -189,14 +189,14 @@ export default {
 }
 
 .sk .sl {
-  font-size: 1.2vh;
+  font-size: 1.4vh;
   text-transform: uppercase;
   letter-spacing: 1px;
   opacity: 0.8;
 }
 
 .sk .sv {
-  font-size: 1.9vh;
+  font-size: 2.2vh;
   font-weight: bold;
   margin-top: 4px;
   color: inherit;
@@ -207,7 +207,7 @@ export default {
 }
 
 .sa {
-  font-size: 2vh;
+  font-size: 2.4vh;
   color: var(--tm);
 }
 
@@ -237,7 +237,7 @@ export default {
 
 .exec-text {
   font-family: Verdana;
-  font-size: 2.6vh;
+  font-size: 3vh;
   color: var(--t);
   text-align: center;
   max-width: 70vw;

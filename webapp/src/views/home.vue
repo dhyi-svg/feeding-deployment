@@ -129,7 +129,7 @@ export default {
   font-size: 4vh;
 }
 .h-greet {
-  font: normal 4.5vh/1.2 Georgia, serif;
+  font: normal 5.2vh/1.2 Georgia, serif;
   color: var(--t);
 }
 .h-greet em {
@@ -137,7 +137,7 @@ export default {
   color: var(--a);
 }
 .h-sub {
-  font-size: 2vh;
+  font-size: 2.4vh;
   color: var(--tm);
   line-height: 1.5;
 }

@@ -262,7 +262,7 @@ export default {
 
 <style scoped>
 .pred {
-  font-size: 1.9vh;
+  font-size: 2.3vh;
   color: var(--tm);
   margin-top: 1vh;
 }

@@ -23,7 +23,7 @@ from std_msgs.msg import Bool
 from feeding_deployment.control.robot_controller.arm_interface import ArmInterface, ArmManager, NUC_HOSTNAME, ARM_RPC_PORT, RPC_AUTHKEY
 from feeding_deployment.control.base_controller.base_interface import BaseManager, BASE_RPC_PORT
 
-EXPERIMENTOR_ESTOP_FREQUENCY_THRESHOLD = 50 # expected is 60 Hz
+EXPERIMENTOR_ESTOP_FREQUENCY_THRESHOLD = 15 # expected is 60 Hz
 
 BULLDOG_RUN_FREQUENCY = 1000
 

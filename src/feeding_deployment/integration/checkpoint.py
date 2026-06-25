@@ -33,6 +33,11 @@ FEEDING_PICKUP_CHECKPOINTS = {
 
 LAST_STATE = "last_state"
 
+# Standalone preference-session snapshot, overwritten the instant each correction
+# is locked (decoupled from the per-skill sim checkpoints) so a resume restores the
+# latest corrections regardless of which skill boundary / phase the crash fell on.
+PREF_SNAPSHOT = "pref_session"
+
 # Numbered per-meal checkpoints, e.g. "03_pick_plate_from_fridge.p".
 _NUMBERED_RE = re.compile(r"^\d+_.*\.p$")
 
@@ -105,3 +110,27 @@ class CheckpointStore:
             payload = pickle.load(f)
         self.index = payload["skill_index"]
         return payload
+
+    def save_pref(self, state: Dict[str, Any]) -> None:
+        """Overwrite the standalone preference snapshot. Called on every locked
+        correction so the latest preference state is always durable, independent
+        of the sim checkpoints."""
+        with open(self.path(PREF_SNAPSHOT), "wb") as f:
+            pickle.dump(state, f)
+
+    def load_pref(self) -> Dict[str, Any] | None:
+        """Return the latest standalone preference snapshot, or None if absent or
+        unreadable."""
+        path = self.path(PREF_SNAPSHOT)
+        if not path.exists():
+            return None
+        try:
+            with open(path, "rb") as f:
+                return pickle.load(f)
+        except Exception as e:  # noqa: BLE001 - a corrupt snapshot must not block resume
+            print(f"[checkpoint] Failed to read {path.name}: {e}")
+            return None
+
+    def clear_pref(self) -> None:
+        """Remove the standalone preference snapshot (fresh-run reset)."""
+        self.path(PREF_SNAPSHOT).unlink(missing_ok=True)

@@ -845,14 +845,14 @@ export default {
 }
 
 .skill-modal-hdr {
-  font: normal 2.6vh/1.4 Georgia, serif;
+  font: normal 3vh/1.4 Georgia, serif;
   color: var(--t);
   margin-bottom: .5vh;
   padding-right: 3vw;
 }
 
 .skill-modal-sub {
-  font-size: 1.7vh;
+  font-size: 2vh;
   color: var(--tm);
   margin-bottom: 2vh;
 }
@@ -889,13 +889,13 @@ export default {
 }
 
 .sk-lbl {
-  font-size: 1.7vh;
+  font-size: 2vh;
   font-weight: 700;
   color: var(--t);
 }
 
 .mark-instruction {
-  font-size: 1.9vh;
+  font-size: 2.3vh;
   color: var(--t);
   text-align: center;
   margin-bottom: 1.5vh;
@@ -1017,13 +1017,13 @@ export default {
 }
 
 .bc-name {
-  font-size: 1.9vh;
+  font-size: 2.3vh;
   font-weight: 700;
   color: var(--t);
 }
 
 .bc-next {
-  font-size: 1.4vh;
+  font-size: 1.7vh;
   color: var(--tm);
 }
 
@@ -1035,7 +1035,7 @@ export default {
 }
 
 .swap-empty {
-  font-size: 1.5vh;
+  font-size: 1.8vh;
   color: var(--tm);
   padding: 1vh;
 }
@@ -1059,7 +1059,7 @@ export default {
 }
 
 .swap-name {
-  font-size: 1.2vh;
+  font-size: 1.45vh;
   color: var(--tm);
   text-align: center;
   white-space: nowrap;
@@ -1086,7 +1086,7 @@ export default {
   align-items: center;
   justify-content: space-between;
   cursor: pointer;
-  font-size: 1.6vh;
+  font-size: 1.9vh;
   color: var(--t);
   flex-shrink: 0;
 }
@@ -1105,7 +1105,7 @@ export default {
 }
 
 .skill-fallback-lbl {
-  font-size: 1.9vh;
+  font-size: 2.2vh;
   color: var(--tm);
   text-align: right;
   line-height: 1.3;

@@ -292,7 +292,7 @@ export default {
 .canvas-overlay-text {
   position: absolute;
   font-family: Verdana;
-  font-size: 1.8vh;
+  font-size: 2.1vh;
   color: var(--tm);
   background: var(--s1);
   padding: 1vh 1.5vw;
@@ -379,7 +379,7 @@ export default {
 
 .cc-val {
   font-family: Verdana;
-  font-size: 2.2vh;
+  font-size: 2.6vh;
   font-weight: 700;
   color: var(--t);
   flex-shrink: 0;
@@ -389,7 +389,7 @@ export default {
   padding: .8vh 1.5vw;
   border-radius: 8px;
   font-family: Verdana;
-  font-size: 1.6vh;
+  font-size: 1.9vh;
   font-weight: 700;
   width: 100%;
   text-align: center;

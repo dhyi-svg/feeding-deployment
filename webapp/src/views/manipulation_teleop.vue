@@ -463,7 +463,7 @@ export default {
 
 .tabbar { display: flex; gap: 8px; margin: 6px 0; }
 .tab {
-  flex: 1; font-family: Verdana, sans-serif; font-size: 15px; padding: 9px 0;
+  flex: 1; font-family: Verdana, sans-serif; font-size: 17px; padding: 9px 0;
   color: var(--t); background: var(--s2); border: 1px solid var(--s3); border-radius: 8px;
   cursor: pointer;
 }
@@ -472,9 +472,9 @@ export default {
 }
 
 .stepsize { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.stepsize-label { font-size: 13px; color: var(--tm); min-width: 70px; }
+.stepsize-label { font-size: 15px; color: var(--tm); min-width: 70px; }
 .step {
-  flex: 1; font-family: Verdana, sans-serif; font-size: 13px; padding: 9px 0;
+  flex: 1; font-family: Verdana, sans-serif; font-size: 15px; padding: 9px 0;
   border: 1px solid var(--s3); border-radius: 8px; background: var(--s2); color: var(--t);
   cursor: pointer;
 }
@@ -483,7 +483,7 @@ export default {
 }
 
 .status {
-  font-size: 13px; padding: 6px 10px; border-radius: 8px; margin-bottom: 6px;
+  font-size: 15px; padding: 6px 10px; border-radius: 8px; margin-bottom: 6px;
   text-align: center;
 }
 .status.idle { background: var(--s2); color: var(--tm); }
@@ -491,11 +491,11 @@ export default {
 .status.aborted { background: rgba(220, 60, 60, .15); color: #e88; }
 
 .hla-banner {
-  font-size: 14px; padding: 6px 10px; border-radius: 8px; margin-bottom: 6px;
+  font-size: 16px; padding: 6px 10px; border-radius: 8px; margin-bottom: 6px;
   text-align: center; background: rgba(46, 196, 182, .12); color: var(--a2);
 }
 
-.pad-label { font-size: 13px; font-weight: 700; margin: 0 0 4px; color: var(--tm); }
+.pad-label { font-size: 15px; font-weight: 700; margin: 0 0 4px; color: var(--tm); }
 
 .tab-content { flex: 1; min-height: 0; }
 
@@ -514,7 +514,7 @@ export default {
 .rotate-grid { grid-template-rows: repeat(4, 1fr); }
 
 .jog {
-  font-family: Verdana, sans-serif; font-size: 16px; font-weight: 700;
+  font-family: Verdana, sans-serif; font-size: 19px; font-weight: 700;
   border: 1px solid var(--s3); border-radius: 12px; color: var(--t);
   background: var(--s2); cursor: pointer; min-height: 46px;
 }
@@ -543,7 +543,7 @@ export default {
 }
 .joint-col.moving { background: rgba(240, 165, 0, .1); }
 .joint-label {
-  font-size: 13px; color: var(--t); text-align: center; line-height: 1.2;
+  font-size: 15px; color: var(--t); text-align: center; line-height: 1.2;
   min-height: 34px; display: flex; align-items: center; justify-content: center;
 }
 .joint-col .jog { flex: 1; padding: 0; font-size: 38px; line-height: 1; }
@@ -558,17 +558,17 @@ export default {
 }
 
 .retract {
-  font-family: Verdana, sans-serif; font-size: 15px; font-weight: 700;
+  font-family: Verdana, sans-serif; font-size: 18px; font-weight: 700;
   padding: 10px 0; border: 2px solid rgba(46, 196, 182, .22); border-radius: 8px;
   background: rgba(46, 196, 182, .12); color: var(--a2); cursor: pointer; min-height: 48px;
 }
 .stop {
-  font-family: Verdana, sans-serif; font-size: 15px; font-weight: 700;
+  font-family: Verdana, sans-serif; font-size: 18px; font-weight: 700;
   padding: 10px 0; border: none; border-radius: 8px;
   background: #c0392b; color: #fff; cursor: pointer; min-height: 48px;
 }
 .done {
-  font-family: Verdana, sans-serif; font-size: 15px; font-weight: 700;
+  font-family: Verdana, sans-serif; font-size: 18px; font-weight: 700;
   padding: 10px 0; border: none; border-radius: 8px;
   background: var(--a); color: var(--g); cursor: pointer; min-height: 48px;
 }
