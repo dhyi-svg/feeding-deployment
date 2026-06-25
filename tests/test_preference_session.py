@@ -197,6 +197,79 @@ def test_finalize_meal_one_update_with_full_bundle(bt_dir):
     assert all(f in s.finalized for f in PREF_FIELDS)
 
 
+def test_ask_skips_already_finalized_dims(bt_dir):
+    # Resume scenario: robot_speed was asked before the crash (finalized). On
+    # re-ask it must be skipped, and only the still-open dim is shown.
+    web = FakeWeb()
+    s = PreferenceSession(FakeModel(), bt_dir, CTX, web_interface=web)
+    s.start()
+    s._finalize("robot_speed", "fast", changed=True)
+    s.ask(["robot_speed", "skewering_axis"])
+    asked = [field for field, _secs in web.steps]
+    assert asked == ["skewering_axis"]
+    assert s.bundle["robot_speed"] == "fast"  # untouched
+
+
+def test_capture_resume_roundtrip(bt_dir):
+    # Build a session with a correction + a recorded color, snapshot it, then
+    # rehydrate a brand-new session (as on a crash/restart) and confirm the
+    # per-meal state and the actuated color survive.
+    model = FakeModel()
+    web = FakeWeb({"robot_speed": "fast"})
+    s = PreferenceSession(model, bt_dir, CTX, web_interface=web)
+    s.start()
+    s.ask(["robot_speed"])
+    _set_yaml_color(bt_dir, "fridge", {"h": 10, "s": 20, "v": 30, "range": 0.2})
+    s.record_color("fridge")
+
+    snapshot = s.capture_state()
+    assert snapshot["corrected"]["robot_speed"] == "fast"
+    assert "plate_color_fridge" in snapshot["finalized"]
+
+    s2 = PreferenceSession(FakeModel(), bt_dir, CTX)
+    s2.resume_from_state(snapshot)
+    assert s2.finalized == s.finalized
+    assert s2.corrected == s.corrected
+    assert s2.bundle == s.bundle
+    assert s2.bundle["plate_color_fridge"] == {"h": 10, "s": 20, "v": 30, "range": 0.2}
+
+
+def test_resume_then_finalize_meal_keeps_precrash_corrections(bt_dir):
+    # The end-of-meal learning update must reflect a correction made before the
+    # crash, even though a fresh model is built on resume.
+    web = FakeWeb({"robot_speed": "fast"})
+    s = PreferenceSession(FakeModel(), bt_dir, CTX, web_interface=web)
+    s.start()
+    s.ask(["robot_speed"])
+    snapshot = s.capture_state()
+
+    model2 = FakeModel()
+    s2 = PreferenceSession(model2, bt_dir, CTX)
+    s2.resume_from_state(snapshot)
+    s2.finalize_meal(day=3)
+
+    assert len(model2.update_calls) == 1
+    assert model2.update_calls[0]["corrected"].get("robot_speed") == "fast"
+
+
+def test_resume_does_not_reask_finalized_color(bt_dir):
+    # A color recorded before the crash stays finalized after resume, so a
+    # repeated record_color() is a no-op (no second correction / reprediction).
+    s = PreferenceSession(FakeModel(), bt_dir, CTX)
+    s.start()
+    _set_yaml_color(bt_dir, "fridge", {"h": 1, "s": 2, "v": 3, "range": 0.1})
+    s.record_color("fridge")
+    snapshot = s.capture_state()
+
+    model2 = FakeModel()
+    s2 = PreferenceSession(model2, bt_dir, CTX)
+    s2.resume_from_state(snapshot)
+    n_before = len(model2.predict_calls)
+    s2.record_color("fridge")  # already finalized -> early return
+    assert len(model2.predict_calls) == n_before  # no reprediction
+    assert "plate_color_fridge" in s2.finalized
+
+
 def test_repredictions_do_not_write_memory(bt_dir):
     model = FakeModel()
     web = FakeWeb({"robot_speed": "fast"})

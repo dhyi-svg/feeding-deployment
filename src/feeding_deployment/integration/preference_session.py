@@ -233,6 +233,10 @@ class PreferenceSession:
         correction; apply after each. Color dims are NOT asked here (they use
         the pickup color picker)."""
         dims = [d for d in dims if PREF_KIND.get(d) != "color"]
+        # Resume: dims already locked as ground truth (asked/corrected before a
+        # crash) are not re-asked. This also lets a partially-completed ask()
+        # batch resume on exactly the still-open dims.
+        dims = [d for d in dims if d not in self.finalized]
         if not dims:
             return
 
@@ -336,6 +340,38 @@ class PreferenceSession:
             corrected=sorted(self.corrected.keys()),
         )
         return ground_truth
+
+    # ------------------------------------------------------------------ #
+    # Checkpoint / resume
+    # ------------------------------------------------------------------ #
+    def capture_state(self) -> Dict[str, Any]:
+        """Serializable per-meal session state for checkpointing.
+
+        Only the live bundle and the finalized/corrected bookkeeping are stored
+        -- the prediction model is rebuilt separately on resume (it owns LLM /
+        memory / disk handles), and color *values* already persist in the pickup
+        BT YAMLs. Sufficient to (a) avoid re-asking, and (b) keep the end-of-meal
+        learning update honest."""
+        return {
+            "context": dict(self.context),
+            "bundle": dict(self.bundle),
+            "finalized": set(self.finalized),
+            "corrected": dict(self.corrected),
+        }
+
+    def resume_from_state(self, state: Dict[str, Any]) -> None:
+        """Re-hydrate per-meal state after a crash and re-apply it to the BTs /
+        scene WITHOUT predicting or asking. Open-dim predictions already live in
+        the persistent pickup BT YAMLs from the original run; this just makes the
+        in-memory bundle and the actuated config consistent again so the meal can
+        continue and ``finalize_meal`` reflects the corrections made before the
+        crash."""
+        self.context = dict(state["context"])
+        self.bundle = dict(state["bundle"])
+        self.finalized = set(state["finalized"])
+        self.corrected = dict(state["corrected"])
+        self._write_open_colors_to_bt()
+        self._apply_non_planning()
 
     # ------------------------------------------------------------------ #
     # Internals

@@ -4,7 +4,6 @@ import json
 from collections import namedtuple
 from pathlib import Path
 from typing import Any, Callable, List
-import pickle
 import queue
 import os
 import sys
@@ -120,6 +119,7 @@ from feeding_deployment.simulation.simulator import (
 from feeding_deployment.actions.flair.flair import FLAIR
 from feeding_deployment.transparency.query_llm import TransparencyQuery
 from feeding_deployment.integration.preference_context import build_preference_context
+from feeding_deployment.integration.checkpoint import CheckpointStore
 from feeding_deployment.integration.data_logger import DataLogger
 from feeding_deployment.integration.preference_session import PreferenceSession
 from feeding_deployment.preference_learning.methods.prediction_model import PredictionModel, PREF_OPTIONS
@@ -240,14 +240,28 @@ class _Runner:
         # Disabled (no-op for release logging) when --day is omitted.
         self.data_logger = DataLogger(state_dir=self.log_dir, day=day)
 
+        # Checkpointing. The store owns saved_states/: numbered NN_<skill>.p
+        # checkpoints track the deterministic plate journey (prep + finish), the
+        # four after_*_pickup.p are the feeding recovery points, and last_state.p
+        # always holds the last completed skill. See _save_state / _load_from_state.
+        self._ckpt = CheckpointStore(Path(__file__).parent / "saved_states")
+        # Resume target (base name) or None for a fresh run.
+        self._resume_state_name: str | None = resume_from_state or None
+        # Set by _load_from_state on resume: the phase the checkpoint was taken
+        # in ("prep" | "feeding" | "finish"), the restored preference snapshot,
+        # and the physical profile the checkpoint was produced under.
+        self._resume_phase: str | None = None
+        self._resume_pref_state: dict | None = None
+        self._resume_physical_profile: str | None = None
+
         if resume_from_state == "":
             # clear behavior tree execution log
             with open(self.execution_log, "w") as f:
                 f.write("")
-            self._saved_state_infile = None
-        else:
-            self._saved_state_infile = Path(__file__).parent / "saved_states" / (resume_from_state + ".p")
-        self._saved_state_outfile = Path(__file__).parent / "saved_states" / "last_state.p"
+            # Fresh run: drop the previous meal's numbered checkpoints (their
+            # numbering is only valid within one meal's plan). last_state.p,
+            # after_*_pickup.p, and manual *.pkl files are preserved.
+            self._ckpt.clear_ephemeral()
 
         # Initialize the interface to the robot.
         if run_on_robot:
@@ -467,16 +481,30 @@ class _Runner:
         self.transparency_query = TransparencyQuery(self.log_dir)
         print("Initialized transparency query.")
 
-        if self._saved_state_infile:
+        if self._resume_state_name:
             self._load_from_state()
             print("WARNING: The system state has been restored to:")
+            print(f"  phase={self._resume_phase}, last completed skill #{self._ckpt.index}")
             print(" ", sorted(self.current_atoms))
-            resp = input("Are you sure you want to continue from here? [y/n] ")
-            while resp not in ["y", "n"]:
-                resp = input("Please enter 'y' or 'n': ")
-                if resp == "n":
+
+            # Physical profile mismatch: the checkpoint was produced under one
+            # profile; resuming under a different one taints any post-resume
+            # repredictions and the end-of-meal learning update (predictions are
+            # profile-dependent). Already-finalized preferences are restored from
+            # the snapshot and are unaffected.
+            if self._resume_physical_profile != self.physical_profile_label:
+                print("WARNING: physical profile DIFFERS from the checkpoint's profile!")
+                print("  checkpoint profile:", self._resume_physical_profile)
+                print("  current profile:   ", self.physical_profile_label)
+                print("  Continuing predicts remaining/learned preferences under the new "
+                      "profile, inconsistent with the rest of this meal.")
+                if not self._confirm("Continue despite the profile mismatch? [y/n] "):
                     self.stop_all_threads()
                     sys.exit(0)
+
+            if not self._confirm("Are you sure you want to continue from here? [y/n] "):
+                self.stop_all_threads()
+                sys.exit(0)
 
         print("Runner is ready.")
         self.active = True
@@ -534,34 +562,31 @@ class _Runner:
             time_of_day=ctx_dict["time_of_day"],
         )
 
-    def _start_preference_session(self) -> None:
-        """Collect context, predict the full bundle, ask the initial dims, then
-        run the staged meal preparation (fetch plate, microwave, place on
-        table) asking the relevant prefs at each stage."""
-        ctx = self._collect_preference_context()
-        print("Preference context (meal / setting / time_of_day):", ctx)
-
+    def _build_prediction_model(self) -> PredictionModel:
+        """Construct the preference prediction model. Used both on a fresh meal
+        and when rehydrating a resumed session (the model is never pickled)."""
         assert self.physical_profile_label is not None, (
             "physical_profile_label is required for preference prediction "
             "(pass --physical_profile_file)."
         )
-        self._prediction_model = PredictionModel(
+        return PredictionModel(
             user=self.deployment_user,
             physical_profile_label="deployment_physical_profile",
             logs_dir=self.log_dir / "preference_learning",
             physical_profile_description=self.physical_profile_label,
         )
 
-        # Terminal mode reuses the staged session via a stdin correction adapter.
+    def _build_preference_session(self, model: PredictionModel, ctx: dict) -> PreferenceSession:
+        """Construct a PreferenceSession wired to this run's interfaces. Terminal
+        mode reuses the staged session via a stdin correction adapter."""
         correction_interface = self.web_interface
         if self._pref_mode == "terminal":
             from feeding_deployment.integration.terminal_preferences import (
                 TerminalCorrectionInterface,
             )
             correction_interface = TerminalCorrectionInterface()
-
-        self._pref_session = PreferenceSession(
-            self._prediction_model,
+        return PreferenceSession(
+            model,
             self.run_behavior_tree_dir,
             dict(ctx),
             web_interface=correction_interface,
@@ -571,11 +596,45 @@ class _Runner:
             flair=self.flair,
         )
 
-        # Predict everything, then ask the initial dims (speed + autocontinue
-        # wait). The finalized wait drives the autocontinue of later pages.
-        self._pref_session.start()
-        print("Predicted preference bundle (initial):",
+    def _restore_preference_session(self, state: dict) -> None:
+        """Rehydrate the per-meal preference session on resume: rebuild the model
+        and re-apply the restored bundle to the BTs/scene WITHOUT predicting or
+        asking. After this, finalized dims are skipped by ask() and finalize_meal
+        still reflects pre-crash corrections."""
+        self.preference_context = dict(state["context"])
+        self._prediction_model = self._build_prediction_model()
+        self._pref_session = self._build_preference_session(
+            self._prediction_model, self.preference_context
+        )
+        self._pref_session.resume_from_state(state)
+        print("Restored preference session from checkpoint:",
               json.dumps(self._pref_session._loggable_bundle(), indent=2))
+
+    def _start_preference_session(self, resume: bool = False) -> None:
+        """Predict (or, on resume, reuse the restored bundle), ask the initial
+        dims, then run the staged meal preparation (fetch plate, microwave, place
+        on table) asking the relevant prefs at each stage.
+
+        On ``resume`` the session has already been rehydrated via
+        _restore_preference_session: prediction is skipped, and the already-asked
+        dims are skipped by PreferenceSession.ask(); only still-open dims are
+        asked and only not-yet-done skills actually execute (the planner replans
+        completed steps to empty plans)."""
+        if resume:
+            assert self._pref_session is not None, "resume requires a restored session"
+            ctx = self.ensure_preference_context()
+            print("Resuming preference session; context:", ctx)
+        else:
+            ctx = self._collect_preference_context()
+            print("Preference context (meal / setting / time_of_day):", ctx)
+            self._prediction_model = self._build_prediction_model()
+            self._pref_session = self._build_preference_session(self._prediction_model, dict(ctx))
+            # Predict everything before asking the initial dims (speed +
+            # autocontinue wait). The finalized wait drives later autocontinue.
+            self._pref_session.start()
+            print("Predicted preference bundle (initial):",
+                  json.dumps(self._pref_session._loggable_bundle(), indent=2))
+
         self._pref_session.ask(_INITIAL_PREF_DIMS)
 
         self._run_meal_preparation()
@@ -588,7 +647,8 @@ class _Runner:
 
         # 1. Fridge -> holder (fridge color correction happens during pickup).
         self.process_user_command(
-            GroundHighLevelAction(self.hla_name_to_hla["PlacePlateOnHolder"], (self.plate, self.holder))
+            GroundHighLevelAction(self.hla_name_to_hla["PlacePlateOnHolder"], (self.plate, self.holder)),
+            phase="prep",
         )
 
         # 2. Microwave preference (single dim). "no microwave" sets FoodHeated
@@ -604,7 +664,8 @@ class _Runner:
         # 3. (Holder ->) [microwave ->] table. Microwave color correction
         #    happens during the microwave pickup if the plate is routed there.
         self.process_user_command(
-            GroundHighLevelAction(self.hla_name_to_hla["PlacePlateOnTable"], (self.plate, self.table))
+            GroundHighLevelAction(self.hla_name_to_hla["PlacePlateOnTable"], (self.plate, self.table)),
+            phase="prep",
         )
 
         # 4. Table dims, just before feeding.
@@ -630,7 +691,22 @@ class _Runner:
         # refreshes and slow webapp connections.
         self.web_interface.wait_for_start_meal()
 
-        if self._pref_mode == "none":
+        resuming = self._resume_phase is not None
+        if resuming:
+            # --- Resume: the world state/atoms were restored in __init__. Rebuild
+            # the preference session (if the crashed meal had one), then route by
+            # the phase the checkpoint was taken in. Only "prep" replays the
+            # staged meal preparation (which skips done skills via empty replans
+            # and skips finalized prefs); "feeding"/"finish" jump straight to the
+            # task-selection page with atoms matching the real world. ---
+            if self._resume_pref_state is not None:
+                self._restore_preference_session(self._resume_pref_state)
+            if self._resume_phase == "prep":
+                self._start_preference_session(resume=True)
+            else:
+                print(f"Resuming in phase '{self._resume_phase}'; skipping meal preparation.")
+            self.web_interface.ready_for_task_selection()
+        elif self._pref_mode == "none":
             self.web_interface.ready_for_task_selection()
         else:
             # --- Staged personalization: predict full bundle, then ask the
@@ -670,7 +746,7 @@ class _Runner:
                     # PlacePlateInSink plans PickPlateFromTable first, so the
                     # table color correction happens here. After the plate is
                     # away, write the single per-day memory update.
-                    self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["PlacePlateInSink"], (self.plate, self.sink)))
+                    self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["PlacePlateInSink"], (self.plate, self.sink)), phase="finish")
                     self._finalize_preference_session()
                     last_task_type = None
                 elif task == "meal_assistance":
@@ -750,6 +826,14 @@ class _Runner:
             self.web_interface.stop_all_threads()
         self.data_logger.close()
 
+    @staticmethod
+    def _confirm(prompt: str) -> bool:
+        """Block on a y/n prompt; return True for 'y', False for 'n'."""
+        resp = input(prompt).strip().lower()
+        while resp not in ("y", "n"):
+            resp = input("Please enter 'y' or 'n': ").strip().lower()
+        return resp == "y"
+
     def signal_handler(self, signal, frame):
         print("\nReceived SIGINT.")
         self.stop_all_threads()
@@ -757,9 +841,15 @@ class _Runner:
         sys.exit(0)
 
     def process_user_command(
-        self, user_command: GroundHighLevelAction | set[GroundAtom]
+        self, user_command: GroundHighLevelAction | set[GroundAtom],
+        phase: str = "feeding",
     ) -> None:
-        """Process a user command."""
+        """Process a user command.
+
+        ``phase`` ("prep" | "feeding" | "finish") is set by the call site and
+        controls checkpoint naming: prep/finish skills are numbered NN_<skill>.p
+        (the deterministic plate journey), while feeding pickups get their fixed
+        after_*_pickup.p recovery state. See CheckpointStore."""
 
         print(f"Working towards user command: {user_command}")
 
@@ -879,22 +969,48 @@ class _Runner:
                         self._pref_session.record_color(location)
 
             # Save the latest state in case we want to resume execution
-            # after a crash.
-            self._save_state(sim_state, self.current_atoms)
+            # after a crash. skill_plan_names[i] is this skill's BT filename
+            # (or HLA name fallback) -- the same string used for checkpoint names.
+            self._save_state(
+                sim_state, self.current_atoms,
+                phase=phase, completed_skill=skill_plan_names[i],
+            )
 
     def make_video(self, outfile: Path) -> None:
         """Create a video of the simulated trajectory."""
         self.sim.make_simulation_video(outfile)
         print(f"Saved video to {outfile}")
 
-    def _save_state(self, sim_state: FeedingDeploymentWorldState, atoms: set[GroundAtom]) -> None:
-        with open(self._saved_state_outfile, "wb") as f:
-            pickle.dump((sim_state, atoms), f)
-        print(f"Saved system state to {self._saved_state_outfile}")
+    def _save_state(
+        self,
+        sim_state: FeedingDeploymentWorldState,
+        atoms: set[GroundAtom],
+        *,
+        phase: str,
+        completed_skill: str,
+    ) -> None:
+        """Checkpoint after a completed sub-HLA. The store writes last_state.p
+        plus any numbered/named target for this skill. The preference snapshot
+        rides along so resume continues without re-asking and the end-of-meal
+        learning update stays honest."""
+        core_payload = {
+            "sim_state": sim_state,
+            "atoms": atoms,
+            "physical_profile": self.physical_profile_label,
+            "preference_session": (
+                self._pref_session.capture_state() if self._pref_session is not None else None
+            ),
+        }
+        written = self._ckpt.save(core_payload, phase=phase, completed_skill=completed_skill)
+        print(f"Saved system state -> {', '.join(p.name for p in written)}")
 
     def _load_from_state(self) -> None:
-        with open(self._saved_state_infile, "rb") as f:
-            sim_state, self.current_atoms = pickle.load(f)
+        payload = self._ckpt.load(self._resume_state_name)
+        self.current_atoms = payload["atoms"]
+        self._resume_phase = payload["phase"]
+        self._resume_pref_state = payload["preference_session"]
+        self._resume_physical_profile = payload["physical_profile"]
+        sim_state = payload["sim_state"]
         if sim_state is not None:
             assert isinstance(sim_state, FeedingDeploymentWorldState)
             self.sim.sync(sim_state)
@@ -902,8 +1018,12 @@ class _Runner:
                 self.rviz_interface.joint_state_update(sim_state.robot_joints)
                 if sim_state.held_object:
                     self.rviz_interface.tool_update(True, sim_state.held_object, Pose((0, 0, 0), (0, 0, 0, 1)))
-                
-        print(f"Loaded system state from {self._saved_state_infile}")
+
+        print(
+            f"Loaded system state '{self._resume_state_name}' "
+            f"(phase={self._resume_phase}, after skill #{self._ckpt.index}: "
+            f"{payload['completed_skill']})"
+        )
 
     def process_user_update_request(self, request_text: str) -> str:
         """Validate and update behavior trees."""
