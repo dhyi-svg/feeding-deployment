@@ -856,6 +856,10 @@ class PerceptionInterface:
                     last_attachment_pose = new_pose
 
                 result_vis = cv2.imread(os.path.join(attachment_dir, "attachment_corners.png"))
+                # The camera is mounted upside down, so rotate the visualization
+                # 180 degrees to show it right-side up to the user.
+                if result_vis is not None:
+                    result_vis = cv2.rotate(result_vis, cv2.ROTATE_180)
                 web_interface.send_color_correction_result(result_vis, new_pose is not None)
 
                 if status == "confirm":
@@ -912,6 +916,10 @@ class PerceptionInterface:
 
             attachment_dir = os.path.dirname(inspect.getfile(self._attachment_perception.__class__))
             vis_image = cv2.imread(os.path.join(attachment_dir, "attachment_corners.png"))
+            # The camera is mounted upside down, so rotate the visualization
+            # 180 degrees to show it right-side up to the user.
+            if vis_image is not None:
+                vis_image = cv2.rotate(vis_image, cv2.ROTATE_180)
 
             if web_interface is None:
                 confirmed = self._terminal_confirmation("attachment", vis_image)
