@@ -89,6 +89,8 @@ def main() -> None:
 
     seq = 0
     last_report = time.monotonic()
+    last_report_seq = 0       # seq at the last heartbeat, for measuring send rate
+    prev_pressed = False      # so we log only the transition into a press
     # Reverse-coupling state.
     first_epoch = None          # EPOCH of the first ack we ever saw
     last_ack = None             # time.monotonic() of the most recent ack
@@ -102,8 +104,9 @@ def main() -> None:
             sock.sendto(struct.pack(PACKET_FORMAT, seq, pressed), dest)
             seq += 1
 
-            if pressed:
+            if pressed and not prev_pressed:
                 print(f"PRESS sent: experimentor={pressed} (seq={seq})")
+            prev_pressed = pressed
 
             # Drain any pending acks (non-blocking). Each ack carries the
             # bridge's EPOCH; a new EPOCH means the bridge/bulldog restarted.
@@ -133,11 +136,18 @@ def main() -> None:
                 stop_reason = f"no bridge ack for {ACK_TIMEOUT_S:.1f}s (bridge/bulldog gone)"
                 break
 
-            # Heartbeat sanity log, like bulldog's.
-            if start - last_report >= 5.0:
+            # Heartbeat sanity log, like bulldog's. Report the actual send
+            # frequency (should track --rate) and the peak audio amplitude
+            # seen this second (useful for tuning max/min_threshold).
+            if start - last_report >= 1.0:
+                elapsed = start - last_report
+                freq = (seq - last_report_seq) / elapsed
+                peak = button.get_peak()
                 armed = "armed" if first_epoch is not None else "waiting for bridge"
-                print(f"... alive, {seq} packets sent ({armed})")
+                state = "PRESSED" if pressed else "ok"
+                print(f"... alive, {freq:.0f} Hz, peak={peak}, {state} ({armed})")
                 last_report = start
+                last_report_seq = seq
 
             time.sleep(max(0.0, period - (time.monotonic() - start)))
     except KeyboardInterrupt:

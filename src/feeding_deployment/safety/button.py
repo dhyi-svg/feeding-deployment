@@ -68,6 +68,11 @@ class Button:
         self.button_lock = Lock()
         self.button_value = False
 
+        # Peak absolute audio amplitude seen since the last get_peak() call.
+        # Useful for tuning max/min_threshold to a given adapter's gain.
+        self.peak_lock = Lock()
+        self.peak_value = 0
+
     def close(self) -> None:
         """Close the audio stream."""
         if self.stream is not None:
@@ -85,6 +90,14 @@ class Button:
         with self.button_lock:
             self.button_value = False
 
+    def get_peak(self) -> int:
+        """Return the peak absolute audio amplitude seen since the last call,
+        then reset the tracker. 0 if no audio has been processed yet."""
+        with self.peak_lock:
+            peak = self.peak_value
+            self.peak_value = 0
+            return peak
+
     def __audio_callback(
         self, data: bytes, frame_count: int, time_info: dict, status: int
     ) -> tuple[bytes, int]:
@@ -95,6 +108,10 @@ class Button:
             return (data, pyaudio.paContinue)
 
         data_arr = np.frombuffer(data, dtype=np.int16)
+
+        # Track the peak absolute amplitude for threshold-tuning diagnostics.
+        with self.peak_lock:
+            self.peak_value = max(self.peak_value, int(np.abs(data_arr).max()))
 
         # Check if the e-stop button has been pressed
         if Button.rising_edge_detector(
