@@ -23,7 +23,18 @@ from std_msgs.msg import Bool
 from feeding_deployment.control.robot_controller.arm_interface import ArmInterface, ArmManager, NUC_HOSTNAME, ARM_RPC_PORT, RPC_AUTHKEY
 from feeding_deployment.control.base_controller.base_interface import BaseManager, BASE_RPC_PORT
 
-EXPERIMENTOR_ESTOP_FREQUENCY_THRESHOLD = 15 # expected is 60 Hz
+# Min packets/sec on /experimentor_estop (counted over the trailing 1s window).
+# Nominal is ~82 Hz from the Mac sender; 30 leaves wide margin above normal
+# jitter (81-84) while still flagging real degradation early.
+EXPERIMENTOR_ESTOP_FREQUENCY_THRESHOLD = 30
+
+# Debounce for the frequency check: the rate must stay below the threshold
+# CONTINUOUSLY for this long before we trip. This is the link-liveness heartbeat
+# (NOT a button press, which is latched on its own immediate path), so a transient
+# WiFi blackout of up to ~1s should be ridden out rather than cause a false stop.
+# A genuine link death still trips within ~ESTOP_FREQ_GRACE_S of the rate dipping.
+# If ~1s WiFi blackouts still slip through, raise this toward 1.2-1.5s.
+ESTOP_FREQ_GRACE_S = 1.0
 
 BULLDOG_RUN_FREQUENCY = 1000
 
@@ -54,6 +65,11 @@ class BullDog:
         self.experimentor_emergency_stop_sub = rospy.Subscriber('/experimentor_estop', Bool, self.experimentorEmergencyStopCallback, queue_size = queue_size, buff_size = 65536*queue_size)
         self.experimentor_emergency_stop_timestamps = PeekableQueue()
         self.experimentor_emergency_stop_pressed = False
+        # Debounce state: wall-clock time the rate first dipped below threshold in
+        # the current low spell, or None when the rate is healthy. See check_status.
+        self.experimentor_estop_low_freq_since = None
+        # Lowest rate seen during the current low spell, for the near-miss log.
+        self.experimentor_estop_low_freq_min = None
 
         self.bulldog_status_pub = rospy.Publisher('/bulldog_status', Bool, queue_size=1)
 
@@ -116,12 +132,39 @@ class BullDog:
             while _queue.peek() < start_time - 1.0:
                 _queue.get()
             queue_size = _queue.qsize()
-            if queue_size < _threshold:
-                print(f"Frequency: {queue_size} for {_anomaly}")
-                rospy.loginfo(f"Frequency: {queue_size} for {_anomaly}")
-                anomaly = _anomaly
-                break   
             frequencies.append(queue_size)
+            if queue_size < _threshold:
+                # Below threshold. Debounce it: only trip once the rate has been
+                # low CONTINUOUSLY for ESTOP_FREQ_GRACE_S, so a transient WiFi
+                # blackout does not cause a false stop. A genuine link death stays
+                # low and trips after the grace window.
+                if self.experimentor_estop_low_freq_since is None:
+                    self.experimentor_estop_low_freq_since = start_time
+                    self.experimentor_estop_low_freq_min = queue_size
+                else:
+                    self.experimentor_estop_low_freq_min = min(
+                        self.experimentor_estop_low_freq_min, queue_size)
+                low_for = start_time - self.experimentor_estop_low_freq_since
+                if low_for >= ESTOP_FREQ_GRACE_S:
+                    print(f"Frequency: {queue_size} for {_anomaly} (low for {low_for:.2f}s)")
+                    rospy.loginfo(f"Frequency: {queue_size} for {_anomaly} (low for {low_for:.2f}s)")
+                    anomaly = _anomaly
+                    break
+            else:
+                # Healthy reading clears the low spell. If we were in a dip that the
+                # debounce swallowed (no trip), log it as a near-miss so a degrading
+                # WiFi link is visible BEFORE a blackout finally exceeds the grace.
+                if self.experimentor_estop_low_freq_since is not None:
+                    dip_for = start_time - self.experimentor_estop_low_freq_since
+                    if dip_for >= 0.1:  # ignore single-reading blips
+                        msg = (f"experimentor estop heartbeat dipped to "
+                               f"{self.experimentor_estop_low_freq_min} Hz for {dip_for:.2f}s "
+                               f"(threshold {_threshold}, grace {ESTOP_FREQ_GRACE_S:.1f}s) -- "
+                               f"recovered, no stop")
+                        print(f"[near-miss] {msg}")
+                        rospy.logwarn(msg)
+                self.experimentor_estop_low_freq_since = None
+                self.experimentor_estop_low_freq_min = None
 
         if self.second_counter == BULLDOG_RUN_FREQUENCY:
             print("Bulldog running at expected frequency.")
