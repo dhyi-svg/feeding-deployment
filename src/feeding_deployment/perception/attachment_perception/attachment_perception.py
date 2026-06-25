@@ -248,11 +248,42 @@ class AttachmentPerception(TFInterface):
         hsv = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV)
         if handle_color is None:
             handle_color = np.array([82, 55, 84])
-        handle_color = np.asarray(handle_color)
-        delta = (float(color_range) * np.array([179, 255, 255])).astype(int)
-        lower = np.clip(handle_color - delta, [0, 0, 0], [179, 255, 255]).astype(np.uint8)
-        upper = np.clip(handle_color + delta, [0, 0, 0], [179, 255, 255]).astype(np.uint8)
-        return cv2.inRange(hsv, lower, upper)
+        h, s, v = np.asarray(handle_color, dtype=int).tolist()
+
+        # Hue is the discriminative channel, so keep its tolerance tight while
+        # letting saturation/value be looser. Scaling all three uniformly by
+        # color_range made the hue band ~70 deg wide at range 0.2, which swept
+        # in unrelated colors and let DBSCAN lock onto the wrong (larger) blob.
+        cr = float(color_range)
+        h_tol = int(cr * 90)   # half the previous hue width
+        s_tol = int(cr * 255)
+        v_tol = int(cr * 255)
+
+        s_lo, s_hi = int(np.clip(s - s_tol, 0, 255)), int(np.clip(s + s_tol, 0, 255))
+        v_lo, v_hi = int(np.clip(v - v_tol, 0, 255)), int(np.clip(v + v_tol, 0, 255))
+
+        # Hue is circular (0-179 in OpenCV). When the band straddles the 0/179
+        # wrap point, clipping to [0, 179] would silently drop half of it (e.g.
+        # for red handles), so split it into two inRange calls and OR them.
+        if h_tol >= 90:
+            # Tolerance spans the whole hue circle; match on S/V only.
+            return cv2.inRange(hsv,
+                               np.array([0, s_lo, v_lo], dtype=np.uint8),
+                               np.array([179, s_hi, v_hi], dtype=np.uint8))
+
+        lo_h = (h - h_tol) % 180
+        hi_h = (h + h_tol) % 180
+        if lo_h <= hi_h:
+            return cv2.inRange(hsv,
+                               np.array([lo_h, s_lo, v_lo], dtype=np.uint8),
+                               np.array([hi_h, s_hi, v_hi], dtype=np.uint8))
+        mask_lo = cv2.inRange(hsv,
+                              np.array([0, s_lo, v_lo], dtype=np.uint8),
+                              np.array([hi_h, s_hi, v_hi], dtype=np.uint8))
+        mask_hi = cv2.inRange(hsv,
+                              np.array([lo_h, s_lo, v_lo], dtype=np.uint8),
+                              np.array([179, s_hi, v_hi], dtype=np.uint8))
+        return cv2.bitwise_or(mask_lo, mask_hi)
 
     def clean_mask(self, mask):
         kernel = np.ones((5, 5), np.uint8)

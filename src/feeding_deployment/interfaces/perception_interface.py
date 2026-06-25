@@ -818,8 +818,13 @@ class PerceptionInterface:
         last_attachment_pose = initial_attachment_pose
 
         vis_image = cv2.imread(os.path.join(attachment_dir, "attachment_corners.png"))
+        # The camera is mounted upside down, so rotate the pixel-picking frame
+        # 180 degrees to show it right-side up to the user (matching the result
+        # vis below). Rotation only relabels pixel positions, not their colors,
+        # so the color sampled from the displayed pixel is still correct.
+        pick_image = cv2.rotate(rgb_image, cv2.ROTATE_180) if rgb_image is not None else rgb_image
         web_interface.start_color_correction(
-            rgb_image,
+            pick_image,
             initial_vis_image=None,
             initial_color_range=current_range,
         )
@@ -956,7 +961,7 @@ class PerceptionInterface:
         if handle_type == "microwave":
             offset[:3, 3] = np.array([0, 0.009, -0.01])
         elif handle_type == "bottom textured fridge door":
-            offset[:3, 3] = np.array([0, -0.003, 0.0])
+            offset[:3, 3] = np.array([0, -0.006, 0.0])
         elif handle_type == "table":
             offset[:3, 3] = np.array([0, -0.008, 0.0])
         else:
@@ -966,7 +971,7 @@ class PerceptionInterface:
         if handle_type == "microwave":
             offset[:3, 3] = np.array([0, 0.009, -0.11])
         elif handle_type == "bottom textured fridge door":
-            offset[:3, 3] = np.array([0, -0.003, -0.11])
+            offset[:3, 3] = np.array([0, -0.006, -0.11])
         elif handle_type == "table":
             offset[:3, 3] = np.array([0, -0.008, -0.11])
         else:

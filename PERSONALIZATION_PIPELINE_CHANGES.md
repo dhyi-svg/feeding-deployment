@@ -293,8 +293,11 @@ Notes:
   `{state:preference_correction,status:ready}` on connection and that the per-dim
   `field` in the response matches the requested field (the backend filters on it).
 - **Context page collection.** `get_meal_context` requires the new `ready` handshake in
-  `preference_context.vue`. If it hangs, that's the first thing to check. Fallback:
-  pass `--pref_meal/--pref_setting/--pref_time_of_day` to skip the web page.
+  `preference_context.vue`. The backend resends the jump until `ready` arrives (mirrors the
+  correction page), so a dropped first jump self-heals once the page mounts; it only hangs
+  if the page never mounts/subscribes or never emits `ready` on connection — that's the
+  first thing to check. Fallback: pass `--pref_meal/--pref_setting/--pref_time_of_day` to
+  skip the web page.
 - **Color round-trip.** The session writes predicted colors into
   `log/<user>/behavior_trees/pick_plate_from_*.yaml` (`HandleColor`=[H,S,V],
   `ColorRange`=float) before each pickup, and reads them back after. If colors don't

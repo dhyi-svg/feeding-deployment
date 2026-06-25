@@ -336,9 +336,18 @@ class WebInterface:
             lambda m: m.get("state") == "home" and m.get("status") == "start_meal"
         )
 
-    def get_required_web_interface_message(self, condition) -> dict[str, Any]:
-        """Parses through all messages received from the web interface and returns the oldest one satisfying the condition."""
+    def get_required_web_interface_message(self, condition, resend=None, resend_interval=1.0) -> dict[str, Any]:
+        """Parses through all messages received from the web interface and returns the oldest one satisfying the condition.
+
+        ``resend``: optional zero-arg callback re-invoked every ``resend_interval``
+        seconds while waiting. The page-jump topic (/robot_to_webapp) is NOT
+        latched and each webapp page opens a fresh rosbridge subscription on
+        mount, so a jump published during a page transition can be dropped. For
+        handshakes that wait on a page mounting (e.g. preference_correction
+        "ready"), pass ``resend`` to re-publish the jump until the page is up.
+        """
         print_once = True
+        last_resend = time.time()
         while self.active:
             # A mid-skill takeover must break a blocking confirm wait. Checked
             # before draining the queue so it fires even when the queue is full
@@ -361,6 +370,9 @@ class WebInterface:
                 if print_once:
                     print("Waiting for required message from the web interface ...")
                     print_once = False
+                if resend is not None and time.time() - last_resend >= resend_interval:
+                    resend()
+                    last_resend = time.time()
                 time.sleep(0.1)
                 continue
 
@@ -657,12 +669,18 @@ class WebInterface:
         """
         self.current_page = "preference_context"
         self.clear_received_messages()
-        self._send_message({"state": "preference_context", "status": "jump"})
+        jump_msg = {"state": "preference_context", "status": "jump"}
+        self._send_message(jump_msg)
+        # Re-publish the jump while waiting: /robot_to_webapp is not latched and
+        # the page re-subscribes asynchronously on mount, so the first jump can be
+        # missed. Resend until the page mounts and reports ready (matches the
+        # correction page; without it a dropped jump hangs here indefinitely).
         self.get_required_web_interface_message(
             lambda m: (
                 m.get("state") == "preference_context"
                 and m.get("status") == "ready"
-            )
+            ),
+            resend=lambda: self._send_message(jump_msg),
         )
         self._send_message({
             "state": "preference_context_data",
@@ -705,17 +723,23 @@ class WebInterface:
         self.current_page = "preference_correction"
         # Drop stale messages so we wait for the ready for THIS navigation.
         self.clear_received_messages()
-        self._send_message({
+        jump_msg = {
             "state": "preference_correction",
             "status": "jump",
             "total": int(total),
             "autocontinue_seconds": float(autocontinue_seconds),
-        })
+        }
+        self._send_message(jump_msg)
+        # Re-publish the jump while waiting: /robot_to_webapp is not latched and
+        # the target page re-subscribes asynchronously on mount (especially when
+        # we just navigated it here from another page, e.g. on resume), so the
+        # first jump can be missed. Resend until the page mounts and reports ready.
         self.get_required_web_interface_message(
             lambda msg_dict: (
                 msg_dict.get("state") == "preference_correction"
                 and msg_dict.get("status") == "ready"
-            )
+            ),
+            resend=lambda: self._send_message(jump_msg),
         )
 
     def send_preference_step(

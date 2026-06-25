@@ -45,7 +45,7 @@
                 <div class="och" v-if="selected === option">✓</div>
               </div>
             </div>
-            <p class="cdown auto-note">Auto-confirming <em>{{ selected }}</em> in <span>{{ countdown }}s</span></p>
+            <p v-if="!userInteracted" class="cdown auto-note">Auto-confirming <em>{{ selected }}</em> in <span>{{ countdown }}s</span></p>
           </div>
         </div>
 
@@ -77,6 +77,9 @@ export default {
       // Current single-dimension step (null while waiting for the next one).
       current: null,
       selected: '',
+      // True once the user clicks an option — cancels auto-confirm so they must
+      // explicitly confirm their correction.
+      userInteracted: false,
       step: 0,
       total: 0,
       autocontinueSeconds: DEFAULT_AUTOCONTINUE_SECONDS,
@@ -110,7 +113,10 @@ export default {
   methods: {
     selectOption(option) {
       this.selected = option
-      this.restartCountdown()
+      // User has taken over — stop the auto-confirm countdown and require an
+      // explicit Continue/Confirm press.
+      this.userInteracted = true
+      this.clearCountdownTimer()
     },
     restartCountdown() {
       this.clearCountdownTimer()
@@ -196,6 +202,7 @@ export default {
 
       this.current = { field, label: message.label || this.formatLabel(field), predicted, options: rawOptions }
       this.selected = predicted
+      this.userInteracted = false
       this.isSubmitting = false
       this.restartCountdown()
     },

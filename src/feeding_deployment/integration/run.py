@@ -665,6 +665,17 @@ class _Runner:
 
         self._pref_session.ask(_INITIAL_PREF_DIMS)
 
+        if not resume:
+            # First durable sim checkpoint of the meal, written BEFORE any skill
+            # executes, so even a kill during the very first navigation is
+            # resumable (the initial prefs already ride in pref_session.p). This
+            # also overwrites any stale last_state.p left by a previous meal.
+            # Skipped on resume: a checkpoint already exists and the numbered
+            # counter has been seeded from it.
+            self._save_state(
+                self.sim.get_current_state(), self.current_atoms,
+                phase="prep", completed_skill="meal_start",
+            )
         self._run_meal_preparation()
 
     def _run_meal_preparation(self) -> None:
@@ -674,12 +685,30 @@ class _Runner:
         session = self._pref_session
 
         # 1. Fridge -> holder (fridge color correction happens during pickup).
+        #    skip_if_already_achieved: on a resume past this step the plate is
+        #    already on the holder, so re-issuing the command would replan a
+        #    redundant PickPlateFromHolder (its precondition Holding(plate) is
+        #    false) and re-manipulate the plate. Skip it instead.
         self.process_user_command(
             GroundHighLevelAction(self.hla_name_to_hla["PlacePlateOnHolder"], (self.plate, self.holder)),
             phase="prep",
+            skip_if_already_achieved=True,
         )
 
-        # 2. Microwave preference (single dim). "no microwave" sets FoodHeated
+        # 2. Close the fridge before pausing to ask the microwave preference.
+        #    The fridge pickup left the door open (OpenDoor drops SafeToNavigate),
+        #    and the planner would otherwise only close it as the first step of
+        #    PlacePlateOnTable below -- i.e. AFTER the ask -- leaving the fridge
+        #    hanging open while we wait on the user. Close it explicitly here;
+        #    PlacePlateOnTable then needs no close. Same total motion, reordered.
+        #    skip_if_already_achieved: a no-op if the fridge is already shut.
+        self.process_user_command(
+            GroundHighLevelAction(self.hla_name_to_hla["CloseDoor"], (self.fridge,)),
+            phase="prep",
+            skip_if_already_achieved=True,
+        )
+
+        # 3. Microwave preference (single dim). "no microwave" sets FoodHeated
         #    so the planner serves directly; a duration leaves it unset so the
         #    planner routes through the microwave and writes the BT duration.
         session.ask(["microwave_time"])
@@ -689,14 +718,17 @@ class _Runner:
         else:
             print(f"Microwave preference: {microwave_duration}s (planner will include microwave steps).")
 
-        # 3. (Holder ->) [microwave ->] table. Microwave color correction
+        # 4. (Holder ->) [microwave ->] table. Microwave color correction
         #    happens during the microwave pickup if the plate is routed there.
+        #    skip_if_already_achieved: on a resume past this step the plate is
+        #    already on the table -> skip rather than redo the journey.
         self.process_user_command(
             GroundHighLevelAction(self.hla_name_to_hla["PlacePlateOnTable"], (self.plate, self.table)),
             phase="prep",
+            skip_if_already_achieved=True,
         )
 
-        # 4. Table dims, just before feeding.
+        # 5. Table dims, just before feeding.
         session.ask(_TABLE_PREF_DIMS)
 
     def _finalize_preference_session(self) -> None:
@@ -876,15 +908,33 @@ class _Runner:
     def process_user_command(
         self, user_command: GroundHighLevelAction | set[GroundAtom],
         phase: str = "feeding",
+        skip_if_already_achieved: bool = False,
     ) -> None:
         """Process a user command.
 
         ``phase`` ("prep" | "feeding" | "finish") is set by the call site and
         controls checkpoint naming: prep/finish skills are numbered NN_<skill>.p
         (the deterministic plate journey), while feeding pickups get their fixed
-        after_*_pickup.p recovery state. See CheckpointStore."""
+        after_*_pickup.p recovery state. See CheckpointStore.
+
+        ``skip_if_already_achieved``: opt-in for the deterministic prep replay on
+        resume. When set and the command's add-effects already hold, the command
+        is treated as done and skipped (rather than replanning to its now-false
+        preconditions and re-manipulating the plate). MUST stay False for feeding
+        commands -- e.g. a re-queued bite leaves ToolTransferDone set, and we must
+        still re-acquire and transfer on the next request."""
 
         print(f"Working towards user command: {user_command}")
+
+        # Resume optimization: a deterministic prep command whose effects already
+        # hold was completed on a prior run -- skip it instead of replanning a
+        # redundant pickup to satisfy its (now-false) preconditions.
+        if isinstance(user_command, GroundHighLevelAction) and skip_if_already_achieved:
+            effects = user_command.get_operator().add_effects
+            if effects and effects.issubset(self.current_atoms):
+                print(f"{user_command} effects already satisfied; skipping (already "
+                      f"completed on a prior run).")
+                return
 
         # Plan to the preconditions of the HLA.
         if isinstance(user_command, GroundHighLevelAction):
@@ -936,6 +986,14 @@ class _Runner:
                 )
             except Exception:
                 skill_plan_names.append(gh.hla.get_name())
+
+        # On the deterministic prep replay the webapp may still be on the home
+        # page (no preference ask navigated it there). Move it to the execution
+        # view before the skills run -- a single jump from whatever page it's on,
+        # so there is no race with a back-to-back preference jump. Feeding/finish
+        # navigate via their own selection/perception pages, so leave them be.
+        if phase == "prep" and plan_hlas and self.web_interface is not None:
+            self.web_interface.switch_to_explanation_page()
 
         for i, ground_hla in enumerate(plan_hlas):
             print(f"Refining {ground_hla}")

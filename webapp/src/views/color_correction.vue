@@ -214,7 +214,12 @@ export default {
       const scaleY = canvas.height / rect.height
       const x = Math.max(0, Math.min(canvas.width  - 1, Math.floor((event.clientX - rect.left) * scaleX)))
       const y = Math.max(0, Math.min(canvas.height - 1, Math.floor((event.clientY - rect.top)  * scaleY)))
-      const pixel = canvas.getContext('2d').getImageData(x, y, 1, 1).data
+      // Sample from the clean image, not the live canvas: a previous selection
+      // may have drawn crosshairs, and clicking on those would otherwise read
+      // the crosshair color (red) instead of the underlying pixel.
+      const ctx = canvas.getContext('2d')
+      ctx.drawImage(this.pickImageElement, 0, 0)
+      const pixel = ctx.getImageData(x, y, 1, 1).data
       this.selectedColor = { r: pixel[0], g: pixel[1], b: pixel[2] }
       this.drawPickWithCrosshairs(x, y)
     },

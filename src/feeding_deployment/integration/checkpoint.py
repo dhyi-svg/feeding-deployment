@@ -53,7 +53,11 @@ class CheckpointStore:
         self.index = 0
 
     def path(self, name: str) -> Path:
-        """Absolute path of a checkpoint by base name (no .p suffix)."""
+        """Absolute path of a checkpoint by base name. A trailing '.p' is
+        tolerated, so `--resume_from_state 01_meal_start` and `01_meal_start.p`
+        both resolve to the same file."""
+        if name.endswith(".p"):
+            name = name[:-2]
         return self.dir / f"{name}.p"
 
     def clear_ephemeral(self) -> None:
@@ -106,7 +110,15 @@ class CheckpointStore:
 
     def load(self, name: str) -> Dict[str, Any]:
         """Read a checkpoint by base name and resume the counter from it."""
-        with open(self.path(name), "rb") as f:
+        target = self.path(name)
+        if not target.exists():
+            available = sorted(f.stem for f in self.dir.glob("*.p"))
+            raise FileNotFoundError(
+                f"No checkpoint '{target.name}' in {self.dir}. "
+                f"Available checkpoints: {available or '(none)'}. "
+                f"Pass the base name without '.p' (e.g. --resume_from_state last_state)."
+            )
+        with open(target, "rb") as f:
             payload = pickle.load(f)
         self.index = payload["skill_index"]
         return payload

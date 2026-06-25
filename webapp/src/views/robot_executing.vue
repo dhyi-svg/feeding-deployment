@@ -27,7 +27,6 @@
     </div>
 
     <div class="bd exec-body">
-      <div class="icon-ring"><div class="pi">🦾</div></div>
       <div class="exec-text">{{ displayedMessage }}</div>
     </div>
   </div>
@@ -220,27 +219,12 @@ export default {
   flex: 1;
 }
 
-.icon-ring {
-  width: 12vh;
-  height: 12vh;
-  border-radius: 50%;
-  border: 2px solid var(--s3);
-  background: rgba(46, 196, 182, .07);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.pi {
-  font-size: 6vh;
-}
-
 .exec-text {
   font-family: Verdana;
-  font-size: 3vh;
+  font-size: 4.2vh;
   color: var(--t);
   text-align: center;
-  max-width: 70vw;
+  max-width: 80vw;
   line-height: 1.4;
 }
 </style>
