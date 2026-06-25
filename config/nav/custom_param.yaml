@@ -23,7 +23,14 @@ refinement:
 
   # --- stop-when-good thresholds --------------------------------------------
   # null => use half the active planner's goal tolerance (move_base/TEB).
-  success_xy_m: null
+  # Heading-only refinement: success_xy_m is set above the worst observed
+  # move_base park (~4.6cm) so xy never blocks convergence and the FAR regime
+  # (turn-to-face + forward drive, which spikes yaw) never triggers. This base
+  # cannot refine xy (floored linear drive) but refines yaw smoothly, so we
+  # accept move_base's position and only fix heading. Bump to 0.08 if parks
+  # regularly exceed ~5cm. success_yaw_rad stays null (~1.43deg) — yaw was never
+  # the blocker.
+  success_xy_m: 0.06
   success_yaw_rad: null
 
   # --- divergence safety (stop if clearly getting worse) ---------------------
@@ -36,5 +43,5 @@ refinement:
   max_ang_rps: 0.4       # clamp on angular velocity (rad/s)
   k_lin: 0.8             # proportional gain on distance -> linear vel
   max_lin_mps: 0.08      # clamp on linear velocity (m/s)
-  lin_engage_dist_m: 0.04  # only drive linearly if xy error exceeds this (stiction floor)
+  lin_engage_dist_m: 0.06  # = success_xy_m so forward drive (the yaw-spiker) never engages
   face_goal_tol_rad: 0.35  # must be within this heading-to-goal before driving forward
