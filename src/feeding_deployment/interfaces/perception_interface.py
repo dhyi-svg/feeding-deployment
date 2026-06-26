@@ -460,7 +460,7 @@ class PerceptionInterface:
                     raise RuntimeError("Could not detect button pressing pose")
 
                 appliance_dir = os.path.dirname(inspect.getfile(self._appliance_perception.__class__))
-                vis_image = cv2.imread(os.path.join(appliance_dir, "rgb_keypoint.png"))
+                vis_image = cv2.imread(os.path.join(appliance_dir, "rgb_button_pixel.png"))
                 if web_interface is None:
                     confirmed = self._terminal_confirmation("button", vis_image)
                 else:
@@ -521,10 +521,8 @@ class PerceptionInterface:
                     raise RuntimeError(f"Could not detect handle opening poses for {handle_type}")
 
                 vis_image = cv2.imread(os.path.join(os.getcwd(), "handle_hinge_pixels.png"))
-                # The camera is mounted upside down, so rotate the visualization
-                # 180 degrees to show it right-side up to the user.
-                if vis_image is not None:
-                    vis_image = cv2.rotate(vis_image, cv2.ROTATE_180)
+                # Orientation is handled centrally in WebInterface._send_image (the
+                # camera is upside down); do not rotate here or it would double-flip.
                 if web_interface is None:
                     confirmed = self._terminal_confirmation("handle", vis_image)
                 else:
@@ -821,11 +819,11 @@ class PerceptionInterface:
         last_attachment_pose = initial_attachment_pose
 
         vis_image = cv2.imread(os.path.join(attachment_dir, "attachment_corners.png"))
-        # The camera is mounted upside down, so rotate the pixel-picking frame
-        # 180 degrees to show it right-side up to the user (matching the result
-        # vis below). Rotation only relabels pixel positions, not their colors,
-        # so the color sampled from the displayed pixel is still correct.
-        pick_image = cv2.rotate(rgb_image, cv2.ROTATE_180) if rgb_image is not None else rgb_image
+        # Orientation is handled centrally in WebInterface._send_image (the camera
+        # is upside down); pass the raw frame through here. The picker returns an
+        # RGB color, not a pixel coordinate, so the displayed orientation never
+        # affected correctness anyway.
+        pick_image = rgb_image
         web_interface.start_color_correction(
             pick_image,
             initial_vis_image=None,
@@ -864,10 +862,8 @@ class PerceptionInterface:
                     last_attachment_pose = new_pose
 
                 result_vis = cv2.imread(os.path.join(attachment_dir, "attachment_corners.png"))
-                # The camera is mounted upside down, so rotate the visualization
-                # 180 degrees to show it right-side up to the user.
-                if result_vis is not None:
-                    result_vis = cv2.rotate(result_vis, cv2.ROTATE_180)
+                # Orientation is handled centrally in WebInterface._send_image (the
+                # camera is upside down); do not rotate here or it would double-flip.
                 web_interface.send_color_correction_result(result_vis, new_pose is not None)
 
                 if status == "confirm":
@@ -924,10 +920,8 @@ class PerceptionInterface:
 
             attachment_dir = os.path.dirname(inspect.getfile(self._attachment_perception.__class__))
             vis_image = cv2.imread(os.path.join(attachment_dir, "attachment_corners.png"))
-            # The camera is mounted upside down, so rotate the visualization
-            # 180 degrees to show it right-side up to the user.
-            if vis_image is not None:
-                vis_image = cv2.rotate(vis_image, cv2.ROTATE_180)
+            # Orientation is handled centrally in WebInterface._send_image (the
+            # camera is upside down); do not rotate here or it would double-flip.
 
             if web_interface is None:
                 confirmed = self._terminal_confirmation("attachment", vis_image)
@@ -1073,10 +1067,8 @@ class PerceptionInterface:
                 # detect_table_placement saves the annotated frame (red dot = placement
                 # center, blue = surrounding pixels used for depth) to the cwd.
                 vis_image = cv2.imread(os.path.join(os.getcwd(), "table_placement_pixel.png"))
-                # The camera is mounted upside down, so rotate the visualization
-                # 180 degrees to show it right-side up to the user.
-                if vis_image is not None:
-                    vis_image = cv2.rotate(vis_image, cv2.ROTATE_180)
+                # Orientation is handled centrally in WebInterface._send_image (the
+                # camera is upside down); do not rotate here or it would double-flip.
                 if web_interface is None:
                     confirmed = self._terminal_confirmation("plate", vis_image)
                 else:

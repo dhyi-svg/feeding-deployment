@@ -412,7 +412,6 @@ export default {
         }
       } catch (error) {
       }
-      this.$router.push('/task_selection')
     },
     async updateItemsAndCurrentItem(data) {
       try {
@@ -485,8 +484,12 @@ export default {
       box.Pheight = imageHeight;
       box.BoxWRatio = box.width / imageWidth;
       box.BoxHRatio = box.height / imageHeight;
-      box.BoxTRatio = box.top / imageHeight;
-      box.BoxLRatio = box.left / imageWidth;
+      // The plate image arrives rotated 180 degrees (the camera is mounted upside
+      // down; the flip is applied centrally in WebInterface._send_image). The box
+      // coords from the backend are in the original (unrotated) plate frame, so
+      // flip them 180 degrees here to keep the overlay aligned with the food.
+      box.BoxTRatio = 1 - (box.top + box.height) / imageHeight;
+      box.BoxLRatio = 1 - (box.left + box.width) / imageWidth;
       return box;
     },
     cropImage(imageSrc, box, maxBoxWidth = 100, maxBoxHeight = 100) {
@@ -507,9 +510,16 @@ export default {
           canvas.width = scaledWidth;
           canvas.height = scaledHeight;
 
+          // The plate image is rotated 180 degrees (camera mounted upside down;
+          // flip applied centrally in WebInterface._send_image), but box.left/top
+          // are in the original (unrotated) frame. Flip the source crop region so
+          // the thumbnail shows the correct, upright food item.
+          const srcLeft = image.width - box.left - box.width;
+          const srcTop = image.height - box.top - box.height;
+
           context.drawImage(
             image,
-            box.left, box.top,
+            srcLeft, srcTop,
             box.width, box.height,
             0, 0,
             scaledWidth, scaledHeight
@@ -697,10 +707,15 @@ export default {
         data: JSON.stringify({
           state: 'bite_skill_selection',
           status: index,
+          // Markers are captured as ratios of the displayed (upright) plate image,
+          // but the plate is rotated 180 degrees relative to the camera frame the
+          // backend maps into (camera mounted upside down; flip applied centrally
+          // in WebInterface._send_image). Send 1 - x / 1 - y so the backend's
+          // ratio-to-camera-pixel mapping resolves to the correct point.
           positions: positions.map((position, positionIndex) => ({
-            index: positionIndex + 1, 
-            x: position.x,
-            y: position.y
+            index: positionIndex + 1,
+            x: 1 - position.x,
+            y: 1 - position.y
           }))
         }) 
       });

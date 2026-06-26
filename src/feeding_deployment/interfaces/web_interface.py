@@ -158,6 +158,14 @@ class WebInterface:
     def _send_image(self, image) -> None:
         # Every key image shown to the user (plate image, bite-selection image,
         # detection-confirmation vis, color-correction frame) flows through here.
+        #
+        # The camera is mounted upside down, so every frame it produces is rotated
+        # 180 degrees. Flip it back here -- the single point every webapp image
+        # passes through -- so the user always sees a naturally upright image.
+        # Callers must NOT pre-rotate the image (that would double-flip it). Flip
+        # before logging so the data logger records exactly what the user saw.
+        if image is not None:
+            image = cv2.rotate(image, cv2.ROTATE_180)
         if self.data_logger is not None:
             self.data_logger.log_image("webapp_sent", image)
         self.web_interface_image_publisher.publish(self.image_bridge.cv2_to_compressed_imgmsg(image))

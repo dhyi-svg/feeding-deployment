@@ -363,7 +363,10 @@ class AppliancePerception(TFInterface):
         # Hack, take a point with x as center of bounding box and y as 40 pixels above the top of the bounding box
         center_pixel = ((x1 + x2) // 2 + 140, y1 - 50)
         cv2.circle(rgb_image, center_pixel, 10, (0, 0, 255), -1)
-        self._log_image("sink_back_pixel.png", cv2.rotate(rgb_image, cv2.ROTATE_180))
+        # Save the raw (upside-down) annotated frame. The camera-orientation flip
+        # for the webapp is applied centrally in WebInterface._send_image, so
+        # rotating here would double-flip and show the user an upside-down image.
+        self._log_image("sink_back_pixel.png", rgb_image)
 
         ok, center_3d = self.pixel2World(camera_info_msg, center_pixel[0], center_pixel[1], depth_image)
         if not ok:
