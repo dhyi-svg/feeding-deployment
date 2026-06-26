@@ -2,8 +2,45 @@
   <div id="app">
     <div v-if="showTakeoverEnable" class="enable-takeover-wrap">
       <button class="enable-takeover-btn" @click="enableTakeoverMic">
-        🎙 Enable takeover button
+        Enable voice button
       </button>
+    </div>
+    <div v-if="showMicSetupModal" class="mic-setup-backdrop">
+      <div class="mic-setup-modal">
+        <button class="mic-setup-close" @click="closeMicSetup" title="Close">×</button>
+        <div class="mic-setup-title">Voice Button Channels</div>
+        <div class="mic-setup-copy">
+          Select the physical button adapter for button presses. Keep the voice
+          channel as the built-in microphone used by Chrome or the system.
+        </div>
+
+        <div class="mic-channel-grid">
+          <label class="mic-channel-field">
+            <span>Button channel</span>
+            <select v-model="setupButtonDeviceId" @change="saveMicSetupSelection">
+              <option value="">Browser default microphone</option>
+              <option v-for="device in audioInputs" :key="'button-' + device.deviceId" :value="device.deviceId">
+                {{ device.label || 'Microphone (permission needed for name)' }}
+              </option>
+            </select>
+          </label>
+          <label class="mic-channel-field">
+            <span>Voice channel</span>
+            <select v-model="setupVoiceDeviceId" @change="saveMicSetupSelection">
+              <option value="">Browser/system default microphone</option>
+              <option v-for="device in audioInputs" :key="'voice-' + device.deviceId" :value="device.deviceId">
+                {{ device.label || 'Microphone (permission needed for name)' }}
+              </option>
+            </select>
+          </label>
+        </div>
+
+        <div class="mic-setup-status">{{ micSetupStatus }}</div>
+        <div class="mic-setup-actions">
+          <button class="mic-setup-secondary" @click="refreshAudioDevices">Refresh devices</button>
+          <button class="mic-setup-primary" @click="saveMicSetupAndEnable">Save & Enable</button>
+        </div>
+      </div>
     </div>
     <div v-if="!audioEnabled" class="enable-audio-wrap">
       <button class="enable-audio-btn" @click="enableAudio">
@@ -47,6 +84,12 @@ export default {
       _reconnectTimer: null,
       audioEnabled: false,
       _micActive: false,
+      _takeoverMicDeviceId: '',
+      showMicSetupModal: false,
+      audioInputs: [],
+      setupButtonDeviceId: '',
+      setupVoiceDeviceId: '',
+      micSetupStatus: 'Choose the button and voice channels.',
       // Routes where the button-detection mic is released so the iPad's mic is
       // free for speech-to-text (the transparency / adaptability Q&A pages and
       // the gesture_setup form). Add others here (e.g. '/meal_setup') as needed.
@@ -210,13 +253,63 @@ export default {
 
     async enableTakeoverMic () {
       try {
+        await this.requestMicPermission()
+        await this.refreshAudioDevices()
+        this.setupButtonDeviceId = this._getStoredValue('takeoverMicDeviceId')
+        this.setupVoiceDeviceId = this._getStoredValue('voiceMicDeviceId')
+        this.showMicSetupModal = true
+        this.micSetupStatus = 'Permission granted. Select channels, then save.'
+      } catch (e) {
+        alert('Could not start the voice button setup: ' + e.name + ' — ' + e.message +
+          '\n(The webapp must be served over HTTPS for the iPad to allow the mic.)')
+      }
+    },
+    async requestMicPermission () {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+      })
+      stream.getTracks().forEach((track) => track.stop())
+    },
+    async refreshAudioDevices () {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+        this.micSetupStatus = 'This browser cannot list audio devices.'
+        return
+      }
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      this.audioInputs = devices.filter((device) => device.kind === 'audioinput')
+      if (this.setupButtonDeviceId && !this.audioInputs.some((device) => device.deviceId === this.setupButtonDeviceId)) {
+        this.setupButtonDeviceId = ''
+      }
+      if (this.setupVoiceDeviceId && !this.audioInputs.some((device) => device.deviceId === this.setupVoiceDeviceId)) {
+        this.setupVoiceDeviceId = ''
+      }
+      this.micSetupStatus = `Found ${this.audioInputs.length} audio input device(s).`
+    },
+    closeMicSetup () {
+      this.showMicSetupModal = false
+    },
+    setupDeviceLabel (deviceId, fallback) {
+      const device = this.audioInputs.find((item) => item.deviceId === deviceId)
+      return device && device.label ? device.label : fallback
+    },
+    saveMicSetupSelection () {
+      this._setStoredValue('takeoverMicDeviceId', this.setupButtonDeviceId)
+      this._setStoredValue('takeoverMicDeviceLabel', this.setupDeviceLabel(this.setupButtonDeviceId, 'Browser default microphone'))
+      this._setStoredValue('voiceMicDeviceId', this.setupVoiceDeviceId)
+      this._setStoredValue('voiceMicDeviceLabel', this.setupDeviceLabel(this.setupVoiceDeviceId, 'Browser/system default microphone'))
+      this.micSetupStatus = 'Channel selection saved.'
+    },
+    async saveMicSetupAndEnable () {
+      try {
+        this.saveMicSetupSelection()
+        await this._stopMic()
         if (!this.micFreeRoutes.includes(this.$route.path)) {
           await this._startMic()
         }
         this.takeoverMicEnabled = true
+        this.showMicSetupModal = false
       } catch (e) {
-        alert('Could not start the takeover button mic: ' + e.name + ' — ' + e.message +
-          '\n(The webapp must be served over HTTPS for the iPad to allow the mic.)')
+        this.micSetupStatus = 'Could not enable button channel: ' + e.name + ' — ' + e.message
       }
     },
     async _syncMicForRoute (path = this.$route.path) {
@@ -248,9 +341,7 @@ export default {
     // (to free it for speech-to-text on voice pages) without re-prompting.
     async _startMic () {
       if (this._micActive) return
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
-      })
+      const stream = await navigator.mediaDevices.getUserMedia(this._takeoverMicConstraints())
       const ctx = new (window.AudioContext || window.webkitAudioContext)()
       await ctx.resume()
       const src = ctx.createMediaStreamSource(stream)
@@ -300,6 +391,32 @@ export default {
       // Decoupled from the page: any view that wants the physical button (e.g.
       // bite_confirm_transfer) listens for this event and runs its own action.
       window.dispatchEvent(new CustomEvent('takeover-press'))
+    },
+    _getStoredValue (key) {
+      try {
+        return window.localStorage.getItem(key) || ''
+      } catch (e) {
+        return ''
+      }
+    },
+    _setStoredValue (key, value) {
+      try {
+        window.localStorage.setItem(key, value || '')
+      } catch (e) { /* storage unavailable */ }
+    },
+    _getTakeoverMicDeviceId () {
+      return this._getStoredValue('takeoverMicDeviceId')
+    },
+    _takeoverMicConstraints () {
+      const audio = {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false
+      }
+      const deviceId = this._getTakeoverMicDeviceId()
+      this._takeoverMicDeviceId = deviceId
+      if (deviceId) audio.deviceId = { exact: deviceId }
+      return { audio }
     }
   }
 }
@@ -388,6 +505,111 @@ nav a.router-link-exact-active {
   box-shadow: 0 4px 14px rgba(46, 196, 182, .45);
   cursor: pointer;
 }
+.mic-setup-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4vh 4vw;
+  background: rgba(5, 10, 18, .62);
+}
+.mic-setup-modal {
+  position: relative;
+  width: min(760px, 92vw);
+  background: #172033;
+  color: #F5F0E8;
+  border: 2px solid #31405f;
+  border-radius: 8px;
+  padding: 3vh 2.5vw 2.5vh;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .45);
+  text-align: left;
+}
+.mic-setup-close {
+  position: absolute;
+  top: 1vh;
+  right: 1vw;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  border-radius: 50%;
+  border: 1px solid #31405f;
+  background: #202b42;
+  color: #F5F0E8;
+  font-size: 3vh;
+  line-height: 1;
+  cursor: pointer;
+}
+.mic-setup-title {
+  font-family: Georgia, serif;
+  font-size: 3.6vh;
+  color: #F5F0E8;
+  margin-right: 52px;
+}
+.mic-setup-copy {
+  margin-top: 1vh;
+  color: #aab6ca;
+  font-size: 2.2vh;
+  line-height: 1.45;
+}
+.mic-channel-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5vw;
+  margin-top: 2.2vh;
+}
+.mic-channel-field {
+  display: flex;
+  flex-direction: column;
+  gap: .8vh;
+  color: #aab6ca;
+  font-size: 2vh;
+  font-weight: 700;
+}
+.mic-channel-field select {
+  width: 100%;
+  min-height: 6vh;
+  border-radius: 8px;
+  border: 1px solid #31405f;
+  background: #0b1220;
+  color: #F5F0E8;
+  font-family: Verdana, sans-serif;
+  font-size: 2vh;
+  padding: 0 1vw;
+}
+.mic-setup-status {
+  margin-top: 1.6vh;
+  min-height: 3vh;
+  color: #2EC4B6;
+  font-size: 2vh;
+  font-weight: 700;
+}
+.mic-setup-actions {
+  display: flex;
+  gap: 1vw;
+  justify-content: flex-end;
+  margin-top: 1.8vh;
+}
+.mic-setup-actions button {
+  min-height: 6vh;
+  border-radius: 8px;
+  font-family: Verdana, sans-serif;
+  font-size: 2.1vh;
+  font-weight: 800;
+  padding: 0 2vw;
+  cursor: pointer;
+}
+.mic-setup-primary {
+  background: #F0A500;
+  border: 2px solid #F0A500;
+  color: #0D1B2A;
+}
+.mic-setup-secondary {
+  background: #202b42;
+  border: 2px solid #31405f;
+  color: #F5F0E8;
+}
 .enable-audio-wrap {
   position: fixed;
   left: 0;
@@ -410,5 +632,13 @@ nav a.router-link-exact-active {
   border: 3px solid #F0A500;
   box-shadow: 0 4px 14px rgba(240, 165, 0, .45);
   cursor: pointer;
+}
+@media (max-width: 720px) {
+  .mic-channel-grid {
+    grid-template-columns: 1fr;
+  }
+  .mic-setup-actions {
+    flex-direction: column;
+  }
 }
 </style>
