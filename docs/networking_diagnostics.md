@@ -52,7 +52,10 @@ is the real safety device; the Mac's normal `estop_sender.py` is NOT running.
 Because the NUC is wired to the router, any loss seen here is over-the-air loss on the
 Mac→router hop — the clean measurement point.
 
-Static IPs: **NUC = 192.168.1.3**, **Mac = 192.168.1.8** (compute box = 192.168.1.2).
+Static IPs: **NUC = 192.168.1.3**, **Mac = 192.168.1.13** (compute box = 192.168.1.2).
+The Mac's reservation must be bound to its **hardware** Wi-Fi MAC (Private Wi-Fi Address
+OFF for this SSID) — a reservation bound to the rotating private MAC silently breaks and
+the Mac falls back to a dynamic IP.
 
 ### Before you start
 - Confirm both machines' clocks are roughly synced (`chronyc tracking` / `sntp`).
@@ -86,8 +89,8 @@ finishes (it prints a summary).
 Collect everything into one directory, then run the analyzer:
 ```bash
 mkdir -p <run-dir>
-# Mac (192.168.1.8): sent/acks/wifi_stats/wifi_events/meta
-scp '<mac-user>@192.168.1.8:.../net_diag/<mac-run>/*' <run-dir>/
+# Mac (192.168.1.13): sent/acks/wifi_stats/wifi_events/meta/send_errors
+scp 'rkjenamani@192.168.1.13:.../net_diag/<mac-run>/*' <run-dir>/
 # NUC (192.168.1.3): recv.csv, gaps.csv, sys.csv
 scp 'isacc@192.168.1.3:.../net_diag/<nuc-run>/*' <run-dir>/
 

@@ -26,7 +26,7 @@
 import ROSLIB from 'roslib'
 import { ROS_URL } from '@/config/parameterConfig'
 import { categoryOf } from '@/config/skillCategories'
-import { PressClassifier } from '@/utils/pressClassifier'
+import { PressDetector } from '@/utils/pressClassifier'
 
 export default {
   name: 'app',
@@ -102,14 +102,11 @@ export default {
   },
   mounted () {
     this.connectRos()
-    // Single press -> bite-transfer confirm (latency-tolerant). Double press is
-    // intentionally inert: the physical user button must no longer trigger
-    // teleoperation (use the on-screen Robot Arm/Base Control buttons instead).
-    // We still classify the double so a fast two-click doesn't fire a spurious
-    // single-press confirm.
-    this._press = new PressClassifier({
-      onSingle: () => this.onSinglePress(),
-      onDouble: () => this.onDoublePress()
+    // Every press -> bite-transfer confirm. There is no single/double
+    // distinction: the physical user button no longer triggers teleoperation
+    // (use the on-screen Robot Arm/Base Control buttons instead).
+    this._press = new PressDetector({
+      onPress: () => this.onPress()
     })
     window.addEventListener('release-takeover-mic', this.releaseTakeoverMic)
   },
@@ -299,25 +296,10 @@ export default {
       this._prevAbove = above
       this._raf = requestAnimationFrame(this.audioLoop)
     },
-    onSinglePress () {
+    onPress () {
       // Decoupled from the page: any view that wants the physical button (e.g.
       // bite_confirm_transfer) listens for this event and runs its own action.
-      window.dispatchEvent(new CustomEvent('takeover-single-press'))
-    },
-    onDoublePress () {
-      // Disabled: the physical button no longer triggers teleoperation. Left as
-      // a no-op (rather than deleting onTakeoverButton) so it can be re-enabled
-      // by restoring `this.onTakeoverButton()` here if needed.
-    },
-    onTakeoverButton () {
-      if (!this.showTakeOver || this.$route.path === '/idle_takeover') return
-      if (this.skillCurrent < 0) {
-        if (this.$route.path !== '/idle_takeover') this.$router.push('/idle_takeover')
-        return
-      }
-      const skill = this.skillPlan[this.skillCurrent]
-      if (categoryOf(skill) === 'navigation') this.controlBase()
-      else this.controlArm()
+      window.dispatchEvent(new CustomEvent('takeover-press'))
     }
   }
 }

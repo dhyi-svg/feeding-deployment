@@ -32,6 +32,8 @@
           <img alt="send" src="../assets/send.png">
         </button>
       </div>
+      <p v-if="voiceStatus" class="voice-status"
+         style="font-size:2vh;color:var(--tm);margin:0.4vh 0;">🎙 {{ voiceStatus }}</p>
 
       <p class="talk-lbl">Robot's response</p>
       <div class="response-box">{{ customOrder || 'Waiting for the text response...' }}</div>
@@ -57,6 +59,9 @@ export default {
       transcript: '',
       isRecognizing: false,
       customOrder: '',
+      // On-screen status for the dictation mic so failures aren't silent on the
+      // iPad (no dev console). Shows the raw recognition error / lifecycle.
+      voiceStatus: '',
     }
   },
   mounted () {
@@ -144,47 +149,65 @@ export default {
         return;
       }
 
+      if (this.$refs.textarea) {
+        this.$refs.textarea.blur();
+      }
+
       await this.releaseTakeoverMic();
 
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        this.voiceStatus = 'speech recognition not supported in this browser';
+        return;
+      }
+
       if (!this.recognition) {
-
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!SpeechRecognition) {
-          alert('Speech recognition is not supported in this browser.');
-          return;
-        }
-
         this.recognition = new SpeechRecognition();
         this.recognition.lang = 'en-US';
         this.recognition.continuous = false;
+
+        this.recognition.onstart = () => {
+          this.voiceStatus = 'listening…';
+        };
 
         this.recognition.onresult = (event) => {
 
           this.transcript += event.results[0][0].transcript;
           this.isRecognizing = false;
+          this.voiceStatus = '';
         };
 
         this.recognition.onerror = (event) => {
           this.isRecognizing = false;
+          // Surface the raw error so we can tell the failure mode apart:
+          // 'not-allowed'/'service-not-allowed' -> mic blocked (often the
+          // takeover button still holding it, or no HTTPS/permission);
+          // 'no-speech' -> mic worked but heard nothing; 'aborted' -> stopped.
+          this.voiceStatus = 'error: ' + (event.error || 'unknown') +
+            (event.message ? ' — ' + event.message : '');
+          // eslint-disable-next-line no-console
+          console.error('[transparency] speech recognition error:', event.error, event.message);
           this.focusTextarea();
         };
 
         this.recognition.onend = () => {
           this.isRecognizing = false;
+          if (this.voiceStatus === 'listening…') this.voiceStatus = 'no speech captured';
           this.focusTextarea();
         };
       }
 
-      if (this.isRecognizing) {
-        this.recognition.stop();
-      }
-
       this.isRecognizing = true;
-      this.recognition.start();
-
-      this.$nextTick(() => {
-        this.focusTextarea();
-      });
+      this.voiceStatus = 'starting…';
+      try {
+        this.recognition.start();
+      } catch (e) {
+        // start() throws if called while a previous session is still active.
+        this.isRecognizing = false;
+        this.voiceStatus = 'start failed: ' + (e && e.message ? e.message : e);
+        // eslint-disable-next-line no-console
+        console.error('[transparency] recognition.start() threw:', e);
+      }
     },
 
     focusTextarea() {
