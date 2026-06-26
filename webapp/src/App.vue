@@ -76,8 +76,11 @@ export default {
   },
   mounted () {
     this.connectRos()
-    // Single press -> bite-transfer confirm (latency-tolerant); double press ->
-    // stop autonomous & take over (fires fast, on the 2nd click).
+    // Single press -> bite-transfer confirm (latency-tolerant). Double press is
+    // intentionally inert: the physical user button must no longer trigger
+    // teleoperation (use the on-screen Robot Arm/Base Control buttons instead).
+    // We still classify the double so a fast two-click doesn't fire a spurious
+    // single-press confirm.
     this._press = new PressClassifier({
       onSingle: () => this.onSinglePress(),
       onDouble: () => this.onDoublePress()
@@ -181,7 +184,9 @@ export default {
       window.dispatchEvent(new CustomEvent('takeover-single-press'))
     },
     onDoublePress () {
-      this.onTakeoverButton()
+      // Disabled: the physical button no longer triggers teleoperation. Left as
+      // a no-op (rather than deleting onTakeoverButton) so it can be re-enabled
+      // by restoring `this.onTakeoverButton()` here if needed.
     },
     onTakeoverButton () {
       if (!this.showTakeOver || this.$route.path === '/idle_takeover') return
