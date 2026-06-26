@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mic Release Test</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #111827;
+      --panel: #172033;
+      --panel-2: #202b42;
+      --line: #31405f;
+      --text: #f4f7fb;
+      --muted: #aab6ca;
+      --amber: #f0a500;
+      --teal: #2ec4b6;
+      --red: #ef4444;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      width: min(980px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 32px 0;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(28px, 4vw, 44px);
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.5;
+      font-size: 17px;
+    }
+
+    section {
+      margin-top: 20px;
+      padding: 20px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 8px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    button {
+      min-height: 48px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-2);
+      color: var(--text);
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    select {
+      width: 100%;
+      min-height: 48px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0b1220;
+      color: var(--text);
+      font: inherit;
+      padding: 0 12px;
+    }
+
+    .device-picker {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 180px;
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    button.primary {
+      background: var(--amber);
+      border-color: var(--amber);
+      color: #111827;
+    }
+
+    button.teal {
+      background: var(--teal);
+      border-color: var(--teal);
+      color: #102026;
+    }
+
+    button:disabled {
+      opacity: .45;
+      cursor: default;
+    }
+
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    .row strong {
+      color: var(--text);
+      text-align: right;
+      overflow-wrap: anywhere;
+    }
+
+    .meter {
+      height: 18px;
+      margin-top: 12px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      background: #0b1220;
+      border-radius: 8px;
+    }
+
+    .fill {
+      width: 0%;
+      height: 100%;
+      background: var(--teal);
+      transition: width 80ms linear;
+    }
+
+    textarea, pre {
+      width: 100%;
+      min-height: 140px;
+      margin-top: 12px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0b1220;
+      color: var(--text);
+      font: 15px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      resize: vertical;
+      white-space: pre-wrap;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 32px;
+      margin-top: 12px;
+      padding: 0 12px;
+      border-radius: 999px;
+      background: var(--panel-2);
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .pill.good { color: var(--teal); }
+    .pill.bad { color: var(--red); }
+
+    @media (max-width: 720px) {
+      .grid { grid-template-columns: 1fr; }
+      .device-picker { grid-template-columns: 1fr; }
+      .row { flex-direction: column; gap: 4px; }
+      .row strong { text-align: left; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Mic Release Test</h1>
+    <p>
+      This page tests the same handoff used by the transparency page: the switch-button
+      mic is opened for peak detection, then fully released before speech-to-text starts.
+      No ROS or robot connection is needed.
+    </p>
+
+    <section>
+      <h2>1. Button mic</h2>
+      <p>
+        Pick the switch-button audio adapter first. If device names are hidden,
+        click Enable once to grant permission, then Release, choose the right input,
+        and Enable again.
+      </p>
+      <div class="device-picker">
+        <select id="audioDeviceSelect">
+          <option value="">Browser default microphone</option>
+        </select>
+        <button id="refreshDevices">Refresh devices</button>
+      </div>
+      <div class="grid">
+        <button id="enableButtonMic" class="teal">Enable button mic</button>
+        <button id="releaseButtonMic">Release button mic</button>
+        <button id="directSpeechWhileHeld">Try speech while held</button>
+      </div>
+      <div class="row"><span>Button mic state</span><strong id="buttonState">inactive</strong></div>
+      <div class="row"><span>Selected device</span><strong id="selectedDeviceLabel">Browser default microphone</strong></div>
+      <div class="row"><span>Input device</span><strong id="deviceLabel">unknown</strong></div>
+      <div class="row"><span>Live peak</span><strong id="peakText">0.000</strong></div>
+      <div class="meter"><div id="peakFill" class="fill"></div></div>
+    </section>
+
+    <section>
+      <h2>2. Transparency handoff</h2>
+      <p>
+        Use this to test the fixed flow: release the selected button mic, then start
+        transcription. Browser speech recognition uses the browser/system speech input;
+        this page can only select the separate button-listener mic.
+      </p>
+      <div class="grid">
+        <button id="transparencySpeech" class="primary">Release and start speech</button>
+        <button id="reacquireButtonMic">Reacquire button mic</button>
+        <button id="clearTranscript">Clear transcript</button>
+      </div>
+      <div id="speechSupport" class="pill">checking speech support</div>
+      <textarea id="transcript" placeholder="Speech transcript will appear here"></textarea>
+    </section>
+
+    <section>
+      <h2>Log</h2>
+      <pre id="log"></pre>
+    </section>
+  </main>
+
+  <script>
+    const state = {
+      stream: null,
+      audioCtx: null,
+      analyser: null,
+      buf: null,
+      raf: null,
+      recognition: null,
+      recognizing: false,
+      selectedDeviceId: ''
+    };
+
+    const el = {
+      audioDeviceSelect: document.getElementById('audioDeviceSelect'),
+      refreshDevices: document.getElementById('refreshDevices'),
+      enableButtonMic: document.getElementById('enableButtonMic'),
+      releaseButtonMic: document.getElementById('releaseButtonMic'),
+      directSpeechWhileHeld: document.getElementById('directSpeechWhileHeld'),
+      transparencySpeech: document.getElementById('transparencySpeech'),
+      reacquireButtonMic: document.getElementById('reacquireButtonMic'),
+      clearTranscript: document.getElementById('clearTranscript'),
+      buttonState: document.getElementById('buttonState'),
+      selectedDeviceLabel: document.getElementById('selectedDeviceLabel'),
+      deviceLabel: document.getElementById('deviceLabel'),
+      peakText: document.getElementById('peakText'),
+      peakFill: document.getElementById('peakFill'),
+      speechSupport: document.getElementById('speechSupport'),
+      transcript: document.getElementById('transcript'),
+      log: document.getElementById('log')
+    };
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const hasSpeech = !!SpeechRecognition;
+    el.speechSupport.textContent = hasSpeech ? 'speech recognition available' : 'speech recognition unavailable in this browser';
+    el.speechSupport.classList.add(hasSpeech ? 'good' : 'bad');
+
+    function log(message) {
+      const line = new Date().toLocaleTimeString() + '  ' + message;
+      el.log.textContent = line + '\n' + el.log.textContent;
+    }
+
+    function setButtonState(label) {
+      el.buttonState.textContent = label;
+      el.buttonState.style.color = label === 'active' ? 'var(--teal)' : 'var(--text)';
+    }
+
+    async function refreshAudioDevices() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+        log('device enumeration is unavailable in this browser');
+        return;
+      }
+
+      const previous = state.selectedDeviceId || el.audioDeviceSelect.value;
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const inputs = devices.filter((device) => device.kind === 'audioinput');
+
+      el.audioDeviceSelect.innerHTML = '';
+      const defaultOption = document.createElement('option');
+      defaultOption.value = '';
+      defaultOption.textContent = 'Browser default microphone';
+      el.audioDeviceSelect.appendChild(defaultOption);
+
+      inputs.forEach((device, index) => {
+        const option = document.createElement('option');
+        option.value = device.deviceId;
+        option.textContent = device.label || 'Microphone ' + (index + 1) + ' (permission needed for name)';
+        el.audioDeviceSelect.appendChild(option);
+      });
+
+      const hasPrevious = inputs.some((device) => device.deviceId === previous);
+      state.selectedDeviceId = hasPrevious ? previous : '';
+      el.audioDeviceSelect.value = state.selectedDeviceId;
+      updateSelectedDeviceLabel();
+      log('found ' + inputs.length + ' audio input device(s)');
+    }
+
+    function updateSelectedDeviceLabel() {
+      const selected = el.audioDeviceSelect.options[el.audioDeviceSelect.selectedIndex];
+      el.selectedDeviceLabel.textContent = selected ? selected.textContent : 'Browser default microphone';
+    }
+
+    function audioConstraints() {
+      const audio = {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false
+      };
+
+      if (state.selectedDeviceId) {
+        audio.deviceId = { exact: state.selectedDeviceId };
+      }
+
+      return { audio };
+    }
+
+    async function enableButtonMic() {
+      if (state.stream) {
+        log('button mic already active');
+        return;
+      }
+
+      updateSelectedDeviceLabel();
+      log('requesting button mic: ' + el.selectedDeviceLabel.textContent);
+      const stream = await navigator.mediaDevices.getUserMedia(audioConstraints());
+
+      const track = stream.getAudioTracks()[0];
+      el.deviceLabel.textContent = track && track.label ? track.label : 'label hidden or unavailable';
+      await refreshAudioDevices();
+
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      const audioCtx = new AudioContextClass();
+      await audioCtx.resume();
+
+      const source = audioCtx.createMediaStreamSource(stream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 2048;
+      source.connect(analyser);
+
+      state.stream = stream;
+      state.audioCtx = audioCtx;
+      state.analyser = analyser;
+      state.buf = new Float32Array(analyser.fftSize);
+      setButtonState('active');
+      loop();
+      log('button mic active');
+    }
+
+    async function releaseButtonMic() {
+      if (state.raf) {
+        cancelAnimationFrame(state.raf);
+        state.raf = null;
+      }
+
+      if (state.stream) {
+        state.stream.getTracks().forEach((track) => track.stop());
+        state.stream = null;
+      }
+
+      if (state.audioCtx) {
+        try {
+          await state.audioCtx.close();
+        } catch (error) {
+          log('audio context close warning: ' + error.message);
+        }
+        state.audioCtx = null;
+      }
+
+      state.analyser = null;
+      state.buf = null;
+      el.peakText.textContent = '0.000';
+      el.peakFill.style.width = '0%';
+      setButtonState('inactive');
+      log('button mic released');
+    }
+
+    function loop() {
+      if (!state.analyser || !state.buf) return;
+
+      state.analyser.getFloatTimeDomainData(state.buf);
+      let peak = 0;
+      for (let i = 0; i < state.buf.length; i++) {
+        const value = Math.abs(state.buf[i]);
+        if (value > peak) peak = value;
+      }
+
+      el.peakText.textContent = peak.toFixed(3);
+      el.peakFill.style.width = Math.min(100, peak * 100 / 0.3) + '%';
+      state.raf = requestAnimationFrame(loop);
+    }
+
+    function startSpeechRecognition(label) {
+      if (!hasSpeech) {
+        log('speech recognition unavailable');
+        return;
+      }
+      if (state.recognizing) {
+        log('speech recognition already running');
+        return;
+      }
+
+      const recognition = new SpeechRecognition();
+      state.recognition = recognition;
+      recognition.lang = 'en-US';
+      recognition.continuous = false;
+      recognition.interimResults = false;
+
+      recognition.onstart = () => {
+        state.recognizing = true;
+        log(label + ': speech recognition started');
+      };
+      recognition.onresult = (event) => {
+        const text = event.results[0][0].transcript;
+        el.transcript.value += (el.transcript.value ? '\n' : '') + text;
+        log(label + ': result "' + text + '"');
+      };
+      recognition.onerror = (event) => {
+        log(label + ': speech error ' + event.error);
+      };
+      recognition.onend = () => {
+        state.recognizing = false;
+        log(label + ': speech recognition ended');
+      };
+
+      try {
+        recognition.start();
+      } catch (error) {
+        log(label + ': speech start failed: ' + error.message);
+      }
+    }
+
+    el.enableButtonMic.addEventListener('click', () => {
+      enableButtonMic().catch((error) => log('button mic error: ' + error.name + ': ' + error.message));
+    });
+
+    el.refreshDevices.addEventListener('click', () => {
+      refreshAudioDevices().catch((error) => log('refresh devices error: ' + error.name + ': ' + error.message));
+    });
+
+    el.audioDeviceSelect.addEventListener('change', () => {
+      state.selectedDeviceId = el.audioDeviceSelect.value;
+      updateSelectedDeviceLabel();
+      if (state.stream) {
+        log('selected device changed; click Release, then Enable again to switch inputs');
+      } else {
+        log('selected button mic: ' + el.selectedDeviceLabel.textContent);
+      }
+    });
+
+    el.releaseButtonMic.addEventListener('click', () => {
+      releaseButtonMic().catch((error) => log('release error: ' + error.message));
+    });
+
+    el.directSpeechWhileHeld.addEventListener('click', () => {
+      startSpeechRecognition('held-mic test');
+    });
+
+    el.transparencySpeech.addEventListener('click', async () => {
+      await releaseButtonMic();
+      startSpeechRecognition('transparency handoff');
+    });
+
+    el.reacquireButtonMic.addEventListener('click', () => {
+      enableButtonMic().catch((error) => log('reacquire error: ' + error.name + ': ' + error.message));
+    });
+
+    el.clearTranscript.addEventListener('click', () => {
+      el.transcript.value = '';
+      log('transcript cleared');
+    });
+
+    window.addEventListener('beforeunload', () => {
+      if (state.stream) state.stream.getTracks().forEach((track) => track.stop());
+      if (state.audioCtx) state.audioCtx.close();
+    });
+
+    setButtonState('inactive');
+    refreshAudioDevices().catch((error) => log('initial device refresh error: ' + error.name + ': ' + error.message));
+    log('ready');
+  </script>
+</body>
+</html>

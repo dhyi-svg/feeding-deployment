@@ -63,8 +63,13 @@ export default {
     this.ros = new ROSLIB.Ros({ url: ROS_URL })
     this.initPublisher()
     this.initRosConnection()
+    this.releaseTakeoverMic()
   },
   beforeRouteLeave (to, from, next) {
+    if (this.recognition && this.isRecognizing) {
+      this.recognition.stop();
+    }
+
     if (this.listener) {
       this.listener.unsubscribe();
       this.listener = null;
@@ -117,14 +122,38 @@ export default {
       this.transcript = '';
     },
 
-    startSpeechRecognition() {
+    releaseTakeoverMic() {
+      return new Promise((resolve) => {
+        let settled = false;
+        const done = () => {
+          if (settled) return;
+          settled = true;
+          resolve();
+        };
+
+        window.dispatchEvent(new CustomEvent('release-takeover-mic', {
+          detail: { done }
+        }));
+
+        setTimeout(done, 300);
+      });
+    },
+
+    async startSpeechRecognition() {
       if (this.isRecognizing) {
         return;
       }
 
+      await this.releaseTakeoverMic();
+
       if (!this.recognition) {
 
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+          alert('Speech recognition is not supported in this browser.');
+          return;
+        }
+
         this.recognition = new SpeechRecognition();
         this.recognition.lang = 'en-US';
         this.recognition.continuous = false;

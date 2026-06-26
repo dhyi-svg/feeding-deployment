@@ -93,17 +93,10 @@ export default {
     // button-detection mic so the iPad's speech recognizer gets exclusive
     // access; re-acquire it when leaving. Only relevant once the user has
     // enabled the takeover mic.
-    '$route.path' (path) {
-      if (!this.takeoverMicEnabled) return
-      const freeMic = this.micFreeRoutes.includes(path)
-      if (freeMic && this._micActive) {
-        this._stopMic()
-      } else if (!freeMic && !this._micActive) {
-        this._startMic().catch(() => {
-          // Re-acquire failed (some iOS versions need a fresh user gesture);
-          // fall back to the enable pill so the user can re-tap.
-          this.takeoverMicEnabled = false
-        })
+    '$route.path': {
+      immediate: true,
+      handler (path) {
+        this._syncMicForRoute(path)
       }
     }
   },
@@ -118,9 +111,11 @@ export default {
       onSingle: () => this.onSinglePress(),
       onDouble: () => this.onDoublePress()
     })
+    window.addEventListener('release-takeover-mic', this.releaseTakeoverMic)
   },
   beforeUnmount () {
     this._destroyed = true
+    window.removeEventListener('release-takeover-mic', this.releaseTakeoverMic)
     if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null }
     this._stopMic()
     if (this._press) this._press.reset()
@@ -218,11 +213,37 @@ export default {
 
     async enableTakeoverMic () {
       try {
-        await this._startMic()
+        if (!this.micFreeRoutes.includes(this.$route.path)) {
+          await this._startMic()
+        }
         this.takeoverMicEnabled = true
       } catch (e) {
         alert('Could not start the takeover button mic: ' + e.name + ' — ' + e.message +
           '\n(The webapp must be served over HTTPS for the iPad to allow the mic.)')
+      }
+    },
+    async _syncMicForRoute (path = this.$route.path) {
+      if (!this.takeoverMicEnabled) return
+      const freeMic = this.micFreeRoutes.includes(path)
+      if (freeMic) {
+        await this._stopMic()
+      } else if (!this._micActive) {
+        try {
+          await this._startMic()
+        } catch (e) {
+          // Re-acquire failed (some iOS versions need a fresh user gesture);
+          // fall back to the enable pill so the user can re-tap.
+          this.takeoverMicEnabled = false
+        }
+      }
+    },
+    async releaseTakeoverMic (event) {
+      const done = event && event.detail && event.detail.done
+      try {
+        await this._stopMic()
+        if (done) done()
+      } catch (e) {
+        if (done) done(e)
       }
     },
     // Acquire the mic and start the button-detection loop. Split out from
