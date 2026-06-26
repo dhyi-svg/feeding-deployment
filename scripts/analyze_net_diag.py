@@ -170,6 +170,19 @@ def pct(arr, q):
     return float(np.percentile(arr, q)) if arr.size else float("nan")
 
 
+def field_changes(wifi, field):
+    """Transitions of a wifi_stats column over time -> [(t_wall, prev, new), ...].
+    Catches IP drops (-> blank), private-MAC re-engagement (mac change), roams
+    (bssid change). Blank is shown as '<none>'."""
+    changes, prev = [], None
+    for r in wifi:
+        v = r.get(field, "")
+        if prev is not None and v != prev:
+            changes.append((float(r["t_wall"]), prev or "<none>", v or "<none>"))
+        prev = v
+    return changes
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -252,6 +265,22 @@ def main():
         lines.append(f"{tstr:19} {ev['lost']:>5} {ev['duration_s']:>6.2f} "
                      f"{('%.0f' % rb) if rb is not None else '?':>6} "
                      f"{('%.1f' % nl) if nl is not None else '?':>6} {cause}")
+
+    # Interface transitions (IP drop / private-MAC re-engage / roam) straight from
+    # the wifi_stats columns -- the failure signatures, no log parsing needed.
+    for field, label in (("ip", "IP"), ("mac", "in-use MAC"), ("bssid", "BSSID")):
+        chs = field_changes(wifi, field)
+        if chs:
+            lines.append("")
+            lines.append(f"--- {label} transitions ({len(chs)}) ---")
+            for t, a, b in chs[:20]:
+                tstr = datetime.datetime.fromtimestamp(t).strftime("%H:%M:%S")
+                note = ""
+                if field == "ip" and "<none>" in (a, b):
+                    note = "  <-- interface lost/regained its IP (drop)"
+                if field == "mac":
+                    note = "  <-- private MAC re-engaged?"
+                lines.append(f"  {tstr}  {a} -> {b}{note}")
 
     lines.append("")
     lines.append("--- cause tally (all listed events) ---")

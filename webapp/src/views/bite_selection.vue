@@ -37,7 +37,7 @@
             @click="addMarker"
             ref="imageMarkerContainer"
           >
-            <img :src="imageSrc" class="mark-img" alt="Plate" />
+            <img :src="imageSrc" class="mark-img" alt="Plate" ref="markImage" />
             <div
               v-for="(marker, index) in markers"
               :key="index"
@@ -73,17 +73,7 @@
                 :key="index"
                 :ref="`box-${index}`"
                 class="bite-box"
-                :style="{
-                  position: 'absolute',
-                  top: `${box.BoxTRatio * imageHeight}px`,
-                  left: `${box.BoxLRatio * imageWidth}px`,
-                  width: `${box.BoxWRatio * imageWidth}px`,
-                  height: `${box.BoxHRatio * imageHeight}px`,
-                  borderColor: selectedBox === index ? '#F0A500' : '#8BA8C4AD',
-                  borderWidth: selectedBox === index ? '4px' : '2px',
-                  backgroundColor: selectedBox === index ? 'rgba(240, 165, 0, 0.18)' : 'transparent',
-                  zIndex: selectedBox === index ? '10' : '100'
-                }"
+                :style="boxStyle(box, index)"
                 @click="handleBoxClick(index)"
               >
                 <span
@@ -144,7 +134,7 @@
 
           <div class="skill-fallback" v-if="!showModal">
             <span class="skill-fallback-lbl">Trouble picking this up?</span>
-            <button class="skill-fallback-btn" title="Execute Pickup Skill Manually" @click="showModal = true; currentStep = 1">🛠️</button>
+            <button class="skill-fallback-btn" title="Execute Pickup Skill Manually" @click="stopCountdown(); showModal = true; currentStep = 1">🛠️</button>
           </div>
         </div>
       </div>
@@ -258,6 +248,8 @@ export default {
       ],
       imageWidth: 1,
       imageHeight: 1,
+      imageNaturalWidth: 1,
+      imageNaturalHeight: 1,
       imageWidth2: 1,
       imageHeight2: 1,
       activeIndex: null,
@@ -572,8 +564,37 @@ export default {
       this.publishMessagePhysical();
       this.$router.push('/robot_executing');
     },
+    boxStyle(box, index) {
+      // The <img> fills the wrapper at 100% with object-fit: contain, so the
+      // actual plate image is letterboxed (scaled to fit, centered) inside the
+      // element. imageWidth/imageHeight are the *element* size; the rendered
+      // image content is smaller. Reconstruct the contain content rect from the
+      // natural aspect ratio and place boxes within it -- otherwise boxes are
+      // offset by the letterbox margin and mis-scaled, shifting as the window
+      // (and thus the element's aspect ratio) changes.
+      const elementW = this.imageWidth;
+      const elementH = this.imageHeight;
+      const natW = this.imageNaturalWidth || elementW;
+      const natH = this.imageNaturalHeight || elementH;
+      const scale = Math.min(elementW / natW, elementH / natH);
+      const contentW = natW * scale;
+      const contentH = natH * scale;
+      const offsetX = (elementW - contentW) / 2;
+      const offsetY = (elementH - contentH) / 2;
+      return {
+        position: 'absolute',
+        top: `${offsetY + box.BoxTRatio * contentH}px`,
+        left: `${offsetX + box.BoxLRatio * contentW}px`,
+        width: `${box.BoxWRatio * contentW}px`,
+        height: `${box.BoxHRatio * contentH}px`,
+        borderColor: this.selectedBox === index ? '#F0A500' : '#8BA8C4AD',
+        borderWidth: this.selectedBox === index ? '4px' : '2px',
+        backgroundColor: this.selectedBox === index ? 'rgba(240, 165, 0, 0.18)' : 'transparent',
+        zIndex: this.selectedBox === index ? '10' : '100'
+      };
+    },
     handleBoxClick(index) {
-      
+
       this.selectedBox = index;
       const selectedBox = this.currentItem.boxes[index];
       this.cropImage(this.imageSrc, selectedBox)
@@ -602,16 +623,28 @@ export default {
       this.currentStep = 1
     },
     addMarker(event) {
-      this.$nextTick(() => { 
-        if (!this.$refs.imageMarkerContainer) {
+      this.$nextTick(() => {
+        // Measure the click ratio against the <img> element's rect, NOT the
+        // .cam container. .cam has a 1px border (and centers its content), so
+        // its border-box is offset/larger than the rendered image -- using it
+        // would shift the ratio by ~1px and scale it by w/(w+2). The marker dot,
+        // the connecting line, and the backend all treat the ratio as relative
+        // to the image content, so the image rect is the correct reference and
+        // makes the picked pixel map 1:1 onto the plate pixels acquisition
+        // samples (point = ratio * plate_bounds + plate_bounds_origin). The 180
+        // CSS flip leaves getBoundingClientRect unchanged (point-symmetric), and
+        // it cancels the backend's 180 rotation so the displayed image is the raw
+        // camera-frame plate crop.
+        const img = this.$refs.markImage;
+        if (!img) {
           return;
         }
         if (this.markers.length < this.maxMarkers) {
-          const containerRect = this.$refs.imageMarkerContainer.getBoundingClientRect();
-          const x = (event.clientX - containerRect.left) / containerRect.width;
-          const y = (event.clientY - containerRect.top) / containerRect.height;
+          const imageRect = img.getBoundingClientRect();
+          const x = (event.clientX - imageRect.left) / imageRect.width;
+          const y = (event.clientY - imageRect.top) / imageRect.height;
           if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {
-            
+
             const markerWidth = 60;
             const markerHeight = 60;
 
@@ -752,8 +785,14 @@ export default {
             img.src = base64Image;
 
             img.onload = () => {
-              
+
               this.imageSrc = base64Image;
+
+              // Intrinsic plate-image pixels. The box ratios are computed against
+              // these (see calculateBoxRatios), so boxStyle needs them to undo the
+              // object-fit: contain letterbox when overlaying boxes.
+              this.imageNaturalWidth = img.naturalWidth || img.width || 1;
+              this.imageNaturalHeight = img.naturalHeight || img.height || 1;
 
               this.imageStyle = {
                 width: '100%',

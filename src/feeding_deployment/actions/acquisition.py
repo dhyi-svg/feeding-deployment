@@ -157,7 +157,25 @@ class AcquireBiteHLA(HighLevelAction):
                         id += 1
                     with open(self.food_detection_log_dir / f"{file_name}_{id}.pkl", "wb") as f:
                         pickle.dump(food_detection_data, f)
-                        
+
+                    # Annotated plate image: draw the detected bounding boxes (in
+                    # plate-crop pixels, the exact coords sent to the webapp) on the
+                    # unflipped plate image. This is the ground-truth detection
+                    # geometry -- compare it against what the webapp overlays. Note
+                    # the webapp rotates this image 180 for display; here we keep it
+                    # in the raw detection frame so the boxes are unambiguous.
+                    try:
+                        boxes_vis = items_detection["plate_image"].copy()
+                        for label, boxes in items_detection["food_type_to_bounding_boxes_plate"].items():
+                            for i, (x, y, w, h) in enumerate(boxes):
+                                x, y, w, h = int(x), int(y), int(w), int(h)
+                                cv2.rectangle(boxes_vis, (x, y), (x + w, y + h), (0, 165, 240), 2)
+                                cv2.putText(boxes_vis, f"{label} #{i + 1}", (x, max(y - 5, 12)),
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 240), 1, cv2.LINE_AA)
+                        cv2.imwrite(str(self.food_detection_log_dir / f"food_detection_boxes_{id}.png"), boxes_vis)
+                    except Exception as e:
+                        print("Failed to save annotated bounding-box image:", e)
+
                 else:
                     # read last logged data
                     try:
@@ -266,8 +284,10 @@ class AcquireBiteHLA(HighLevelAction):
                     plate_bounds = items_detection["plate_bounds"]
                     pos = skill_params[0]
 
-                    point_x = int(pos["x"]*plate_bounds[2]) + plate_bounds[0]
-                    point_y = int(pos["y"]*plate_bounds[3]) + plate_bounds[1]
+                    # round (not int/truncate) so the picked point maps to the
+                    # nearest plate pixel rather than biasing toward the top-left.
+                    point_x = round(pos["x"]*plate_bounds[2]) + plate_bounds[0]
+                    point_y = round(pos["y"]*plate_bounds[3]) + plate_bounds[1]
 
                     print("Plate Bounds:", plate_bounds)
                     print("Positions:", skill_params)
@@ -293,8 +313,10 @@ class AcquireBiteHLA(HighLevelAction):
                     plate_bounds = items_detection["plate_bounds"]
                     pos = skill_params[0]
 
-                    point_x = int(pos["x"]*plate_bounds[2]) + plate_bounds[0]
-                    point_y = int(pos["y"]*plate_bounds[3]) + plate_bounds[1]
+                    # round (not int/truncate) so the picked point maps to the
+                    # nearest plate pixel rather than biasing toward the top-left.
+                    point_x = round(pos["x"]*plate_bounds[2]) + plate_bounds[0]
+                    point_y = round(pos["y"]*plate_bounds[3]) + plate_bounds[1]
 
                     print("Plate Bounds:", plate_bounds)
                     print("Positions:", skill_params)
@@ -326,6 +348,7 @@ class AcquireBiteHLA(HighLevelAction):
                 traceback.print_exc()
                 continue
             
+            ask_confirmation = True # Rajat Hack for calibrating bite acqusiition. Need to remove for final
             if self.web_interface is not None and ask_confirmation:
                 get_success_confirmation = self.web_interface.get_successful_food_acquisition_confirmation()
                 if get_success_confirmation:

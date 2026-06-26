@@ -63,6 +63,18 @@ def _run(cmd, timeout=4):
         return ""
 
 
+def get_ip(dev):
+    """Current IPv4 on the WiFi interface, or None if it has none (= dropped)."""
+    return _run(["ipconfig", "getifaddr", dev], timeout=2).strip() or None
+
+
+def get_inuse_mac(dev):
+    """The MAC currently in use on dev. If this ever != the hardware MAC, macOS
+    has re-engaged a private (randomized) address."""
+    m = re.search(r"\bether\s+([0-9a-f:]{17})", _run(["ifconfig", dev], timeout=2))
+    return m.group(1) if m else None
+
+
 def _first_float(pattern, text):
     m = re.search(pattern, text, re.IGNORECASE)
     return float(m.group(1)) if m else None
@@ -82,6 +94,7 @@ def sample_wifi_wdutil():
         "noise": _first_float(r"Noise\s*:\s*(-?\d+)", out),
         "tx_rate": _first_float(r"Tx Rate\s*:\s*([\d.]+)", out),
         "channel": _first_str(r"Channel\s*:\s*(\S+)", out),
+        "bssid": _first_str(r"BSSID\s*:\s*([0-9a-fA-F:]{17})", out),
     }
 
 
@@ -124,23 +137,29 @@ def sample_wifi():
 
 
 class WifiSampler(threading.Thread):
-    def __init__(self, path, interval):
+    def __init__(self, path, interval, dev="en0"):
         super().__init__(daemon=True)
         self.path = path
         self.interval = interval
+        self.dev = dev
         self._stop = threading.Event()
         self.latest_rssi = None
 
     def run(self):
         with open(self.path, "w", buffering=1) as f:
-            f.write("t_wall,rssi,noise,snr,tx_rate,channel\n")
+            f.write("t_wall,rssi,noise,snr,tx_rate,channel,ip,mac,bssid\n")
             while not self._stop.is_set():
                 d = sample_wifi()
                 rssi, noise = d.get("rssi"), d.get("noise")
                 snr = (rssi - noise) if (rssi is not None and noise is not None) else None
                 self.latest_rssi = rssi
+                # IP / in-use MAC catch the two failure modes directly: IP goes
+                # blank on an interface drop; MAC changing = private addr re-engaged.
+                ip = get_ip(self.dev)
+                mac = get_inuse_mac(self.dev)
                 f.write(f"{time.time():.3f},{_fmt(rssi)},{_fmt(noise)},{_fmt(snr)},"
-                        f"{_fmt(d.get('tx_rate'))},{_fmt(d.get('channel'))}\n")
+                        f"{_fmt(d.get('tx_rate'))},{_fmt(d.get('channel'))},"
+                        f"{_fmt(ip)},{_fmt(mac)},{_fmt(d.get('bssid'))}\n")
                 self._stop.wait(self.interval)
 
     def stop(self):
@@ -181,6 +200,8 @@ def main():
                    help="run length in seconds (default 3600 = 1 hour)")
     p.add_argument("--wifi-interval", type=float, default=1.0,
                    help="seconds between WiFi stat samples (default 1)")
+    p.add_argument("--wifi-dev", default="en0",
+                   help="macOS Wi-Fi interface for IP/MAC sampling (default en0)")
     p.add_argument("--out-dir", default=None,
                    help="output dir (default integration/log/net_diag/<timestamp>/)")
     args = p.parse_args()
@@ -203,7 +224,8 @@ def main():
     err_f = open(os.path.join(out_dir, "send_errors.csv"), "w", buffering=1)
     err_f.write("t_wall,seq,errno,strerror\n")
 
-    sampler = WifiSampler(os.path.join(out_dir, "wifi_stats.csv"), args.wifi_interval)
+    sampler = WifiSampler(os.path.join(out_dir, "wifi_stats.csv"),
+                          args.wifi_interval, dev=args.wifi_dev)
     sampler.start()
 
     t0_wall = time.time()
