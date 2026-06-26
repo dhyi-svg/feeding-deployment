@@ -39,7 +39,12 @@ export default {
       _raf: null,
       _ros: null,
       _destroyed: false,
-      _reconnectTimer: null
+      _reconnectTimer: null,
+      _micActive: false,
+      // Routes where the button-detection mic is released so the iPad's mic is
+      // free for speech-to-text (the transparency / adaptability Q&A pages and
+      // the gesture_setup form). Add others here (e.g. '/meal_setup') as needed.
+      micFreeRoutes: ['/transparency', '/adaptability', '/gesture_setup']
     }
   },
   computed: {
@@ -71,8 +76,30 @@ export default {
       // where their longer headers would collide with the centered pill).
       if (this.takeoverMicEnabled) return false
       const excluded = ['/manipulation_teleop', '/manipulation_done', '/navigation_teleop', '/idle_takeover', '/mictest']
-      return !excluded.includes(this.$route.path)
+      const p = this.$route.path
+      // Don't offer to enable the button mic on voice pages — it would hold the
+      // mic the speech recognizer needs.
+      return !excluded.includes(p) && !this.micFreeRoutes.includes(p)
     },
+  },
+  watch: {
+    // When navigating onto a voice page (e.g. transparency), release the
+    // button-detection mic so the iPad's speech recognizer gets exclusive
+    // access; re-acquire it when leaving. Only relevant once the user has
+    // enabled the takeover mic.
+    '$route.path' (path) {
+      if (!this.takeoverMicEnabled) return
+      const freeMic = this.micFreeRoutes.includes(path)
+      if (freeMic && this._micActive) {
+        this._stopMic()
+      } else if (!freeMic && !this._micActive) {
+        this._startMic().catch(() => {
+          // Re-acquire failed (some iOS versions need a fresh user gesture);
+          // fall back to the enable pill so the user can re-tap.
+          this.takeoverMicEnabled = false
+        })
+      }
+    }
   },
   mounted () {
     this.connectRos()
@@ -89,7 +116,7 @@ export default {
   beforeUnmount () {
     this._destroyed = true
     if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null }
-    if (this._raf) cancelAnimationFrame(this._raf)
+    this._stopMic()
     if (this._press) this._press.reset()
   },
   methods: {
@@ -149,24 +176,55 @@ export default {
 
     async enableTakeoverMic () {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
-        })
-        const ctx = new (window.AudioContext || window.webkitAudioContext)()
-        await ctx.resume()
-        const src = ctx.createMediaStreamSource(stream)
-        this._analyser = ctx.createAnalyser()
-        this._analyser.fftSize = 2048
-        this._audioBuf = new Float32Array(this._analyser.fftSize)
-        src.connect(this._analyser)
+        await this._startMic()
         this.takeoverMicEnabled = true
-        this.audioLoop()
       } catch (e) {
         alert('Could not start the takeover button mic: ' + e.name + ' — ' + e.message +
           '\n(The webapp must be served over HTTPS for the iPad to allow the mic.)')
       }
     },
+    // Acquire the mic and start the button-detection loop. Split out from
+    // enableTakeoverMic so the route watcher can release/re-acquire the mic
+    // (to free it for speech-to-text on voice pages) without re-prompting.
+    async _startMic () {
+      if (this._micActive) return
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+      })
+      const ctx = new (window.AudioContext || window.webkitAudioContext)()
+      await ctx.resume()
+      const src = ctx.createMediaStreamSource(stream)
+      this._analyser = ctx.createAnalyser()
+      this._analyser.fftSize = 2048
+      this._audioBuf = new Float32Array(this._analyser.fftSize)
+      src.connect(this._analyser)
+      // Kept as plain (non-reactive) instance props on purpose: wrapping native
+      // MediaStream/AudioContext in Vue's reactive proxy can break their methods.
+      this._micStream = stream
+      this._audioCtx = ctx
+      this._micActive = true
+      this._prevAbove = false
+      if (this._press) this._press.reset()
+      this.audioLoop()
+    },
+    // Stop the loop and fully release the mic (stop the MediaStream tracks and
+    // close the AudioContext) so the iPad frees it for the speech recognizer.
+    async _stopMic () {
+      if (this._raf) { cancelAnimationFrame(this._raf); this._raf = null }
+      if (this._micStream) {
+        this._micStream.getTracks().forEach((t) => t.stop())
+        this._micStream = null
+      }
+      if (this._audioCtx) {
+        try { await this._audioCtx.close() } catch (e) { /* already closed */ }
+        this._audioCtx = null
+      }
+      this._analyser = null
+      this._micActive = false
+      if (this._press) this._press.reset()
+    },
     audioLoop () {
+      if (!this._micActive || !this._analyser) return
       this._analyser.getFloatTimeDomainData(this._audioBuf)
       let peak = 0
       for (let i = 0; i < this._audioBuf.length; i++) {
