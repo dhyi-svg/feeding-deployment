@@ -54,8 +54,21 @@ export default {
   },
   beforeUnmount () {
     if (this.countdownInterval) {
-      clearInterval(this.countdownInterval); 
+      clearInterval(this.countdownInterval);
     }
+  },
+  beforeRouteLeave (to, from, next) {
+    if (this.listener) {
+      this.listener.unsubscribe();
+      this.listener = null;
+    }
+
+    if (this.publisher) {
+      this.publisher.unadvertise();
+      this.publisher = null;
+    }
+
+    next();
   },
   methods: {
     initSubscriber() {
@@ -137,21 +150,8 @@ export default {
       this.publisher = new ROSLIB.Topic({
         ros: this.ros,
         name: '/webapp_to_robot', 
-        messageType: 'std_msgs/String' 
+        messageType: 'std_msgs/String'
       });
-    },
-    beforeRouteLeave (to, from, next) {
-      if (this.listener) {
-        this.listener.unsubscribe();
-        this.listener = null;
-      }
-
-      if (this.publisher) {
-        this.publisher.unadvertise();
-        this.publisher = null;
-      }
-
-      next();
     },
   }
 }

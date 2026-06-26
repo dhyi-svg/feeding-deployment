@@ -168,7 +168,7 @@ export default {
         }) 
       })
       this.publisher.publish(message);
-      this.router.push('/gesture_record_negative');
+      this.$router.push('/gesture_record_negative');
     },
 
     handleRosMessage(message) {
@@ -219,10 +219,6 @@ export default {
         } catch (error) {
         }
       })
-      this.listener.subscribe((message) => {
-        this.handleRosMessage(message);
-      });
-
     },
 
     redirectToChangeItem() {

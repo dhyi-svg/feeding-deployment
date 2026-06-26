@@ -168,7 +168,7 @@ export default {
         }) 
       })
       this.publisher.publish(message);
-      this.router.push('/robot_executing');
+      this.$router.push('/robot_executing');
     },
 
     handleRosMessage(message) {
@@ -207,14 +207,13 @@ export default {
         try {
           const parsedMessage = JSON.parse(msg.data);
           if (parsedMessage.state === 'prepare_bite' && parsedMessage.status === 'completed') {
-            this.$router.push('/meal_setup'); 
+            this.$router.push('/meal_setup');
+          } else {
+            this.handleRosMessage(msg);
           }
         } catch (error) {
         }
       })
-      this.listener.subscribe((message) => {
-        this.handleRosMessage(message);
-      });
     },
 
     redirectToChangeItem() {

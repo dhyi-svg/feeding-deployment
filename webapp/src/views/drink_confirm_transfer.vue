@@ -11,7 +11,7 @@
     <div class="bd">
       <div class="simple-confirm">
         <p>The robot has picked up the drink.<br>Click 'Continue' to transfer the drink when ready.</p>
-        <button class="btn lg amber" style="min-width:24vw">Continue</button>
+        <button class="btn lg amber" style="min-width:24vw" @click="handleButtonClick">Continue</button>
       </div>
     </div>
   </div>
