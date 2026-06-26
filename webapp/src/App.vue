@@ -234,16 +234,16 @@ nav a.router-link-exact-active {
   z-index: 1000;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 16px;
 }
 
 .global-btn {
-  height: 6vh;
+  height: 8vh;
   font-family: Verdana, sans-serif;
-  font-size: 1.9vh;
+  font-size: 2.8vh;
   font-weight: 700;
-  padding: 0 1.6vw;
-  border-radius: 10px;
+  padding: 0 2.6vw;
+  border-radius: 14px;
   color: #F5F0E8;
   cursor: pointer;
   background: #1E3347;
@@ -270,14 +270,14 @@ nav a.router-link-exact-active {
 .enable-takeover-btn {
   pointer-events: auto;
   font-family: Verdana, sans-serif;
-  font-size: 1.8vh;
-  font-weight: 700;
-  padding: 1vh 1.6vw;
+  font-size: 3vh;
+  font-weight: 800;
+  padding: 2vh 4vw;
   border-radius: 999px;
-  background: #1E3347;
-  color: #2EC4B6;
-  border: 2px solid rgba(46, 196, 182, .4);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  background: #2EC4B6;
+  color: #0D1B2A;
+  border: 3px solid #2EC4B6;
+  box-shadow: 0 4px 14px rgba(46, 196, 182, .45);
   cursor: pointer;
 }
 </style>
