@@ -11,12 +11,26 @@
     <div class="bd">
       <div class="mic-wrap">
         <p class="mic-hint">
-          Confirms the mic works over HTTPS, your button's audio adapter is the active
-          input, and the detection threshold to use in the real takeover component.
+          Calibrates the physical button adapter used by the real app. Keep the
+          browser or system speech mic on the built-in microphone; save the button
+          adapter here so the app can open it by device id.
         </p>
 
+        <div class="mic-row">
+          <span>Button adapter</span>
+          <select v-model="selectedDeviceId" @change="saveSelectedDevice">
+            <option value="">Browser default microphone</option>
+            <option v-for="device in audioInputs" :key="device.deviceId" :value="device.deviceId">
+              {{ device.label || 'Microphone (permission needed for name)' }}
+            </option>
+          </select>
+        </div>
+        <div class="mic-row"><span>Saved button adapter</span><b>{{ savedDeviceLabel }}</b></div>
+
         <div class="mic-enable-row">
-          <button class="btn md amber" style="min-width:34%" @click="enableMic">Enable mic</button>
+          <button class="btn md ghost" style="flex:1" @click="refreshAudioDevices">Refresh devices</button>
+          <button class="btn md amber" style="flex:1" @click="enableMic">Enable button mic</button>
+          <button class="btn md ghost" style="flex:1" @click="releaseMic">Release mic</button>
           <span class="mic-status">{{ status }}</span>
         </div>
 
@@ -70,6 +84,9 @@ export default {
     return {
       status: '— not started —',
       device: '—',
+      audioInputs: [],
+      selectedDeviceId: this.loadStoredValue('takeoverMicDeviceId'),
+      savedDeviceLabel: this.loadStoredValue('takeoverMicDeviceLabel') || '— not set —',
       peak: 0,
       maxSeen: 0,
       threshold: 0.1,
@@ -80,23 +97,76 @@ export default {
       _data: null,
       _prevAbove: false,
       _press: null,
-      _raf: null
+      _raf: null,
+      _stream: null,
+      _audioCtx: null
     }
   },
   computed: {
     meterWidth () { return Math.min(100, this.peak * 100 / 0.3) }
   },
   beforeUnmount () {
-    if (this._raf) cancelAnimationFrame(this._raf)
-    if (this._press) this._press.reset()
+    this.releaseMic(false)
+  },
+  mounted () {
+    this.refreshAudioDevices()
   },
   methods: {
+    loadStoredValue (key) {
+      try {
+        return window.localStorage.getItem(key) || ''
+      } catch (e) {
+        return ''
+      }
+    },
+    async refreshAudioDevices () {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+        this.status = 'device list unavailable'
+        return
+      }
+
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices()
+        this.audioInputs = devices.filter((device) => device.kind === 'audioinput')
+        if (this.selectedDeviceId && !this.audioInputs.some((device) => device.deviceId === this.selectedDeviceId)) {
+          this.selectedDeviceId = ''
+        }
+        this.addLog('peak', 'found ' + this.audioInputs.length + ' audio input device(s)')
+      } catch (e) {
+        this.status = 'device refresh error: ' + e.name
+      }
+    },
+    selectedDeviceLabel () {
+      const selected = this.audioInputs.find((device) => device.deviceId === this.selectedDeviceId)
+      return selected && selected.label ? selected.label : (this.selectedDeviceId ? 'Selected microphone' : 'Browser default microphone')
+    },
+    saveSelectedDevice () {
+      const label = this.selectedDeviceLabel()
+      this.savedDeviceLabel = label
+      try {
+        window.localStorage.setItem('takeoverMicDeviceId', this.selectedDeviceId || '')
+        window.localStorage.setItem('takeoverMicDeviceLabel', label)
+      } catch (e) {
+        this.addLog('peak', 'could not save selected mic: ' + e.message)
+      }
+      this.addLog('press', 'saved button adapter: ' + label)
+    },
+    audioConstraints () {
+      const audio = {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false
+      }
+      if (this.selectedDeviceId) audio.deviceId = { exact: this.selectedDeviceId }
+      return { audio }
+    },
     async enableMic () {
       try {
+        await this.releaseMic(false)
+        this.saveSelectedDevice()
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
-        })
+        const stream = await navigator.mediaDevices.getUserMedia(this.audioConstraints())
+        this._stream = stream
         this.status = 'mic granted'
 
         try {
@@ -111,6 +181,7 @@ export default {
         } catch (e) { this.device = 'enumerate failed' }
 
         const ctx = new (window.AudioContext || window.webkitAudioContext)()
+        this._audioCtx = ctx
         await ctx.resume()
         const src = ctx.createMediaStreamSource(stream)
         this._analyser = ctx.createAnalyser()
@@ -121,9 +192,36 @@ export default {
           onPress: () => this.onPress()
         })
         this.loop()
+        await this.refreshAudioDevices()
       } catch (e) {
         this.status = 'ERROR: ' + e.name + ' — ' + e.message +
           '  (NotAllowed/undefined usually means you are NOT on HTTPS)'
+      }
+    },
+    async releaseMic (logRelease = true) {
+      if (this._raf) {
+        cancelAnimationFrame(this._raf)
+        this._raf = null
+      }
+      if (this._press) {
+        this._press.reset()
+        this._press = null
+      }
+      if (this._stream) {
+        this._stream.getTracks().forEach((track) => track.stop())
+        this._stream = null
+      }
+      if (this._audioCtx) {
+        try { await this._audioCtx.close() } catch (e) { /* already closed */ }
+        this._audioCtx = null
+      }
+      this._analyser = null
+      this._data = null
+      this._prevAbove = false
+      this.peak = 0
+      if (logRelease) {
+        this.status = 'mic released'
+        this.addLog('peak', 'mic released')
       }
     },
     addLog (type, msg) {
@@ -131,6 +229,7 @@ export default {
       if (this.logs.length > 80) this.logs.pop()
     },
     loop () {
+      if (!this._analyser || !this._data) return
       this._analyser.getFloatTimeDomainData(this._data)
       let p = 0
       for (let i = 0; i < this._data.length; i++) {
