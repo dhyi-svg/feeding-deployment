@@ -36,8 +36,8 @@
             class="cam mark-cam"
             @click="addMarker"
             ref="imageMarkerContainer"
-            :style="{ backgroundImage: 'url(' + imageSrc + ')' }"
           >
+            <img :src="imageSrc" class="mark-img" alt="Plate" />
             <div
               v-for="(marker, index) in markers"
               :key="index"
@@ -173,6 +173,7 @@ export default {
       ],
       username: USER,
       countdownInterval: null,
+      countdownCancelled: false,
       countdownText: "Auto-confirming in 15s",
       countdown: 1000,
       Pwidth: 0,
@@ -321,11 +322,18 @@ export default {
       this.transcript = '';
     },
     stopCountdown() {
+      // The user interacted, so the auto-continue is cancelled for this page
+      // visit. Record it unconditionally: the auto_time message from the backend
+      // can arrive slightly after this click (it's sent ~0.6s after the page
+      // loads), and without this flag handleRosMessage would silently re-arm the
+      // countdown -- firing acquire_food even though the on-screen countdown was
+      // dismissed.
+      this.countdownCancelled = true;
       if (this.countdownInterval) {
         clearInterval(this.countdownInterval);
         this.countdownInterval = null;
-        this.countdownText = "";
       }
+      this.countdownText = "";
     },
     startCountdown() {
       this.countdownInterval = setInterval(() => {
@@ -391,15 +399,21 @@ export default {
       try {
         const parsedMessage = JSON.parse(message.data);
         if (parsedMessage.state === 'auto_time' && parsedMessage.status) {
-          if (this.countdownInterval) {
-            clearInterval(this.countdownInterval);
-            this.countdownInterval = null;
+          // Don't re-arm the countdown if the user already clicked to cancel it.
+          // auto_time can arrive just after a click, and re-starting here would
+          // resurrect the auto-continue the user just dismissed (the timer would
+          // expire and publish acquire_food).
+          if (!this.countdownCancelled) {
+            if (this.countdownInterval) {
+              clearInterval(this.countdownInterval);
+              this.countdownInterval = null;
+            }
+
+            this.countdown = parseInt(parsedMessage.status, 10);
+            this.updateCountdownText();
+
+            this.startCountdown();
           }
-
-          this.countdown = parseInt(parsedMessage.status, 10);
-          this.updateCountdownText();
-
-          this.startCountdown();
         } else {
         }
         const route = routeMap[parsedMessage.state]?.[parsedMessage.status];
@@ -484,12 +498,12 @@ export default {
       box.Pheight = imageHeight;
       box.BoxWRatio = box.width / imageWidth;
       box.BoxHRatio = box.height / imageHeight;
-      // The plate image arrives rotated 180 degrees (the camera is mounted upside
-      // down; the flip is applied centrally in WebInterface._send_image). The box
-      // coords from the backend are in the original (unrotated) plate frame, so
-      // flip them 180 degrees here to keep the overlay aligned with the food.
-      box.BoxTRatio = 1 - (box.top + box.height) / imageHeight;
-      box.BoxLRatio = 1 - (box.left + box.width) / imageWidth;
+      // The displayed image is rotated a full 180 degrees back to upright (the
+      // backend's 180 rotation is undone by transform: scaleX(-1) scaleY(-1) on the
+      // img). The box coords from the backend are already in the upright plate
+      // frame, so they map straight onto the displayed image with no flips.
+      box.BoxTRatio = box.top / imageHeight;
+      box.BoxLRatio = box.left / imageWidth;
       return box;
     },
     cropImage(imageSrc, box, maxBoxWidth = 100, maxBoxHeight = 100) {
@@ -707,15 +721,14 @@ export default {
         data: JSON.stringify({
           state: 'bite_skill_selection',
           status: index,
-          // Markers are captured as ratios of the displayed (upright) plate image,
-          // but the plate is rotated 180 degrees relative to the camera frame the
-          // backend maps into (camera mounted upside down; flip applied centrally
-          // in WebInterface._send_image). Send 1 - x / 1 - y so the backend's
-          // ratio-to-camera-pixel mapping resolves to the correct point.
+          // The displayed image is rotated back to upright (scaleX(-1) scaleY(-1)),
+          // so markers are captured directly in the upright plate frame - which is
+          // exactly the frame the backend maps ratios to camera pixels in. Send the
+          // ratios through unchanged.
           positions: positions.map((position, positionIndex) => ({
             index: positionIndex + 1,
-            x: 1 - position.x,
-            y: 1 - position.y
+            x: position.x,
+            y: position.y
           }))
         }) 
       });
@@ -746,7 +759,14 @@ export default {
                 width: '100%',
                 height: '100%',
                 objectFit: 'contain',
-                display: 'block'
+                display: 'block',
+                // The plate arrives 180-rotated from the backend (camera mounted
+                // upside down; flip applied in WebInterface._send_image). Rotate it
+                // back 180 here so it appears upright from the user's perspective
+                // (they face the robot, which looks down in front of them). With the
+                // image upright, the backend box coords (given in the upright plate
+                // frame) overlay directly - see calculateBoxRatios.
+                transform: 'scaleX(-1) scaleY(-1)'
               };
 
               this.imageReceived = true;
@@ -917,13 +937,28 @@ export default {
 }
 
 .mark-cam {
-  flex: 1;
-  min-height: 36vh;
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
+  /* Shrink-wrap the image instead of stretching to the full modal width, so the
+     clickable area lines up 1:1 with the plate (no letterboxing) and the marker
+     ratios map straight onto the image. */
+  align-self: center;
+  width: fit-content;
+  max-width: 100%;
   position: relative;
   cursor: crosshair;
+}
+
+.mark-img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  /* Cap the height so the full plate fits inside the modal alongside the
+     instruction text and action buttons. */
+  max-height: 48vh;
+  pointer-events: none;
+  /* Rotate 180 back to upright to match the user's perspective, same as the main
+     bite-selection plate image. */
+  transform: scaleX(-1) scaleY(-1);
 }
 
 .mark-dot {
@@ -1120,25 +1155,26 @@ export default {
 }
 
 .skill-fallback-lbl {
-  font-size: 2.2vh;
+  font-size: 3.6vh;
+  font-weight: 700;
   color: var(--tm);
   text-align: right;
   line-height: 1.3;
-  max-width: 22vw;
+  max-width: 32vw;
 }
 
 .skill-fallback-btn {
-  width: 9vh;
-  height: 9vh;
-  border-radius: 16px;
+  width: 15vh;
+  height: 15vh;
+  border-radius: 24px;
   flex-shrink: 0;
   background: transparent;
-  border: 2px solid var(--s3);
+  border: 3px solid var(--s3);
   color: var(--tm);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 3.6vh;
+  font-size: 6.5vh;
   cursor: pointer;
 }
 </style>

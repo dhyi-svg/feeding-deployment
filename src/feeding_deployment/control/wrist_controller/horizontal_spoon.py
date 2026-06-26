@@ -193,7 +193,7 @@ class HorizontalSpoon:
 
         self.last_pitch_angle = pitch_angle
         self.last_roll_angle = roll_angle
-        print("Published wrist state: ", wrist_state)
+        # print("Published wrist state: ", wrist_state)
 
     def run(self):
         

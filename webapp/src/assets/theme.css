@@ -239,7 +239,7 @@ input, textarea {
 .footer .btn { flex: 1; max-width: 32%; }
 
 /* ── Autocontinue countdown ── */
-.cdown { font-size: 2.4vh; color: var(--tm); text-align: center; }
+.cdown { font-size: 2.4vh; color: var(--tm); text-align: center; min-height: 1.3em; }
 .cdown span { color: var(--a); font-weight: 700; font-size: 2.7vh; }
 
 /* ── Talk box (text input + send/clear/voice) ── */

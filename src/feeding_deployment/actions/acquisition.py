@@ -2,6 +2,7 @@ from typing import Any
 
 import time
 import pickle
+import traceback
 import numpy as np
 import cv2
 
@@ -317,7 +318,12 @@ class AcquireBiteHLA(HighLevelAction):
                     print("Skill failed. Retrying ...")
                     continue
             except Exception as e:
-                print("Failed to acquire bite:", e)
+                print(
+                    f"Failed to acquire bite: {type(e).__name__}: {e}"
+                    if str(e)
+                    else f"Failed to acquire bite: {type(e).__name__} (no message)"
+                )
+                traceback.print_exc()
                 continue
             
             if self.web_interface is not None and ask_confirmation:

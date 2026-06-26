@@ -197,6 +197,11 @@ def main():
     sent_f.write("seq,t_send_wall,t_send_mono\n")
     acks_f = open(os.path.join(out_dir, "acks.csv"), "w", buffering=1)
     acks_f.write("seq,t_ack_wall,rtt_ms\n")
+    # Send failures (e.g. EADDRNOTAVAIL when WiFi briefly drops the Mac's IP). We
+    # record these and keep going instead of crashing -- a failed send shows up as
+    # a missing seq (loss) at the receiver, and this file says why.
+    err_f = open(os.path.join(out_dir, "send_errors.csv"), "w", buffering=1)
+    err_f.write("t_wall,seq,errno,strerror\n")
 
     sampler = WifiSampler(os.path.join(out_dir, "wifi_stats.csv"), args.wifi_interval)
     sampler.start()
@@ -209,15 +214,27 @@ def main():
 
     seq = 0
     acked = 0
+    send_errs = 0
     last_report = time.monotonic()
     last_report_seq = 0
+    last_err_print = 0.0
     start_mono = time.monotonic()
     try:
         while time.monotonic() - start_mono < args.duration:
             start = time.monotonic()
             t_send_wall = time.time()
-            sock.sendto(struct.pack(PACKET_FORMAT, seq, start), dest)
-            sent_f.write(f"{seq},{t_send_wall:.6f},{start:.6f}\n")
+            try:
+                sock.sendto(struct.pack(PACKET_FORMAT, seq, start), dest)
+                sent_f.write(f"{seq},{t_send_wall:.6f},{start:.6f}\n")
+            except OSError as exc:
+                # Interface likely lost its IP (WiFi disconnect/reassoc). Record,
+                # warn (throttled), and continue -- the gap is captured as loss.
+                send_errs += 1
+                err_f.write(f"{t_send_wall:.6f},{seq},{exc.errno},{exc.strerror}\n")
+                if start - last_err_print >= 1.0:
+                    print(f"!! send error (errno {exc.errno}: {exc.strerror}) -- "
+                          f"WiFi interface dropped its IP; continuing", flush=True)
+                    last_err_print = start
             seq += 1
 
             # Drain echo-acks (non-blocking) and record RTT.
@@ -250,13 +267,15 @@ def main():
         sampler.stop()
         sent_f.close()
         acks_f.close()
+        err_f.close()
         with open(os.path.join(out_dir, "run_meta.json"), "w") as f:
             json.dump({"t0_wall": t0_wall, "t1_wall": t1_wall, "rate": args.rate,
                        "host": args.host, "port": args.port, "sent": seq,
-                       "acked": acked}, f, indent=2)
+                       "acked": acked, "send_errors": send_errs}, f, indent=2)
         capture_wifi_events(t0_wall, os.path.join(out_dir, "wifi_events.log"))
         sock.close()
-        print(f"\ndone. sent={seq} acked={acked}. CSVs in {out_dir}")
+        print(f"\ndone. sent={seq} acked={acked} send_errors={send_errs}. "
+              f"CSVs in {out_dir}")
         print("Next: scp this dir's files next to the NUC recv.csv, then run "
               "scripts/analyze_net_diag.py <run-dir>")
 

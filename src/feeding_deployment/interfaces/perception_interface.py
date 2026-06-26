@@ -111,7 +111,7 @@ class PerceptionInterface:
         self.last_plate_poses = None
         self.last_drink_poses = None
 
-        # set led brightness
+        # Rajat ToDo: Support LED
         # self.set_led_brightness()
 
     def zero_ft_sensor(self):
@@ -140,12 +140,14 @@ class PerceptionInterface:
             ser.write(command)
 
     def turn_on_led(self):
+        return # Rajat ToDo: Support LED
         with serial.Serial(LED_SERIAL_PORT, LED_BAUD_RATE, timeout=1) as ser:
             ser.reset_input_buffer()  # Clear input buffer
             ser.reset_output_buffer()  # Clear output buffer
             ser.write(b"ON\r\n")  # Send the command
 
     def turn_off_led(self):
+        return # Rajat ToDo: Support LED
         with serial.Serial(LED_SERIAL_PORT, LED_BAUD_RATE, timeout=1) as ser:
             ser.reset_input_buffer()
             ser.reset_output_buffer()

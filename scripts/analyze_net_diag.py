@@ -34,8 +34,13 @@ import numpy as np
 
 CORRELATE_WINDOW_S = 2.0   # match WiFi events within +/- this of a loss event
 RF_FADE_DBM = -70.0        # RSSI at/below this near a drop -> suspect RF fade
+# Match only MEANINGFUL state-change events, not the constant GET-BSSID/NOISE/
+# CHANNEL polling noise (which would swamp the nearest-event match). These are the
+# things that actually take the radio off-channel: scans, AWDL, roams, channel
+# switches, (de)auth/disassoc, link up/down.
 WIFI_EVENT_KEYWORDS = re.compile(
-    r"roam|scan|assoc|deauth|disassoc|channel|CSA|switch|disconnect|beacon loss",
+    r"\[SCAN\]|\bAWDL\b|\broam|\bCSA\b|disassoc|deauth|channel switch|"
+    r"link (?:up|down)|beacon loss|disconnect",
     re.IGNORECASE)
 
 
@@ -87,14 +92,19 @@ def parse_wifi_events(path):
                 continue
             try:
                 dt = datetime.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S.%f%z")
-                events.append((dt.timestamp(), m.group(2).strip()))
             except ValueError:
                 continue
+            # Drop the constant boilerplate prefix (...(CoreWiFi) [...] [corewifi])
+            # so the meaningful tail (e.g. "BEGIN REQ [SCAN] ...") survives truncation.
+            text = re.sub(r"^.*\[corewifi\]\s*", "", m.group(2).strip())
+            events.append((dt.timestamp(), text))
     return events
 
 
-def find_loss_events(recv, rate):
-    """Contiguous missing-seq runs -> list of dicts."""
+def find_loss_events(recv):
+    """Contiguous missing-seq runs -> list of dicts. Duration is the directly
+    measured wall-clock gap between the packets bracketing the loss (no rate
+    assumption), and we also derive the effective send rate from the data."""
     seq_to_wall = {}
     for r in recv:
         try:
@@ -105,13 +115,17 @@ def find_loss_events(recv, rate):
     events = []
     for a, b in zip(seqs, seqs[1:]):
         if b > a + 1:
-            lost = b - a - 1
             events.append({
                 "start_wall": seq_to_wall[a],
-                "after_seq": a, "before_seq": b, "lost": lost,
-                "duration_s": lost / rate if rate else float("nan"),
+                "after_seq": a, "before_seq": b, "lost": b - a - 1,
+                "duration_s": seq_to_wall[b] - seq_to_wall[a],
             })
-    return events, seqs
+    eff_rate = float("nan")
+    if len(seqs) > 1:
+        span_s = seq_to_wall[seqs[-1]] - seq_to_wall[seqs[0]]
+        if span_s > 0:
+            eff_rate = (seqs[-1] - seqs[0]) / span_s
+    return events, seqs, eff_rate
 
 
 def rssi_before(wifi_t, wifi_rssi, t):
@@ -144,7 +158,7 @@ def sys_at(sys_t, sys_load, sys_psi, t):
 
 def classify(ev, rssi_b, near_evt, nuc_load, nuc_psi):
     if near_evt is not None:
-        return f"wifi-event ({near_evt[2][:60]})"
+        return f"wifi-event ({near_evt[2][:80]})"
     if rssi_b is not None and rssi_b <= RF_FADE_DBM:
         return f"RF-fade (RSSI {rssi_b:.0f} dBm before)"
     if (nuc_psi is not None and nuc_psi > 25.0) or (nuc_load is not None and nuc_load > 3.0):
@@ -167,12 +181,12 @@ def main():
     if not recv:
         sys.exit(f"no recv.csv in {args.run_dir} (need the NUC receiver output)")
 
-    rate = float(meta.get("rate", 100.0))
+    nominal_rate = float(meta.get("rate", 100.0))
     n_sent = int(meta.get("sent", len(sent)))
     n_recv = len(recv)
     n_acked = int(meta.get("acked", len(acks)))
 
-    loss_events, seqs = find_loss_events(recv, rate)
+    loss_events, seqs, eff_rate = find_loss_events(recv)
     seq_span = (seqs[-1] - seqs[0] + 1) if seqs else 0
     forward_lost = seq_span - n_recv
     forward_loss_pct = 100.0 * forward_lost / seq_span if seq_span else 0.0
@@ -199,7 +213,8 @@ def main():
     lines.append("=== Mac->NUC link diagnostic report ===")
     if meta:
         dur = meta.get("t1_wall", 0) - meta.get("t0_wall", 0)
-        lines.append(f"host={meta.get('host')} rate={rate:.0f}Hz duration={dur:.0f}s")
+        lines.append(f"host={meta.get('host')} nominal_rate={nominal_rate:.0f}Hz "
+                     f"effective_rate={eff_rate:.1f}Hz duration={dur:.0f}s")
     lines.append(f"sent={n_sent}  received={n_recv}  acked={n_acked}")
     lines.append(f"forward loss: {forward_lost} / {seq_span} seqs ({forward_loss_pct:.3f}%)")
     rev_lost = max(0, n_sent - n_acked)
@@ -211,6 +226,11 @@ def main():
     if rtt.size:
         lines.append(f"RTT ms: median={pct(rtt, 50):.1f} p99={pct(rtt, 99):.1f} "
                      f"max={rtt.max():.1f}")
+    n_send_err = int(meta.get("send_errors", 0))
+    if n_send_err:
+        lines.append(f"sender interface errors: {n_send_err} (WiFi dropped the Mac's "
+                     f"IP mid-send; see send_errors.csv) -- these are full L2/L3 drops, "
+                     f"worse than a scan blackout")
     lines.append(f"WiFi samples: {wifi_t.size}  parsed WiFi events: {len(events)}")
     lines.append(f"loss events (missing-seq runs): {len(loss_events)}")
     lines.append("")

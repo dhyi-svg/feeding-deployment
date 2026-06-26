@@ -5,6 +5,11 @@
         🎙 Enable takeover button
       </button>
     </div>
+    <div v-if="!audioEnabled" class="enable-audio-wrap">
+      <button class="enable-audio-btn" @click="enableAudio">
+        🔊 Enable voice
+      </button>
+    </div>
     <div v-if="showTakeOver" class="global-controls">
       <button
         v-if="showBaseControl"
@@ -39,7 +44,8 @@ export default {
       _raf: null,
       _ros: null,
       _destroyed: false,
-      _reconnectTimer: null
+      _reconnectTimer: null,
+      audioEnabled: false
     }
   },
   computed: {
@@ -126,6 +132,42 @@ export default {
           this.skillCurrent = (typeof parsed.current === 'number') ? parsed.current : -1
         } catch (e) { /* ignore non-JSON */ }
       })
+      // The robot publishes spoken prompts (bite-transfer cues, etc.) on /speak.
+      // We voice them on this device (the iPad) via the Web Speech API instead of
+      // a speaker wired to the compute machine. Re-created on reconnect, like above.
+      this.speakListener = new ROSLIB.Topic({
+        ros,
+        name: '/speak',
+        messageType: 'std_msgs/String'
+      })
+      this.speakListener.subscribe((msg) => this.speakText(msg.data))
+    },
+    enableAudio () {
+      // iPad Safari blocks speechSynthesis until speak() is first called from an
+      // explicit user gesture with a real utterance (an empty/silent one doesn't
+      // unlock it). This button is that gesture; "Voice enabled" both unlocks
+      // speech for the rest of the session and audibly confirms output works.
+      this.audioEnabled = true
+      if (!('speechSynthesis' in window)) {
+        alert('This browser has no speech synthesis support.')
+        return
+      }
+      try {
+        window.speechSynthesis.cancel()
+        const u = new SpeechSynthesisUtterance('Voice enabled')
+        u.lang = 'en-US'
+        window.speechSynthesis.speak(u)
+      } catch (e) { /* ignore */ }
+    },
+    speakText (text) {
+      if (!text || !('speechSynthesis' in window)) return
+      // Drop any queued/stale utterance so prompts don't pile up if they arrive
+      // faster than they're spoken.
+      window.speechSynthesis.cancel()
+      const utterance = new SpeechSynthesisUtterance(text)
+      utterance.lang = 'en-US'
+      utterance.rate = 0.95
+      window.speechSynthesis.speak(utterance)
     },
     controlArm () {
       if (this.takeoverPublisher) {
@@ -278,6 +320,29 @@ nav a.router-link-exact-active {
   color: #0D1B2A;
   border: 3px solid #2EC4B6;
   box-shadow: 0 4px 14px rgba(46, 196, 182, .45);
+  cursor: pointer;
+}
+.enable-audio-wrap {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 2vh;
+  z-index: 1100;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+.enable-audio-btn {
+  pointer-events: auto;
+  font-family: Verdana, sans-serif;
+  font-size: 2.6vh;
+  font-weight: 800;
+  padding: 1.6vh 4vw;
+  border-radius: 999px;
+  background: #F0A500;
+  color: #0D1B2A;
+  border: 3px solid #F0A500;
+  box-shadow: 0 4px 14px rgba(240, 165, 0, .45);
   cursor: pointer;
 }
 </style>
