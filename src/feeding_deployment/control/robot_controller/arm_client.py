@@ -177,7 +177,7 @@ if __name__ == "__main__":
     # test_pose = [0.08472398668527603, -0.2637099027633667, 0.038250695914030075, -0.5053791193878973, 0.49333470475951946, 0.5047943064799332, -0.4963824361437406]
 
 
-    # arm_client_interface.execute_command(JointCommand(config.behind_back_retract_pos))
+    arm_client_interface.execute_command(JointCommand(config.left_back_retract_pos))
     # arm_client_interface.execute_command(JointCommand(config.behind_intermediate_pos))
     # arm_client_interface.execute_command(JointCommand(config.above_plate_holder_pos))
     # arm_client_interface.execute_command(CloseGripperCommand())
@@ -185,10 +185,33 @@ if __name__ == "__main__":
 
     # print current state
     state = arm_client_interface.get_state()
-    print("Current joint positions:", state["position"])
-    print("Current end-effector pose:", state["ee_pos"])
+
+    print("Current joint positions:", ", ".join([str(x) for x in state["position"]]))
+    print("Current end-effector pose:", ", ".join([str(x) for x in state["ee_pos"]]))
     ee_pose = state["ee_pos"]
     joint_positions = state["position"]
+
+    # inside_wipe_pos = [0.85825826, 0.95030489, -3.09761987, -2.15569468, -0.7778742, -0.06054484, 0.06848732]
+    # inside_wipe_pose = [0.225377038, -0.274041951, -0.0744716004, -0.706883089, 0.707329435, 0.000993771659, -0.000617011788]
+
+    # above_wipe_pos = [0.6328300587626073, 0.6887907964323334, -2.7848718129536034, -2.1832253731850066, -0.6606903190323079, -0.3828911920361806, -0.05568456786468445]
+    # above_wipe_pose = [0.2253306359052658, -0.2739931046962738, 0.025486968457698822, -0.7068899132210025, 0.7073224732814735, 0.0010873045054919429, -0.0006222108123638986]
+
+    # outside_wipe_pose = [0.225377038, -0.36, -0.0744716004, -0.706883089, 0.707329435, 0.000993771659, -0.000617011788]
+
+    # outside_above_wipe_pose = [0.22536281, -0.36181583, 0.02330974, -0.70688359, 0.70732895, 0.00090122, -0.00073724]
+
+    # arm_client_interface.execute_command(JointCommand(above_wipe_pos))
+    # arm_client_interface.execute_command(CartesianCommand(inside_wipe_pose[:3], inside_wipe_pose[3:]))
+    # arm_client_interface.execute_command(OpenGripperCommand())
+    # arm_client_interface.execute_command(CartesianCommand(outside_wipe_pose[:3], outside_wipe_pose[3:]))
+    # input("Press enter to continue...")
+    # arm_client_interface.execute_command(CartesianCommand(outside_above_wipe_pose[:3], outside_above_wipe_pose[3:]))
+
+    # arm_client_interface.execute_command(CloseGripperCommand())
+
+    # above_ee_pose = [ee_pose[0], ee_pose[1], ee_pose[2] + 0.1, ee_pose[3], ee_pose[4], ee_pose[5], ee_pose[6]]
+    # arm_client_interface.execute_command(CartesianCommand(above_ee_pose[:3], above_ee_pose[3:]))
 
     def pick_plate_from_fridge():
         arm_client_interface.execute_command(JointCommand(config.left_back_retract_pos))
@@ -216,7 +239,11 @@ if __name__ == "__main__":
 
     # pick_plate_from_table()
 
-    arm_client_interface.execute_command(JointCommand(config.left_back_retract_pos))
+    # arm_client_interface.execute_command(JointCommand(config.retract_pos))
+    # arm_client_interface.execute_command(JointCommand(config.utensil_above_mount_pos))
+
+    # ee_pose = [0.22307398915290833, -0.2535272538661957, -0.01640208810567856, 0.7071, -0.7071, 0.0, 0.0]
+    # arm_client_interface.execute_command(CartesianCommand(ee_pose[:3], ee_pose[3:]))
 
     # set speed to medium
     # arm_client_interface.set_speed("high")

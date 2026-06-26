@@ -204,7 +204,10 @@ class PerceptionInterface:
         return joint_state
 
     def get_camera_data(self):  # Rajat ToDo: Add return type
-        camera_color_data, camera_info_data, camera_depth_data, _ = self._head_perception.get_camera_data()
+        cam_data = self._realsense.get_camera_data()
+        camera_color_data = cam_data["rgb_image"]
+        camera_info_data = cam_data["camera_info"]
+        camera_depth_data = cam_data["depth_image"]
         camera_info = CustomCameraInfo(fx=camera_info_data.K[0], fy=camera_info_data.K[4], cx=camera_info_data.K[2], cy=camera_info_data.K[5])
         return camera_color_data, camera_info, camera_depth_data
     

@@ -404,19 +404,36 @@ class WebInterface:
 
         self.current_page = "meal_assistance"
 
+        # Drop stale messages so we wait for the ready for THIS navigation.
+        self.clear_received_messages()
+
         # Jump to next bite selection page
-        self._send_message({"state": "bite_selection", "status": "jump"})
+        jump_msg = {"state": "bite_selection", "status": "jump"}
+        self._send_message(jump_msg)
+
+        # Wait until the page has mounted and reports it's ready for data before
+        # sending it. /robot_to_webapp is not latched and the bite_selection page
+        # re-subscribes asynchronously on mount, so a jump (and the image/data
+        # that follow) published on a fixed timer can be dropped -- leaving the
+        # page waiting forever, re-emitting ready_for_initial_data, until it times
+        # out and bounces back to task selection (the flicker). Resend the jump
+        # until the page reports ready (mirrors the preference_context page).
+        self.get_required_web_interface_message(
+            lambda m: (
+                m.get("state") == "bite_selection"
+                and m.get("status") == "ready_for_initial_data"
+            ),
+            resend=lambda: self._send_message(jump_msg),
+        )
 
         # Send required data for the next bite selection page
-        time.sleep(0.5) # simulate delay, needed for web interface
-
         self._send_image(plate_image)
         time.sleep(0.2)
-        self._send_message({"n_food_types": n_solid_food_types, "data": bite_data, "current_bite": predicted_bite})  
+        self._send_message({"n_food_types": n_solid_food_types, "data": bite_data, "current_bite": predicted_bite})
         time.sleep(0.2)
         self._send_message({"n_ordering": n_dip_food_types, "data": dip_data})
         # set autocontinue timeout
-        time.sleep(0.5)
+        time.sleep(0.2)
         self._send_message({"state": "auto_time", "status": str(autocontinue_timeout)})
 
         bite_msg_dict, dip_msg_dict = None, None

@@ -665,71 +665,87 @@ class _Runner:
 
         self._pref_session.ask(_INITIAL_PREF_DIMS)
 
-        if not resume:
+        if resume:
+            # The prep pipeline index to resume from was restored from the
+            # checkpoint (steps before it completed on the prior run).
+            assert self._resume_prep_step is not None, "prep-phase resume requires resume_prep_step"
+            resume_from_step = self._resume_prep_step
+        else:
             # First durable sim checkpoint of the meal, written BEFORE any skill
             # executes, so even a kill during the very first navigation is
             # resumable (the initial prefs already ride in pref_session.p). This
             # also overwrites any stale last_state.p left by a previous meal.
-            # Skipped on resume: a checkpoint already exists and the numbered
-            # counter has been seeded from it.
+            # resume_prep_step=0 -> a resume from here re-runs the whole pipeline.
             self._save_state(
                 self.sim.get_current_state(), self.current_atoms,
-                phase="prep", completed_skill="meal_start",
+                phase="prep", completed_skill="meal_start", resume_prep_step=0,
             )
-        self._run_meal_preparation()
+            resume_from_step = 0
 
-    def _run_meal_preparation(self) -> None:
-        """Fetch the plate from the fridge, ask the microwave preference, route
-        through the microwave (or not) per the planner, and place on the table,
-        asking the table dims once the plate is down."""
+        self._run_meal_preparation(resume_from_step)
+
+    # Fixed, ordered prep pipeline. These indices ARE the resume_prep_step values
+    # saved in checkpoints, so they must stay stable. Steps with a process_user_command
+    # checkpoint their progress; the two ask() steps do not (their dims are restored
+    # via pref_session.p and re-asking is idempotent).
+    _PREP_PLACE_ON_HOLDER = 0
+    _PREP_CLOSE_FRIDGE = 1
+    _PREP_MICROWAVE = 2
+    _PREP_PLACE_ON_TABLE = 3
+    _PREP_TABLE_DIMS = 4
+
+    def _run_meal_preparation(self, resume_from_step: int = 0) -> None:
+        """Run the fixed prep pipeline from ``resume_from_step``.
+
+        Each step has a stable index (the ``_PREP_*`` constants). Steps before
+        ``resume_from_step`` completed on a prior run and are skipped. The
+        in-progress step (== resume_from_step) is re-issued; its process_user_command
+        re-plans from the restored atoms, so the planner emits only the remaining
+        sub-skills (e.g. an already-heated plate keeps FoodHeated, so no microwave
+        detour). This replaces the old per-command "skip if already achieved"
+        guards -- completed work is skipped by index, not re-issued-then-detected."""
         session = self._pref_session
 
-        # 1. Fridge -> holder (fridge color correction happens during pickup).
-        #    skip_if_already_achieved: on a resume past this step the plate is
-        #    already on the holder, so re-issuing the command would replan a
-        #    redundant PickPlateFromHolder (its precondition Holding(plate) is
-        #    false) and re-manipulate the plate. Skip it instead.
-        self.process_user_command(
-            GroundHighLevelAction(self.hla_name_to_hla["PlacePlateOnHolder"], (self.plate, self.holder)),
-            phase="prep",
-            skip_if_already_achieved=True,
-        )
+        if resume_from_step <= self._PREP_PLACE_ON_HOLDER:
+            # Fridge -> holder (fridge color correction happens during the pickup).
+            self.process_user_command(
+                GroundHighLevelAction(self.hla_name_to_hla["PlacePlateOnHolder"], (self.plate, self.holder)),
+                phase="prep", prep_step=self._PREP_PLACE_ON_HOLDER,
+            )
 
-        # 2. Close the fridge before pausing to ask the microwave preference.
-        #    The fridge pickup left the door open (OpenDoor drops SafeToNavigate),
-        #    and the planner would otherwise only close it as the first step of
-        #    PlacePlateOnTable below -- i.e. AFTER the ask -- leaving the fridge
-        #    hanging open while we wait on the user. Close it explicitly here;
-        #    PlacePlateOnTable then needs no close. Same total motion, reordered.
-        #    skip_if_already_achieved: a no-op if the fridge is already shut.
-        self.process_user_command(
-            GroundHighLevelAction(self.hla_name_to_hla["CloseDoor"], (self.fridge,)),
-            phase="prep",
-            skip_if_already_achieved=True,
-        )
+        if resume_from_step <= self._PREP_CLOSE_FRIDGE:
+            # Close the fridge before pausing to ask the microwave preference, so it
+            # is not left hanging open while we wait on the user (the planner would
+            # otherwise close it only as the first step of PlacePlateOnTable).
+            self.process_user_command(
+                GroundHighLevelAction(self.hla_name_to_hla["CloseDoor"], (self.fridge,)),
+                phase="prep", prep_step=self._PREP_CLOSE_FRIDGE,
+            )
 
-        # 3. Microwave preference (single dim). "no microwave" sets FoodHeated
-        #    so the planner serves directly; a duration leaves it unset so the
-        #    planner routes through the microwave and writes the BT duration.
-        session.ask(["microwave_time"])
-        microwave_duration = session.apply_microwave(self.current_atoms, GroundAtom(FoodHeated, []))
-        if microwave_duration is None:
-            print("Microwave preference: no microwave (FoodHeated added to planner state).")
-        else:
-            print(f"Microwave preference: {microwave_duration}s (planner will include microwave steps).")
+        if resume_from_step <= self._PREP_MICROWAVE:
+            # Microwave preference (single dim). "no microwave" sets FoodHeated so
+            # the planner serves directly; a duration leaves it unset so the planner
+            # routes through the microwave and writes the BT duration. Skipped by
+            # index on a resume past here -> an already-heated plate's FoodHeated is
+            # preserved (no re-heat).
+            session.ask(["microwave_time"])
+            microwave_duration = session.apply_microwave(self.current_atoms, GroundAtom(FoodHeated, []))
+            if microwave_duration is None:
+                print("Microwave preference: no microwave (FoodHeated added to planner state).")
+            else:
+                print(f"Microwave preference: {microwave_duration}s (planner will include microwave steps).")
 
-        # 4. (Holder ->) [microwave ->] table. Microwave color correction
-        #    happens during the microwave pickup if the plate is routed there.
-        #    skip_if_already_achieved: on a resume past this step the plate is
-        #    already on the table -> skip rather than redo the journey.
-        self.process_user_command(
-            GroundHighLevelAction(self.hla_name_to_hla["PlacePlateOnTable"], (self.plate, self.table)),
-            phase="prep",
-            skip_if_already_achieved=True,
-        )
+        if resume_from_step <= self._PREP_PLACE_ON_TABLE:
+            # (Holder ->) [microwave ->] table. Microwave color correction happens
+            # during the microwave pickup if the plate is routed there.
+            self.process_user_command(
+                GroundHighLevelAction(self.hla_name_to_hla["PlacePlateOnTable"], (self.plate, self.table)),
+                phase="prep", prep_step=self._PREP_PLACE_ON_TABLE,
+            )
 
-        # 5. Table dims, just before feeding.
-        session.ask(_TABLE_PREF_DIMS)
+        if resume_from_step <= self._PREP_TABLE_DIMS:
+            # Table dims, just before feeding.
+            session.ask(_TABLE_PREF_DIMS)
 
     def _finalize_preference_session(self) -> None:
         """One memory update at meal end with the full finalized bundle."""
@@ -908,7 +924,7 @@ class _Runner:
     def process_user_command(
         self, user_command: GroundHighLevelAction | set[GroundAtom],
         phase: str = "feeding",
-        skip_if_already_achieved: bool = False,
+        prep_step: int | None = None,
     ) -> None:
         """Process a user command.
 
@@ -917,24 +933,14 @@ class _Runner:
         (the deterministic plate journey), while feeding pickups get their fixed
         after_*_pickup.p recovery state. See CheckpointStore.
 
-        ``skip_if_already_achieved``: opt-in for the deterministic prep replay on
-        resume. When set and the command's add-effects already hold, the command
-        is treated as done and skipped (rather than replanning to its now-false
-        preconditions and re-manipulating the plate). MUST stay False for feeding
-        commands -- e.g. a re-queued bite leaves ToolTransferDone set, and we must
-        still re-acquire and transfer on the next request."""
+        ``prep_step``: the index of this command in the fixed prep pipeline (see
+        _run_meal_preparation), or None for feeding/finish. Each sub-skill
+        checkpoint records ``resume_prep_step`` = the prep step to (re)start from
+        on resume: ``prep_step + 1`` once the command's last sub-skill completes,
+        else ``prep_step`` (re-run it; the planner re-derives the remaining
+        sub-skills from the restored atoms)."""
 
         print(f"Working towards user command: {user_command}")
-
-        # Resume optimization: a deterministic prep command whose effects already
-        # hold was completed on a prior run -- skip it instead of replanning a
-        # redundant pickup to satisfy its (now-false) preconditions.
-        if isinstance(user_command, GroundHighLevelAction) and skip_if_already_achieved:
-            effects = user_command.get_operator().add_effects
-            if effects and effects.issubset(self.current_atoms):
-                print(f"{user_command} effects already satisfied; skipping (already "
-                      f"completed on a prior run).")
-                return
 
         # Plan to the preconditions of the HLA.
         if isinstance(user_command, GroundHighLevelAction):
@@ -1062,9 +1068,17 @@ class _Runner:
             # Save the latest state in case we want to resume execution
             # after a crash. skill_plan_names[i] is this skill's BT filename
             # (or HLA name fallback) -- the same string used for checkpoint names.
+            # resume_prep_step advances to the next prep step once this command's
+            # LAST sub-skill is done (the macro is complete); otherwise it stays
+            # on this step so resume re-issues it and the planner finishes it.
+            resume_prep_step = None
+            if prep_step is not None:
+                macro_complete = (i == len(plan_hlas) - 1)
+                resume_prep_step = prep_step + 1 if macro_complete else prep_step
             self._save_state(
                 sim_state, self.current_atoms,
                 phase=phase, completed_skill=skill_plan_names[i],
+                resume_prep_step=resume_prep_step,
             )
 
     def make_video(self, outfile: Path) -> None:
@@ -1079,16 +1093,22 @@ class _Runner:
         *,
         phase: str,
         completed_skill: str,
+        resume_prep_step: int | None = None,
     ) -> None:
         """Checkpoint after a completed sub-HLA. The store writes last_state.p
         plus any numbered/named target for this skill. The preference snapshot
         rides along so resume continues without re-asking and the end-of-meal
-        learning update stays honest."""
+        learning update stays honest.
+
+        ``resume_prep_step`` is the prep pipeline index to (re)start from if this
+        checkpoint is resumed (None for feeding/finish, where resume routes by
+        phase and bypasses prep). See _run_meal_preparation."""
         core_payload = {
             "sim_state": sim_state,
             "atoms": atoms,
             "physical_profile": self.physical_profile_label,
             "day": self._day,
+            "resume_prep_step": resume_prep_step,
             "preference_session": (
                 self._pref_session.capture_state() if self._pref_session is not None else None
             ),
@@ -1101,7 +1121,10 @@ class _Runner:
         self.current_atoms = payload["atoms"]
         self._resume_phase = payload["phase"]
         self._resume_physical_profile = payload["physical_profile"]
-        self._resume_day = payload.get("day")  # absent in pre-existing checkpoints
+        self._resume_day = payload["day"]
+        # Prep pipeline index to (re)start from (None for feeding/finish, which
+        # bypass prep on resume). See _run_meal_preparation.
+        self._resume_prep_step = payload["resume_prep_step"]
         # Prefer the standalone preference snapshot (written on every correction)
         # over the sim checkpoint's embedded copy (only as fresh as the last
         # sub-skill), so the latest corrections are restored regardless of which
