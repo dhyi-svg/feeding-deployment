@@ -179,7 +179,7 @@ def capture_wifi_events(t0_wall, path):
         out = subprocess.run(
             ["log", "show", "--start", start_str, "--predicate", predicate,
              "--info", "--style", "syslog"],
-            capture_output=True, text=True, timeout=120).stdout
+            capture_output=True, text=True, timeout=600).stdout
         with open(path, "w") as f:
             f.write(out)
         print(f"captured WiFi event log -> {path} ({out.count(chr(10))} lines)")
