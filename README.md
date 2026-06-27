@@ -148,9 +148,9 @@ Builds session `robot` as 3 stacked panes (run on the NUC):
 ### Permanence
 Each script installs `prefix + r` at build time (lasts for the tmux server's
 life). To persist it across a full tmux-server restart, add the matching
-`bind r ...` line to that machine's `~/.tmux.conf` (see `scripts/nuc.tmux.conf`
-for the NUC template). Panes are resolved by **geometry**, not title, because
-programs like roscore/htop overwrite pane titles.
+`bind r ...` line to that machine's `~/.tmux.conf`. Panes are resolved by
+**geometry**, not title, because programs like roscore/htop overwrite pane
+titles.
 
 ## Run Feeding Demo in Simulation
 1. Launch the roslaunch for visualization / publish tfs:
