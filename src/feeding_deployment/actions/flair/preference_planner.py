@@ -10,6 +10,7 @@ import json
 
 import anthropic
 import ast
+from feeding_deployment.utils.llm_config import DEFAULT_CLAUDE_MODEL
 
 class GPTInterface:
     def __init__(self):
@@ -22,7 +23,7 @@ class GPTInterface:
         (Method name kept for backward compatibility with callers.)
         """
         response = self.client.messages.create(
-                   model='claude-opus-4-8',
+                   model=DEFAULT_CLAUDE_MODEL,
                    max_tokens=8192,
                    messages=[{'role': 'user', 'content': prompt}],
                   )

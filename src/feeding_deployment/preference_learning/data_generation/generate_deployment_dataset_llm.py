@@ -22,8 +22,9 @@ from feeding_deployment.preference_learning.config.preference_bundle import PREF
 from feeding_deployment.preference_learning.data_generation.prompts.preference_generation import (
     get_preference_generation_prompt,
 )
+from feeding_deployment.utils.llm_config import DEFAULT_CLAUDE_MODEL
 
-DEFAULT_MODEL = "claude-opus-4-8"
+DEFAULT_MODEL = DEFAULT_CLAUDE_MODEL
 
 
 def _strip_json_fences(raw: str) -> str:

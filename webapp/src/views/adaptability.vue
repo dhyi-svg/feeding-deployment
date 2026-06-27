@@ -31,6 +31,11 @@
           <img alt="send" src="../assets/send.png">
         </button>
       </div>
+      <p class="voice-status" :class="{ empty: !voiceStatus }" aria-live="polite">
+        <img alt="" src="../assets/voice.png">
+        <span v-if="voiceStatus">{{ voiceStatus }}</span>
+        <span v-else>&nbsp;</span>
+      </p>
 
       <p class="talk-lbl">Robot's response</p>
       <div class="response-box">{{ customOrder || 'Waiting for the text response...' }}</div>
@@ -57,6 +62,7 @@ export default {
       transcript: '',
       isRecognizing: false,
       customOrder: '',
+      voiceStatus: '',
     }
   },
   mounted () {
@@ -65,6 +71,10 @@ export default {
     this.initRosConnection()
   },
   beforeRouteLeave (to, from, next) {
+    if (this.recognition && this.isRecognizing) {
+      this.recognition.stop();
+    }
+
     if (this.listener) {
       this.listener.unsubscribe();
       this.listener = null;
@@ -110,46 +120,75 @@ export default {
     cleartheinput() {
       this.transcript = '';
     },
-    startSpeechRecognition() {
+    releaseTakeoverMic() {
+      return new Promise((resolve) => {
+        let settled = false;
+        const done = () => {
+          if (settled) return;
+          settled = true;
+          resolve();
+        };
+
+        window.dispatchEvent(new CustomEvent('release-takeover-mic', {
+          detail: { done }
+        }));
+
+        setTimeout(done, 300);
+      });
+    },
+    async startSpeechRecognition() {
+      if (this.isRecognizing) {
+        return;
+      }
+
+      if (this.$refs.textarea) {
+        this.$refs.textarea.blur();
+      }
+
+      await this.releaseTakeoverMic();
+
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        this.voiceStatus = 'speech recognition not supported in this browser';
+        return;
+      }
 
       if (!this.recognition) {
-
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         this.recognition = new SpeechRecognition();
         this.recognition.lang = 'en-US';
         this.recognition.continuous = false;
+
+        this.recognition.onstart = () => {
+          this.voiceStatus = 'listening...';
+        };
 
         this.recognition.onresult = (event) => {
 
           this.transcript += event.results[0][0].transcript;
           this.isRecognizing = false;
+          this.voiceStatus = '';
         };
 
         this.recognition.onerror = (event) => {
           this.isRecognizing = false;
-          this.focusTextarea();
+          this.voiceStatus = 'error: ' + (event.error || 'unknown') +
+            (event.message ? ' - ' + event.message : '');
         };
 
         this.recognition.onend = () => {
           this.isRecognizing = false;
-          this.focusTextarea();
+          if (this.voiceStatus === 'listening...') this.voiceStatus = 'no speech captured';
         };
       }
 
-      if (this.isRecognizing) {
-        this.recognition.stop();
-      }
-
       this.isRecognizing = true;
-      this.recognition.start();
-
-      this.$nextTick(() => {
-        this.focusTextarea();
-      });
-    },
-    focusTextarea() {
-
-      this.$refs.textarea.focus();
+      this.voiceStatus = 'starting...';
+      try {
+        this.recognition.start();
+      } catch (e) {
+        this.isRecognizing = false;
+        this.voiceStatus = 'start failed: ' + (e && e.message ? e.message : e);
+      }
     },
     initPublisher() {
 

@@ -19,6 +19,7 @@ from feeding_deployment.preference_learning.methods.utils import (
 
 from feeding_deployment.preference_learning.methods.prediction_model import PredictionModel
 from feeding_deployment.preference_learning.methods.utils import PREF_FIELDS
+from feeding_deployment.utils.llm_config import DEFAULT_CLAUDE_MODEL
 
 
 class _Tee:
@@ -43,7 +44,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-meals", type=int, default=0)
     p.add_argument("--num-rollouts", type=int, default=1)
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--openai-model", default="claude-opus-4-8")
+    p.add_argument("--openai-model", default=DEFAULT_CLAUDE_MODEL)
     p.add_argument("--embed-model", default="text-embedding-3-small")
     p.add_argument("--ablation", choices=["full", "ltm_only", "em_only", "no_memory"], default="full")
     p.add_argument("--days", type=int, default=0, help="Evaluate only the first N days (0 = use all days in dataset).")

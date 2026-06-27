@@ -23,6 +23,8 @@ import anthropic
 import PIL.Image
 from tomsutils.llm import LargeLanguageModel
 
+from feeding_deployment.utils.llm_config import DEFAULT_CLAUDE_MODEL
+
 # Opus 4.7/4.8 and the Fable/Mythos family removed the sampling parameters
 # (temperature / top_p / top_k); sending temperature to them returns HTTP 400.
 # Only forward temperature on models that still accept it (Opus 4.6 and older,
@@ -45,7 +47,7 @@ class AnthropicLLM(LargeLanguageModel):
 
     def __init__(
         self,
-        model_name: str = "claude-opus-4-8",
+        model_name: str = DEFAULT_CLAUDE_MODEL,
         cache_dir: Path = Path("llm_cache"),
         max_tokens: int = 700,
         use_cache_only: bool = False,

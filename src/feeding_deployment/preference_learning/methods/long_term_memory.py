@@ -18,6 +18,7 @@ from feeding_deployment.preference_learning.methods.utils import (
     _episode_text,
     _extract_truth_bundle,
 )
+from feeding_deployment.utils.llm_config import DEFAULT_CLAUDE_MODEL
 
 
 def _extract_json_object(text: str) -> str:
@@ -112,17 +113,11 @@ class LongTermMemoryModel:
                 system="You write concise, faithful preference summaries. Respond with a single JSON object and nothing else.",
                 messages=[
                     {"role": "user", "content": prompt},
-                    # Prefill forces the model to start the JSON object immediately,
-                    # preventing any prose preamble before the JSON.
-                    {"role": "assistant", "content": "{"},
                 ],
             )
 
         resp = self._retry(_call)
         raw = ("".join(b.text for b in resp.content if b.type == "text")).strip()
-        # Re-attach the prefilled "{" that the model continues from.
-        if not raw.startswith("{"):
-            raw = "{" + raw
         new_ltm_summary = _extract_json_object(raw)
     
         if self.logs_dir:
@@ -147,7 +142,7 @@ def parse_args_ltm() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Generate and log LTM summaries day-by-day from a dataset file.")
     p.add_argument("--data-file", required=True, help="Path to one JSON dataset file.")
     p.add_argument("--log-dir", required=True, help="Directory to write logs (will be created).")
-    p.add_argument("--openai-model", default="claude-opus-4-8", help="Chat model for LTM (default: claude-opus-4-8).")
+    p.add_argument("--openai-model", default=DEFAULT_CLAUDE_MODEL, help=f"Chat model for LTM (default: {DEFAULT_CLAUDE_MODEL}).")
     p.add_argument("--api-key", default="", help="Anthropic API key (optional).")
     return p.parse_args()
 

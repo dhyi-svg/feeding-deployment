@@ -41,7 +41,7 @@ import signal
 import subprocess
 import sys
 import time
-from logging.handlers import RotatingFileHandler
+from collections import deque
 
 # --------------------------------------------------------------------------- #
 # Thresholds. Tuned for this laptop (31 GB RAM, 2 GB swap, RTX 4090 mobile).
@@ -93,8 +93,37 @@ PROTECTED_PATTERNS = [
 KILL_HOLD_SECONDS = 8.0    # CRIT must persist this long before we kill
 KILL_COOLDOWN_SECONDS = 20.0  # wait after a kill for memory to free before next
 GPU_POLL_EVERY = 3         # poll nvidia-smi every N ticks (it costs ~50ms)
+LOG_WINDOW_SECONDS = 20 * 60
 
 log = logging.getLogger("health")
+
+
+class RollingWindowFileHandler(logging.Handler):
+    """Keep a log file containing only records from the last N seconds."""
+
+    def __init__(self, filename, window_seconds):
+        super().__init__()
+        self.filename = filename
+        self.window_seconds = float(window_seconds)
+        self.records = deque()
+
+    def emit(self, record):
+        try:
+            line = self.format(record)
+            self.records.append((record.created, line))
+            cutoff = record.created - self.window_seconds
+            while self.records and self.records[0][0] < cutoff:
+                self.records.popleft()
+            log_dir = os.path.dirname(self.filename)
+            if log_dir:
+                os.makedirs(log_dir, exist_ok=True)
+            tmp = f"{self.filename}.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                for _, kept_line in self.records:
+                    f.write(kept_line + "\n")
+            os.replace(tmp, self.filename)
+        except Exception:
+            self.handleError(record)
 
 
 # --------------------------------------------------------------------------- #
@@ -350,8 +379,10 @@ def setup_logging(logfile):
     ch.setLevel(logging.WARNING)
     log.addHandler(ch)
     if logfile:
-        os.makedirs(os.path.dirname(logfile), exist_ok=True)
-        fh = RotatingFileHandler(logfile, maxBytes=2_000_000, backupCount=3)
+        log_dir = os.path.dirname(logfile)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
+        fh = RollingWindowFileHandler(logfile, LOG_WINDOW_SECONDS)
         fh.setFormatter(fmt)
         fh.setLevel(logging.INFO)
         log.addHandler(fh)

@@ -5,6 +5,10 @@ try:
     import rospy
     from std_msgs.msg import Bool
     from sensor_msgs.msg import JointState
+    from feeding_deployment_msgs.srv import (
+        SetCollisionThreshold,
+        SetCollisionThresholdResponse,
+    )
     ROSPY_IMPORTED = True
 except ModuleNotFoundError:
     ROSPY_IMPORTED = False
@@ -22,8 +26,9 @@ from pybullet_helpers.joint import JointPositions, JointVelocities
 class CollisionSensor:
     """See docstring above."""
 
-    # Threshold for collision detection
-    COLLISION_THRESHOLD = 25.0
+    # Default threshold for collision detection. HLAs can temporarily override
+    # this at runtime via the /set_collision_threshold service.
+    DEFAULT_COLLISION_THRESHOLD = 10.0
 
     def __init__(self):
 
@@ -49,6 +54,23 @@ class CollisionSensor:
         self._disable_collision_sensor = False
         self._disable_collision_sensor_sub = rospy.Subscriber(
             "/disable_collision_sensor", Bool, self._disable_collision_sensor_callback
+        )
+
+        self._collision_threshold = self.DEFAULT_COLLISION_THRESHOLD
+        self._set_threshold_srv = rospy.Service(
+            "/set_collision_threshold",
+            SetCollisionThreshold,
+            self._set_threshold_callback,
+        )
+
+    def _set_threshold_callback(
+        self, req: "SetCollisionThreshold"
+    ) -> "SetCollisionThresholdResponse":
+        previous = self._collision_threshold
+        self._collision_threshold = req.threshold
+        print(f"Collision threshold set: {previous:.1f} -> {req.threshold:.1f}")
+        return SetCollisionThresholdResponse(
+            success=True, previous_threshold=previous
         )
 
     def _disable_collision_sensor_callback(self, msg: "Bool") -> None:
@@ -135,7 +157,7 @@ class CollisionSensor:
             self._last_print_time = now
 
         # Very high error means collision, otherwise model error
-        if max_error > self.COLLISION_THRESHOLD:
+        if max_error > self._collision_threshold:
             return True
         
         return False

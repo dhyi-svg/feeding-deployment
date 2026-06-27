@@ -73,6 +73,7 @@ class NavigateHLA(HighLevelAction):
         "rate_hz": 10.0,
         "window_s": 1.0,
         "warmup_s": 1.0,
+        "localization_settle_s": 30.0,
         "success_xy_m": None,       # None => half of move_base xy_goal_tolerance
         "success_yaw_rad": None,    # None => half of move_base yaw_goal_tolerance
         "divergence_margin_m": 0.03,
@@ -364,6 +365,16 @@ class NavigateHLA(HighLevelAction):
     def _clamp(value: float, limit: float) -> float:
         return max(-limit, min(limit, value))
 
+    def _wait_for_localization_settle(self, duration_s: float, reason: str) -> None:
+        """Give map-frame localization time to settle before reading residual error."""
+        if duration_s <= 0.0:
+            return
+        print(f"  Waiting {duration_s:.0f}s for localization to settle before {reason}...")
+        deadline = rospy.Time.now() + rospy.Duration(duration_s)
+        while not rospy.is_shutdown() and rospy.Time.now() < deadline:
+            remaining_s = (deadline - rospy.Time.now()).to_sec()
+            rospy.sleep(min(1.0, max(0.0, remaining_s)))
+
     def _refine_cmd(
         self, x: float, y: float, yaw: float,
         gx: float, gy: float, goal_yaw: float,
@@ -480,6 +491,10 @@ class NavigateHLA(HighLevelAction):
 
         # Residual pose error the moment move_base declared the goal reached,
         # BEFORE any refinement driving.
+        self._wait_for_localization_settle(
+            float(cfg["localization_settle_s"]),
+            "measuring pre-refinement residual error",
+        )
         _residual("Goal reached. Residual error vs goal")
 
         try:

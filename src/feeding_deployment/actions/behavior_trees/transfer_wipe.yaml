@@ -41,10 +41,10 @@ parameters:
     description: "Distance from the wipe tip to the user's mouth for the wipe transfer."
     space:
       type: "Box"
-      lower: 0.1
-      upper: 0.2
+      lower: 0.05
+      upper: 0.15
     is_user_editable: True
-    value: 0.15
+    value: 0.1
   - name: "AskForConfirmationInitiatingTransferSequence"
     description: "Ask for confirmation on the web app (web interface) before initiating the transfer sequence for wiping. True is 1 and False is 0."
     space:

@@ -1,4 +1,5 @@
 from typing import Any
+from contextlib import nullcontext
 
 import time
 
@@ -17,10 +18,18 @@ from feeding_deployment.actions.base import (
     DoorClosed,
     SafeToNavigate,
 )
+from feeding_deployment.safety.collision_threshold import collision_threshold
 
 
 class OpenDoorHLA(HighLevelAction):
     """Open a door (fridge or microwave)."""
+
+    # Collision threshold applied while moving into the handle grasp pose, where
+    # contact with the handle produces larger torque error. Tune on the real
+    # robot; reverts to the sensor default automatically after the move.
+    PULL_COLLISION_THRESHOLD = 25.0
+    SLIGHT_PUSH_COLLISION_THRESHOLD = 15.0
+    HARD_PUSH_COLLISION_THRESHOLD = 25.0
 
     def get_name(self) -> str:
         return "OpenDoor"
@@ -61,6 +70,24 @@ class OpenDoorHLA(HighLevelAction):
         if self.robot_interface is not None:
             self.robot_interface.set_speed(speed)
 
+        # Temporarily raise the collision threshold while grasping the handle
+        # (real robot only; in sim there is no collision sensor / service).
+        pull_threshold = (
+            collision_threshold(self.PULL_COLLISION_THRESHOLD)
+            if self.robot_interface is not None
+            else nullcontext()
+        )
+        slight_push_threshold = (
+            collision_threshold(self.SLIGHT_PUSH_COLLISION_THRESHOLD)
+            if self.robot_interface is not None
+            else nullcontext()
+        )
+        hard_push_threshold = (
+            collision_threshold(self.HARD_PUSH_COLLISION_THRESHOLD)
+            if self.robot_interface is not None
+            else nullcontext()
+        )
+
         print("Opening fridge door ...")
         # return
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
@@ -93,18 +120,20 @@ class OpenDoorHLA(HighLevelAction):
 
         self.move_to_ee_pose(handle_opening_poses["pre_grasp_pose"])
         self.open_gripper()
-        self.move_to_ee_pose(handle_opening_poses["grasp_pose"])
-        self.close_gripper()
-        # self.move_to_ee_pose(handle_opening_poses["post_grasp_pose"])
-        self.move_to_ee_pose_trajectory(handle_opening_poses["opening_waypoints"])
-        self.open_gripper()
-        self.move_to_ee_pose(handle_opening_poses["post_release_pose"])
         
-        # self.move_to_joint_positions(self.sim.scene_description.fridge_door_intermediate_restract_pos)
-
+        with pull_threshold:
+            self.move_to_ee_pose(handle_opening_poses["grasp_pose"])
+            self.close_gripper()
+            # self.move_to_ee_pose(handle_opening_poses["post_grasp_pose"])
+            self.move_to_ee_pose_trajectory(handle_opening_poses["opening_waypoints"])
+            self.open_gripper()
+        
+        self.move_to_ee_pose(handle_opening_poses["post_release_pose"])
         self.move_to_ee_pose(handle_opening_poses["pre_push_pose"])
         self.move_to_ee_pose(handle_opening_poses["push_pose"])
-        self.move_to_ee_pose_trajectory(handle_opening_poses["push_waypoints"])
+
+        with slight_push_threshold:
+            self.move_to_ee_pose_trajectory(handle_opening_poses["push_waypoints"])
 
         time.sleep(3)
         self.move_to_ee_pose(handle_opening_poses["push_waypoints"][-3])
@@ -116,6 +145,24 @@ class OpenDoorHLA(HighLevelAction):
 
         if self.robot_interface is not None:
             self.robot_interface.set_speed(speed)
+
+        # Temporarily raise the collision threshold while grasping the handle
+        # (real robot only; in sim there is no collision sensor / service).
+        pull_threshold = (
+            collision_threshold(self.PULL_COLLISION_THRESHOLD)
+            if self.robot_interface is not None
+            else nullcontext()
+        )
+        slight_push_threshold = (
+            collision_threshold(self.SLIGHT_PUSH_COLLISION_THRESHOLD)
+            if self.robot_interface is not None
+            else nullcontext()
+        )
+        hard_push_threshold = (
+            collision_threshold(self.HARD_PUSH_COLLISION_THRESHOLD)
+            if self.robot_interface is not None
+            else nullcontext()
+        )
 
         print("Opening microwave door ...")
 
@@ -146,17 +193,19 @@ class OpenDoorHLA(HighLevelAction):
         self.move_to_ee_pose(handle_opening_poses["pre_grasp_pose"])
         self.open_gripper()
         self.move_to_ee_pose(handle_opening_poses["grasp_pose"])
-        self.close_gripper()
-        # self.move_to_ee_pose(handle_opening_poses["post_grasp_pose"])
-        self.move_to_ee_pose_trajectory(handle_opening_poses["opening_waypoints"])
-        self.open_gripper()
-        self.move_to_ee_pose(handle_opening_poses["post_release_pose"])
         
-        # self.move_to_joint_positions(self.sim.scene_description.fridge_door_intermediate_restract_pos)
+        with pull_threshold:
+            self.close_gripper()
+            # self.move_to_ee_pose(handle_opening_poses["post_grasp_pose"])
+            self.move_to_ee_pose_trajectory(handle_opening_poses["opening_waypoints"])
+            self.open_gripper()
 
+        self.move_to_ee_pose(handle_opening_poses["post_release_pose"])
         self.move_to_ee_pose(handle_opening_poses["pre_push_pose"])
         self.move_to_ee_pose(handle_opening_poses["push_pose"])
-        self.move_to_ee_pose_trajectory(handle_opening_poses["push_waypoints"])
+        
+        with slight_push_threshold:
+            self.move_to_ee_pose_trajectory(handle_opening_poses["push_waypoints"])
 
         time.sleep(3)
         self.move_to_ee_pose(handle_opening_poses["push_waypoints"][-3])

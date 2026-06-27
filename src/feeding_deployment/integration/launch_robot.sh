@@ -6,11 +6,9 @@ cleanup() {
     if kill -0 $joint_states_publisher_pid 2>/dev/null; then
         kill $joint_states_publisher_pid
     fi
-    # Speaker disabled: bite-transfer prompts are now voiced on the iPad webapp
-    # (App.vue subscribes to /speak). See speak.py if you need the compute speaker back.
-    # if kill -0 $speaker_pid 2>/dev/null; then
-    #     kill $speaker_pid
-    # fi
+    if kill -0 $speaker_pid 2>/dev/null; then
+        kill $speaker_pid
+    fi
     if kill -0 $collision_sensor_pid 2>/dev/null; then
         kill $collision_sensor_pid
     fi
@@ -30,10 +28,11 @@ cd /home/isacc/deployment_ws/src/feeding-deployment/src/feeding_deployment/contr
 python joint_states_publisher.py &
 joint_states_publisher_pid=$!  # Store the PID of joint_states_publisher
 
-# Speaker disabled: /speak prompts are now voiced on the iPad webapp (App.vue).
-# cd /home/isacc/deployment_ws/src/feeding-deployment/src/feeding_deployment/misc
-# python speak.py &
-# speaker_pid=$!  # Store the PID of speaker
+# Start speaker (compute-side TTS). /speak prompts are voiced both here and on the
+# iPad webapp (App.vue subscribes to /speak), so audio plays on both.
+cd /home/isacc/deployment_ws/src/feeding-deployment/src/feeding_deployment/misc
+python speak.py &
+speaker_pid=$!  # Store the PID of speaker
 
 # move to safety directory
 cd /home/isacc/deployment_ws/src/feeding-deployment/src/feeding_deployment/safety
@@ -54,6 +53,6 @@ python watchdog.py
 
 cleanup  # Ensure cleanup is called when bulldog finishes
 wait $joint_states_publisher_pid
-# wait $speaker_pid  # speaker disabled (voiced on iPad webapp)
+wait $speaker_pid
 wait $collision_sensor_pid
 wait $transfer_button_pid

@@ -74,6 +74,7 @@
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>pygame</exec_depend>
+  <exec_depend>feeding_deployment_msgs</exec_depend>
 
 
   <!-- The export tag contains other, unspecified, tags -->

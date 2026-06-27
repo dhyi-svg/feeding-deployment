@@ -123,3 +123,58 @@ log show --start '<YYYY-MM-DD HH:MM:SS>' \
   --info --style syslog > wifi_events.log
 ```
 (Use the `t0_wall` from `run_meta.json`, converted to local time, as the start.)
+
+---
+
+## 4. Remote access to the compute box (VNC over the LAN)
+
+To drive the compute box (`192.168.1.2`) desktop from the Mac. **Use VNC over the LAN, not
+TeamViewer** — the lab LAN is isolated from the internet, so TeamViewer (which brokers
+through its cloud) won't connect; a direct VNC connection is also far lower latency
+(measured ~0.5 ms on this LAN).
+
+This does **not** touch the e-stop: the safety heartbeat is Mac↔NUC + bulldog on the NUC;
+the compute box is not in that path. The only overlap is WiFi airtime if you VNC *from the
+e-stop Mac* during a run — negligible (heartbeat is ~6 kbps; 1 s debounce; 65 ms worst gap),
+but VNC from a different laptop if you want zero overlap.
+
+### Mac side (no install)
+Finder → ⌘K → `vnc://192.168.1.2` → the VNC password. macOS Screen Sharing is a built-in
+VNC client.
+
+### Compute box (Ubuntu 20.04, X11) — server
+The desktop session runs on **`DISPLAY=:1`** (not `:0`), auth at
+`/run/user/1000/gdm/Xauthority`. Served by **x11vnc** as a systemd service attached to that
+live session (so you see the real desktop, not a blank virtual one).
+
+One-time setup:
+```bash
+sudo apt update && sudo apt install -y x11vnc
+x11vnc -storepasswd                       # set a VNC password -> ~/.vnc/passwd
+sudo cp /home/isacc/x11vnc.service /etc/systemd/system/x11vnc.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now x11vnc.service
+```
+The unit (`/etc/systemd/system/x11vnc.service`, source kept at `/home/isacc/x11vnc.service`):
+```ini
+ExecStartPre=-/usr/bin/killall x11vnc
+ExecStart=/usr/bin/x11vnc -display :1 -auth /run/user/1000/gdm/Xauthority \
+    -forever -loop -noxdamage -repeat -shared \
+    -rfbauth /home/isacc/.vnc/passwd -rfbport 5900
+Restart=on-failure
+```
+
+Manage / troubleshoot:
+```bash
+systemctl status x11vnc          # is it running?
+journalctl -u x11vnc -f          # live log (client connects, errors)
+sudo systemctl restart x11vnc    # after editing the unit
+```
+
+Notes:
+- **Security:** VNC auth is weak and unencrypted — fine on the isolated LAN, but never
+  expose port 5900 to the internet.
+- **Display hardcoded to `:1`:** stable on this box. If a reboot ever lands the desktop on a
+  different display, VNC won't connect — check `ls /tmp/.X11-unix` and `who`, then edit the
+  `-display :N` (and the `-auth` path) in the unit and `sudo systemctl restart x11vnc`.
+- `-loop` + `Restart=on-failure` make the service survive boot timing and logout/login.

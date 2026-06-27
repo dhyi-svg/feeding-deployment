@@ -21,6 +21,13 @@ from feeding_deployment.actions.base import (
 class PressMicrowaveButtonHLA(HighLevelAction):
     """Press the microwave button."""
 
+    # Collision threshold applied while moving into the handle grasp pose, where
+    # contact with the handle produces larger torque error. Tune on the real
+    # robot; reverts to the sensor default automatically after the move.
+    PULL_COLLISION_THRESHOLD = 25.0
+    SLIGHT_PUSH_COLLISION_THRESHOLD = 15.0
+    HARD_PUSH_COLLISION_THRESHOLD = 25.0
+
     def get_name(self) -> str:
         return "PressMicrowaveButton"
 
@@ -62,6 +69,12 @@ class PressMicrowaveButtonHLA(HighLevelAction):
         if self.robot_interface is not None:
             self.robot_interface.set_speed(speed)
 
+        slight_push_threshold = (
+            collision_threshold(self.SLIGHT_PUSH_COLLISION_THRESHOLD)
+            if self.robot_interface is not None
+            else nullcontext()
+        )
+
         # Each button press adds 30 seconds to the microwave timer.
         num_presses = max(1, int(round(duration / 30.0)))
         print(f"Pressing microwave button {num_presses} times (duration={duration}s) ...")
@@ -75,9 +88,10 @@ class PressMicrowaveButtonHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.fridge_door_staging_pos)
         self.close_gripper() # just in case the gripper is open
         self.move_to_ee_pose(press_button_poses["pre_press_pose"])
-        for i in range(num_presses):
-            self.move_to_ee_pose(press_button_poses["press_pose"])
-            self.move_to_ee_pose(press_button_poses["intermediate_pose"])
+        with slight_push_threshold:
+            for i in range(num_presses):
+                self.move_to_ee_pose(press_button_poses["press_pose"])
+                self.move_to_ee_pose(press_button_poses["intermediate_pose"])
         self.move_to_ee_pose(press_button_poses["pre_press_pose"])
         self.move_to_joint_positions(self.sim.scene_description.fridge_door_staging_pos)
 

@@ -32,8 +32,11 @@
           <img alt="send" src="../assets/send.png">
         </button>
       </div>
-      <p v-if="voiceStatus" class="voice-status"
-         style="font-size:2vh;color:var(--tm);margin:0.4vh 0;">🎙 {{ voiceStatus }}</p>
+      <p class="voice-status" :class="{ empty: !voiceStatus }" aria-live="polite">
+        <img alt="" src="../assets/voice.png">
+        <span v-if="voiceStatus">{{ voiceStatus }}</span>
+        <span v-else>&nbsp;</span>
+      </p>
 
       <p class="talk-lbl">Robot's response</p>
       <div class="response-box">{{ customOrder || 'Waiting for the text response...' }}</div>

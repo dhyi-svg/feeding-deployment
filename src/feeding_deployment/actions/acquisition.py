@@ -266,7 +266,7 @@ class AcquireBiteHLA(HighLevelAction):
 
                     if skill == "Skewer":
                         skewer_point, skewer_angle = self.flair.inference_server.get_skewer_action(mask)
-                        if skewering_orientation == "vertical":
+                        if skewering_orientation == "horizontal":
                             skewer_angle = skewer_angle + np.pi / 2
                         skill_success = self.food_manipulation_skill_library.skewering_skill(camera_color_data, camera_depth_data, camera_info_data, keypoint = skewer_point, major_axis = skewer_angle, skewering_depth=skewering_depth)
                     elif skill == "Scoop":
@@ -348,7 +348,6 @@ class AcquireBiteHLA(HighLevelAction):
                 traceback.print_exc()
                 continue
             
-            ask_confirmation = True # Rajat Hack for calibrating bite acqusiition. Need to remove for final
             if self.web_interface is not None and ask_confirmation:
                 get_success_confirmation = self.web_interface.get_successful_food_acquisition_confirmation()
                 if get_success_confirmation:

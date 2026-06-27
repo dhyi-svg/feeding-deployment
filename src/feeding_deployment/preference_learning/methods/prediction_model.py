@@ -22,6 +22,7 @@ from feeding_deployment.preference_learning.methods.prompts.bundle_prediction im
     get_bundle_prediction_prompt,
 )
 from feeding_deployment.preference_learning.methods.utils import _episode_text, PREF_FIELDS, _resolve_api_key, _retry_on_rate_limit
+from feeding_deployment.utils.llm_config import DEFAULT_CLAUDE_MODEL
 
 PREF_OPTIONS: Dict[str, List[str]] = {name: opts for (name, _, opts) in root_config.PREFERENCE_BUNDLE}
 PREF_DESCRIPTIONS: Dict[str, str] = {dim.field: dim.description for dim in _PREF_BUNDLE_DIMS}
@@ -139,7 +140,7 @@ class PredictionModel:
         use_long_term_memory: bool = True,
         use_episodic_memory: bool = True,
         k_retrieve: int = 5,
-        chat_model: str = "claude-opus-4-8",
+        chat_model: str = DEFAULT_CLAUDE_MODEL,
         embed_model: str = "text-embedding-3-small",
         physical_profile_description: str | None = None,
     ) -> None:

@@ -39,6 +39,7 @@ except ModuleNotFoundError as e:
 
 from feeding_deployment.actions.flair.vision_utils import detect_densest, new_detect_densest, detect_sparsest, detect_centroid, detect_angular_bbox, detect_convex_hull, detect_filling_push_noodles, detect_filling_push_semisolid, efficient_sam_box_prompt_segment, outpaint_masks, detect_blue, proj_pix2mask, cleanup_mask, visualize_keypoints, visualize_skewer, visualize_push, detect_plate, mask_weight, nearest_neighbor, nearest_point_to_mask, detect_furthest_unobstructed_boundary_point, calculate_heatmap_density, calculate_heatmap_entropy, resize_to_square, fill_enclosing_polygon, detect_fillings_in_mask, expanded_detect_furthest_unobstructed_boundary_point
 from feeding_deployment.actions.flair.preference_planner import PreferencePlanner
+from feeding_deployment.utils.llm_config import DEFAULT_CLAUDE_MODEL
 # from feeding_deployment.actions.flair.food_identification import GPT4VFoodIdentification
 
 class BiteAcquisitionInference:
@@ -136,7 +137,7 @@ class BiteAcquisitionInference:
             self.client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
 
         response = self.client.messages.create(
-                   model='claude-opus-4-8',
+                   model=DEFAULT_CLAUDE_MODEL,
                    max_tokens=1024,
                    messages=[{'role': 'user', 'content': prompt}],
                   )

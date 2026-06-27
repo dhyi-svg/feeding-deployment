@@ -91,6 +91,11 @@ class PlacePlateInApplianceHLA(HighLevelAction):
 class PlacePlateOnHolderHLA(HighLevelAction):
     """Place the plate onto the holder."""
 
+    # Collision threshold applied while moving into the handle grasp pose, where
+    # contact with the handle produces larger torque error. Tune on the real
+    # robot; reverts to the sensor default automatically after the move.
+    HOLDER_COLLISION_THRESHOLD = 20.0
+    
     def get_name(self) -> str:
         return "PlacePlateOnHolder"
 
@@ -131,14 +136,23 @@ class PlacePlateOnHolderHLA(HighLevelAction):
         if self.robot_interface is not None:
             self.robot_interface.set_speed(speed)
 
+        holder_threshold = (
+            collision_threshold(self.HOLDER_COLLISION_THRESHOLD)
+            if self.robot_interface is not None
+            else nullcontext()
+        )
+
         print("Placing plate on holder ...")
 
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.behind_intermediate_pos)
         self.move_to_joint_positions(self.sim.scene_description.intermediate_plate_holder_pos)
         self.move_to_joint_positions(self.sim.scene_description.above_plate_holder_pos)
-        self.move_to_ee_pose(self.sim.scene_description.inside_plate_holder_pose)
-        self.close_gripper()
+        
+        with holder_threshold:
+            self.move_to_ee_pose(self.sim.scene_description.inside_plate_holder_pose)
+            self.close_gripper()
+
         self.move_to_ee_pose(self.sim.scene_description.above_plate_holder_pose)
         self.move_to_joint_positions(self.sim.scene_description.behind_intermediate_pos)
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)

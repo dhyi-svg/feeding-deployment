@@ -2,12 +2,13 @@ import re
 import ast
 from pathlib import Path
 from feeding_deployment.utils.anthropic_llm import AnthropicLLM
+from feeding_deployment.utils.llm_config import DEFAULT_CLAUDE_MODEL
 
 class NewMealParser:
     def __init__(self, log_dir):
 
         self.llm = AnthropicLLM(
-            model_name="claude-opus-4-8",
+            model_name=DEFAULT_CLAUDE_MODEL,
             cache_dir=log_dir / "llm_cache",
         )
 

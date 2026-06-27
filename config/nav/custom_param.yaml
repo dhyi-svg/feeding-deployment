@@ -20,6 +20,7 @@ refinement:
   rate_hz: 10.0          # control/sample rate (must exceed cmd_vel bridge cmd_timeout)
   window_s: 1.0          # sliding-average window over the error (smooths jitter)
   warmup_s: 1.0          # delay before the divergence safety check arms
+  localization_settle_s: 30.0  # wait after move_base succeeds, before pre-refinement error read
 
   # --- stop-when-good thresholds --------------------------------------------
   # null => use half the active planner's goal tolerance (move_base/TEB).

@@ -115,6 +115,43 @@ You can move the robot to preset configurations by running:
         - `cd src/feeding-deployment/src/feeding_deployment/integration` 
    - `python transfer_calibration.py --tool <tool_name> --test` where <tool_name> is one of "fork", "drink" and "wipe"
   
+## Running the demo with tmux (compute + NUC)
+
+Helper scripts under `scripts/` build labeled tmux sessions and add a one-key
+restart (`prefix + r`). Each machine runs its own local session, so the session
+(and its processes) survive your SSH client disconnecting.
+
+### Compute: `scripts/feeding-compute.sh`
+Builds session `feeding` as an 8-pane 2x4 grid (run on the compute box):
+
+```
+1 roscore          2 launch_sensors   3 launch_app       4 launch_utensil
+5 launch_watchdog  6 cartographer_localization  7 shared_autonomy  8 run.py
+```
+
+- Each command is **pre-typed but not executed** — fire them in order. Pane 8
+  (`run.py`) is pre-typed in the integration dir so you can edit it before Enter.
+- `prefix + r` restarts the **bottom row only** (5-8), leaving roscore/sensors/
+  app/utensil (1-4) untouched: Ctrl+C 5-8 -> watchdog -> 10s -> cartographer ->
+  5s -> shared_autonomy -> pre-type run.py. Timings are tunable via the
+  `RESTART_GRACE` / `POST_WATCHDOG_DELAY` / `INTER_DELAY` constants at the top.
+- Run: `./scripts/feeding-compute.sh`
+
+### NUC: `scripts/feeding-nuc.sh`
+Builds session `robot` as 3 stacked panes (run on the NUC):
+`launch_arm` / `launch_base` / `launch_remote_bulldog`.
+
+- `prefix + r` restarts all three after an e-stop: Ctrl+C all -> relaunch
+  arm + base -> bulldog ~3s later (bulldog needs both RPC servers up first).
+- Run: `./scripts/feeding-nuc.sh`
+
+### Permanence
+Each script installs `prefix + r` at build time (lasts for the tmux server's
+life). To persist it across a full tmux-server restart, add the matching
+`bind r ...` line to that machine's `~/.tmux.conf` (see `scripts/nuc.tmux.conf`
+for the NUC template). Panes are resolved by **geometry**, not title, because
+programs like roscore/htop overwrite pane titles.
+
 ## Run Feeding Demo in Simulation
 1. Launch the roslaunch for visualization / publish tfs:
    - Navigate to the launch files: `cd launch`
@@ -296,3 +333,125 @@ python src/feeding_deployment/scripts/build_map_interactive.py \
     --pbstream-file /home/isacc/deployment_ws/src/feeding_deployment/maps/4-28.pbstream
 
 Teleoperate with a controller: ```python src/feeding_deployment/src/controllers/basicmicro_arduino/vention_controller.py```
+
+
+ERRORS:
+
+Saved system state -> last_state.p, 21_stow_utensil.p
+Refining PickPlateFromTable(plate, table)
+Executing parameterized policy PickPlateFromTable with bindings:
+  Speed = medium
+  HandleColor = [85, 83, 132]
+  ColorRange = 0.1
+Picking plate from table ...
+Got images
+Found 224 pixels in mask
+DBSCAN found no clusters.
+Got images
+Found 159 pixels in mask
+DBSCAN found no clusters.
+Got images
+Found 141 pixels in mask
+No valid 3D points from mask.
+Got images
+Found 126 pixels in mask
+Waiting for required message from the web interface ...
+Received message on /webapp_to_robot:  {"state":"detection_confirm","status":"redo","detection_type":"attachment"}
+Received message on /webapp_to_robot:  {"state":"detection_confirm","status":"redo","detection_type":"attachment"}
+Received required message from the web interface
+Attachment detection rejected by user. Re-running attachment perception ...
+Got images
+Found 231 pixels in mask
+No valid 3D points from mask.
+Got images
+Found 279 pixels in mask
+DBSCAN found no clusters.
+Got images
+Found 200 pixels in mask
+No valid 3D points from mask.
+Got images
+Found 176 pixels in mask
+DBSCAN found no clusters.
+Got images
+Found 294 pixels in mask
+No valid 3D points from mask.
+Got images
+Found 285 pixels in mask
+No valid 3D points from mask.
+Got images
+Found 309 pixels in mask
+No valid 3D points from mask.
+Got images
+Found 374 pixels in mask
+No valid 3D points from mask.
+Got images
+Found 249 pixels in mask
+No valid 3D points from mask.
+Got images
+Found 527 pixels in mask
+No valid 3D points from mask.
+Got images
+Found 413 pixels in mask
+No valid 3D points from mask.
+Got images
+Found 272 pixels in mask
+No valid 3D points from mask.
+Got images
+Found 252 pixels in mask
+No valid 3D points from mask.
+Got images
+Found 357 pixels in mask
+DBSCAN found no clusters.
+Got images
+Found 226 pixels in mask
+No valid 3D points from mask.
+Got images
+Found 221 pixels in mask
+No valid 3D points from mask.
+Got images
+Found 306 pixels in mask
+No valid 3D points from mask.
+Got images
+Found 375 pixels in mask
+No valid 3D points from mask.
+Got images
+Found 399 pixels in mask
+No valid 3D points from mask.
+Got images
+Found 434 pixels in mask
+No valid 3D points from mask.
+HLA execution failed: Could not detect attachment pose
+Aborting task and returning to task selection page.
+Sending message to web interface to move to task selection page with last task type:  None
+[learn] Updating memory models (day 1) ...
+  [long_term_memory_model] Updating summary (day 1) ...
+Traceback (most recent call last):
+  File "/home/isacc/deployment_ws/src/feeding-deployment/src/feeding_deployment/integration/run.py", line 1459, in <module>
+    runner.run()
+  File "/home/isacc/deployment_ws/src/feeding-deployment/src/feeding_deployment/integration/run.py", line 831, in run
+    self._finalize_preference_session()
+  File "/home/isacc/deployment_ws/src/feeding-deployment/src/feeding_deployment/integration/run.py", line 761, in _finalize_preference_session
+    self._pref_session.finalize_meal(day)
+  File "/home/isacc/deployment_ws/src/feeding-deployment/src/feeding_deployment/integration/preference_session.py", line 334, in finalize_meal
+    self._model.update(
+  File "/home/isacc/deployment_ws/src/feeding-deployment/src/feeding_deployment/preference_learning/methods/prediction_model.py", line 269, in update
+    self.long_term_memory_model.add_episode(ep_txt)
+  File "/home/isacc/deployment_ws/src/feeding-deployment/src/feeding_deployment/preference_learning/methods/long_term_memory.py", line 121, in add_episode
+    resp = self._retry(_call)
+  File "/home/isacc/deployment_ws/src/feeding-deployment/src/feeding_deployment/preference_learning/methods/utils.py", line 27, in _retry_on_rate_limit
+    return fn()
+  File "/home/isacc/deployment_ws/src/feeding-deployment/src/feeding_deployment/preference_learning/methods/long_term_memory.py", line 109, in _call
+    return self.client.messages.create(
+  File "/home/isacc/miniconda3/envs/feed/lib/python3.10/site-packages/anthropic/_utils/_utils.py", line 294, in wrapper
+    return func(*args, **kwargs)
+  File "/home/isacc/miniconda3/envs/feed/lib/python3.10/site-packages/anthropic/resources/messages/messages.py", line 1032, in create
+    return self._post(
+  File "/home/isacc/miniconda3/envs/feed/lib/python3.10/site-packages/anthropic/_base_client.py", line 1536, in post
+    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))
+  File "/home/isacc/miniconda3/envs/feed/lib/python3.10/site-packages/anthropic/_base_client.py", line 1195, in request
+    raise self._make_status_error_from_response(response) from None
+anthropic.BadRequestError: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'This model does not support assistant message prefill. The conversation must end with a user message.'}, 'request_id': 'req_011CcUHj4Bb7FMqDPNrY6TKr'}
+^C
+
+
+^\Quit (core dumped)

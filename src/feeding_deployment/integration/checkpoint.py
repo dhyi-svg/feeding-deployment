@@ -15,6 +15,7 @@ the robot stack.
 
 from __future__ import annotations
 
+import json
 import pickle
 import re
 from pathlib import Path
@@ -36,7 +37,13 @@ LAST_STATE = "last_state"
 # Standalone preference-session snapshot, overwritten the instant each correction
 # is locked (decoupled from the per-skill sim checkpoints) so a resume restores the
 # latest corrections regardless of which skill boundary / phase the crash fell on.
-PREF_SNAPSHOT = "pref_session"
+# Stored as human-editable JSON (not pickle): the payload is JSON-native apart from
+# the ``finalized`` set, which is written as a sorted list (see _pref_json_default)
+# and re-coerced to a set by PreferenceSession.resume_from_state.
+PREF_SNAPSHOT_FILE = "pref_session.json"
+# Legacy pickle snapshot. No longer written or read; only removed on a fresh run so
+# a stale copy cannot linger and mislead.
+_LEGACY_PREF_SNAPSHOT_FILE = "pref_session.p"
 
 # Numbered per-meal checkpoints, e.g. "03_pick_plate_from_fridge.p".
 _NUMBERED_RE = re.compile(r"^\d+_.*\.p$")
@@ -123,26 +130,40 @@ class CheckpointStore:
         self.index = payload["skill_index"]
         return payload
 
+    def _pref_path(self) -> Path:
+        """Absolute path of the standalone JSON preference snapshot."""
+        return self.dir / PREF_SNAPSHOT_FILE
+
+    @staticmethod
+    def _pref_json_default(obj: Any):
+        """JSON encoder hook: the snapshot is JSON-native except ``finalized``,
+        which is a set -> serialize as a sorted list."""
+        if isinstance(obj, set):
+            return sorted(obj)
+        raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
     def save_pref(self, state: Dict[str, Any]) -> None:
         """Overwrite the standalone preference snapshot. Called on every locked
         correction so the latest preference state is always durable, independent
-        of the sim checkpoints."""
-        with open(self.path(PREF_SNAPSHOT), "wb") as f:
-            pickle.dump(state, f)
+        of the sim checkpoints. Written as human-editable JSON."""
+        with open(self._pref_path(), "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2, sort_keys=True, default=self._pref_json_default)
 
     def load_pref(self) -> Dict[str, Any] | None:
         """Return the latest standalone preference snapshot, or None if absent or
-        unreadable."""
-        path = self.path(PREF_SNAPSHOT)
+        unreadable. JSON only -- legacy ``pref_session.p`` is not read."""
+        path = self._pref_path()
         if not path.exists():
             return None
         try:
-            with open(path, "rb") as f:
-                return pickle.load(f)
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
         except Exception as e:  # noqa: BLE001 - a corrupt snapshot must not block resume
             print(f"[checkpoint] Failed to read {path.name}: {e}")
             return None
 
     def clear_pref(self) -> None:
-        """Remove the standalone preference snapshot (fresh-run reset)."""
-        self.path(PREF_SNAPSHOT).unlink(missing_ok=True)
+        """Remove the standalone preference snapshot (fresh-run reset). Also drops
+        any legacy pickle snapshot so a stale copy cannot linger."""
+        self._pref_path().unlink(missing_ok=True)
+        (self.dir / _LEGACY_PREF_SNAPSHOT_FILE).unlink(missing_ok=True)

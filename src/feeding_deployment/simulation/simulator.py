@@ -237,6 +237,9 @@ class NullSimulator:
     def set_robot_motors(self, target_positions):
         pass
 
+    def set_head_pose(self, pose):
+        pass
+
     def get_current_state(self):
         return None
 

@@ -6,12 +6,13 @@ import math
 import time
 from pathlib import Path
 from feeding_deployment.utils.anthropic_llm import AnthropicLLM
+from feeding_deployment.utils.llm_config import DEFAULT_CLAUDE_MODEL
 
 class TransparencyBase(abc.ABC):
     def __init__(self, log_dir, cache_name = "llm_cache"):
 
         self.llm = AnthropicLLM(
-            model_name="claude-opus-4-8",
+            model_name=DEFAULT_CLAUDE_MODEL,
             cache_dir = log_dir / cache_name,
         )
 

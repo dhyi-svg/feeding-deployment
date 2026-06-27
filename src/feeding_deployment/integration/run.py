@@ -11,6 +11,7 @@ import signal
 import shutil
 import numpy as np
 from feeding_deployment.utils.anthropic_llm import AnthropicLLM
+from feeding_deployment.utils.llm_config import DEFAULT_CLAUDE_MODEL
 import time
 import types
 import inspect
@@ -278,7 +279,7 @@ class _Runner:
             self.wrist_interface = None
 
         self.llm = AnthropicLLM(
-            model_name="claude-opus-4-8",
+            model_name=DEFAULT_CLAUDE_MODEL,
             cache_dir=self.log_dir / "llm_cache",
         )
 
@@ -673,7 +674,7 @@ class _Runner:
         else:
             # First durable sim checkpoint of the meal, written BEFORE any skill
             # executes, so even a kill during the very first navigation is
-            # resumable (the initial prefs already ride in pref_session.p). This
+            # resumable (the initial prefs already ride in pref_session.json). This
             # also overwrites any stale last_state.p left by a previous meal.
             # resume_prep_step=0 -> a resume from here re-runs the whole pipeline.
             self._save_state(
@@ -687,7 +688,7 @@ class _Runner:
     # Fixed, ordered prep pipeline. These indices ARE the resume_prep_step values
     # saved in checkpoints, so they must stay stable. Steps with a process_user_command
     # checkpoint their progress; the two ask() steps do not (their dims are restored
-    # via pref_session.p and re-asking is idempotent).
+    # via pref_session.json and re-asking is idempotent).
     _PREP_PLACE_ON_HOLDER = 0
     _PREP_CLOSE_FRIDGE = 1
     _PREP_MICROWAVE = 2

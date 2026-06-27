@@ -21,6 +21,13 @@ from feeding_deployment.actions.base import (
 class CloseDoorHLA(HighLevelAction):
     """Close a door (fridge or microwave)."""
 
+    # Collision threshold applied while moving into the handle grasp pose, where
+    # contact with the handle produces larger torque error. Tune on the real
+    # robot; reverts to the sensor default automatically after the move.
+    PULL_COLLISION_THRESHOLD = 25.0
+    SLIGHT_PUSH_COLLISION_THRESHOLD = 15.0
+    HARD_PUSH_COLLISION_THRESHOLD = 25.0
+
     def get_name(self) -> str:
         return "CloseDoor"
 
@@ -60,6 +67,22 @@ class CloseDoorHLA(HighLevelAction):
             self.robot_interface.set_speed(speed)
         print("Closing fridge door ...")
 
+        pull_threshold = (
+            collision_threshold(self.PULL_COLLISION_THRESHOLD)
+            if self.robot_interface is not None
+            else nullcontext()
+        )
+        slight_push_threshold = (
+            collision_threshold(self.SLIGHT_PUSH_COLLISION_THRESHOLD)
+            if self.robot_interface is not None
+            else nullcontext()
+        )
+        hard_push_threshold = (
+            collision_threshold(self.HARD_PUSH_COLLISION_THRESHOLD)
+            if self.robot_interface is not None
+            else nullcontext()
+        )
+
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.open_gripper()
 
@@ -70,14 +93,19 @@ class CloseDoorHLA(HighLevelAction):
 
         print("moving to pull closing waypoint: ", handle_closing_poses["pull_closing_waypoint"])
         self.move_to_ee_pose(handle_closing_poses["pull_closing_waypoint"])
-        self.close_gripper()
-        self.move_to_ee_pose_trajectory(handle_closing_poses["pull_closing_waypoints"])
-        self.open_gripper()
+
+        with pull_threshold:
+            self.close_gripper()
+            self.move_to_ee_pose_trajectory(handle_closing_poses["pull_closing_waypoints"])
+            self.open_gripper()
+
         self.move_to_ee_pose(handle_closing_poses["behind_pull_closing_waypoint"])
         self.move_to_ee_pose(handle_closing_poses["above_pull_closing_waypoint"])
         self.move_to_ee_pose(handle_closing_poses["above_push_closing_waypoint"])
         self.move_to_ee_pose(handle_closing_poses["push_closing_waypoints"][0])
-        self.move_to_ee_pose_trajectory(handle_closing_poses["push_closing_waypoints"])
+
+        with slight_push_threshold:
+            self.move_to_ee_pose_trajectory(handle_closing_poses["push_closing_waypoints"])
 
         time.sleep(1.0)
         self.move_to_ee_pose(handle_closing_poses["push_closing_waypoints"][-3])
@@ -92,6 +120,22 @@ class CloseDoorHLA(HighLevelAction):
             self.robot_interface.set_speed(speed)
         print("Closing microwave door ...")
 
+        pull_threshold = (
+            collision_threshold(self.PULL_COLLISION_THRESHOLD)
+            if self.robot_interface is not None
+            else nullcontext()
+        )
+        slight_push_threshold = (
+            collision_threshold(self.SLIGHT_PUSH_COLLISION_THRESHOLD)
+            if self.robot_interface is not None
+            else nullcontext()
+        )
+        hard_push_threshold = (
+            collision_threshold(self.HARD_PUSH_COLLISION_THRESHOLD)
+            if self.robot_interface is not None
+            else nullcontext()
+        )
+
         # self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
         self.open_gripper()
@@ -101,14 +145,18 @@ class CloseDoorHLA(HighLevelAction):
         self.move_to_ee_pose(handle_closing_poses["before_above_closing_waypoint"])
         self.move_to_ee_pose(handle_closing_poses["above_closing_waypoint"])
         self.move_to_ee_pose(handle_closing_poses["closing_waypoint"])
-        self.move_to_ee_pose_trajectory(handle_closing_poses["closing_waypoints"])
+        
+        with slight_push_threshold:
+            self.move_to_ee_pose_trajectory(handle_closing_poses["closing_waypoints"])
 
         time.sleep(1.0) # wait for the door to be fully closed before moving the arm away
         self.move_to_ee_pose(handle_closing_poses["closing_waypoints"][-2])
 
         self.close_gripper()
         self.move_to_ee_pose(handle_closing_poses["offset_closing_waypoints"][0])
-        self.move_to_ee_pose_trajectory(handle_closing_poses["offset_closing_waypoints"])
+        
+        with hard_push_threshold:
+            self.move_to_ee_pose_trajectory(handle_closing_poses["offset_closing_waypoints"])
 
         self.move_to_ee_pose(handle_closing_poses["pre_grasp_pose"])
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)

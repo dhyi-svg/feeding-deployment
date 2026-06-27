@@ -18,8 +18,6 @@ from feeding_deployment.actions.feel_the_bite.base import Transfer
 
 from pybullet_helpers.geometry import Pose
 
-DISTANCE_INFRONT_MOUTH = 0.10
-
 class OutsideMouthTransfer(Transfer):
 
     def __init__(self, sim : FeedingDeploymentPyBulletSimulator, robot_interface: ArmInterfaceClient, perception_interface: PerceptionInterface, rviz_interface: RVizInterface, no_waits=False, log_dir=None):
@@ -64,7 +62,7 @@ class OutsideMouthTransfer(Transfer):
         forque_target_base[:3, :3] = Rotation.from_quat([0.523, -0.503, -0.469, 0.503]).as_matrix()
         
         servo_point_forque_target = np.identity(4)
-        servo_point_forque_target[:3,3] = np.array([0, 0, -outside_mouth_distance]).reshape(1,3)
+        servo_point_forque_target[:3,3] = np.array([0, -0.04, -outside_mouth_distance]).reshape(1,3)
         infront_mouth_target = forque_target_base @ servo_point_forque_target
 
         # # mouth is assumed to be facing away from the wheelchair

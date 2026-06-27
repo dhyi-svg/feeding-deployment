@@ -16,8 +16,9 @@ from feeding_deployment.preference_learning.config.physical_capabilities import 
 from feeding_deployment.preference_learning.data_generation.prompts.user_preference_encoding import (
     get_user_preference_encoding_prompt,
 )
+from feeding_deployment.utils.llm_config import DEFAULT_CLAUDE_MODEL
 
-DEFAULT_MODEL = "claude-opus-4-8"
+DEFAULT_MODEL = DEFAULT_CLAUDE_MODEL
 
 
 def _extract_json_object(text: str) -> str:

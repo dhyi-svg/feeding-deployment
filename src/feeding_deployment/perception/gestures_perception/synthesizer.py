@@ -7,6 +7,7 @@ import textwrap
 import pickle
 from tomsutils.llm import synthesize_python_function_with_llm, GridSearchSynthesizedProgramArgumentOptimizer
 from feeding_deployment.utils.anthropic_llm import AnthropicLLM
+from feeding_deployment.utils.llm_config import DEFAULT_CLAUDE_MODEL
 from gymnasium.spaces import Box
 
 from feeding_deployment.perception.gestures_perception.in_context_examples import detect_mouth_open, detect_head_nod
@@ -40,7 +41,7 @@ class PersonalizedGestureDetectorSynthesizer:
     def __init__(self, log_dir):
 
         self.llm = AnthropicLLM(
-            model_name="claude-opus-4-8",
+            model_name=DEFAULT_CLAUDE_MODEL,
             cache_dir=log_dir / "llm_cache",
             max_tokens=2500,
         )

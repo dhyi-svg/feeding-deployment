@@ -577,6 +577,10 @@ class TestUpdateWritesLogs:
 
         model.update(day=1, context=ctx, corrected={}, ground_truth_bundle=bundle)
 
+        messages = _mock_anthropic.messages.create.call_args.kwargs["messages"]
+        assert messages[-1]["role"] == "user"
+        assert all(m["role"] != "assistant" for m in messages)
+
         ltm_file = tmp_path / "pref" / "u" / "long_term_memory" / "day_0001.json"
         assert ltm_file.exists()
         data = json.loads(ltm_file.read_text())

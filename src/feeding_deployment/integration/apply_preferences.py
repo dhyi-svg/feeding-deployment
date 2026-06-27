@@ -28,7 +28,7 @@ _RETRACT_MAP = {"yes": 1, "no": 0}
 
 _AUTOCONTINUE_MAP = {"10 sec": 10.0, "100 sec": 100.0, "1000 sec": 1000.0}
 
-_OUTSIDE_MOUTH_DISTANCE_MAP = {"near": 0.1, "medium": 0.15, "far": 0.2}
+_OUTSIDE_MOUTH_DISTANCE_MAP = {"near": 0.07, "medium": 0.1, "far": 0.13}
 
 _CONVEY_READY_MAP = {
     "no cue": "silent",

@@ -278,6 +278,27 @@ input, textarea {
 .icon-btn.amber-ic { border-color: var(--a); color: var(--a); }
 .icon-btn img { width: 48%; height: 48%; object-fit: contain; filter: invert(1); }
 .icon-btn:disabled { opacity: .4; cursor: not-allowed; }
+.voice-status {
+  min-height: 2.5vh;
+  margin: 0.4vh 0 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5vw;
+  color: var(--tm);
+  font-size: 2vh;
+  line-height: 1.2;
+}
+.voice-status img {
+  width: 2vh;
+  height: 2vh;
+  object-fit: contain;
+  filter: invert(1);
+  opacity: 0.75;
+  flex-shrink: 0;
+}
+.voice-status.empty img {
+  opacity: 0;
+}
 .response-box {
   background: var(--s1);
   border: 1px dashed var(--s3);
