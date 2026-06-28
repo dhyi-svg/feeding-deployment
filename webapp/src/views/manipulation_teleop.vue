@@ -130,6 +130,7 @@ const STEPS = {
 const MOTION_TIMEOUT_MS = 15000
 
 const HEARTBEAT_MS = 3000
+const TAKEOVER_RETRY_MS = 300
 
 export default {
   data () {
@@ -149,6 +150,7 @@ export default {
       cmdCounter: 0,
       motionTimer: null,
       heartbeatTimer: null,
+      takeoverRetryTimer: null,
       publisher: null,
       logPublisher: null,
       listener: null,
@@ -172,11 +174,9 @@ export default {
     this.initRos()
 
     // Announce the takeover from THIS view's own connection (the one that also
-    // sends heartbeats), so the backend reliably sets its takeover_event. The
-    // global App.vue button publishes this too, but on a separate long-lived
-    // socket that can be stale -> the message gets silently dropped. Backend
-    // de-dupes repeated takeovers, so this is idempotent.
-    this.publish({ state: 'teleop', status: 'takeover' })
+    // sends heartbeats), then retry until the backend acknowledges teleop. A
+    // single publish during a route/rosbridge transition can be dropped.
+    this.startTakeoverRetry()
 
     if (this.$route.query.hla) {
       this.currentHla = this.$route.query.hla
@@ -191,10 +191,12 @@ export default {
   beforeUnmount () {
     this.clearMotionTimer()
     this.clearHeartbeat()
+    this.clearTakeoverRetry()
   },
   beforeRouteLeave (to, from, next) {
     this.clearMotionTimer()
     this.clearHeartbeat()
+    this.clearTakeoverRetry()
     if (this.listener) {
       this.listener.unsubscribe()
       this.listener = null
@@ -261,6 +263,7 @@ export default {
         return
       }
       if (parsed.state === 'teleop') {
+        this.clearTakeoverRetry()
         const status = parsed.status
         if (status === 'motion_complete' || status === 'motion_aborted') {
           
@@ -418,6 +421,21 @@ export default {
       if (this.heartbeatTimer) {
         clearInterval(this.heartbeatTimer)
         this.heartbeatTimer = null
+      }
+    },
+
+    startTakeoverRetry () {
+      this.clearTakeoverRetry()
+      this.publish({ state: 'teleop', status: 'takeover' })
+      this.takeoverRetryTimer = setInterval(() => {
+        this.publish({ state: 'teleop', status: 'takeover' })
+      }, TAKEOVER_RETRY_MS)
+    },
+
+    clearTakeoverRetry () {
+      if (this.takeoverRetryTimer) {
+        clearInterval(this.takeoverRetryTimer)
+        this.takeoverRetryTimer = null
       }
     },
 

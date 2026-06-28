@@ -110,10 +110,18 @@
         args="0 0 0 0 0 0 1 arm_finger_tip arm_wipebase 10"/>
 
   <!-- ===== Arm RealSense camera driver (from robot.launch) ===== -->
+  <!-- D435: run color and depth at 1280x720 @ 30 Hz (depth's max-at-30Hz),
+       so both streams are at native res for depth alignment / pointcloud. -->
   <include file="$(find realsense2_camera)/launch/rs_camera.launch">
     <arg name="align_depth" value="true"/>
     <arg name="enable_sync" value="true"/>
     <arg name="filters" value="pointcloud"/>
+    <arg name="color_width"  value="1280"/>
+    <arg name="color_height" value="720"/>
+    <arg name="color_fps"    value="30"/>
+    <arg name="depth_width"  value="1280"/>
+    <arg name="depth_height" value="720"/>
+    <arg name="depth_fps"    value="30"/>
   </include>
 
   <!-- ===== Arm FT sensor driver (from robot.launch) ===== -->

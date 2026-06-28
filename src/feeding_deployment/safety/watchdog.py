@@ -20,7 +20,7 @@ import sys
 from sensor_msgs.msg import CameraInfo, LaserScan, JointState
 from geometry_msgs.msg import WrenchStamped, Pose
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float32MultiArray
 
 import threading
 import time
@@ -35,6 +35,7 @@ from feeding_deployment.control.robot_controller.arm_interface import ArmInterfa
 
 
 CAMERA_FREQUENCY_THRESHOLD = 2 # expected is 30 Hz
+EXPECTED_CAMERA_RESOLUTION = (1280, 720) # (width, height); D435 color stream at 30 Hz
 FT_FREQUENCY_THRESHOLD = 300 # expected is 1000 Hz
 FT_THRESHOLD = [40.0, 40.0, 40.0, 2.0, 2.0, 2.0]
 COLLISION_FREE_FREQUENCY_THRESHOLD = 100 # expected is 350 Hz (empirical)
@@ -69,6 +70,9 @@ class WatchDog:
         self.camera_info_sub = rospy.Subscriber("/camera/color/camera_info", CameraInfo, self.cameraCallback, queue_size = queue_size, buff_size = 65536*queue_size)
         self.camera_timestamps = PeekableQueue()
 
+        # One-time camera resolution check at launch (not monitored every loop).
+        self.camera_resolution_unexpected = self._check_camera_resolution()
+
         self.camera_unexpected_sub = rospy.Subscriber("/head_perception/unexpected", Bool, self.cameraUnexpectedCallback, queue_size = queue_size, buff_size = 65536*queue_size)
         self.camera_unexpected = False 
         
@@ -79,6 +83,11 @@ class WatchDog:
         self.collision_free_sub = rospy.Subscriber('/collision_free', Bool, self.collisionFreeCallback, queue_size = queue_size, buff_size = 65536*queue_size)
         self.collision_free_timestamps = PeekableQueue()
         self.collision_free_unexpected = False
+
+        # Collision force/threshold for the status panel, published by collision_sensor.py
+        # as [current_max_error, peak_last_10s, threshold]. None until first message.
+        self.collision_force_sub = rospy.Subscriber('/collision_force', Float32MultiArray, self.collisionForceCallback, queue_size = queue_size, buff_size = 65536*queue_size)
+        self.collision_force = None
 
         self.lidar_l_sub = rospy.Subscriber('/lidar_l/scan', LaserScan, self.lidarLeftCallback, queue_size = queue_size, buff_size = 65536*queue_size)
         self.lidar_l_timestamps = PeekableQueue()
@@ -102,11 +111,32 @@ class WatchDog:
         self.disable_collision_sensor_pub = rospy.Publisher("/disable_collision_sensor", Bool, queue_size=1)
 
         self.second_counter = 0
+        # Status-panel rendering state: number of lines drawn last refresh, so we can
+        # move the cursor up and overwrite in place (only when writing to a real TTY).
+        self._panel_lines = 0
+        self._is_tty = sys.stdout.isatty()
         time.sleep(5.0) # Wait for all queues to fill up / collision monitor to start
         
         # make sure collision is enabled
         self.disable_collision_sensor_pub.publish(Bool(data=False))
         print("Initialized.")
+
+    def _check_camera_resolution(self):
+        """Read a single CameraInfo at launch and verify the stream resolution.
+        Returns True if the resolution is not as expected. Frequency monitoring
+        (via cameraCallback) handles the camera-not-streaming case separately."""
+        try:
+            msg = rospy.wait_for_message("/camera/color/camera_info", CameraInfo, timeout=10.0)
+        except rospy.ROSException:
+            print("Could not read camera resolution at launch (no CameraInfo received).")
+            rospy.loginfo("Could not read camera resolution at launch (no CameraInfo received).")
+            return False
+        resolution = (msg.width, msg.height)
+        if resolution != EXPECTED_CAMERA_RESOLUTION:
+            print(f"Unexpected camera resolution: {resolution}, expected {EXPECTED_CAMERA_RESOLUTION}")
+            rospy.loginfo(f"Unexpected camera resolution: {resolution}, expected {EXPECTED_CAMERA_RESOLUTION}")
+            return True
+        return False
 
     def cameraCallback(self, msg):
         self.camera_timestamps.put(time.time())
@@ -132,6 +162,11 @@ class WatchDog:
         if not msg.data:
             self.collision_free_unexpected = True
 
+    def collisionForceCallback(self, msg):
+        # [current_max_error, peak_last_10s, threshold]
+        if len(msg.data) >= 3:
+            self.collision_force = (msg.data[0], msg.data[1], msg.data[2])
+
     def lidarLeftCallback(self, msg):
         self.lidar_l_timestamps.put(time.time())
 
@@ -146,6 +181,39 @@ class WatchDog:
 
     def robotCartesianStateCallback(self, msg):
         self.robot_cartesian_state_timestamps.put(time.time())
+
+    def _render_panel(self, frequencies):
+        """Render a status panel (sensor frequencies + collision force) that updates
+        in place on a TTY, so the shared watchdog terminal looks static with only the
+        numbers changing. Falls back to plain prints when stdout is not a terminal."""
+        name_width = max((len(name) for name, _ in frequencies), default=0)
+        lines = []
+        lines.append("================ Watchdog ================")
+        lines.append("Frequency (msgs in last 1s):")
+        for name, freq in frequencies:
+            lines.append(f"  {name:<{name_width}} : {freq}")
+        lines.append("Collision force:")
+        if self.collision_force is not None:
+            current, peak, threshold = self.collision_force
+            label_width = len("Peak (last 10s)")
+            lines.append(f"  {'Current':<{label_width}} : {current:8.3f}")
+            lines.append(f"  {'Peak (last 10s)':<{label_width}} : {peak:8.3f}")
+            lines.append(f"  {'Threshold':<{label_width}} : {threshold:8.3f}")
+        else:
+            lines.append("  (waiting for /collision_force ...)")
+        lines.append("==========================================")
+
+        text = "\n".join(lines)
+        if self._is_tty:
+            # Move cursor to the top of the previous panel and clear to end of screen,
+            # then redraw in place.
+            if self._panel_lines:
+                sys.stdout.write(f"\033[{self._panel_lines}F\033[J")
+            sys.stdout.write(text + "\n")
+            sys.stdout.flush()
+            self._panel_lines = len(lines)
+        else:
+            print(text)
 
     def check_status(self):
         self.second_counter += 1
@@ -172,12 +240,12 @@ class WatchDog:
             frequencies.append((_anomaly.name, queue_size))
 
         if self.second_counter == WATCHDOG_RUN_FREQUENCY:
-            print("Watchdog running at expected frequency.")
-            print("Frequencies:  " + ", ".join(f"{name}: {freq}" for name, freq in frequencies))
+            self._render_panel(frequencies)
             self.second_counter = 0
 
         for _unexpected, _anomaly in [
                                     (self.camera_unexpected, AnomalyStatus.CAMERA_UNEXPECTED),
+                                    (self.camera_resolution_unexpected, AnomalyStatus.CAMERA_RESOLUTION),
                                     (self.ft_unexpected, AnomalyStatus.FT_UNEXPECTED),
                                     (self.collision_free_unexpected, AnomalyStatus.COLLISION_FREE_UNEXPECTED)]:
             if _unexpected:

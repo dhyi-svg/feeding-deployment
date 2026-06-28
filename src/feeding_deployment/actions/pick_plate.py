@@ -120,7 +120,9 @@ class PickPlateFromApplianceHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.microwave_inside_gaze_pos)
 
         time.sleep(2.0)
-        result = self.perception_interface.perceive_attachment_poses(handle_type="microwave", handle_color=handle_color, color_range=color_range, web_interface=self.web_interface)
+        # The camera is physically flipped for the microwave-inside gaze, so the frame is
+        # already upright -- tell perception not to re-flip the user-facing images.
+        result = self.perception_interface.perceive_attachment_poses(handle_type="microwave", handle_color=handle_color, color_range=color_range, web_interface=self.web_interface, camera_flipped=True)
         pickup_pose = result["pickup_pose"]
         pre_pickup_pose = result["pre_pickup_pose"]
 

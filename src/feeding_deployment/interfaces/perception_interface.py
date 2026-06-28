@@ -810,11 +810,14 @@ class PerceptionInterface:
         handle_orientation: str,
         attachment_dir: str,
         initial_attachment_pose,
+        flip=True,
     ):
         """Run the interactive color correction loop on the web interface.
 
         Returns (confirmed, color, color_range, attachment_pose).
         confirmed=False means the user pressed Back; caller should redo detection.
+        flip: pass False when the camera is already upright for this capture (see
+        WebInterface._send_image), e.g. the microwave plate pickup.
         """
         current_color = list(initial_color) if hasattr(initial_color, '__iter__') else initial_color
         current_range = float(initial_range)
@@ -822,14 +825,16 @@ class PerceptionInterface:
 
         vis_image = cv2.imread(os.path.join(attachment_dir, "attachment_corners.png"))
         # Orientation is handled centrally in WebInterface._send_image (the camera
-        # is upside down); pass the raw frame through here. The picker returns an
-        # RGB color, not a pixel coordinate, so the displayed orientation never
-        # affected correctness anyway.
+        # is upside down), unless flip=False (camera already upright, e.g. microwave
+        # pickup); pass the raw frame through here. The picker returns an RGB color,
+        # not a pixel coordinate, so the displayed orientation never affected
+        # correctness anyway.
         pick_image = rgb_image
         web_interface.start_color_correction(
             pick_image,
             initial_vis_image=None,
             initial_color_range=current_range,
+            flip=flip,
         )
 
         while True:
@@ -865,8 +870,9 @@ class PerceptionInterface:
 
                 result_vis = cv2.imread(os.path.join(attachment_dir, "attachment_corners.png"))
                 # Orientation is handled centrally in WebInterface._send_image (the
-                # camera is upside down); do not rotate here or it would double-flip.
-                web_interface.send_color_correction_result(result_vis, new_pose is not None)
+                # camera is upside down), unless flip=False (camera already upright);
+                # do not rotate here or it would double-flip.
+                web_interface.send_color_correction_result(result_vis, new_pose is not None, flip=flip)
 
                 if status == "confirm":
                     if last_attachment_pose is not None:
@@ -878,7 +884,12 @@ class PerceptionInterface:
             elif status == "back":
                 return False, initial_color, initial_range, initial_attachment_pose
 
-    def perceive_attachment_poses(self, handle_type: str, handle_color, color_range, handle_orientation: str = "front", web_interface=None):
+    def perceive_attachment_poses(self, handle_type: str, handle_color, color_range, handle_orientation: str = "front", web_interface=None, camera_flipped=False):
+
+        # camera_flipped=True when the robot physically flipped its (upside-down) camera
+        # for this capture (microwave plate pickup), making the frame already upright --
+        # so the user-facing images must NOT get the central 180 deg flip.
+        flip = not camera_flipped
 
         if self.simulation:
             with open(self.log_dir / 'attachment_poses.pkl', 'rb') as f:
@@ -932,7 +943,7 @@ class PerceptionInterface:
                 print("Attachment detection rejected by user. Re-running attachment perception ...")
                 continue
 
-            action = web_interface.get_attachment_detection_action("attachment", vis_image)
+            action = web_interface.get_attachment_detection_action("attachment", vis_image, flip=flip)
 
             if action == "confirm":
                 web_interface.switch_to_explanation_page()
@@ -951,6 +962,7 @@ class PerceptionInterface:
                     handle_orientation,
                     attachment_dir,
                     attachment_pose,
+                    flip=flip,
                 )
                 if confirmed:
                     break

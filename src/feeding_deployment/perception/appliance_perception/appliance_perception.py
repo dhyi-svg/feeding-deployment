@@ -233,17 +233,16 @@ class AppliancePerception(TFInterface):
         # Elliptical arc about the hinge: full horizontal radius, vertical squashed by
         # ky (foreshortened out-of-plane swing). Starts at the handle and sweeps toward the
         # foreground/robot, stopping at the straight-down point so it never rises back up.
-        # We draw on the RAW (upside-down) frame -- _send_image flips 180 deg centrally --
-        # so "foreground" is the TOP of this frame (target = -pi/2); after the flip it
-        # reads as sweeping downward/out toward the robot. Handedness is inherent from the
-        # handle/hinge positions.
+        # The fridge/microwave frames are captured already flipped, so in the image the
+        # user sees, the door opens toward the bottom: sweep toward +y (target = +pi/2).
+        # Handedness is inherent from the handle/hinge positions.
         cx, cy = float(hinge_px[0]), float(hinge_px[1])
         vx, vy = handle_px[0] - cx, handle_px[1] - cy
         R = math.hypot(vx, vy)
         if R < 1e-3:
             return
         a0 = math.atan2(vy, vx)
-        target = -math.pi / 2.0                         # straight up in raw -> foreground after flip
+        target = math.pi / 2.0                          # toward +y (foreground) in the displayed frame
         d = 1.0 if (target - a0) > 0 else -1.0
         sweep = min(math.radians(_SWING_SWEEP_DEG), abs(target - a0))
         pts = [(cx + R * math.cos(a0 + d * sweep * i / _SWING_NSEG),

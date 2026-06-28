@@ -155,16 +155,21 @@ class WebInterface:
             with open(self.webapp_sent_messages_log, "a") as f:
                 f.write(json.dumps(msg_dict) + "\n")
 
-    def _send_image(self, image) -> None:
+    def _send_image(self, image, flip=True) -> None:
         # Every key image shown to the user (plate image, bite-selection image,
         # detection-confirmation vis, color-correction frame) flows through here.
         #
         # The camera is mounted upside down, so every frame it produces is rotated
         # 180 degrees. Flip it back here -- the single point every webapp image
         # passes through -- so the user always sees a naturally upright image.
-        # Callers must NOT pre-rotate the image (that would double-flip it). Flip
-        # before logging so the data logger records exactly what the user saw.
-        if image is not None:
+        # Callers must NOT pre-rotate the image (that would double-flip it).
+        #
+        # Pass flip=False when the camera is already upright for this capture -- e.g.
+        # the robot physically flips its (upside-down) camera to pick the plate out of
+        # the microwave, so that frame is already right-side-up and must NOT be rotated.
+        # We (don't) rotate before logging so the data logger records exactly what the
+        # user saw.
+        if image is not None and flip:
             image = cv2.rotate(image, cv2.ROTATE_180)
         if self.data_logger is not None:
             self.data_logger.log_image("webapp_sent", image)
@@ -188,9 +193,23 @@ class WebInterface:
             if self.data_logger is not None:
                 self.data_logger.log_user_input("webapp_to_robot", msg_dict)
 
+        teleop_status = msg_dict.get("status")
+        implicit_teleop_takeover = (
+            msg_dict.get("state") == "teleop"
+            and teleop_status in ("command", "halt")
+            and self.current_page != "teleop"
+        )
+
         # Mid-skill manual takeover request: flag it (and best-effort abort the
         # in-flight move) so the executive hands control to the teleop screen.
-        if msg_dict.get("state") == "teleop" and msg_dict.get("status") == "takeover":
+        # If the explicit takeover packet was dropped during a webapp route/ROS
+        # reconnect race, a teleop command from a non-teleop page is treated as
+        # an implicit takeover. The command itself is discarded; the user can tap
+        # again once the teleop session is active.
+        if (
+            msg_dict.get("state") == "teleop"
+            and teleop_status == "takeover"
+        ) or implicit_teleop_takeover:
             print("Received takeover request from web interface!")
             already_requested = self.takeover_event.is_set()
             self.takeover_event.set()
@@ -569,17 +588,18 @@ class WebInterface:
             self.switch_to_explanation_page()
         return confirmed
 
-    def get_attachment_detection_action(self, detection_type: str, vis_image=None) -> str:
+    def get_attachment_detection_action(self, detection_type: str, vis_image=None, flip=True) -> str:
         """Like get_detection_confirmation but also supports 'correct_color' action.
 
-        Returns 'confirm', 'redo', or 'correct_color'.
+        Returns 'confirm', 'redo', or 'correct_color'. Pass flip=False when the camera is
+        already upright for this capture (see _send_image).
         """
         self.current_page = "detection_confirm"
         self._send_message({"state": "detection_confirm", "status": "jump", "detection_type": detection_type})
         time.sleep(0.5)
         self._send_message({"state": "detection_confirm", "status": "info", "detection_type": detection_type})
         if vis_image is not None:
-            self._send_image(vis_image)
+            self._send_image(vis_image, flip=flip)
 
         msg_dict = self.get_required_web_interface_message(
             lambda msg_dict: (msg_dict["state"] == "detection_confirm")
@@ -590,11 +610,12 @@ class WebInterface:
 
     #### Color Correction Page ####
 
-    def start_color_correction(self, raw_bgr_image, initial_vis_image=None, initial_color_range: float = 0.1) -> None:
+    def start_color_correction(self, raw_bgr_image, initial_vis_image=None, initial_color_range: float = 0.1, flip=True) -> None:
         """Navigate to the color correction page and send images.
 
         raw_bgr_image: the raw BGR camera frame for pixel color picking.
         initial_vis_image: the detection corners vis to pre-populate the result panel.
+        flip: pass False when the camera is already upright for this capture (see _send_image).
         """
         self.current_page = "color_correction"
         self._send_message({"state": "color_correction", "status": "jump"})
@@ -602,13 +623,13 @@ class WebInterface:
         self._send_message({"state": "color_correction", "status": "info",
                             "initial_color_range": initial_color_range})
         if raw_bgr_image is not None:
-            self._send_image(raw_bgr_image)
+            self._send_image(raw_bgr_image, flip=flip)
         # Pre-populate the result panel with the initial detection visualization.
         if initial_vis_image is not None:
             time.sleep(0.1)
             self._send_message({"state": "color_correction", "status": "detection_success"})
             time.sleep(0.1)
-            self._send_image(initial_vis_image)
+            self._send_image(initial_vis_image, flip=flip)
 
     def wait_for_color_correction_message(self) -> dict:
         """Block until the color correction page sends a message."""
@@ -616,13 +637,16 @@ class WebInterface:
             lambda msg_dict: (msg_dict.get("state") == "color_correction")
         )
 
-    def send_color_correction_result(self, vis_image, success: bool) -> None:
-        """Send a detection result image (or failure notice) to the color correction page."""
+    def send_color_correction_result(self, vis_image, success: bool, flip=True) -> None:
+        """Send a detection result image (or failure notice) to the color correction page.
+
+        flip: pass False when the camera is already upright for this capture (see _send_image).
+        """
         if success:
             self._send_message({"state": "color_correction", "status": "detection_success"})
             time.sleep(0.1)
             if vis_image is not None:
-                self._send_image(vis_image)
+                self._send_image(vis_image, flip=flip)
         else:
             self._send_message({"state": "color_correction", "status": "detection_failed"})
 

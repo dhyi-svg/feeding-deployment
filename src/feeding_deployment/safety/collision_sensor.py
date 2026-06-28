@@ -3,7 +3,7 @@ This senses a collision in the robot arm using joint force torque sensing
 """
 try:
     import rospy
-    from std_msgs.msg import Bool
+    from std_msgs.msg import Bool, Float32MultiArray
     from sensor_msgs.msg import JointState
     from feeding_deployment_msgs.srv import (
         SetCollisionThreshold,
@@ -44,12 +44,16 @@ class CollisionSensor:
         self.q_pin = np.zeros(self.model.nq)
 
         self._collision_pub = rospy.Publisher("/collision_free", Bool, queue_size=1)
+        # Publishes [current_max_error, peak_last_10s, threshold] for the watchdog to
+        # render in its status panel (instead of this node printing to the shared terminal).
+        self._collision_force_pub = rospy.Publisher(
+            "/collision_force", Float32MultiArray, queue_size=1
+        )
         self._joint_state_sub = rospy.Subscriber(
             "/robot_joint_states", JointState, self._joint_state_callback
         )
 
         self._recent_max_errors = collections.deque()  # (timestamp, max_error) pairs
-        self._last_print_time = 0.0
 
         self._disable_collision_sensor = False
         self._disable_collision_sensor_sub = rospy.Subscriber(
@@ -152,9 +156,13 @@ class CollisionSensor:
             self._recent_max_errors.popleft()
         peak_10s = max(e for _, e in self._recent_max_errors)
 
-        if now - self._last_print_time >= 1.0:
-            print(f"Max Force Detected: {max_error:.3f}  |  Peak (last 10s): {peak_10s:.3f}")
-            self._last_print_time = now
+        # Publish for the watchdog status panel instead of printing here, so the
+        # shared watchdog terminal stays static.
+        self._collision_force_pub.publish(
+            Float32MultiArray(
+                data=[float(max_error), float(peak_10s), float(self._collision_threshold)]
+            )
+        )
 
         # Very high error means collision, otherwise model error
         if max_error > self._collision_threshold:
