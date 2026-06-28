@@ -26,30 +26,15 @@
 
 <script>
 
-import ROSLIB from 'roslib'
-import { ROS_URL, USER } from '@/config/parameterConfig'
+import { USER } from '@/config/parameterConfig'
 
 export default {
   name: 'IdleTakeover',
   data () {
-    return { ros: null, webAppPub: null, username: USER }
-  },
-  mounted () {
-    this.ros = new ROSLIB.Ros({ url: ROS_URL })
-    this.webAppPub = new ROSLIB.Topic({
-      ros: this.ros,
-      name: '/webapp_to_robot',
-      messageType: 'std_msgs/String'
-    })
+    return { username: USER }
   },
   methods: {
     takeoverArm () {
-      
-      if (this.webAppPub) {
-        this.webAppPub.publish(new ROSLIB.Message({
-          data: JSON.stringify({ state: 'teleop', status: 'takeover' })
-        }))
-      }
       this.$router.push('/manipulation_teleop')
     },
     takeoverBase () {
@@ -59,4 +44,3 @@ export default {
   }
 }
 </script>
-

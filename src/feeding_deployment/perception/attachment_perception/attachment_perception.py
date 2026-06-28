@@ -25,13 +25,25 @@ from feeding_deployment.perception.tf_interface import TFInterface
 
 
 class AttachmentPerception(TFInterface):
-    def __init__(self, num_perception_samples=25):
+    def __init__(self, num_perception_samples=25, data_logger=None):
         super().__init__()
 
         self.num_perception_samples = num_perception_samples
 
         self.attachment_points_pub = rospy.Publisher("/attachment_points", Marker, queue_size=1)
         self.attachment_center_pub = rospy.Publisher("/attachment_center", Marker, queue_size=1)
+
+        # Route detection images through the per-day data logger (into the active
+        # skill's folder) and cache the latest frame per name so PerceptionInterface
+        # can relay the confirmation vis to the iPad without re-reading from disk.
+        self._data_logger = data_logger
+        self._last_images = {}
+
+    def _log_image(self, name, image):
+        """Log a detection image by semantic name; no write to the source tree/cwd."""
+        self._last_images[name] = image
+        if self._data_logger is not None:
+            self._data_logger.log_image(name, image)
 
     def detect_attachment(self, rgb_image, camera_info_msg, depth_image, handle_orientation="front", handle_color=None, color_range=0.1):
         if rgb_image is None:
@@ -40,11 +52,10 @@ class AttachmentPerception(TFInterface):
 
         transform = self.get_frame_to_frame_transform(camera_info_msg)
 
-        file_path = os.path.dirname(__file__)
         print("Got images")
-        cv2.imwrite(file_path + "/rgb.png", rgb_image)
+        self._log_image("rgb", rgb_image)
         depth_mm = (depth_image * 1000.0).astype("uint16")
-        cv2.imwrite(file_path + "/depth.png", depth_mm)
+        self._log_image("depth", depth_mm)
 
         # -----------------------------
         # Color mask
@@ -116,7 +127,7 @@ class AttachmentPerception(TFInterface):
         vis = rgb_image.copy()
         vis[cluster_mask > 0] = (0, 0, 255)
 
-        cv2.imwrite(file_path + "/attachment_mask.png", vis)
+        self._log_image("attachment_mask", vis)
         # rospy.loginfo(
             # f"Saved attachment_mask.png with {cluster_pixels.shape[0]} pixels")
         
@@ -187,7 +198,7 @@ class AttachmentPerception(TFInterface):
         uv_center = self.world2Pixel(camera_info_msg, world_x=center_3d[0], world_y=center_3d[1], world_z=center_3d[2])
         self._halo_marker(corner_vis, (int(uv_center[0]), int(uv_center[1])), self._OVERLAY_ACCENT)
 
-        cv2.imwrite(file_path + "/attachment_corners.png", corner_vis)
+        self._log_image("attachment_corners", corner_vis)
 
         corners_3d = np.array(corners_3d)
 

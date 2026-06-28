@@ -79,9 +79,9 @@ class PerceptionInterface:
             print("Initializing drink perception ...")
             self._drink_perception = DrinkPerception()
             print("Initializing handle perception ...")
-            self._appliance_perception = AppliancePerception(self._grounded_sam, log_dir=self.log_dir)
+            self._appliance_perception = AppliancePerception(self._grounded_sam, data_logger=self.data_logger)
             print("Initializing attachment perception ...")
-            self._attachment_perception = AttachmentPerception()
+            self._attachment_perception = AttachmentPerception(data_logger=self.data_logger)
             print("Perception interface initialized")
 
             self._head_perception_warm_started = False
@@ -461,8 +461,7 @@ class PerceptionInterface:
                 if button_pose is None:
                     raise RuntimeError("Could not detect button pressing pose")
 
-                appliance_dir = os.path.dirname(inspect.getfile(self._appliance_perception.__class__))
-                vis_image = cv2.imread(os.path.join(appliance_dir, "rgb_button_pixel.png"))
+                vis_image = self._appliance_perception._last_images.get("rgb_button_pixel")
                 if web_interface is None:
                     confirmed = self._terminal_confirmation("button", vis_image)
                 else:
@@ -522,7 +521,7 @@ class PerceptionInterface:
                 if handle_pose is None:
                     raise RuntimeError(f"Could not detect handle opening poses for {handle_type}")
 
-                vis_image = cv2.imread(os.path.join(os.getcwd(), "handle_hinge_pixels.png"))
+                vis_image = self._appliance_perception._last_images.get("handle_hinge_pixels")
                 # Orientation is handled centrally in WebInterface._send_image (the
                 # camera is upside down); do not rotate here or it would double-flip.
                 if web_interface is None:
@@ -808,7 +807,6 @@ class PerceptionInterface:
         initial_color,
         initial_range: float,
         handle_orientation: str,
-        attachment_dir: str,
         initial_attachment_pose,
         flip=True,
     ):
@@ -823,7 +821,7 @@ class PerceptionInterface:
         current_range = float(initial_range)
         last_attachment_pose = initial_attachment_pose
 
-        vis_image = cv2.imread(os.path.join(attachment_dir, "attachment_corners.png"))
+        vis_image = self._attachment_perception._last_images.get("attachment_corners")
         # Orientation is handled centrally in WebInterface._send_image (the camera
         # is upside down), unless flip=False (camera already upright, e.g. microwave
         # pickup); pass the raw frame through here. The picker returns an RGB color,
@@ -868,7 +866,7 @@ class PerceptionInterface:
                 if new_pose is not None:
                     last_attachment_pose = new_pose
 
-                result_vis = cv2.imread(os.path.join(attachment_dir, "attachment_corners.png"))
+                result_vis = self._attachment_perception._last_images.get("attachment_corners")
                 # Orientation is handled centrally in WebInterface._send_image (the
                 # camera is upside down), unless flip=False (camera already upright);
                 # do not rotate here or it would double-flip.
@@ -931,8 +929,7 @@ class PerceptionInterface:
             if attachment_pose is None:
                 raise RuntimeError("Could not detect attachment pose")
 
-            attachment_dir = os.path.dirname(inspect.getfile(self._attachment_perception.__class__))
-            vis_image = cv2.imread(os.path.join(attachment_dir, "attachment_corners.png"))
+            vis_image = self._attachment_perception._last_images.get("attachment_corners")
             # Orientation is handled centrally in WebInterface._send_image (the
             # camera is upside down); do not rotate here or it would double-flip.
 
@@ -960,7 +957,6 @@ class PerceptionInterface:
                     current_color,
                     current_range,
                     handle_orientation,
-                    attachment_dir,
                     attachment_pose,
                     flip=flip,
                 )
@@ -972,7 +968,7 @@ class PerceptionInterface:
         if handle_type == "microwave":
             offset[:3, 3] = np.array([0, 0.009, -0.01])
         elif handle_type == "bottom textured fridge door":
-            offset[:3, 3] = np.array([0, -0.006, 0.0])
+            offset[:3, 3] = np.array([0, -0.012, 0.0])
         elif handle_type == "table":
             offset[:3, 3] = np.array([0, -0.008, 0.0])
         else:
@@ -982,7 +978,7 @@ class PerceptionInterface:
         if handle_type == "microwave":
             offset[:3, 3] = np.array([0, 0.009, -0.11])
         elif handle_type == "bottom textured fridge door":
-            offset[:3, 3] = np.array([0, -0.006, -0.11])
+            offset[:3, 3] = np.array([0, -0.012, -0.11])
         elif handle_type == "table":
             offset[:3, 3] = np.array([0, -0.008, -0.11])
         else:
@@ -1031,7 +1027,7 @@ class PerceptionInterface:
                 if sink_placement_pose is None:
                     raise RuntimeError("Could not detect sink placement pose")
 
-                vis_image = cv2.imread(os.path.join(os.getcwd(), "sink_back_pixel.png"))
+                vis_image = self._appliance_perception._last_images.get("sink_back_pixel")
                 if web_interface is None:
                     confirmed = self._terminal_confirmation("sink", vis_image)
                 else:
@@ -1078,9 +1074,9 @@ class PerceptionInterface:
                 if table_placement_pose is None:
                     raise RuntimeError("Could not detect table placement pose")
 
-                # detect_table_placement saves the annotated frame (red dot = placement
-                # center, blue = surrounding pixels used for depth) to the cwd.
-                vis_image = cv2.imread(os.path.join(os.getcwd(), "table_placement_pixel.png"))
+                # detect_table_placement logs the annotated frame (red dot = placement
+                # center, blue = surrounding pixels used for depth); read it from memory.
+                vis_image = self._appliance_perception._last_images.get("table_placement_pixel")
                 # Orientation is handled centrally in WebInterface._send_image (the
                 # camera is upside down); do not rotate here or it would double-flip.
                 if web_interface is None:

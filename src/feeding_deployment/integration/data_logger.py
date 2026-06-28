@@ -13,8 +13,9 @@ Layout (one directory per deployment day, keyed by user + day number):
         events.jsonl           # structured events logged by the executive/skills
         images_index.jsonl     # one record per saved image (path + metadata)
         images/
-            webapp_sent/       # images shown to the user on the iPad
-            transfer_pose/     # RGB frame used to compute the bite-transfer pose
+            <skill>/           # one folder per HLA (e.g. open_microwave, acquire_bite),
+                               #   files <run>_<name>.png (0_rgb, 0_depth, ...; reruns -> 1_*)
+            webapp_images/     # everything shown to the user on the iPad, in display order
             ...
 
 Design notes:
@@ -71,6 +72,19 @@ class DataLogger:
         self.enabled = day is not None
         self._lock = threading.Lock()
         self._image_seq = 0
+
+        # Per-HLA image organization, two-level prefix `images/<hla>/<run>[_<retry>]_<name>.png`:
+        #   <run>   -- the full skill execution; `begin_hla` bumps it (0, 1, 2, ...).
+        #   <retry> -- a re-detection within that execution; omitted for the first
+        #              capture, then 1, 2, ... So a full run is `1_rgb`, a rerun
+        #              within run 0 is `0_1_rgb`. Distinct names in one capture share
+        #              the prefix (0_rgb, 0_depth). `webapp_images/` is a separate
+        #              funnel keyed by its own monotonic counter.
+        self._current_hla: str | None = None
+        self._run: dict[str, int] = {}
+        self._retry: dict[str, int] = {}
+        self._group_used: dict[str, set] = {}
+        self._webapp_seq = 0
 
         if not self.enabled:
             self.day_dir = None
@@ -146,15 +160,45 @@ class DataLogger:
         except Exception as e:  # noqa: BLE001
             print(f"[data_logger] Failed to log event '{category}': {e}")
 
+    def begin_hla(self, hla_name: str) -> None:
+        """Mark ``hla_name`` as the active skill for subsequent ``log_image`` calls.
+
+        Images logged after this land in ``images/<hla_name>/``. Each call bumps the
+        full-run index (0, 1, 2, ...) and resets the retry counter, so re-running a
+        skill (e.g. after a teleop takeover) writes a new ``<run>_*`` set instead of
+        overwriting the previous one. No-op (but safe to call) when disabled.
+        """
+        if not self.enabled:
+            return
+        try:
+            with self._lock:
+                self._run[hla_name] = self._run.get(hla_name, -1) + 1
+                self._retry[hla_name] = 0
+                self._group_used[hla_name] = set()
+                self._current_hla = hla_name
+        except Exception as e:  # noqa: BLE001
+            print(f"[data_logger] Failed to begin HLA '{hla_name}': {e}")
+
     def log_image(
         self,
-        category: str,
+        name: str,
         image: Any,
         is_rgb: bool = False,
         ext: str = "png",
         **metadata: Any,
     ) -> str | None:
-        """Save an image under ``images/<category>/`` and index it.
+        """Save an image into the active skill's folder and index it.
+
+        ``name`` is the semantic image label (``"rgb"``, ``"depth"``,
+        ``"detection_mask"``, ...). The image is written as
+        ``images/<hla>/<run>[_<retry>]_<name>.<ext>`` for whichever skill
+        ``begin_hla`` last selected (falling back to ``images/misc/`` if none is
+        active yet). Distinct names share the current prefix (``0_rgb``, ``0_depth``);
+        re-logging a name already seen opens the next retry within the run
+        (``0_1_rgb``, ``0_1_depth``), while a fresh ``begin_hla`` bumps the run
+        (``1_rgb``). The special name ``"webapp"`` routes to ``images/webapp_images/`` keyed by a
+        monotonic counter (``<n>_webapp.<ext>``) -- the faithful, ordered record of
+        what was shown on the iPad, independent of any skill.
 
         ``image`` is an OpenCV-style ndarray. Pass ``is_rgb=True`` for frames in
         RGB order (e.g. head-perception camera frames) so they are converted to
@@ -170,14 +214,38 @@ class DataLogger:
         if image is None:
             return None
         try:
+            ts = self._timestamp()
             with self._lock:
                 seq = self._image_seq
                 self._image_seq += 1
-            ts = self._timestamp()
-            category_dir = self.images_dir / category
+                if name == "webapp":
+                    folder = "webapp_images"
+                    run: int | None = None
+                    retry: int | None = None
+                    stem = f"{self._webapp_seq}_webapp"
+                    self._webapp_seq += 1
+                else:
+                    folder = self._current_hla or "misc"
+                    if folder not in self._run:
+                        self._run[folder] = 0
+                        self._retry[folder] = 0
+                        self._group_used[folder] = set()
+                    # A repeated name signals a re-detection -> open the next retry.
+                    if name in self._group_used[folder]:
+                        self._retry[folder] += 1
+                        self._group_used[folder] = set()
+                    run = self._run[folder]
+                    retry = self._retry[folder]
+                    self._group_used[folder].add(name)
+                    # First capture of a run uses a double underscore (0__rgb);
+                    # reruns add the retry index (0_1_rgb). The extra '_' sorts
+                    # before the digit in the file explorer, so the base capture
+                    # lists ahead of its reruns while all of a run's files cluster.
+                    stem = f"{run}__{name}" if retry == 0 else f"{run}_{retry}_{name}"
+
+            category_dir = self.images_dir / folder
             category_dir.mkdir(parents=True, exist_ok=True)
-            filename = f"{seq:05d}_{int(ts['epoch'] * 1000)}.{ext}"
-            out_path = category_dir / filename
+            out_path = category_dir / f"{stem}.{ext}"
 
             to_write = image
             if is_rgb and _NUMPY_IMPORTED and getattr(image, "ndim", 0) == 3:
@@ -189,7 +257,10 @@ class DataLogger:
             record = {
                 **ts,
                 "seq": seq,
-                "category": category,
+                "folder": folder,
+                "name": name,
+                "run": run,
+                "retry": retry,
                 "path": str(out_path.relative_to(self.day_dir)),
                 **metadata,
             }
@@ -197,7 +268,7 @@ class DataLogger:
                 self._append_jsonl(self._images_index_path, record)
             return str(out_path)
         except Exception as e:  # noqa: BLE001
-            print(f"[data_logger] Failed to log image '{category}': {e}")
+            print(f"[data_logger] Failed to log image '{name}': {e}")
             return None
 
     def close(self) -> None:

@@ -28,7 +28,7 @@ class CollisionSensor:
 
     # Default threshold for collision detection. HLAs can temporarily override
     # this at runtime via the /set_collision_threshold service.
-    DEFAULT_COLLISION_THRESHOLD = 10.0
+    DEFAULT_COLLISION_THRESHOLD = 15.0
 
     def __init__(self):
 

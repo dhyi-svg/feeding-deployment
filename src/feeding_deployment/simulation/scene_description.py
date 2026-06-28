@@ -115,11 +115,11 @@ class SceneDescription:
     drink_before_transfer_pose: Pose
 
     # Utensil mount constants
-    utensil_inside_mount: Pose
+    utensil_inside_mount_pose: Pose
     utensil_inside_mount_pos: JointPositions
-    utensil_outside_mount: Pose
+    utensil_outside_mount_pose: Pose
     utensil_outside_mount_pos: JointPositions
-    utensil_above_mount: Pose
+    utensil_above_mount_pose: Pose
     utensil_above_mount_pos: JointPositions
 
     # Drink placement constants
@@ -127,13 +127,15 @@ class SceneDescription:
     drink_staging_pos: JointPositions
 
     # Wipe mount constants
-    wipe_inside_mount: Pose
+    wipe_inside_mount_pose: Pose
     wipe_inside_mount_pos: JointPositions
-    wipe_outside_mount: Pose
+    wipe_outside_mount_pose: Pose
     wipe_outside_mount_pos: JointPositions
-    wipe_above_mount: Pose
+    wipe_above_mount_pose: Pose
     wipe_above_mount_pos: JointPositions
-
+    wipe_outside_above_mount_pose: Pose
+    wipe_outside_above_mount_pos: JointPositions
+    
     # Plate holder constants
     inside_plate_holder_pose: Pose
     above_plate_holder_pose: Pose
@@ -147,15 +149,10 @@ class SceneDescription:
     drink_delta_xy: tuple[float, float] = (0.0, 0.0)
 
     # Specific env arguments can be set to None
-    utensil_outside_above_mount: Pose = None
+    utensil_outside_above_mount_pose: Pose = None
     utensil_outside_above_mount_pos: JointPositions = None
     # Used for specific environments
-    wipe_outside_above_mount: Pose = None
-    wipe_outside_above_mount_pos: JointPositions = None
-    wipe_infront_mount: Pose = None 
-    wipe_infront_mount_pos: JointPositions = None
-    wipe_neutral_pos: JointPositions = None
-
+    
     # Robot.
     robot_name: str = "kinova-gen3"
     robot_urdf_path: Path = (Path(__file__).parent.parent / "assets" / "robot" / "robot.urdf")   
@@ -325,7 +322,7 @@ class SceneDescription:
 
     @property
     def utensil_pose(self):
-        return self.utensil_inside_mount.multiply(self.tool_frame_to_finger_tip)
+        return self.utensil_inside_mount_pose.multiply(self.tool_frame_to_finger_tip)
     
     @property
     def drink_pose(self):
@@ -340,7 +337,7 @@ class SceneDescription:
 
     @property
     def wipe_pose(self):
-        return self.wipe_inside_mount.multiply(self.tool_frame_to_finger_tip)
+        return self.wipe_inside_mount_pose.multiply(self.tool_frame_to_finger_tip)
     
     # @property
     # def plate_pose(self):

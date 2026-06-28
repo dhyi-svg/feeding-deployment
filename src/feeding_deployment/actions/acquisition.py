@@ -172,7 +172,12 @@ class AcquireBiteHLA(HighLevelAction):
                                 cv2.rectangle(boxes_vis, (x, y), (x + w, y + h), (0, 165, 240), 2)
                                 cv2.putText(boxes_vis, f"{label} #{i + 1}", (x, max(y - 5, 12)),
                                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 240), 1, cv2.LINE_AA)
-                        cv2.imwrite(str(self.food_detection_log_dir / f"food_detection_boxes_{id}.png"), boxes_vis)
+                        # Route through the data logger so the annotated frame lands
+                        # in the active skill's folder (images/acquire_bite/) rather
+                        # than a separate food_detection_log/ tree.
+                        data_logger = getattr(self.perception_interface, "data_logger", None)
+                        if data_logger is not None:
+                            data_logger.log_image("food_detection_boxes", boxes_vis)
                     except Exception as e:
                         print("Failed to save annotated bounding-box image:", e)
 

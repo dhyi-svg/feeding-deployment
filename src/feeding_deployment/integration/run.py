@@ -1006,6 +1006,10 @@ class _Runner:
 
         for i, ground_hla in enumerate(plan_hlas):
             print(f"Refining {ground_hla}")
+            # Tell the data logger which skill is now executing so every image it
+            # (and its perception) saves lands in images/<skill>/. Re-running this
+            # skill (teleop redo below) calls begin_hla again -> bumps the run index.
+            self.data_logger.begin_hla(skill_plan_names[i])
             # Tell the web interface which skill is now executing.
             if self.web_interface is not None:
                 self.web_interface.publish_skill_plan(skill_plan_names, i)

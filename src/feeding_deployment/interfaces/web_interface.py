@@ -130,6 +130,7 @@ class WebInterface:
             print("Error stopping gesture listener thread: ", e)
 
     def switch_to_explanation_page(self) -> None:
+        self.current_page = "robot_executing"
         self.web_interface_publisher.publish(String(json.dumps({"state": "robot_executing", "status": "jump"})))
 
     def publish_skill_plan(self, plan_names: list, current_index: int) -> None:
@@ -172,7 +173,9 @@ class WebInterface:
         if image is not None and flip:
             image = cv2.rotate(image, cv2.ROTATE_180)
         if self.data_logger is not None:
-            self.data_logger.log_image("webapp_sent", image)
+            # "webapp" routes to images/webapp_images/ (monotonic, display order) --
+            # the faithful record of every frame shown on the iPad.
+            self.data_logger.log_image("webapp", image)
         self.web_interface_image_publisher.publish(self.image_bridge.cv2_to_compressed_imgmsg(image))
 
     def _message_callback(self, msg: "String") -> None:
@@ -193,23 +196,9 @@ class WebInterface:
             if self.data_logger is not None:
                 self.data_logger.log_user_input("webapp_to_robot", msg_dict)
 
-        teleop_status = msg_dict.get("status")
-        implicit_teleop_takeover = (
-            msg_dict.get("state") == "teleop"
-            and teleop_status in ("command", "halt")
-            and self.current_page != "teleop"
-        )
-
         # Mid-skill manual takeover request: flag it (and best-effort abort the
         # in-flight move) so the executive hands control to the teleop screen.
-        # If the explicit takeover packet was dropped during a webapp route/ROS
-        # reconnect race, a teleop command from a non-teleop page is treated as
-        # an implicit takeover. The command itself is discarded; the user can tap
-        # again once the teleop session is active.
-        if (
-            msg_dict.get("state") == "teleop"
-            and teleop_status == "takeover"
-        ) or implicit_teleop_takeover:
+        if msg_dict.get("state") == "teleop" and msg_dict.get("status") == "takeover":
             print("Received takeover request from web interface!")
             already_requested = self.takeover_event.is_set()
             self.takeover_event.set()

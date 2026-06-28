@@ -69,7 +69,6 @@ export default {
   name: 'app',
   data () {
     return {
-      takeoverPublisher: null,
       takeoverMicEnabled: false,
       takeoverThreshold: 0.1,
       skillPlan: [],
@@ -164,9 +163,8 @@ export default {
     connectRos () {
       // App.vue is the persistent root: unlike the views (which build a fresh
       // connection on every mount), this socket would otherwise live and die
-      // once. If it drops with no reconnect, takeoverPublisher and the
-      // /skill_plan listener silently go dead -> the global Take Over buttons and
-      // base-control visibility stop working. Reconnect on close so they heal.
+      // once. If it drops with no reconnect, the /skill_plan listener and spoken
+      // prompts silently go dead. Reconnect on close so they heal.
       const ros = new ROSLIB.Ros({ url: ROS_URL })
       this._ros = ros
       ros.on('error', () => { /* a 'close' follows; reconnect is handled there */ })
@@ -177,11 +175,6 @@ export default {
           this._reconnectTimer = null
           this.connectRos()
         }, 1000)
-      })
-      this.takeoverPublisher = new ROSLIB.Topic({
-        ros,
-        name: '/webapp_to_robot',
-        messageType: 'std_msgs/String'
       })
       this.skillPlanListener = new ROSLIB.Topic({
         ros,
@@ -235,11 +228,6 @@ export default {
       window.speechSynthesis.speak(utterance)
     },
     controlArm () {
-      if (this.takeoverPublisher) {
-        this.takeoverPublisher.publish(new ROSLIB.Message({
-          data: JSON.stringify({ state: 'teleop', status: 'takeover' })
-        }))
-      }
       this.$router.push('/manipulation_teleop')
     },
     controlBase () {
