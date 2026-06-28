@@ -164,20 +164,28 @@ class AttachmentPerception(TFInterface):
         # Get 4 rectangle corners in 2D (plane coordinates)
         box_2d = cv2.boxPoints(rect)  # shape (4,2)
 
-        # visualize cornerns in an image
-        corner_vis = rgb_image.copy()
-        # visualize center
-        uv_center = self.world2Pixel(camera_info_msg, world_x=center_3d[0], world_y=center_3d[1], world_z=center_3d[2])
-        cv2.circle(corner_vis, (int(uv_center[0]), int(uv_center[1])), 5, (0, 0, 255), -1)
+        # -----------------------------
+        # User-facing visualization: show the color-detected pixels (all raw
+        # matches faint, the kept cluster bold) plus viewfinder brackets at the
+        # four detected corners, so a non-technical user can judge the detection
+        # -- and whether to hit "Correct Color". Drawn in raw orientation;
+        # WebInterface._send_image applies the central 180 deg flip before display.
+        # -----------------------------
+        corner_vis = self._overlay_detected_color(rgb_image.copy(), mask, cluster_mask)
 
-        # Back-project corners to 3D
+        # Back-project the four corners to 3D, collecting their pixels.
         corners_3d = []
+        corner_uvs = []
         for x2d, y2d in box_2d:
             p3d = P0 + x2d * u + y2d * v
             corners_3d.append(p3d)
-            # visualize corner in image
             uv = self.world2Pixel(camera_info_msg, world_x=p3d[0], world_y=p3d[1], world_z=p3d[2])
-            cv2.circle(corner_vis, (int(uv[0]), int(uv[1])), 5, (0, 255, 0), -1)
+            corner_uvs.append((int(uv[0]), int(uv[1])))
+
+        # Viewfinder brackets at the corners + center dot (amber, matching).
+        self._draw_corner_brackets(corner_vis, corner_uvs)
+        uv_center = self.world2Pixel(camera_info_msg, world_x=center_3d[0], world_y=center_3d[1], world_z=center_3d[2])
+        self._halo_marker(corner_vis, (int(uv_center[0]), int(uv_center[1])), self._OVERLAY_ACCENT)
 
         cv2.imwrite(file_path + "/attachment_corners.png", corner_vis)
 
@@ -243,6 +251,49 @@ class AttachmentPerception(TFInterface):
 
         print("Could not find transform between arm_base_link and camera_color_optical_frame.")
         return None
+
+    # BGR constants for the user-facing detection overlay.
+    _OVERLAY_HL = (0, 0, 255)         # red:  color pixels kept (used to fit the attachment)
+    _OVERLAY_REJECT = (255, 255, 0)   # cyan: color matches discarded by clustering
+    _OVERLAY_ACCENT = (40, 190, 255)  # amber: corner brackets + center dot
+
+    @staticmethod
+    def _overlay_detected_color(vis, raw_mask, cluster_mask):
+        """Tint the color-filtered pixels onto ``vis``.
+
+        Pixels that pass the color threshold but are discarded by DBSCAN clustering
+        are tinted cyan (rejected); the kept cluster -- the pixels actually used to
+        fit the attachment -- is tinted bold red. So the user sees what the color
+        filter caught versus what was actually used.
+        """
+        # DEBUG: solid colors, no alpha -- discarded matches = red, kept cluster = black.
+        if raw_mask is not None and cluster_mask is not None:
+            rejected = (raw_mask > 0) & (cluster_mask == 0)
+            vis[rejected] = (0, 0, 255)        # solid red
+        if cluster_mask is not None:
+            vis[cluster_mask > 0] = (0, 0, 0)  # solid black
+        return vis
+
+    @staticmethod
+    def _draw_corner_brackets(vis, corner_uvs, frac=0.32, thickness=3):
+        """Draw viewfinder-style L brackets at each corner, along the rectangle
+        edges. ``corner_uvs`` are in ``cv2.boxPoints`` order, so consecutive
+        points are adjacent corners.
+        """
+        accent = AttachmentPerception._OVERLAY_ACCENT
+        pts = [np.array(p, dtype=float) for p in corner_uvs]
+        n = len(pts)
+        for i in range(n):
+            p = pts[i]
+            for nb in (pts[(i - 1) % n], pts[(i + 1) % n]):
+                end = p + (nb - p) * frac
+                cv2.line(vis, tuple(p.astype(int)), tuple(end.astype(int)), accent, thickness, cv2.LINE_AA)
+
+    @staticmethod
+    def _halo_marker(vis, pt, color, radius=6):
+        """Filled dot with a white ring so it reads on any background."""
+        cv2.circle(vis, pt, radius + 4, (255, 255, 255), -1, cv2.LINE_AA)
+        cv2.circle(vis, pt, radius, color, -1, cv2.LINE_AA)
 
     def detect_attachment_color(self, bgr_image, handle_color=None, color_range=0.1):
         hsv = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV)

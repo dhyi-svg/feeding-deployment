@@ -23,6 +23,8 @@ from feeding_deployment.actions.base import (
     FoodHeated,
 )
 
+from feeding_deployment.safety.collision_threshold import collision_threshold
+
 class PlacePlateInApplianceHLA(HighLevelAction):
     """Place the plate into an appliance (fridge or microwave)."""
 
@@ -95,7 +97,7 @@ class PlacePlateOnHolderHLA(HighLevelAction):
     # contact with the handle produces larger torque error. Tune on the real
     # robot; reverts to the sensor default automatically after the move.
     HOLDER_COLLISION_THRESHOLD = 20.0
-    
+
     def get_name(self) -> str:
         return "PlacePlateOnHolder"
 

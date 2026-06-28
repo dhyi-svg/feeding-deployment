@@ -17,8 +17,9 @@ import queue
 import signal
 import sys
 
-from sensor_msgs.msg import CameraInfo
-from geometry_msgs.msg import WrenchStamped
+from sensor_msgs.msg import CameraInfo, LaserScan, JointState
+from geometry_msgs.msg import WrenchStamped, Pose
+from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool
 
 import threading
@@ -37,6 +38,10 @@ CAMERA_FREQUENCY_THRESHOLD = 2 # expected is 30 Hz
 FT_FREQUENCY_THRESHOLD = 300 # expected is 1000 Hz
 FT_THRESHOLD = [40.0, 40.0, 40.0, 2.0, 2.0, 2.0]
 COLLISION_FREE_FREQUENCY_THRESHOLD = 100 # expected is 350 Hz (empirical)
+LIDAR_FREQUENCY_THRESHOLD = 2 # expected is ~5-10 Hz (RPLIDAR A1)
+ZED_FREQUENCY_THRESHOLD = 2 # expected is ~30-60 Hz (ZED Mini odom)
+ROBOT_JOINT_STATES_FREQUENCY_THRESHOLD = 2 # expected high (tight publish loop)
+ROBOT_CARTESIAN_STATE_FREQUENCY_THRESHOLD = 2 # expected high (tight publish loop)
 
 WATCHDOG_RUN_FREQUENCY = 1000
 
@@ -75,6 +80,21 @@ class WatchDog:
         self.collision_free_timestamps = PeekableQueue()
         self.collision_free_unexpected = False
 
+        self.lidar_l_sub = rospy.Subscriber('/lidar_l/scan', LaserScan, self.lidarLeftCallback, queue_size = queue_size, buff_size = 65536*queue_size)
+        self.lidar_l_timestamps = PeekableQueue()
+
+        self.lidar_r_sub = rospy.Subscriber('/lidar_r/scan', LaserScan, self.lidarRightCallback, queue_size = queue_size, buff_size = 65536*queue_size)
+        self.lidar_r_timestamps = PeekableQueue()
+
+        self.zed_sub = rospy.Subscriber('/zed_mini/zed_node/odom', Odometry, self.zedCallback, queue_size = queue_size, buff_size = 65536*queue_size)
+        self.zed_timestamps = PeekableQueue()
+
+        self.robot_joint_states_sub = rospy.Subscriber('/robot_joint_states', JointState, self.robotJointStatesCallback, queue_size = queue_size, buff_size = 65536*queue_size)
+        self.robot_joint_states_timestamps = PeekableQueue()
+
+        self.robot_cartesian_state_sub = rospy.Subscriber('/robot_cartesian_state', Pose, self.robotCartesianStateCallback, queue_size = queue_size, buff_size = 65536*queue_size)
+        self.robot_cartesian_state_timestamps = PeekableQueue()
+
         self.watchdog_status_pub = rospy.Publisher("/watchdog_status", Bool, queue_size=1)
 
         self.execution_log_path = Path(__file__).parent.parent / "integration" / "log" / "execution_log.txt"
@@ -112,15 +132,35 @@ class WatchDog:
         if not msg.data:
             self.collision_free_unexpected = True
 
+    def lidarLeftCallback(self, msg):
+        self.lidar_l_timestamps.put(time.time())
+
+    def lidarRightCallback(self, msg):
+        self.lidar_r_timestamps.put(time.time())
+
+    def zedCallback(self, msg):
+        self.zed_timestamps.put(time.time())
+
+    def robotJointStatesCallback(self, msg):
+        self.robot_joint_states_timestamps.put(time.time())
+
+    def robotCartesianStateCallback(self, msg):
+        self.robot_cartesian_state_timestamps.put(time.time())
+
     def check_status(self):
         self.second_counter += 1
         self._arm_interface.is_alive()
         anomaly = AnomalyStatus.NO_ANOMALY
         start_time = time.time()
         frequencies = []
-        for _queue, _threshold, _anomaly in [(self.camera_timestamps, CAMERA_FREQUENCY_THRESHOLD, AnomalyStatus.CAMERA_FREQUENCY), 
+        for _queue, _threshold, _anomaly in [(self.camera_timestamps, CAMERA_FREQUENCY_THRESHOLD, AnomalyStatus.CAMERA_FREQUENCY),
                                             (self.ft_timestamps, FT_FREQUENCY_THRESHOLD, AnomalyStatus.FT_FREQUENCY),
-                                            (self.collision_free_timestamps, COLLISION_FREE_FREQUENCY_THRESHOLD, AnomalyStatus.COLLISION_FREE_FREQUENCY)]:
+                                            (self.collision_free_timestamps, COLLISION_FREE_FREQUENCY_THRESHOLD, AnomalyStatus.COLLISION_FREE_FREQUENCY),
+                                            (self.lidar_l_timestamps, LIDAR_FREQUENCY_THRESHOLD, AnomalyStatus.LIDAR_L_FREQUENCY),
+                                            (self.lidar_r_timestamps, LIDAR_FREQUENCY_THRESHOLD, AnomalyStatus.LIDAR_R_FREQUENCY),
+                                            # (self.zed_timestamps, ZED_FREQUENCY_THRESHOLD, AnomalyStatus.ZED_FREQUENCY),
+                                            (self.robot_joint_states_timestamps, ROBOT_JOINT_STATES_FREQUENCY_THRESHOLD, AnomalyStatus.ROBOT_JOINT_STATES_FREQUENCY),
+                                            (self.robot_cartesian_state_timestamps, ROBOT_CARTESIAN_STATE_FREQUENCY_THRESHOLD, AnomalyStatus.ROBOT_CARTESIAN_STATE_FREQUENCY)]:
             while _queue.peek() < start_time - 1.0:
                 _queue.get()
             queue_size = _queue.qsize()
@@ -129,12 +169,11 @@ class WatchDog:
                 rospy.loginfo(f"Frequency: {queue_size} for {_anomaly}")
                 anomaly = _anomaly
                 break   
-            frequencies.append(queue_size)
+            frequencies.append((_anomaly.name, queue_size))
 
         if self.second_counter == WATCHDOG_RUN_FREQUENCY:
             print("Watchdog running at expected frequency.")
-            print(f"Frequencies:  Camera: {frequencies[0]}, FT: {frequencies[1]}, Collision Free: {frequencies[2]}")
-            # print(f"Frequencies:  Camera: {frequencies[0]}, Collision Free: {frequencies[1]}")
+            print("Frequencies:  " + ", ".join(f"{name}: {freq}" for name, freq in frequencies))
             self.second_counter = 0
 
         for _unexpected, _anomaly in [

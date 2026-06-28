@@ -11,6 +11,19 @@
     <div class="bd det-bd">
       <div class="det-instruction" v-html="currentInstruction"></div>
 
+      <div v-if="currentLegend" class="legend-row">
+        <span v-for="(item, i) in currentLegend" :key="i" class="legend-chip">
+          <span
+            class="swatch"
+            :class="{ 'swatch-box': item.swatch === 'box' }"
+            :style="item.swatch === 'box'
+              ? { borderColor: item.color || '#ffbe3c' }
+              : { backgroundColor: item.color }"
+          ></span>
+          {{ item.label }}
+        </span>
+      </div>
+
       <div class="cam cam-wide">
         <img v-if="imageSrc" :src="imageSrc" alt="Detection visualization" />
         <div v-else class="cam-placeholder">Waiting for detection image...</div>
@@ -34,30 +47,53 @@ const DETECTION_MESSAGES = {
   handle: {
     slog: 'Please verify the handle detection.',
     instruction:
-      "Does the robot's handle detection look correct? <br>" +
-      "Green dot = handle, Blue dot = hinge. Red dot = where to place plate. <br>" +
-      "Click 'Looks Correct' to proceed, or 'Redo' to detect again."
+      "Does the robot's handle detection look correct? " +
+      "Click 'Looks Correct' to proceed, or 'Redo' to detect again.",
+    legend: [
+      { swatch: 'box', label: 'Detected door (opens toward you)' },
+      { color: '#ff3b30', label: 'Handle — where the robot grabs' },
+      { color: '#3498db', label: 'Hinge — the edge the door pivots on' }
+    ]
   },
   button: {
     slog: 'Please verify the microwave button detection.',
     instruction:
-      "Does the robot's microwave button detection look correct? <br>" +
-      "The marked point should be on the start / 30 secs button to press. <br>" +
-      "Click 'Looks Correct' to proceed, or 'Redo' to detect again."
+      "Does the robot's microwave button detection look correct? " +
+      "If the wrong spot is marked, tap 'Redo'.",
+    legend: [
+      { color: '#ff3b30', label: 'Start / 30 secs button to press' }
+    ]
+  },
+  sink: {
+    slog: 'Please verify the sink placement detection.',
+    instruction:
+      "Does the robot's sink detection look correct? " +
+      "If it's off, tap 'Redo' to detect again.",
+    legend: [
+      { swatch: 'box', label: 'Detected sink area' },
+      { color: '#ff3b30', label: 'Where the plate will be placed' }
+    ]
   },
   plate: {
     slog: 'Please verify the plate placement detection.',
     instruction:
-      "Does the robot's plate placement detection look correct? <br>" +
-      "Red dot = where the plate will be placed on the table. <br>" +
-      "Click 'Looks Correct' to proceed, or 'Redo' to detect again."
+      "Does the robot's plate placement detection look correct? " +
+      "If it's off, tap 'Redo' to detect again.",
+    legend: [
+      { swatch: 'box', label: 'Detected placement marker' },
+      { color: '#ff3b30', label: 'Where the plate will be placed' }
+    ]
   },
   attachment: {
     slog: 'Please verify the attachment detection.',
     instruction:
-      "Does the robot's attachment detection look correct? <br>" +
-      "The highlighted region shows the detected attachment point. <br>" +
-      "Click 'Looks Correct' to proceed, 'Redo' to detect again, or 'Correct Color' to adjust the color filter."
+      "Does the robot's attachment detection look correct? " +
+      "If the wrong area is highlighted, tap 'Correct Color' to adjust the color filter.",
+    legend: [
+      { color: '#ff3b30', label: 'Color pixels used' },
+      { color: '#00c8c8', label: 'Color matches rejected' },
+      { swatch: 'box', label: 'Detected attachment (corners + center)' }
+    ]
   }
 };
 
@@ -82,6 +118,9 @@ export default {
     },
     currentInstruction () {
       return this.currentMessage.instruction;
+    },
+    currentLegend () {
+      return this.currentMessage.legend || null;
     }
   },
   mounted () {
@@ -172,4 +211,34 @@ export default {
   }
 }
 </script>
+
+<style scoped>
+.legend-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px 16px;
+  margin: 10px 0 2px;
+}
+.legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.95rem;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+  padding: 6px 12px;
+}
+.swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.swatch-box {
+  border-radius: 3px;
+  background: transparent !important;
+  border: 3px solid #ffbe3c; /* fallback; per-chip color set inline (mirrors the box) */
+}
+</style>
 

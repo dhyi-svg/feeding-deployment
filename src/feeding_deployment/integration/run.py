@@ -286,6 +286,7 @@ class _Runner:
         # Initialize the perceiver (e.g., get joint states or human head poses).
         self.perception_interface = PerceptionInterface(robot_interface=self.robot_interface, simulate_head_perception=self.simulate_head_perception, data_logger=self.data_logger)
 
+        print("Initializing the scene...")
         # Initialize the simulator.
         scene_config_path = Path(__file__).parent.parent / "simulation" / "configs" / f"{scene_config}.yaml"
         self.scene_description = create_scene_description_from_config(str(scene_config_path), transfer_type)
@@ -299,6 +300,7 @@ class _Runner:
         else:
             print("Running in simulation mode.")
 
+        print("Initializing FLAIR...")
         grounded_sam = self.perception_interface._grounded_sam if hasattr(self.perception_interface, '_grounded_sam') else None
         self.flair = FLAIR(self.log_dir, grounded_sam=grounded_sam)
 

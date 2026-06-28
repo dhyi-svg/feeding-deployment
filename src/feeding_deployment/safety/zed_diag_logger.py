@@ -1,0 +1,310 @@
+#!/usr/bin/env python3
+"""zed_diag_logger.py -- find out WHY the ZED stream stalls/trips the watchdog.
+
+Measurement tool, NOT part of the safety path. Run it for an hour WHILE the
+robot operates normally; it touches nothing the robot uses (read-only subscribers
++ read-only system polling). The watchdog tripped repeatedly on the ZED odom
+frequency; this logger records everything needed to pin the cause.
+
+Core idea -- monitor TWO ZED streams at once so a stall is self-diagnosing:
+
+  * /zed_mini/zed_node/imu/data   (IMU)  -- raw off the sensor, ~200-400 Hz
+  * /zed_mini/zed_node/odom       (odom) -- VIO-FUSED output, ~30-60 Hz
+
+If BOTH stop together  -> the node/USB/camera dropped (hardware/bandwidth).
+If ONLY odom stops     -> the VIO/grab loop stalled (CPU/GPU/tracking), USB fine.
+
+For every message it also separates ARRIVAL gaps (wall clock, when WE got it)
+from HEADER-STAMP gaps (when the driver said it was produced): if header stamps
+stay continuous but arrivals gap, the transport/subscriber stalled, not the
+camera.
+
+Stalls are correlated against the two usual suspects, sampled the whole run:
+  * USB kernel events (dmesg/journalctl: disconnect/reset/xhci) -- best effort
+  * CPU%% + load average, and GPU util/temp/power (nvidia-smi) -- best effort
+
+Outputs (one timestamped dir per run, default under integration/log/):
+  * samples.csv  -- ~1 Hz: per-topic Hz, worst arrival gap, CPU, load, GPU
+  * events.log   -- every detected dropout (which topic, gap size) + USB lines,
+                    interleaved in wall-clock order so you can read the story
+  * run_meta.json-- start/end, args, totals (dropouts, worst gap, usb events)
+
+Usage (let it run an hour, Ctrl+C stops early and still writes the summary):
+    python zed_diag_logger.py --duration 3600
+
+Reading dmesg may need privileges (kernel.dmesg_restrict); if so, run with sudo
+or pass --no-dmesg. Everything else works without root.
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import threading
+import time
+from collections import deque
+from datetime import datetime
+from pathlib import Path
+
+import rospy
+from sensor_msgs.msg import Imu
+from nav_msgs.msg import Odometry
+
+
+# A single inter-message gap larger than this (seconds) is logged as a dropout
+# event. Normal odom spacing is ~0.02-0.03 s, IMU ~0.003-0.005 s, so 0.25 s
+# means ~8-60 messages were missed -- the start of a real stall, well before the
+# watchdog's full 1 s trip, so we catch precursors too.
+DROPOUT_GAP_S = 0.25
+
+
+class TopicMonitor:
+    """Tracks rate and gaps for one topic. Callback-thread safe."""
+
+    def __init__(self, name, event_log):
+        self.name = name
+        self._event_log = event_log
+        self._lock = threading.Lock()
+        self.total = 0
+        self._window_count = 0          # messages since last sample()
+        self._last_arrival = None       # wall time of previous message
+        self._last_stamp = None         # header stamp (s) of previous message
+        self._max_gap = 0.0             # worst arrival gap since last sample()
+        self._max_stamp_gap = 0.0       # worst header-stamp gap since last sample()
+        self.dropouts = 0
+        self.worst_gap = 0.0            # worst arrival gap over the whole run
+
+    def on_msg(self, msg):
+        now = time.time()
+        try:
+            stamp = msg.header.stamp.to_sec()
+        except AttributeError:
+            stamp = None
+        with self._lock:
+            self.total += 1
+            self._window_count += 1
+            if self._last_arrival is not None:
+                gap = now - self._last_arrival
+                if gap > self._max_gap:
+                    self._max_gap = gap
+                if gap > self.worst_gap:
+                    self.worst_gap = gap
+                if gap >= DROPOUT_GAP_S:
+                    self.dropouts += 1
+                    stamp_gap = (stamp - self._last_stamp) if (stamp and self._last_stamp) else float("nan")
+                    self._event_log.write(
+                        f"DROPOUT {self.name:5s} arrival_gap={gap:6.3f}s "
+                        f"stamp_gap={stamp_gap:6.3f}s "
+                        f"(header {'continuous->transport stall' if stamp_gap < gap / 2 else 'also gapped->source stall'})"
+                    )
+            if stamp is not None:
+                if self._last_stamp is not None:
+                    sg = stamp - self._last_stamp
+                    if sg > self._max_stamp_gap:
+                        self._max_stamp_gap = sg
+                self._last_stamp = stamp
+            self._last_arrival = now
+
+    def sample(self, dt):
+        """Return (hz, max_arrival_gap, max_stamp_gap) and reset the window."""
+        with self._lock:
+            hz = self._window_count / dt if dt > 0 else 0.0
+            max_gap = self._max_gap
+            max_stamp_gap = self._max_stamp_gap
+            self._window_count = 0
+            self._max_gap = 0.0
+            self._max_stamp_gap = 0.0
+        return hz, max_gap, max_stamp_gap
+
+
+class EventLog:
+    """Append-only, timestamped, thread-safe text log."""
+
+    def __init__(self, path):
+        self._f = open(path, "a", buffering=1)  # line-buffered
+        self._lock = threading.Lock()
+        self.lines = 0
+
+    def write(self, line):
+        ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        with self._lock:
+            self._f.write(f"{ts}  {line}\n")
+            self.lines += 1
+
+    def close(self):
+        self._f.close()
+
+
+class CpuSampler:
+    """Overall CPU%% from /proc/stat deltas + load average. No deps."""
+
+    def __init__(self):
+        self._prev = self._read()
+
+    @staticmethod
+    def _read():
+        with open("/proc/stat") as f:
+            parts = f.readline().split()[1:]   # user nice system idle iowait ...
+        vals = [int(x) for x in parts]
+        idle = vals[3] + (vals[4] if len(vals) > 4 else 0)
+        return sum(vals), idle
+
+    def sample(self):
+        total, idle = self._read()
+        dt_total = total - self._prev[0]
+        dt_idle = idle - self._prev[1]
+        self._prev = (total, idle)
+        cpu = 100.0 * (1.0 - dt_idle / dt_total) if dt_total > 0 else float("nan")
+        try:
+            load1 = os.getloadavg()[0]
+        except OSError:
+            load1 = float("nan")
+        return cpu, load1
+
+
+def sample_gpu():
+    """(util%, temp C, power W) via nvidia-smi, or NaNs if unavailable."""
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi",
+             "--query-gpu=utilization.gpu,temperature.gpu,power.draw",
+             "--format=csv,noheader,nounits"],
+            stderr=subprocess.DEVNULL, timeout=2.0,
+        ).decode().strip().splitlines()[0]
+        util, temp, power = (x.strip() for x in out.split(","))
+        return float(util), float(temp), float(power)
+    except Exception:
+        return float("nan"), float("nan"), float("nan")
+
+
+def follow_kernel_usb(event_log, stop_evt, use_dmesg):
+    """Stream USB/xhci kernel lines into the event log. Best effort."""
+    if not use_dmesg:
+        return
+    # Prefer `dmesg --follow` (has the message text); fall back to journalctl -kf.
+    for cmd in (["dmesg", "--follow", "--ctime"], ["journalctl", "-kf", "-o", "short"]):
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, text=True)
+        except FileNotFoundError:
+            continue
+        event_log.write(f"INFO  following kernel log via: {' '.join(cmd)}")
+        try:
+            for line in proc.stdout:
+                if stop_evt.is_set():
+                    break
+                low = line.lower()
+                if any(k in low for k in ("usb", "xhci", "zed", "uvc")):
+                    event_log.write("KERNEL " + line.rstrip())
+        finally:
+            proc.terminate()
+        return
+    event_log.write("WARN  no kernel log source available (dmesg/journalctl); "
+                    "USB events will NOT be captured (try sudo, or --no-dmesg)")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--duration", type=float, default=3600.0,
+                    help="seconds to run (default 3600 = 1 h)")
+    ap.add_argument("--odom-topic", default="/zed_mini/zed_node/odom")
+    ap.add_argument("--imu-topic", default="/zed_mini/zed_node/imu/data")
+    ap.add_argument("--interval", type=float, default=1.0,
+                    help="sample/CSV row period in seconds (default 1.0)")
+    ap.add_argument("--outdir", default=None,
+                    help="output dir (default: integration/log/zed_diag_<timestamp>/)")
+    ap.add_argument("--no-dmesg", action="store_true",
+                    help="don't try to read the kernel log (skip USB capture)")
+    args = ap.parse_args()
+
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if args.outdir:
+        outdir = Path(args.outdir)
+    else:
+        outdir = Path(__file__).parent.parent / "integration" / "log" / f"zed_diag_{stamp}"
+    outdir.mkdir(parents=True, exist_ok=True)
+    print(f"[zed_diag] writing to {outdir}")
+
+    event_log = EventLog(outdir / "events.log")
+    samples_path = outdir / "samples.csv"
+    samples = open(samples_path, "w", buffering=1)
+    samples.write("wall_iso,elapsed_s,odom_hz,odom_max_gap_s,odom_max_stampgap_s,"
+                  "imu_hz,imu_max_gap_s,imu_max_stampgap_s,"
+                  "cpu_pct,load1,gpu_util_pct,gpu_temp_c,gpu_power_w\n")
+
+    rospy.init_node("zed_diag_logger", anonymous=True, disable_signals=True)
+    odom_mon = TopicMonitor("odom", event_log)
+    imu_mon = TopicMonitor("imu", event_log)
+    rospy.Subscriber(args.odom_topic, Odometry, odom_mon.on_msg, queue_size=2000)
+    rospy.Subscriber(args.imu_topic, Imu, imu_mon.on_msg, queue_size=4000)
+
+    stop_evt = threading.Event()
+    usb_thread = threading.Thread(
+        target=follow_kernel_usb, args=(event_log, stop_evt, not args.no_dmesg), daemon=True)
+    usb_thread.start()
+
+    cpu = CpuSampler()
+    event_log.write(f"INFO  run start; odom={args.odom_topic} imu={args.imu_topic} "
+                    f"duration={args.duration}s dropout_gap={DROPOUT_GAP_S}s")
+    print(f"[zed_diag] running for {args.duration:.0f}s; Ctrl+C to stop early.")
+
+    t0 = time.time()
+    last = t0
+    try:
+        while not rospy.is_shutdown():
+            now = time.time()
+            elapsed = now - t0
+            if elapsed >= args.duration:
+                break
+            time.sleep(max(0.0, args.interval - (now - last)))
+            now = time.time()
+            dt = now - last
+            last = now
+
+            o_hz, o_gap, o_sgap = odom_mon.sample(dt)
+            i_hz, i_gap, i_sgap = imu_mon.sample(dt)
+            cpu_pct, load1 = cpu.sample()
+            g_util, g_temp, g_power = sample_gpu()
+            samples.write(
+                f"{datetime.now().isoformat()},{now - t0:.1f},"
+                f"{o_hz:.1f},{o_gap:.3f},{o_sgap:.3f},"
+                f"{i_hz:.1f},{i_gap:.3f},{i_sgap:.3f},"
+                f"{cpu_pct:.1f},{load1:.2f},{g_util:.0f},{g_temp:.0f},{g_power:.1f}\n")
+    except KeyboardInterrupt:
+        print("\n[zed_diag] Ctrl+C -- stopping.")
+
+    stop_evt.set()
+    end = time.time()
+    meta = {
+        "start_iso": datetime.fromtimestamp(t0).isoformat(),
+        "end_iso": datetime.fromtimestamp(end).isoformat(),
+        "elapsed_s": round(end - t0, 1),
+        "args": vars(args),
+        "dropout_gap_s": DROPOUT_GAP_S,
+        "odom": {"messages": odom_mon.total, "dropouts": odom_mon.dropouts,
+                 "worst_gap_s": round(odom_mon.worst_gap, 3)},
+        "imu": {"messages": imu_mon.total, "dropouts": imu_mon.dropouts,
+                "worst_gap_s": round(imu_mon.worst_gap, 3)},
+        "usb_event_lines": event_log.lines,
+    }
+    (outdir / "run_meta.json").write_text(json.dumps(meta, indent=2))
+    event_log.write("INFO  run end; see run_meta.json")
+    event_log.close()
+    samples.close()
+
+    print("\n[zed_diag] ===== summary =====")
+    print(f"  ran {meta['elapsed_s']:.0f}s -> {outdir}")
+    print(f"  odom: {odom_mon.total} msgs, {odom_mon.dropouts} dropouts, "
+          f"worst gap {odom_mon.worst_gap:.3f}s")
+    print(f"  imu : {imu_mon.total} msgs, {imu_mon.dropouts} dropouts, "
+          f"worst gap {imu_mon.worst_gap:.3f}s")
+    if odom_mon.dropouts and not imu_mon.dropouts:
+        print("  hint: odom stalled but IMU did NOT -> VIO/CPU/GPU, not USB.")
+    elif odom_mon.dropouts and imu_mon.dropouts:
+        print("  hint: BOTH stalled together -> node/USB/camera drop. Check events.log for KERNEL usb lines.")
+    print("  read events.log for the per-stall timeline.")
+
+
+if __name__ == "__main__":
+    main()

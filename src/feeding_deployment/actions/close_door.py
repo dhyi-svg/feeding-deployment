@@ -17,6 +17,7 @@ from feeding_deployment.actions.base import (
     SafeToNavigate,
 )
 
+from feeding_deployment.safety.collision_threshold import collision_threshold
 
 class CloseDoorHLA(HighLevelAction):
     """Close a door (fridge or microwave)."""
@@ -26,7 +27,7 @@ class CloseDoorHLA(HighLevelAction):
     # robot; reverts to the sensor default automatically after the move.
     PULL_COLLISION_THRESHOLD = 25.0
     SLIGHT_PUSH_COLLISION_THRESHOLD = 15.0
-    HARD_PUSH_COLLISION_THRESHOLD = 25.0
+    HARD_PUSH_COLLISION_THRESHOLD = 40.0
 
     def get_name(self) -> str:
         return "CloseDoor"
@@ -104,11 +105,10 @@ class CloseDoorHLA(HighLevelAction):
         self.move_to_ee_pose(handle_closing_poses["above_push_closing_waypoint"])
         self.move_to_ee_pose(handle_closing_poses["push_closing_waypoints"][0])
 
-        with slight_push_threshold:
+        with hard_push_threshold:
             self.move_to_ee_pose_trajectory(handle_closing_poses["push_closing_waypoints"])
-
-        time.sleep(1.0)
-        self.move_to_ee_pose(handle_closing_poses["push_closing_waypoints"][-3])
+            time.sleep(1.0)
+            self.move_to_ee_pose(handle_closing_poses["push_closing_waypoints"][-3])
 
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
@@ -148,16 +148,15 @@ class CloseDoorHLA(HighLevelAction):
         
         with slight_push_threshold:
             self.move_to_ee_pose_trajectory(handle_closing_poses["closing_waypoints"])
-
-        time.sleep(1.0) # wait for the door to be fully closed before moving the arm away
-        self.move_to_ee_pose(handle_closing_poses["closing_waypoints"][-2])
+            time.sleep(1.0) # wait for the door to be fully closed before moving the arm away
+            self.move_to_ee_pose(handle_closing_poses["closing_waypoints"][-2])
 
         self.close_gripper()
         self.move_to_ee_pose(handle_closing_poses["offset_closing_waypoints"][0])
         
         with hard_push_threshold:
             self.move_to_ee_pose_trajectory(handle_closing_poses["offset_closing_waypoints"])
+            self.move_to_ee_pose(handle_closing_poses["pre_grasp_pose"])
 
-        self.move_to_ee_pose(handle_closing_poses["pre_grasp_pose"])
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)

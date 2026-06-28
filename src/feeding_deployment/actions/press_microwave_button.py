@@ -17,6 +17,7 @@ from feeding_deployment.actions.base import (
     FoodHeated,
 )
 
+from feeding_deployment.safety.collision_threshold import collision_threshold
 
 class PressMicrowaveButtonHLA(HighLevelAction):
     """Press the microwave button."""

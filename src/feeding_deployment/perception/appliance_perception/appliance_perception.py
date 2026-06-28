@@ -32,7 +32,31 @@ import supervision as sv
 import torch
 import torch.nn.functional as F
 import torchvision
-import torchvision.transforms as transforms 
+import torchvision.transforms as transforms
+
+
+# --- Handle detection-confirmation overlay styling (presentation only) ---
+# BGR colors (the webapp legend chips mirror these).
+# Unified scheme across all detection screens:
+#   amber = detected-region box (recording brackets, + shaded fill where useful)
+#   red   = the point the robot acts on (grasp/press/place): red dot + red box
+#   blue  = hinge pivot edge/axis (handle screens only)
+_OVERLAY_HINGE = (219, 152, 52)     # blue
+_OVERLAY_ACCENT = (60, 190, 255)    # amber  -- detected-region box (all types) + swing arrow
+_OVERLAY_RED = (0, 0, 255)          # red    -- action/grasp point
+_OVERLAY_WHITE = (255, 255, 255)
+# Overlay element sizes below are tuned for a reference 1280-wide frame and scaled
+# by AppliancePerception._scale() to the actual image width. Cameras differ in
+# resolution (e.g. the 640x480 microwave cam vs the 1280x720 head cam), and the
+# iPad renders every frame letterboxed (object-fit: contain) into the same box --
+# so scaling keeps the markers a consistent on-screen size across all screens.
+_OVERLAY_REF_W = 1280
+# Swing-out arrow: wide, shallow elliptical arc about the hinge sweeping to the
+# foreground (foreshortened projection of the door's out-of-plane swing).
+_SWING_SWEEP_DEG = 43.0
+_SWING_KY = {"bottom textured fridge door": 0.37}   # vertical squash per appliance
+_SWING_KY_DEFAULT = 0.22                            # microwave / others
+_SWING_DASH_ON, _SWING_DASH_OFF, _SWING_NSEG = 7, 6, 60
 
 
 class AppliancePerception(TFInterface):
@@ -69,6 +93,172 @@ class AppliancePerception(TFInterface):
             self._log_counters[name] = count + 1
             cv2.imwrite(str(self._appliance_log_dir / f"{name}_{count}.png"), image)
 
+    # ------------------------------------------------------------------
+    # Handle detection-confirmation overlay (what the user approves before
+    # the robot opens a door). Presentation only -- the pixels/poses fed in
+    # are unchanged. Drawn in raw (upside-down) image coords; the camera is
+    # mounted upside down and WebInterface._send_image flips 180 deg centrally
+    # for display, so we must NOT pre-rotate here. The shapes are symmetric and
+    # carry no text, so they read correctly after that flip. The legend (which
+    # color means what) lives in the webapp page, not baked into the image.
+    # ------------------------------------------------------------------
+    def _draw_handle_overlay(self, rgb_image, box, handle_px, hinge_px, handle_type):
+        vis = rgb_image.copy()
+        h, w = vis.shape[:2]
+        x1, y1, x2, y2 = (int(v) for v in box)
+        x1, x2 = max(0, min(x1, x2)), min(w, max(x1, x2))
+        y1, y2 = max(0, min(y1, y2)), min(h, max(y1, y2))
+        clamped = (x1, y1, x2, y2)
+
+        self._draw_spotlight(vis, clamped)              # dim outside the detected door
+        self._draw_corner_brackets(vis, clamped, length=self._scale(vis, 46))  # amber door box
+        self._draw_hinge_axis(vis, hinge_px, clamped)   # vertical pivot axis
+        ky = _SWING_KY.get(handle_type, _SWING_KY_DEFAULT)
+        self._draw_swing_arrow(vis, handle_px, hinge_px, ky)  # door swings out toward robot
+        self._draw_halo_marker(vis, hinge_px, _OVERLAY_HINGE)  # blue pivot point
+        self._draw_action_point(vis, handle_px)               # red grasp point (dot + box)
+        return vis
+
+    def _draw_button_overlay(self, rgb_image, button_px):
+        """Microwave start button (a single detected point, no box): subtle
+        spotlight + red recording box & dot at the press point. Uses the shared
+        action-point sizes -- scaled to the frame -- so it matches the other
+        screens despite the lower-resolution microwave camera."""
+        vis = rgb_image.copy()
+        self._draw_spotlight(vis, self._point_box(button_px, vis.shape, half=70))
+        self._draw_action_point(vis, button_px)
+        return vis
+
+    def _draw_sink_overlay(self, rgb_image, box, used_px):
+        """Sink: amber detected-region box (recording brackets + shaded fill) and a
+        red recording box & dot at the pixel actually used (offset above the basin).
+        Subtle spotlight focuses the sink area."""
+        vis = rgb_image.copy()
+        clamped = self._clamp_box(box, vis.shape)
+        self._draw_spotlight(vis, clamped)                              # subtle dim outside sink
+        self._draw_shaded_box(vis, clamped, _OVERLAY_ACCENT)           # amber shaded fill
+        self._draw_corner_brackets(vis, clamped,
+                                   length=self._bracket_length(clamped))  # amber recording corners
+        self._draw_action_point(vis, used_px)                          # red placement point
+        return vis
+
+    def _draw_plate_overlay(self, rgb_image, box, center_px):
+        """Table placement: amber detected-marker box + red recording box & dot at
+        the placement point. Subtle spotlight focuses the marker."""
+        vis = rgb_image.copy()
+        clamped = self._clamp_box(box, vis.shape)
+        self._draw_spotlight(vis, clamped)
+        self._draw_corner_brackets(vis, clamped, length=self._bracket_length(clamped))
+        self._draw_action_point(vis, center_px)
+        return vis
+
+    @staticmethod
+    def _scale(vis, px):
+        """Scale a reference (1280-wide) size to this frame's width, so overlay
+        elements stay a consistent on-screen size across camera resolutions."""
+        return max(1, int(round(px * vis.shape[1] / _OVERLAY_REF_W)))
+
+    @staticmethod
+    def _clamp_box(box, shape):
+        h, w = shape[:2]
+        x1, y1, x2, y2 = (int(v) for v in box)
+        x1, x2 = max(0, min(x1, x2)), min(w, max(x1, x2))
+        y1, y2 = max(0, min(y1, y2)), min(h, max(y1, y2))
+        return (x1, y1, x2, y2)
+
+    @staticmethod
+    def _point_box(pt, shape, half=55):
+        """Small square box centred on a single detected pixel (half scaled to res)."""
+        h, w = shape[:2]
+        half = max(1, int(round(half * w / _OVERLAY_REF_W)))
+        x, y = int(pt[0]), int(pt[1])
+        return (max(0, x - half), max(0, y - half), min(w, x + half), min(h, y + half))
+
+    @staticmethod
+    def _bracket_length(box, frac=0.28, lo=18, hi=46):
+        """Bracket length scaled to the box so corners never meet on small boxes."""
+        x1, y1, x2, y2 = box
+        return int(max(lo, min(hi, frac * min(x2 - x1, y2 - y1))))
+
+    @staticmethod
+    def _draw_shaded_box(vis, box, color, alpha=0.22):
+        """Translucent fill only -- corners are drawn separately as brackets."""
+        x1, y1, x2, y2 = box
+        overlay = vis.copy()
+        cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
+        cv2.addWeighted(overlay, alpha, vis, 1 - alpha, 0, dst=vis)
+
+    def _draw_action_point(self, vis, pt, half=45, length=24, radius=20):
+        """The point the robot acts on (grasp/press/place): a red recording box +
+        red dot. Consistent 'action = red' across screens; sizes scale down for
+        small targets (e.g. a microwave button)."""
+        box = self._point_box(pt, vis.shape, half=half)
+        self._draw_corner_brackets(vis, box, color=_OVERLAY_RED, length=self._scale(vis, length))
+        self._draw_halo_marker(vis, pt, _OVERLAY_RED, radius=radius)
+
+    @staticmethod
+    def _draw_spotlight(vis, box, dim=0.6):
+        x1, y1, x2, y2 = box
+        keep = vis[y1:y2, x1:x2].copy()
+        vis[:] = (vis.astype(np.float32) * dim).astype(np.uint8)
+        vis[y1:y2, x1:x2] = keep
+
+    @staticmethod
+    def _draw_corner_brackets(vis, box, color=_OVERLAY_ACCENT, length=46, thickness=5):
+        # length arrives in image px (callers scale fixed lengths / pass box-relative
+        # ones); thickness is a fixed reference size -> scale it to the frame.
+        t = AppliancePerception._scale(vis, thickness)
+        x1, y1, x2, y2 = box
+        for cx, cy, sx, sy in ((x1, y1, 1, 1), (x2, y1, -1, 1), (x1, y2, 1, -1), (x2, y2, -1, -1)):
+            cv2.line(vis, (cx, cy), (cx + sx * length, cy), color, t, cv2.LINE_AA)
+            cv2.line(vis, (cx, cy), (cx, cy + sy * length), color, t, cv2.LINE_AA)
+
+    @staticmethod
+    def _draw_hinge_axis(vis, hinge_px, box, thickness=5):
+        _, y1, _, y2 = box
+        off = AppliancePerception._scale(vis, 8)
+        x = int(hinge_px[0])
+        cv2.line(vis, (x, y1 + off), (x, y2 - off), _OVERLAY_HINGE,
+                 AppliancePerception._scale(vis, thickness), cv2.LINE_AA)
+
+    @staticmethod
+    def _draw_halo_marker(vis, pt, color, radius=20):
+        p = (int(pt[0]), int(pt[1]))
+        r = AppliancePerception._scale(vis, radius)
+        cv2.circle(vis, p, r + AppliancePerception._scale(vis, 6), _OVERLAY_WHITE, -1, cv2.LINE_AA)
+        cv2.circle(vis, p, r, color, -1, cv2.LINE_AA)
+
+    @staticmethod
+    def _draw_swing_arrow(vis, handle_px, hinge_px, ky):
+        # Elliptical arc about the hinge: full horizontal radius, vertical squashed by
+        # ky (foreshortened out-of-plane swing). Starts at the handle and sweeps toward the
+        # foreground/robot, stopping at the straight-down point so it never rises back up.
+        # We draw on the RAW (upside-down) frame -- _send_image flips 180 deg centrally --
+        # so "foreground" is the TOP of this frame (target = -pi/2); after the flip it
+        # reads as sweeping downward/out toward the robot. Handedness is inherent from the
+        # handle/hinge positions.
+        cx, cy = float(hinge_px[0]), float(hinge_px[1])
+        vx, vy = handle_px[0] - cx, handle_px[1] - cy
+        R = math.hypot(vx, vy)
+        if R < 1e-3:
+            return
+        a0 = math.atan2(vy, vx)
+        target = -math.pi / 2.0                         # straight up in raw -> foreground after flip
+        d = 1.0 if (target - a0) > 0 else -1.0
+        sweep = min(math.radians(_SWING_SWEEP_DEG), abs(target - a0))
+        pts = [(cx + R * math.cos(a0 + d * sweep * i / _SWING_NSEG),
+                cy + R * ky * math.sin(a0 + d * sweep * i / _SWING_NSEG))
+               for i in range(_SWING_NSEG + 1)]
+        ox, oy = handle_px[0] - pts[0][0], handle_px[1] - pts[0][1]   # anchor start on handle
+        pts = [(int(round(px + ox)), int(round(py + oy))) for px, py in pts]
+        period = _SWING_DASH_ON + _SWING_DASH_OFF
+        for i in range(len(pts) - 1):
+            if (i % period) < _SWING_DASH_ON:           # coarse dashes
+                t = AppliancePerception._scale(vis, 8 + 6 * i / len(pts))   # taper thicker toward tip
+                cv2.line(vis, pts[i], pts[i + 1], _OVERLAY_ACCENT, t, cv2.LINE_AA)
+        cv2.arrowedLine(vis, pts[-3], pts[-1], _OVERLAY_ACCENT,
+                        AppliancePerception._scale(vis, 14), tipLength=0.5, line_type=cv2.LINE_AA)
+
     def detect_start_button(self, rgb_image, camera_info_msg, depth_image):
         transform = self.get_frame_to_frame_transform(camera_info_msg)
 
@@ -85,7 +275,7 @@ class AppliancePerception(TFInterface):
             http_response = requests.post(
                 self.molmo_url,
                 files={"image": img_file},
-                data={"prompt": "Point to the center of the start / 30 secs button. Right one out of two rectangular buttons at the bottom row of the microwave control panel."},
+                data={"prompt": "Point to the center of the start / 30 secs white button. Right one out of two rectangular buttons at the bottom row of the microwave control panel."},
             )
         http_response.raise_for_status()
         response = http_response.json()
@@ -96,9 +286,9 @@ class AppliancePerception(TFInterface):
         # Flip pixel coords back since we flipped the image before sending to molmo
         button_pixel = (rgb_image.shape[1] - pixel_coords[0][0], rgb_image.shape[0] - pixel_coords[0][1])
 
-        # visualize button pixel on original rgb image
-        vis_image = rgb_image.copy()
-        cv2.circle(vis_image, button_pixel, 10, (0, 0, 255), -1)
+        # User-facing overlay: red recording-style box + red dot on the button.
+        # Drawn raw; WebInterface._send_image applies the central 180 deg flip.
+        vis_image = self._draw_button_overlay(rgb_image, button_pixel)
         self._log_image(file_path + "/rgb_button_pixel.png", vis_image)
 
         ok, button_3d = self.pixel2World(camera_info_msg, button_pixel[0], button_pixel[1], depth_image)
@@ -258,17 +448,8 @@ class AppliancePerception(TFInterface):
         handle_centroid_3d = handle_centroid
         handle_centroid_pixel = self.world2Pixel(camera_info_msg, handle_centroid[0], handle_centroid[1], handle_centroid[2])
 
-        vis = rgb_image.copy()
-        # for u, v in cluster_pixels:
-        #     vis[v, u] = (0, 255, 255)
-
-        # draw large green circle at handle_centroid_pixel
         print("Handle centroid pixel:", handle_centroid_pixel)
-        cv2.circle(vis, (handle_centroid_pixel[0], handle_centroid_pixel[1]), 10, (0, 255, 0), -1)
-
-        # draw large orange circle at top_of_appliance_pixel
         print("Top of plane pixel:", top_of_appliance_pixel)
-        cv2.circle(vis, (top_of_appliance_pixel[0], top_of_appliance_pixel[1]), 10, (0, 165, 255), -1)
 
         if handle_type == "bottom textured fridge door":
             print("Finding strip anchor point for fridge door handle")
@@ -289,11 +470,16 @@ class AppliancePerception(TFInterface):
         hinge_3d[1] = handle_centroid_3d[1]
 
         hinge_pixel = self.world2Pixel(camera_info_msg, hinge_3d[0], hinge_3d[1], hinge_3d[2])
-        cv2.circle(vis, (hinge_pixel[0], hinge_pixel[1]), 10, (255, 0, 0), -1)
         
         # update center pixel x is average of handle_centroid_pixel and hinge_pixel
         center_pixel = ((handle_centroid_pixel[0] + hinge_pixel[0]) // 2, center_pixel[1])
-        cv2.circle(vis, (center_pixel[0], center_pixel[1]), 10, (0, 0, 255), -1)
+
+        # Build the user-facing detection-confirmation overlay (presentation only --
+        # handle/hinge pixels and the box convey what the robot will do).
+        vis = self._draw_handle_overlay(
+            rgb_image, (x1, y1, x2, y2),
+            handle_centroid_pixel, hinge_pixel, handle_type,
+        )
         self._log_image("handle_hinge_pixels.png", vis)
 
         ok, center_3d = self.pixel2World(camera_info_msg, center_pixel[0], center_pixel[1], depth_image, depth=plane_depth)
@@ -362,11 +548,12 @@ class AppliancePerception(TFInterface):
 
         # Hack, take a point with x as center of bounding box and y as 40 pixels above the top of the bounding box
         center_pixel = ((x1 + x2) // 2 + 140, y1 - 50)
-        cv2.circle(rgb_image, center_pixel, 10, (0, 0, 255), -1)
-        # Save the raw (upside-down) annotated frame. The camera-orientation flip
-        # for the webapp is applied centrally in WebInterface._send_image, so
-        # rotating here would double-flip and show the user an upside-down image.
-        self._log_image("sink_back_pixel.png", rgb_image)
+        # User-facing overlay: yellow shaded sink-detection box + a small red
+        # recording-style box & dot at the pixel actually used. Drawn raw; the
+        # camera-orientation flip is applied centrally in WebInterface._send_image,
+        # so rotating here would double-flip and show an upside-down image.
+        vis_image = self._draw_sink_overlay(rgb_image, (x1, y1, x2, y2), center_pixel)
+        self._log_image("sink_back_pixel.png", vis_image)
 
         ok, center_3d = self.pixel2World(camera_info_msg, center_pixel[0], center_pixel[1], depth_image)
         if not ok:
@@ -421,8 +608,9 @@ class AppliancePerception(TFInterface):
         #             if 0 <= new_x < rgb_image.shape[1] and 0 <= new_y < rgb_image.shape[0]:
         #                 cv2.circle(rgb_image, (new_x, new_y), 2, (255, 0, 0), -1)
 
-        cv2.circle(rgb_image, center_pixel, 10, (0, 0, 255), -1)
-        self._log_image("table_placement_pixel.png", rgb_image)
+        # User-facing overlay: red recording-style detection box + red center dot.
+        vis_image = self._draw_plate_overlay(rgb_image, (x1, y1, x2, y2), center_pixel)
+        self._log_image("table_placement_pixel.png", vis_image)
 
         ok, center_3d = self.pixel2World(camera_info_msg, center_pixel[0], center_pixel[1], depth_image, use_surrounding_pixels=True)
         if not ok:
