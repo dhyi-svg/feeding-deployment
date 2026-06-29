@@ -6,7 +6,7 @@ don't forge to `pip install pyserial` or `pip3 install pyserial`
 import serial
 import time
 
-serialPort = '/dev/ttyUSB0'  # Change to the serial/COM port of the tower light
+serialPort = '/dev/serial/by-id/usb-UnexpectedMaker_FeatherS2_Neo_84722E753121-if00'
 #serialPort = '/dev/USBserial0'  # on mac/linux, it will be a /dev path
 baudRate = 9600
 

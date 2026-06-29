@@ -84,12 +84,10 @@ class AttachmentPerception(TFInterface):
             return
 
         points_3d = np.array(points_3d)
-        pixels = np.array(pixels)
-
-        # print("Found all pixels")
+        pixels = np.array(pixels)        # print("Found all pixels")
 
         # -----------------------------
-        # DBSCAN clustering (7 cm)
+        # DBSCOkay,AN clustering (7 cm)
         # -----------------------------
         clustering = DBSCAN(
             eps=0.07,

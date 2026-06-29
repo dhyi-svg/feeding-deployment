@@ -567,7 +567,6 @@ class NavigateHLA(HighLevelAction):
         rate = rospy.Rate(float(cfg["rate_hz"]))
         if actuate:
             rospy.sleep(0.2)  # let the cmd_vel publisher connect before commanding
-        start = rospy.Time.now()
         window: deque = deque()  # (elapsed_s, err_xy, err_yaw)
         best_xy = float("inf")
         best_yaw = float("inf")
@@ -585,6 +584,11 @@ class NavigateHLA(HighLevelAction):
             "measuring pre-refinement residual error",
         )
         residual_before = _residual("Goal reached. Residual error vs goal")
+
+        # Start the refinement clock AFTER the settle wait, so `timeout_s` budgets
+        # only actual refinement driving -- otherwise the settle wait alone exceeds
+        # the timeout and the loop bails before commanding the base.
+        start = rospy.Time.now()
 
         try:
             while not rospy.is_shutdown():

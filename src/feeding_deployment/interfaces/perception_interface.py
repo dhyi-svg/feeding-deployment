@@ -15,7 +15,7 @@ import pickle
 import serial
 import copy
 
-LED_SERIAL_PORT = '/dev/ttyACM0'
+LED_SERIAL_PORT = '/dev/serial/by-id/usb-UnexpectedMaker_FeatherS2_Neo_84722E753121-if00'
 LED_BAUD_RATE = 115200
 
 try:
@@ -112,7 +112,7 @@ class PerceptionInterface:
         self.last_drink_poses = None
 
         # Rajat ToDo: Support LED
-        # self.set_led_brightness()
+        self.set_led_brightness()
 
     def zero_ft_sensor(self):
         print("Zeroing FT sensor")
@@ -132,26 +132,37 @@ class PerceptionInterface:
         print("Setting LED Brightness")
         if self.simulation:
             return
-        with serial.Serial(LED_SERIAL_PORT, LED_BAUD_RATE, timeout=1) as ser:
-            ser.reset_input_buffer()
-            ser.reset_output_buffer()
-            # Convert brightness to string, encode to bytes, and concatenate
-            command = f"BRIGHTNESS {brightness}\r\n".encode()
-            ser.write(command)
+        try:
+            with serial.Serial(LED_SERIAL_PORT, LED_BAUD_RATE, timeout=1) as ser:
+                ser.reset_input_buffer()
+                ser.reset_output_buffer()
+                # Convert brightness to string, encode to bytes, and concatenate
+                command = f"BRIGHTNESS {brightness}\r\n".encode()
+                ser.write(command)
+        except (serial.SerialException, OSError) as e:
+            print(f"[LED] set_led_brightness failed on {LED_SERIAL_PORT}: {e}")
 
     def turn_on_led(self):
-        return # Rajat ToDo: Support LED
-        with serial.Serial(LED_SERIAL_PORT, LED_BAUD_RATE, timeout=1) as ser:
-            ser.reset_input_buffer()  # Clear input buffer
-            ser.reset_output_buffer()  # Clear output buffer
-            ser.write(b"ON\r\n")  # Send the command
+        if self.simulation:
+            return
+        try:
+            with serial.Serial(LED_SERIAL_PORT, LED_BAUD_RATE, timeout=1) as ser:
+                ser.reset_input_buffer()  # Clear input buffer
+                ser.reset_output_buffer()  # Clear output buffer
+                ser.write(b"ON\r\n")  # Send the command
+        except (serial.SerialException, OSError) as e:
+            print(f"[LED] turn_on_led failed on {LED_SERIAL_PORT}: {e}")
 
     def turn_off_led(self):
-        return # Rajat ToDo: Support LED
-        with serial.Serial(LED_SERIAL_PORT, LED_BAUD_RATE, timeout=1) as ser:
-            ser.reset_input_buffer()
-            ser.reset_output_buffer()
-            ser.write(b"OFF\r\n")
+        if self.simulation:
+            return
+        try:
+            with serial.Serial(LED_SERIAL_PORT, LED_BAUD_RATE, timeout=1) as ser:
+                ser.reset_input_buffer()
+                ser.reset_output_buffer()
+                ser.write(b"OFF\r\n")
+        except (serial.SerialException, OSError) as e:
+            print(f"[LED] turn_off_led failed on {LED_SERIAL_PORT}: {e}")
 
     def detect_button_press(self):
         print("Waiting for button press")
@@ -614,7 +625,10 @@ class PerceptionInterface:
                 rotate_orientation=True,
             )
             print("Number of second waypoints: ", len(second_waypoints))
-            push_waypoints = second_waypoints[:-6]
+            if handle_type == "microwave":
+                push_waypoints = second_waypoints[:-4]
+            else:
+                push_waypoints = second_waypoints[:-6]
             len_push_waypoints = len(push_waypoints)
             print("Number of push waypoints: ", len_push_waypoints)
 

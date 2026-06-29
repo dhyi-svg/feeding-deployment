@@ -166,7 +166,7 @@ class OpenDoorHLA(HighLevelAction):
 
         print("Opening microwave door ...")
 
-        self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
+        # self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
 
         handle_opening_poses = self.perception_interface.perceive_handle_opening_poses("microwave", web_interface=self.web_interface)
@@ -208,12 +208,12 @@ class OpenDoorHLA(HighLevelAction):
             self.move_to_ee_pose_trajectory(handle_opening_poses["push_waypoints"])
 
         time.sleep(3)
-        self.move_to_ee_pose(handle_opening_poses["push_waypoints"][-3])
+        self.move_to_ee_pose(handle_opening_poses["push_waypoints"][-5])
 
         # intermediate pose to avoid collisions with the microwave door
-        joint_positions = self.get_joint_positions()
-        joint_positions[0] = 0
-        self.move_to_joint_positions(joint_positions)
+        # joint_positions = self.get_joint_positions()
+        # joint_positions[0] = 0
+        # self.move_to_joint_positions(joint_positions)
 
         # self.move_to_joint_positions(self.sim.scene_description.microwave_plate_staging_pos)
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)

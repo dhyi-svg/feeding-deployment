@@ -12,10 +12,10 @@
     "microwave_time": "1 min",
     "outside_mouth_distance": "near",
     "plate_color_fridge": {
-      "h": 83,
-      "range": 0.17,
-      "s": 98,
-      "v": 125
+      "h": 86,
+      "range": 0.16,
+      "s": 89,
+      "v": 180
     },
     "plate_color_microwave": {
       "h": 46,
@@ -39,55 +39,20 @@
   "context": {
     "meal": "chicken nuggets, broccoli, and ketchup",
     "setting": "Personal",
-    "time_of_day": "evening"
+    "time_of_day": "noon"
   },
   "corrected": {
-    "convey_robot_ready_for_initiating_transfer": "speech",
-    "detect_user_ready_for_initiating_transfer_drinking": "open mouth",
-    "detect_user_ready_for_initiating_transfer_feeding": "open mouth",
-    "detect_user_ready_for_initiating_transfer_wiping": "open mouth",
-    "outside_mouth_distance": "near",
     "plate_color_fridge": {
-      "h": 83,
-      "range": 0.17,
-      "s": 98,
-      "v": 125
-    },
-    "plate_color_microwave": {
-      "h": 46,
-      "range": 0.1,
-      "s": 65,
-      "v": 145
-    },
-    "plate_color_table": {
-      "h": 90,
-      "range": 0.1,
-      "s": 66,
-      "v": 210
-    },
-    "wait_before_autocontinue_seconds": "100 sec",
-    "web_interface_confirmation": "yes"
+      "h": 86,
+      "range": 0.16,
+      "s": 89,
+      "v": 180
+    }
   },
   "finalized": [
-    "bite_dipping_preference",
-    "convey_robot_ready_for_completing_transfer",
-    "convey_robot_ready_for_initiating_transfer",
-    "detect_user_completed_transfer_drinking",
-    "detect_user_completed_transfer_feeding",
-    "detect_user_completed_transfer_wiping",
-    "detect_user_ready_for_initiating_transfer_drinking",
-    "detect_user_ready_for_initiating_transfer_feeding",
-    "detect_user_ready_for_initiating_transfer_wiping",
     "microwave_time",
-    "outside_mouth_distance",
     "plate_color_fridge",
-    "plate_color_microwave",
-    "plate_color_table",
-    "retract_between_bites",
     "robot_speed",
-    "skewering_axis",
-    "transfer_mode",
-    "wait_before_autocontinue_seconds",
-    "web_interface_confirmation"
+    "wait_before_autocontinue_seconds"
   ]
 }

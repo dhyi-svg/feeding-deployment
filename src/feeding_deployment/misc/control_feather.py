@@ -2,7 +2,7 @@ import serial
 import time
 
 # Replace with your Feather board's serial port
-SERIAL_PORT = "/dev/ttyACM0"  # Adjust as needed
+SERIAL_PORT = '/dev/serial/by-id/usb-UnexpectedMaker_FeatherS2_Neo_84722E753121-if00'
 BAUD_RATE = 115200
 
 try:
