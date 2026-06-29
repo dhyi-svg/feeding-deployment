@@ -835,15 +835,25 @@ class PerceptionInterface:
         current_range = float(initial_range)
         last_attachment_pose = initial_attachment_pose
 
-        vis_image = self._attachment_perception._last_images.get("attachment_corners")
+        # Grab a fresh frame at entry for the pick image instead of the (now stale)
+        # frame the caller detected on. The RealSense auto-exposure keeps adjusting,
+        # so picking on a current, settled frame -- the same regime later Rerun
+        # frames come from -- keeps the picked color consistent with detection.
+        entry_cam = self._realsense.get_camera_data()
+        pick_rgb = entry_cam.get("rgb_image")
+        if pick_rgb is None:
+            pick_rgb = rgb_image
+
+        # Land the user directly on pixel selection -- no initial detection/result is
+        # pre-populated, so they pick a color first instead of having to Reset away
+        # from a prediction.
         # Orientation is handled centrally in WebInterface._send_image (the camera
         # is upside down), unless flip=False (camera already upright, e.g. microwave
         # pickup); pass the raw frame through here. The picker returns an RGB color,
         # not a pixel coordinate, so the displayed orientation never affected
         # correctness anyway.
-        pick_image = rgb_image
         web_interface.start_color_correction(
-            pick_image,
+            pick_rgb,
             initial_vis_image=None,
             initial_color_range=current_range,
             flip=flip,
@@ -886,6 +896,13 @@ class PerceptionInterface:
                 # do not rotate here or it would double-flip.
                 web_interface.send_color_correction_result(result_vis, new_pose is not None, flip=flip)
 
+                # Refresh the pick image to the frame we just detected on, so the
+                # next pick happens on the most recent frame (matching the result the
+                # user is looking at) rather than the stale entry frame. Do this on
+                # failure too so the user re-picks on the latest frame.
+                if fresh_rgb is not None:
+                    web_interface.update_color_correction_pick_image(fresh_rgb, flip=flip)
+
                 if status == "confirm":
                     if last_attachment_pose is not None:
                         web_interface.switch_to_explanation_page()
@@ -916,6 +933,15 @@ class PerceptionInterface:
 
         current_color = list(handle_color) if hasattr(handle_color, '__iter__') else handle_color
         current_range = float(color_range)
+
+        # Let the RealSense auto-exposure / auto-white-balance settle on this scene
+        # before the first detection. The robot has just moved to the detection pose,
+        # so the first frames are often mis-lit; detecting on them gives a dark frame
+        # that also throws off color picking. This waits once per call (i.e. once per
+        # microwave/fridge/table pickup) -- redo retries re-enter the loop below
+        # without re-waiting, and color-correction reruns are a separate method.
+        CAMERA_SETTLE_SECONDS = 5.0
+        time.sleep(CAMERA_SETTLE_SECONDS)
 
         while True:
             attachment_pose = None

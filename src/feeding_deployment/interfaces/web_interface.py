@@ -639,6 +639,21 @@ class WebInterface:
         else:
             self._send_message({"state": "color_correction", "status": "detection_failed"})
 
+    def update_color_correction_pick_image(self, raw_bgr_image, flip=True) -> None:
+        """Replace the pixel-picking image with a newer frame.
+
+        Unlike start_color_correction, this updates the frame used for color
+        picking WITHOUT disturbing the result currently shown on the page: the
+        "pick_update" status tells the frontend to store the next image as the
+        pick image only (used by Reset and the next click) and not redraw.
+        flip: pass False when the camera is already upright for this capture (see _send_image).
+        """
+        if raw_bgr_image is None:
+            return
+        self._send_message({"state": "color_correction", "status": "pick_update"})
+        time.sleep(0.1)
+        self._send_image(raw_bgr_image, flip=flip)
+
     #### Transparency Pages ####
 
     def get_transparency_request(self) -> None:

@@ -50,7 +50,7 @@
       <div class="det-actions">
         <button class="btn md ghost" :disabled="!showingResult || waitingForResult" @click="resetImage">Reset</button>
         <button class="btn md teal" :disabled="!selectedColor || waitingForResult || showingResult" @click="rerunDetection">Rerun</button>
-        <button class="btn md amber" :disabled="!showingResult || waitingForResult" @click="confirmColor">Confirm</button>
+        <button class="btn md amber" :disabled="!showingResult || waitingForResult || !selectedColor" @click="confirmColor">Confirm</button>
       </div>
     </div>
   </div>
@@ -78,6 +78,7 @@ export default {
       showingResult: false,
       waitingForResult: false,
       receivingResultNext: false,
+      pickUpdateNext: false,
       detectionStatus: null,
       pickImageElement: null,
       sideHeight: null,
@@ -217,6 +218,14 @@ export default {
             this.updateSideHeight()
           }
           img.src = src
+        } else if (this.pickUpdateNext) {
+          // Background refresh of the pick image (the frame the latest detection
+          // ran on). Update the stored image used by onCanvasClick sampling and
+          // Reset, but leave the currently displayed result untouched.
+          this.pickUpdateNext = false
+          const img = new Image()
+          img.onload = () => { this.pickImageElement = img }
+          img.src = src
         } else {
           this.loadPickImage(src)
         }
@@ -238,6 +247,8 @@ export default {
               this.receivingResultNext = false
               this.waitingForResult    = false
               this.detectionStatus     = 'failed'
+            } else if (data.status === 'pick_update') {
+              this.pickUpdateNext = true
             }
           }
           const route = routeMap[data.state]?.[data.status]
