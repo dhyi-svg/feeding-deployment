@@ -141,9 +141,8 @@ input, textarea {
 
 /* ── Camera / image placeholder container ── */
 .cam {
-  background: var(--s1);
+  background: transparent;
   border-radius: var(--r);
-  border: 1px solid var(--s3);
   position: relative;
   overflow: hidden;
   display: flex;

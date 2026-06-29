@@ -119,11 +119,16 @@ export default {
       this.currentHla = this.$route.query.hla
     }
     this.detour = this.$route.query.detour === '1'
-    // Freeze the button set at entry: skill mode only when a navigation skill is
-    // actually running (callers pass ?hla for that). Everything else is aux
-    // (a base-driving detour from arm teleop is aux too — its hla is a
-    // manipulation skill, so categoryOf is never 'navigation').
-    this.navMode = (this.currentHla && categoryOf(this.currentHla) === 'navigation') ? 'skill' : 'aux'
+    // ?recover=1 is a backend-initiated recovery after a navigation leg failed:
+    // force skill mode (Resume/Done) so the user can drive to the goal and hand
+    // back to autonomy or report it parked. currentHla fills in from the latched
+    // /skill_plan for the banner.
+    const recover = this.$route.query.recover === '1'
+    // Freeze the button set at entry: skill mode when a navigation skill is
+    // actually running (callers pass ?hla for that) or on a recovery entry.
+    // Everything else is aux (a base-driving detour from arm teleop is aux too —
+    // its hla is a manipulation skill, so categoryOf is never 'navigation').
+    this.navMode = (recover || (this.currentHla && categoryOf(this.currentHla) === 'navigation')) ? 'skill' : 'aux'
     this.ros = new ROSLIB.Ros({ url: ROS_URL })
     this.ros.on('connection', () => { this.connected = true })
     this.ros.on('close', () => this.setLinkHealthy(false))

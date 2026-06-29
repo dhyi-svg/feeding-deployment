@@ -7,7 +7,6 @@
         <div class="tb-n">{{ username }}</div>
         <div class="tb-s">Manual arm control — move the arm, then press Done</div>
       </div>
-      <button class="btn sm ghost" style="margin-left:auto;height:6vh;padding:0 1.5vw" @click="backToMenu()">Back to Menu</button>
     </div>
 
     <div class="hla-banner" v-if="currentHla">
@@ -273,13 +272,6 @@ export default {
       if (route) {
         this.$router.push(route)
       }
-    },
-
-    backToMenu () {
-
-      this.logEvent('tap', 'back_to_menu', {})
-      this.publish({ state: 'teleop', status: 'done' })
-      this.$router.push('/task_selection')
     },
 
     onDone () {

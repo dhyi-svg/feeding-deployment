@@ -72,7 +72,8 @@ teleop: {
     jump: '/manipulation_teleop'
   },
   navigation_teleop: {
-    jump: '/navigation_teleop'
+    jump: '/navigation_teleop',
+    recover: '/navigation_teleop?recover=1'
   },
   gesture_record: {
     jump: '/gesture_record_positive'

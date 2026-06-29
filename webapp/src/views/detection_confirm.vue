@@ -47,7 +47,7 @@ const DETECTION_MESSAGES = {
   handle: {
     slog: 'Please verify the handle detection.',
     instruction:
-      "Does the robot's handle detection look correct? " +
+      "Does the robot's handle detection look correct?<br>" +
       "Click 'Looks Correct' to proceed, or 'Redo' to detect again.",
     legend: [
       { swatch: 'box', label: 'Detected door (opens toward you)' },
@@ -58,7 +58,7 @@ const DETECTION_MESSAGES = {
   button: {
     slog: 'Please verify the microwave button detection.',
     instruction:
-      "Does the robot's microwave button detection look correct? " +
+      "Does the robot's microwave button detection look correct?<br>" +
       "If the wrong spot is marked, tap 'Redo'.",
     legend: [
       { color: '#ff3b30', label: 'Start / 30 secs button to press' }
@@ -67,7 +67,7 @@ const DETECTION_MESSAGES = {
   sink: {
     slog: 'Please verify the sink placement detection.',
     instruction:
-      "Does the robot's sink detection look correct? " +
+      "Does the robot's sink detection look correct?<br>" +
       "If it's off, tap 'Redo' to detect again.",
     legend: [
       { swatch: 'box', label: 'Detected sink area' },
@@ -77,7 +77,7 @@ const DETECTION_MESSAGES = {
   plate: {
     slog: 'Please verify the plate placement detection.',
     instruction:
-      "Does the robot's plate placement detection look correct? " +
+      "Does the robot's plate placement detection look correct?<br>" +
       "If it's off, tap 'Redo' to detect again.",
     legend: [
       { swatch: 'box', label: 'Detected placement marker' },
@@ -87,7 +87,7 @@ const DETECTION_MESSAGES = {
   attachment: {
     slog: 'Please verify the attachment detection.',
     instruction:
-      "Does the robot's attachment detection look correct? " +
+      "Does the robot's attachment detection look correct?<br>" +
       "If the wrong area is highlighted, tap 'Correct Color' to adjust the color filter.",
     legend: [
       { color: '#ff3b30', label: 'Color pixels used' },

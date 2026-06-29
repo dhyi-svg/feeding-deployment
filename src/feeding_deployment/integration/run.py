@@ -129,6 +129,17 @@ from feeding_deployment.preference_learning.config.physical_capabilities import 
 )
 from feeding_deployment.preference_learning.config import MEALS, SETTINGS, TIMES_OF_DAY
 
+class FatalSkillFailure(Exception):
+    """Raised to stop the executive after an unrecoverable skill failure.
+
+    When a skill fails in a way the user cannot recover from in place (navigation
+    recovery exhausted, an environment failure, or a missing web interface), the
+    executive routes the iPad to the explanation page and stops cleanly -- an
+    operator must re-run run.py. This propagates out of process_user_command and
+    is caught at the top of run().
+    """
+
+
 # Used for preference prediction when --physical_profile_file is not passed.
 DEFAULT_PHYSICAL_PROFILE = (
     "This user has moderate voluntary control of their arms and is able to press "
@@ -776,29 +787,36 @@ class _Runner:
         self.web_interface.wait_for_start_meal()
 
         resuming = self._resume_phase is not None
-        if resuming:
-            # --- Resume: the world state/atoms were restored in __init__. Rebuild
-            # the preference session (if the crashed meal had one), then route by
-            # the phase the checkpoint was taken in. Only "prep" replays the
-            # staged meal preparation (which skips done skills via empty replans
-            # and skips finalized prefs); "feeding"/"finish" jump straight to the
-            # task-selection page with atoms matching the real world. ---
-            if self._resume_pref_state is not None:
-                self._restore_preference_session(self._resume_pref_state)
-            if self._resume_phase == "prep":
-                self._start_preference_session(resume=True)
+        try:
+            if resuming:
+                # --- Resume: the world state/atoms were restored in __init__. Rebuild
+                # the preference session (if the crashed meal had one), then route by
+                # the phase the checkpoint was taken in. Only "prep" replays the
+                # staged meal preparation (which skips done skills via empty replans
+                # and skips finalized prefs); "feeding"/"finish" jump straight to the
+                # task-selection page with atoms matching the real world. ---
+                if self._resume_pref_state is not None:
+                    self._restore_preference_session(self._resume_pref_state)
+                if self._resume_phase == "prep":
+                    self._start_preference_session(resume=True)
+                else:
+                    print(f"Resuming in phase '{self._resume_phase}'; skipping meal preparation.")
+                self.web_interface.ready_for_task_selection()
+            elif self._pref_mode == "none":
+                self.web_interface.ready_for_task_selection()
             else:
-                print(f"Resuming in phase '{self._resume_phase}'; skipping meal preparation.")
-            self.web_interface.ready_for_task_selection()
-        elif self._pref_mode == "none":
-            self.web_interface.ready_for_task_selection()
-        else:
-            # --- Staged personalization: predict full bundle, then ask the
-            # initial dims. The rest are asked just-in-time during the meal
-            # (microwave at the holder, table dims at the table) and colors at
-            # each pickup. A single memory update happens at meal end. ---
-            self._start_preference_session()
-            self.web_interface.ready_for_task_selection()
+                # --- Staged personalization: predict full bundle, then ask the
+                # initial dims. The rest are asked just-in-time during the meal
+                # (microwave at the holder, table dims at the table) and colors at
+                # each pickup. A single memory update happens at meal end. ---
+                self._start_preference_session()
+                self.web_interface.ready_for_task_selection()
+        except FatalSkillFailure as e:
+            # A skill failed unrecoverably during meal preparation. Same handling
+            # as in the main loop below: the iPad is already on the explanation
+            # page; stop the executive without tearing down the web interface.
+            print(f"Executive stopping after fatal skill failure during preparation: {e}. Re-run run.py to restart.")
+            return
         last_task_type = None
         while self.active:
             # Take-Over pressed while idle (no skill running): launch teleop here,
@@ -899,9 +917,17 @@ class _Runner:
                 self.web_interface.ready_for_task_selection(last_task_type=last_task_type)
                 print("Ready for next user command.")
                 print("Current web interface page:", self.web_interface.current_page)
+            except FatalSkillFailure as e:
+                # Unrecoverable skill failure: the handler already routed the iPad
+                # to the explanation page (auto-explanations keep running). Stop
+                # the executive WITHOUT resetting to task selection and WITHOUT
+                # tearing down the web interface, so the explanation page stays
+                # live until the operator re-runs run.py.
+                print(f"Executive stopping after fatal skill failure: {e}. Re-run run.py to restart.")
+                return
             except queue.Empty:
                 # Wait for user commands.
-                time.sleep(0.1) 
+                time.sleep(0.1)
                 continue
 
     def stop_all_threads(self) -> None:
@@ -1033,11 +1059,15 @@ class _Runner:
                     print(f"User chose to continue past {ground_hla} after teleop; treating it as done.")
                     break
                 except RuntimeError as e:
-                    print(f"HLA execution failed: {e}")
-                    print(f"Aborting task and returning to task selection page.")
+                    print(f"HLA execution failed (fatal): {e}")
+                    print("Routing to the explanation page and stopping the executive (re-run run.py to restart).")
                     if self.web_interface is not None:
-                        self.web_interface.ready_for_task_selection()
-                    return
+                        # Land on the explanation page; do NOT pin a message
+                        # (fix_explanation would take the lock and freeze the
+                        # auto-explanations) and do NOT reset to task selection.
+                        # The 1 Hz continuous explanations keep running.
+                        self.web_interface.switch_to_explanation_page()
+                    raise FatalSkillFailure(str(e)) from e
 
             sim_state = self.sim.get_current_state()
 

@@ -1,5 +1,7 @@
+import json
 import math
 import os
+import time
 from collections import deque
 from pathlib import Path
 from typing import Any, Tuple
@@ -61,6 +63,11 @@ class NavigateHLA(HighLevelAction):
     # lives in nav_named_locations.yaml; until a real pose is captured there
     # (placeholder: false) the via-waypoint is skipped and we go direct.
     _STAGING_WAYPOINT = "kitchen_exit"
+
+    # On a failed leg (move_base aborted, or localization lost past the watchdog
+    # window) we hand the base to the user via the navigation teleop screen and
+    # re-try, up to this many times, before giving up (fatal).
+    _MAX_RECOVERY_ATTEMPTS = 3
 
     # Defaults for the post-nav refinement window. Overridden at runtime by
     # config/nav/custom_param.yaml (section: refinement); see that file for the
@@ -221,6 +228,12 @@ class NavigateHLA(HighLevelAction):
         rospy.Subscriber(
             "/shared_autonomy/resume", Empty, self._on_teleop_resume, queue_size=1
         )
+        # We also PUBLISH takeover to start a recovery leg ourselves: re-send the
+        # failed goal, then assert a takeover so the manager cancels move_base and
+        # waits for the human. (The webapp asserts it too on the teleop screen.)
+        self._takeover_pub = rospy.Publisher(
+            "/shared_autonomy/takeover", Empty, queue_size=1
+        )
         self._teleop_subs_ready = True
 
     def _on_teleop_takeover(self, _msg: "Empty") -> None:
@@ -228,6 +241,24 @@ class NavigateHLA(HighLevelAction):
 
     def _on_teleop_resume(self, _msg: "Empty") -> None:
         self._teleop_active = False
+
+    def _publish_base_takeover(self) -> None:
+        """Assert a shared-autonomy takeover from the backend so the manager
+        cancels move_base and waits for the human (starts a recovery leg)."""
+        if getattr(self, "_takeover_pub", None) is None:
+            return
+        self._takeover_pub.publish(Empty())
+
+    def _await_goal_active(self, client, timeout_s: float = 5.0) -> None:
+        """Block until the freshly-sent goal goes ACTIVE, so a subsequent takeover
+        is honored rather than cleared as a stale intent at the goal's start
+        (the manager consumes pending intents when a new goal begins)."""
+        deadline = rospy.Time.now() + rospy.Duration(timeout_s)
+        rate = rospy.Rate(20.0)
+        while not rospy.is_shutdown() and rospy.Time.now() < deadline:
+            if client.get_state() == GoalStatus.ACTIVE:
+                return
+            rate.sleep()
 
     def _navigate_to_target(
         self, location_name: str, speed: str, via: list = None
@@ -259,19 +290,69 @@ class NavigateHLA(HighLevelAction):
             if i == len(waypoints) - 1:
                 # Fine-tune the parking pose only at the final destination;
                 # intermediate staging poses just need to be reached coarsely.
-                self._refinement_window(pose)
+                self._refinement_window(wp, pose)
+
+    def _await_nav_result(self, client, location_name: str) -> str:
+        """Block until the current navigation goal terminates, under the
+        localization-stall watchdog. Returns "succeeded" or "failed".
+
+        Raises RuntimeError only on ROS shutdown (an environment failure, not a
+        recoverable navigation outcome). Both a move_base abort and a localization
+        stall past the watchdog window return "failed" so the caller can hand the
+        base to the user for manual recovery.
+
+        Per-incident localization watchdog: move_base stays alive through a
+        dropout and auto-resumes when TF returns, so we only give up if the
+        dropout PERSISTS for the full window. The counter resets the instant
+        localization is healthy again, and is paused entirely during a human
+        takeover -- so an earlier struggle can never shorten a later incident's
+        recovery window.
+        """
+        poll_s = 0.2
+        stall_s = 0.0
+        while True:
+            if client.wait_for_result(rospy.Duration(poll_s)):
+                break  # move_base/manager reached a terminal state
+            if rospy.is_shutdown():
+                client.cancel_goal()
+                raise RuntimeError("ROS shutdown during navigation")
+            if self._teleop_active or self._localization_fresh():
+                stall_s = 0.0  # human driving, or localization healthy -> reset
+                continue
+            stall_s += poll_s
+            if stall_s >= self._LOCALIZATION_STALL_TIMEOUT_S:
+                client.cancel_goal()
+                print(
+                    f"[nav] localization (map->{self._BASE_FRAME}) lost for "
+                    f">{self._LOCALIZATION_STALL_TIMEOUT_S:.0f}s; treating "
+                    f"{location_name} as a failed leg."
+                )
+                return "failed"
+
+        state = client.get_state()
+        if state == GoalStatus.SUCCEEDED:
+            return "succeeded"
+        print(f"[nav] move_base failed for {location_name}. Action state code={state}")
+        return "failed"
 
     def _drive_to_pose(self, location_name: str, pose: dict[str, Any]) -> None:
-        """Drive to one pose under the localization-stall watchdog.
+        """Drive to one pose under the localization-stall watchdog, with manual
+        teleop recovery on failure.
 
-        Raises RuntimeError if move_base ends non-SUCCEEDED, or TimeoutError if
-        localization (map->base) stays lost longer than the watchdog window.
+        On a failed leg (move_base aborted, or localization lost past the watchdog
+        window) and when a web interface is available, route the iPad to the
+        navigation teleop screen, re-send the goal, and assert a takeover so the
+        manager cancels move_base and waits for the human. The user drives to the
+        goal (Done -> blind SUCCEEDED) or hands back to autonomy (Resume).
+
+        Bounded by _MAX_RECOVERY_ATTEMPTS. If recovery is unavailable (no web
+        interface) or exhausted, raises RuntimeError -- the executive treats this
+        as a fatal failure.
         """
         client = self._get_move_base_client()
 
         goal = MoveBaseGoal()
         goal.target_pose.header.frame_id = str(pose["frame_id"])
-        goal.target_pose.header.stamp = rospy.Time.now()
         goal.target_pose.pose.position.x = pose["x"]
         goal.target_pose.pose.position.y = pose["y"]
         goal.target_pose.pose.position.z = pose["z"]
@@ -286,49 +367,52 @@ class NavigateHLA(HighLevelAction):
             f"is lost for > {self._LOCALIZATION_STALL_TIMEOUT_S:.0f}s of autonomous "
             f"driving (resets the moment localization recovers)."
         )
-        client.send_goal(goal)
-        # The base is now driving (via the shared_autonomy_manager). Enable the
-        # webapp's Robot Base Control button for the duration of this leg so the
-        # user can take over mid-drive. The navigation page publishes
-        # /shared_autonomy/takeover, which the manager honors; on /done it reports
-        # SUCCEEDED (blind success), on /resume it replans from the current pose.
-        self._teleop_active = False  # this leg starts under autonomy
-        self._set_base_control_available(True)
-        # Per-incident localization watchdog (replaces the old cumulative whole-
-        # leg timeout). move_base stays alive through a localization dropout and
-        # auto-resumes when TF returns, so we only give up if the dropout PERSISTS
-        # for the full window. The counter resets the instant localization is
-        # healthy again, and is paused entirely during a human takeover -- so an
-        # earlier struggle can never shorten a later incident's recovery window.
-        poll_s = 0.2
-        stall_s = 0.0
-        try:
-            while True:
-                if client.wait_for_result(rospy.Duration(poll_s)):
-                    break  # move_base/manager reached a terminal state
-                if rospy.is_shutdown():
-                    client.cancel_goal()
-                    raise RuntimeError("ROS shutdown during navigation")
-                if self._teleop_active or self._localization_fresh():
-                    stall_s = 0.0  # human driving, or localization healthy -> reset
-                    continue
-                stall_s += poll_s
-                if stall_s >= self._LOCALIZATION_STALL_TIMEOUT_S:
-                    client.cancel_goal()
-                    raise TimeoutError(
-                        f"Navigation to {location_name} stopped: localization "
-                        f"(map->{self._BASE_FRAME}) lost for "
-                        f">{self._LOCALIZATION_STALL_TIMEOUT_S:.0f}s."
-                    )
-        finally:
-            self._set_base_control_available(False)
 
-        state = client.get_state()
-        if state != GoalStatus.SUCCEEDED:
-            raise RuntimeError(
-                f"move_base failed for {location_name}. Action state code={state}"
+        attempts = 0
+        recovering = False
+        while True:
+            goal.target_pose.header.stamp = rospy.Time.now()
+            client.send_goal(goal)
+            # This leg starts under autonomy; enable the webapp's Robot Base
+            # Control button so the user can take over mid-drive. The manager
+            # honors /shared_autonomy/takeover (cancel move_base), /done (blind
+            # SUCCEEDED) and /resume (replan from the current pose).
+            self._teleop_active = False
+            self._set_base_control_available(True)
+            if recovering:
+                # Recovery leg: hand to the human the instant the goal is ACTIVE,
+                # before autonomy (which just failed) can drive again. Asserting
+                # the takeover AFTER the goal is active means the manager honors
+                # it instead of clearing it as a stale intent at goal start.
+                self._await_goal_active(client)
+                self._publish_base_takeover()
+            try:
+                outcome = self._await_nav_result(client, location_name)
+            finally:
+                self._set_base_control_available(False)
+
+            if outcome == "succeeded":
+                print(f"Reached {location_name}.")
+                return
+
+            if self.web_interface is None or attempts >= self._MAX_RECOVERY_ATTEMPTS:
+                raise RuntimeError(
+                    f"move_base failed for {location_name} after "
+                    f"{attempts} recovery attempt(s)."
+                )
+
+            attempts += 1
+            recovering = True
+            print(
+                f"[nav] navigation to {location_name} failed; handing base "
+                f"control to the user (recovery attempt "
+                f"{attempts}/{self._MAX_RECOVERY_ATTEMPTS})."
             )
-        print(f"Reached {location_name}.")
+            # Route the iPad to the navigation teleop screen in skill mode
+            # (Resume/Done). The loop re-sends the goal above and asserts takeover.
+            self.web_interface._send_message(
+                {"state": "navigation_teleop", "status": "recover"}
+            )
 
     @staticmethod
     def _yaw_from_quat(qx: float, qy: float, qz: float, qw: float) -> float:
@@ -399,7 +483,7 @@ class NavigateHLA(HighLevelAction):
             cmd.angular.z = self._clamp(float(cfg["k_ang"]) * final_yaw_err, float(cfg["max_ang_rps"]))
         return cmd
 
-    def _refinement_window(self, pose: dict) -> None:
+    def _refinement_window(self, location_name: str, pose: dict) -> None:
         """Refine the park pose for up to `timeout_s` after move_base succeeds.
 
         move_base/TEB only drives until it is within its goal tolerance, then
@@ -449,8 +533,12 @@ class NavigateHLA(HighLevelAction):
         gy = pose["y"]
         goal_yaw = self._yaw_from_quat(pose["qx"], pose["qy"], pose["qz"], pose["qw"])
 
-        def _residual(prefix: str) -> None:
-            """Print the signed map-frame pose error (current - goal) in x, y, yaw."""
+        def _residual(prefix: str):
+            """Print the signed map-frame pose error (current - goal) in x, y, yaw.
+
+            Returns (dx, dy, dyaw) in meters/radians, or None if the TF lookup
+            failed, so callers can build a before/after summary.
+            """
             try:
                 tfm = tf_buffer.lookup_transform(
                     self._MAP_FRAME, self._BASE_FRAME,
@@ -463,7 +551,7 @@ class NavigateHLA(HighLevelAction):
                 tf2_ros.TimeoutException,
             ) as exc:
                 print(f"  {prefix}: TF lookup failed ({exc}).")
-                return
+                return None
             tt = tfm.transform.translation
             qq = tfm.transform.rotation
             yy = self._yaw_from_quat(qq.x, qq.y, qq.z, qq.w)
@@ -474,6 +562,7 @@ class NavigateHLA(HighLevelAction):
                 f"  {prefix}: dx={dx * 100:+.1f}cm dy={dy * 100:+.1f}cm "
                 f"dyaw={math.degrees(dyaw):+.2f}deg (|xy|={math.hypot(dx, dy) * 100:.1f}cm)"
             )
+            return dx, dy, dyaw
 
         rate = rospy.Rate(float(cfg["rate_hz"]))
         if actuate:
@@ -495,7 +584,7 @@ class NavigateHLA(HighLevelAction):
             float(cfg["localization_settle_s"]),
             "measuring pre-refinement residual error",
         )
-        _residual("Goal reached. Residual error vs goal")
+        residual_before = _residual("Goal reached. Residual error vs goal")
 
         try:
             while not rospy.is_shutdown():
@@ -584,7 +673,65 @@ class NavigateHLA(HighLevelAction):
         # Residual pose error AFTER the refinement window ended and the base has
         # stopped, so the before/after pair shows whether refinement helped.
         rospy.sleep(0.3)  # let the base settle before the final read
-        _residual("Refinement ended.  Residual error vs goal")
+        residual_after = _residual("Refinement ended.  Residual error vs goal")
+
+        # Consolidated before/after summary for this navigation, so the effect of
+        # the refinement window is readable in one line instead of being scrolled
+        # apart by the per-iteration status updates above.
+        def _fmt(res) -> str:
+            if res is None:
+                return "unavailable"
+            dx, dy, dyaw = res
+            return (
+                f"|xy|={math.hypot(dx, dy) * 100:.1f}cm "
+                f"yaw={math.degrees(dyaw):+.2f}deg"
+            )
+
+        print(
+            f"  Refinement summary: before [{_fmt(residual_before)}] "
+            f"-> after [{_fmt(residual_after)}]"
+        )
+
+        # Persist the before/after residuals for this navigation to the per-user
+        # log directory (log/<user>/nav_residual_log.jsonl), one JSON record per
+        # navigation, so refinement quality can be reviewed offline.
+        self._log_residual_to_file(location_name, residual_before, residual_after)
+
+    @staticmethod
+    def _residual_record(res) -> "dict[str, float] | None":
+        """Convert a (dx, dy, dyaw) residual tuple into a JSON-friendly dict."""
+        if res is None:
+            return None
+        dx, dy, dyaw = res
+        return {
+            "dx_m": dx,
+            "dy_m": dy,
+            "dyaw_rad": dyaw,
+            "xy_m": math.hypot(dx, dy),
+            "yaw_deg": math.degrees(dyaw),
+        }
+
+    def _log_residual_to_file(self, location_name: str, before, after) -> None:
+        """Append one navigation's before/after residuals to the per-user log.
+
+        Best-effort: a logging failure must never break navigation.
+        """
+        log_dir = getattr(self, "log_dir", None)
+        if log_dir is None:
+            return
+        record = {
+            "t": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "location": location_name,
+            "before_refinement": self._residual_record(before),
+            "after_refinement": self._residual_record(after),
+        }
+        try:
+            log_dir = Path(log_dir)
+            log_dir.mkdir(parents=True, exist_ok=True)
+            with open(log_dir / "nav_residual_log.jsonl", "a", encoding="utf-8") as f:
+                f.write(json.dumps(record) + "\n")
+        except Exception as exc:  # noqa: BLE001 - logging must never break nav
+            print(f"[nav] could not write residual log: {exc}")
 
     def _set_base_control_available(self, available: bool) -> None:
         """Tell the webapp whether the Robot Base Control button should be enabled."""

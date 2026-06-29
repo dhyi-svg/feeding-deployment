@@ -510,8 +510,12 @@ class HighLevelAction(abc.ABC):
     def execute_robot_command(self, robot_command: KinovaCommand, plan_viz: list[FeedingDeploymentWorldState] = None, tool_update: str = None) -> None:
         """Execute the given commands on the robot.
 
-        Raises TeleopTakeoverException if user takes over via teleoperation.
-        Raises RuntimeError if the command fails due to firmware/hardware constraints.
+        Raises TeleopTakeoverException if the user takes over via teleoperation --
+        either an explicit mid-skill takeover, OR an automatic hand-off when the
+        command is rejected (joint limit / unreachable pose) and a web interface
+        is available for manual recovery.
+        Raises RuntimeError only when the command fails and there is no web
+        interface to recover through (e.g. simulation / misconfiguration).
         """
         if self.robot_interface is None:
             raise ValueError("Robot interface is not available to execute commands.")
@@ -548,7 +552,40 @@ class HighLevelAction(abc.ABC):
             )
 
         if not success and not isinstance(robot_command, (OpenGripperCommand, CloseGripperCommand)):
+            # The command was rejected (joint limit / unreachable pose). Instead
+            # of aborting the whole task, hand control to the user for manual
+            # recovery via the teleop screen, then let them choose to redo or
+            # continue past this skill -- exactly like a mid-skill takeover.
+            if self.web_interface is not None:
+                print("Robot command failed (joint limit/reachability); handing control to the user.")
+                post_action = self._run_takeover_recovery_and_get_choice(
+                    failure_context="joint_limit_failure"
+                )
+                raise TeleopTakeoverException(
+                    "Robot command failed (joint limit/reachability); user recovered via teleop",
+                    redo_current=(post_action == "redo"),
+                )
+            # No web interface (e.g. simulation / misconfiguration): fail loudly.
             raise RuntimeError("Robot command failed to execute (joint limit or workspace reachability constraint)")
+
+    def _run_takeover_recovery_and_get_choice(self, failure_context: str):
+        """Run a manual teleop recovery session, route the iPad back to the
+        explanation page, and return the user's post-teleop choice ("redo" or
+        "next"). Shared by the explicit mid-skill takeover and the automatic
+        joint-limit hand-off."""
+        post_action = self.run_manual_teleop_recovery(failure_context=failure_context) or "next"
+        # The teleop page announces a takeover on mount, which sets the takeover
+        # event AFTER the recovery session cleared its queue. Clear it here so a
+        # "redo" does not immediately re-trigger a mid-skill takeover on the first
+        # command of the re-run.
+        if self.web_interface is not None:
+            self.web_interface.consume_takeover()
+        # Generic 'resuming' page while autonomy continues the skill.
+        try:
+            self.web_interface.switch_to_explanation_page()
+        except Exception as e:
+            print(f"Could not send resuming page jump: {e}")
+        return post_action
 
     def _maybe_handle_mid_skill_takeover(self):
         """If the user requested a takeover, run teleop and route the iPad to the
@@ -559,14 +596,7 @@ class HighLevelAction(abc.ABC):
         if not self.web_interface.consume_takeover():
             return None
         print("Mid-skill takeover requested; handing control to the user.")
-        post_action = self.run_manual_teleop_recovery(failure_context="mid_skill_takeover") or "next"
-        # Generic 'resuming' page while autonomy continues the skill.
-        try:
-              self.web_interface.switch_to_explanation_page()
-        #     self.web_interface._send_message({"state": "resuming", "status": "jump"})
-        except Exception as e:
-            print(f"Could not send resuming page jump: {e}")
-        return post_action
+        return self._run_takeover_recovery_and_get_choice(failure_context="mid_skill_takeover")
 
 
 @dataclass(frozen=True)
