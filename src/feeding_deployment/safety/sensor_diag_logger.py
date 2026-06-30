@@ -36,8 +36,8 @@ Outputs (one timestamped dir per run, default under integration/log/):
                         --query-compute-apps omits)
   * usb_topology.txt -- lsusb tree + labeled device->controller map at start
   * events.log       -- dropouts + KERNEL usb lines + USB_TOPO connect/
-                        disconnect/re-enum (port + controller labeled), in
-                        wall-clock order so you can read the story
+                        disconnect/re-enum (port + controller labeled) + SKILL
+                        transitions, in wall-clock order so you can read the story
   * run_meta.json    -- start/end, args, per-topic totals, output index
 
 Usage (let it run, Ctrl+C stops early and still writes the summary):
@@ -61,6 +61,7 @@ from pathlib import Path
 import rospy
 from sensor_msgs.msg import Imu, LaserScan, CameraInfo
 from nav_msgs.msg import Odometry
+from std_msgs.msg import String
 
 
 # A dropout is an inter-message arrival gap big enough to mean a real stall
@@ -284,7 +285,9 @@ class GpuProcSampler:
         (re.compile(r"slack", re.I), "slack"),
         (re.compile(r"firefox|chrome|chromium", re.I), "browser"),
         (re.compile(r"Xorg|gnome-shell|gdm|mutter|plasma", re.I), "desktop"),
-        (re.compile(r"flair|food_manip|spanet|feeding_deployment", re.I), "flair"),
+        # The single orchestrator (FLAIR/SAM/etc. all run inside it, not
+        # standalone), so label it by its entry point rather than a sub-module.
+        (re.compile(r"run\.py|--run_on_robot|food_manip|spanet", re.I), "run.py"),
     ]
 
     def __init__(self, csv_file, t0):
@@ -476,6 +479,40 @@ def watch_usb_topology(watcher, stop_evt, interval):
         stop_evt.wait(interval)
 
 
+class SkillTracker:
+    """Logs the currently-executing skill whenever it changes.
+
+    Subscribes to /skill_plan -- the same latched topic the webapp reads to show
+    the user the active skill. Payload is JSON {"plan": [names...], "current": i}.
+    Logging the skill on change drops it into the wall-clock timeline next to
+    dropouts / GPU / USB events, so a stall can be tied to whatever skill was
+    running (e.g. did odom always die during navigation vs acquisition?).
+    """
+
+    def __init__(self, event_log):
+        self._log = event_log
+        self._last = None
+        self.changes = 0
+        self.current = "(none)"
+
+    def on_msg(self, msg):
+        try:
+            d = json.loads(msg.data)
+            plan, cur = d.get("plan", []), d.get("current", -1)
+            if isinstance(plan, list) and 0 <= cur < len(plan):
+                skill = str(plan[cur])
+                tag = f"{skill}  [{cur + 1}/{len(plan)}]"
+            else:
+                skill = tag = "(idle/cleared)"
+        except Exception:
+            skill = tag = f"(unparsed: {str(msg.data)[:60]})"
+        if tag != self._last:
+            self._last = tag
+            self.current = skill
+            self.changes += 1
+            self._log.write(f"SKILL  {tag}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -499,6 +536,8 @@ def main():
                     help="USB topology poll period s")
     ap.add_argument("--no-gpu-procs", action="store_true",
                     help="don't sample per-process GPU usage")
+    ap.add_argument("--skill-topic", default="/skill_plan",
+                    help="latched topic carrying the active skill (webapp's /skill_plan)")
     args = ap.parse_args()
 
     # Resolve per-stream topics from CLI overrides (key -> arg attribute).
@@ -546,6 +585,11 @@ def main():
         mon = TopicMonitor(key, event_log, drop_gap)
         rospy.Subscriber(topic, msg_type, mon.on_msg, queue_size=queue)
         monitors.append((key, mon, topic, drop_gap))
+
+    # Track the currently-executing skill (logged on change), so a stall can be
+    # tied to whatever skill was running at the time.
+    skill_tracker = SkillTracker(event_log)
+    rospy.Subscriber(args.skill_topic, String, skill_tracker.on_msg, queue_size=10)
 
     # CSV header: three columns per stream, then system metrics.
     cols = ["wall_iso", "elapsed_s"]
@@ -619,6 +663,8 @@ def main():
         "usb_topology_changes": usb_watcher.changes,
         "gpu_proc_rows": (gpu_sampler.rows if gpu_sampler else 0),
         "gpu_proc_labels": (sorted(gpu_sampler.labels_seen) if gpu_sampler else []),
+        "skill_changes": skill_tracker.changes,
+        "last_skill": skill_tracker.current,
         "outputs": {
             "samples_csv": "samples.csv",
             "events_log": "events.log",
@@ -664,7 +710,8 @@ def main():
     if gpu_sampler:
         print(f"  per-process GPU: gpu_procs.csv ({gpu_sampler.rows} rows; "
               f"labels seen: {sorted(gpu_sampler.labels_seen)})")
-    print("  read events.log for the per-stall timeline.")
+    print(f"  skill changes: {skill_tracker.changes} (last: {skill_tracker.current})")
+    print("  read events.log for the per-stall timeline (incl. SKILL transitions).")
 
 
 if __name__ == "__main__":

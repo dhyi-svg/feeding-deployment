@@ -176,11 +176,11 @@ plate_gaze_pos:
 above_plate_pos: 
   description: "Above plate configuration"
   type: "joint_positions"
-  values: [-2.86495014, -1.61460533, -2.6115943, -1.37673391, 1.11842806, -1.17904586, -2.6957422]
+  values: [-3.086733931979142, -1.4848561184180396, -2.4547698000449736, -1.381959563380648, 1.375716714311339, -0.8903863651549875, -3.008976818683771]
 before_transfer_pos: 
   description: "Ready to transfer configuration, the user's face should be visible from this configuration"
   type: "joint_positions"
-  values: [-2.86554642, -1.61951779, -2.60986085, -1.37302839, 1.11779249, -1.18028264, 2.05515862]
+  values: [-3.086733931979142, -1.4848561184180396, -2.4547698000449736, -1.381959563380648, 1.375716714311339, -0.8903863651549875, 1.7402419485220058]
 absolute_before_transfer_pos: 
   description: "Ready to transfer configuration, the user's face should be visible from this configuration"
   type: "joint_positions"
@@ -188,15 +188,7 @@ absolute_before_transfer_pos:
 before_transfer_pose:
   description: ""
   type: "ee_pose"
-  values: [0.504, 0.303, 0.529, 0.0, 0.707, 0.707, 0]
-drink_before_transfer_pos: 
-  description: "Ready to transfer configuration, the user's face should be visible from this configuration"
-  type: "joint_positions"
-  values: [-2.86554642, -1.61951779, -2.60986085, -1.37302839, 1.11779249, -1.18028264, 2.05515862]
-drink_before_transfer_pose:
-  description: ""
-  type: "ee_pose"
-  values: [0.504, 0.303, 0.529, 0.0, 0.707, 0.707, 0]
+  values: [0.47918620705604553, 0.46575257182121277, 0.5700108408927917, 0.009804771201475587, 0.7033225874710047, 0.7107377657950257, 0.009645345378612814]
 
 # Utensil mount constants
 utensil_inside_mount_pose: 

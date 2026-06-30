@@ -94,6 +94,29 @@ class WebInterface:
             self._on_base_resume,
             queue_size=1,
         )
+
+        # --- Settings overlay (view/edit already-set preferences) ---
+        # Dedicated, isolated topic pair so settings traffic NEVER touches the main
+        # /webapp_to_robot queue or the takeover/confirmation path. The robot->app
+        # topic is latched so an overlay opening mid-meal immediately gets the current
+        # prefs without a round-trip race.
+        self.settings_publisher = rospy.Publisher(
+            "/robot_settings_to_webapp", String, queue_size=1, latch=True
+        )
+        self.settings_sub = rospy.Subscriber(
+            "/webapp_settings_to_robot", String, self._settings_callback, queue_size=20
+        )
+        # Accessors into the live PreferenceSession, registered by run.py while a meal
+        # session exists; None between meals (the overlay then shows the empty state).
+        self._prefs_view_fn = None
+        self._prefs_edit_fn = None
+        # Set == panel closed. The preference-ask and next-HLA stalls wait on this.
+        self._settings_panel_closed = threading.Event()
+        self._settings_panel_closed.set()
+        # Edits are applied on a single worker thread (off the ROS callback) because an
+        # edit may trigger a slow LLM re-prediction. A None sentinel stops the worker.
+        self._settings_apply_queue: "queue.Queue" = queue.Queue()
+
         time.sleep(1.0)  # Wait for the subscriber to connect
 
         self.current_page = "task_selection" # task_selection, transparency, adaptability
@@ -118,12 +141,24 @@ class WebInterface:
         self.transparency_continuous_thread = threading.Thread(target=self.provide_continuous_explanations)
         self.transparency_continuous_thread.start()
 
+        # Worker that applies settings-overlay edits off the ROS callback thread
+        # (an edit may run a slow LLM re-prediction). Always created so the join in
+        # stop_all_threads is unconditional.
+        self.settings_apply_thread = threading.Thread(target=self._settings_apply_worker)
+        self.settings_apply_thread.start()
+
     def stop_all_threads(self) -> None:
         self.active = False
         try:
             self.transparency_continuous_thread.join()
         except Exception as e:
             print("Error stopping transparency continuous thread: ", e)
+        try:
+            # Unblock the worker's queue.get() with the shutdown sentinel, then join.
+            self._settings_apply_queue.put(None)
+            self.settings_apply_thread.join()
+        except Exception as e:
+            print("Error stopping settings apply thread: ", e)
         try:
             self.gesture_listener_thread.join()
         except Exception as e:
@@ -297,6 +332,89 @@ class WebInterface:
             self.takeover_event.clear()
             return True
         return False
+
+    # ---- Settings overlay plumbing (isolated from _message_callback) ----
+    def register_preferences_accessor(self, view_fn, edit_fn) -> None:
+        """Wire the settings overlay to the live PreferenceSession. ``view_fn()``
+        returns the list of editable prefs; ``edit_fn(field, value)`` applies one
+        edit. Called by run.py when a meal session is built."""
+        self._prefs_view_fn = view_fn
+        self._prefs_edit_fn = edit_fn
+        self._publish_settings()
+
+    def clear_preferences_accessor(self) -> None:
+        """Drop the accessor at meal end and clear the latched prefs so a later-opening
+        overlay shows the empty state, not the last meal's stale list."""
+        self._prefs_view_fn = None
+        self._prefs_edit_fn = None
+        self.settings_publisher.publish(String(json.dumps({"preferences": []})))
+
+    def _publish_settings(self) -> None:
+        """Publish the current editable prefs on the (latched) settings topic."""
+        view_fn = self._prefs_view_fn
+        prefs = []
+        if view_fn is not None:
+            try:
+                prefs = view_fn()
+            except Exception as e:
+                print("Error building settings view: ", e)
+                prefs = []
+        self.settings_publisher.publish(String(json.dumps({"preferences": prefs})))
+
+    def _settings_callback(self, msg: "String") -> None:
+        """Handle settings-overlay messages on the dedicated topic. Runs on its own
+        ROS subscriber thread; never touches received_web_interface_messages."""
+        try:
+            data = json.loads(msg.data)
+        except Exception:
+            return
+        action = data.get("action")
+        if action == "open":
+            # Panel opened: mark open (so the ask/HLA stalls wait) and send prefs.
+            self._settings_panel_closed.clear()
+            self._publish_settings()
+        elif action == "close":
+            self._settings_panel_closed.set()
+        elif action == "set":
+            # Apply off the callback thread: an edit may run a slow LLM re-prediction.
+            self._settings_apply_queue.put((data.get("field"), data.get("value")))
+
+    def _settings_apply_worker(self) -> None:
+        """Serialize settings edits off the ROS callback thread."""
+        while True:
+            item = self._settings_apply_queue.get()
+            if item is None:  # shutdown sentinel
+                break
+            field, value = item
+            edit_fn = self._prefs_edit_fn
+            if edit_fn is not None and field is not None:
+                try:
+                    edit_fn(field, value)
+                except Exception as e:
+                    print("Error applying settings edit: ", e)
+            # Re-publish so the overlay reflects the authoritative state.
+            self._publish_settings()
+
+    def wait_until_settings_closed(self, status: str, *, raise_on_takeover: bool) -> None:
+        """Block the caller while the settings panel is open, so the robot doesn't ask
+        for new prefs / start the next HLA mid-edit. Publishes ``status`` once (e.g.
+        'robot_waiting' before an ask, 'robot_paused' before an HLA) so the panel can
+        show the right banner. Returns immediately if the panel is already closed.
+
+        On a takeover: raise WebInterfaceTakeoverInterrupt if ``raise_on_takeover``
+        (the preference-ask path, which already raises from get_required_web_interface_message),
+        else just return and leave takeover_event for the existing handler (the
+        execute-loop path, which must not get a new exception)."""
+        if self._settings_panel_closed.is_set():
+            return
+        self.settings_publisher.publish(String(json.dumps({"status": status})))
+        print(f"Settings panel open; stalling ({status}) until the user closes it ...")
+        while self.active and not self._settings_panel_closed.is_set():
+            if self.takeover_event.is_set():
+                if raise_on_takeover:
+                    raise WebInterfaceTakeoverInterrupt()
+                return
+            time.sleep(0.1)
 
     def clear_received_messages(self) -> None:
         while not self.received_web_interface_messages.empty():
@@ -773,6 +891,11 @@ class WebInterface:
     def start_preference_correction(self, total: int, autocontinue_seconds: float) -> None:
         """Navigate to the correction page for a stage of ``total`` dims and wait
         until it has mounted/subscribed."""
+        # If the user has the settings overlay open, stall until they close it (so
+        # they aren't yanked mid-edit and the ask reflects their just-made edits).
+        # Mirrors this method's existing get_required_web_interface_message takeover
+        # behavior, hence raise_on_takeover=True.
+        self.wait_until_settings_closed("robot_waiting", raise_on_takeover=True)
         self.current_page = "preference_correction"
         # Drop stale messages so we wait for the ready for THIS navigation.
         self.clear_received_messages()

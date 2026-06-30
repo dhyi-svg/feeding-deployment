@@ -194,6 +194,148 @@ def test_finalize_meal_one_update_with_full_bundle(bt_dir):
     assert all(f in s.finalized for f in PREF_FIELDS)
 
 
+# ---------------------------------------------------------------------------
+# Settings overlay: view / edit already-set preferences
+# ---------------------------------------------------------------------------
+
+
+def test_settings_view_lists_finalized_categorical_only(bt_dir):
+    s = PreferenceSession(FakeModel(), bt_dir, CTX, web_interface=FakeWeb())
+    s.start()
+    s.ask(["robot_speed", "skewering_axis"])
+    view = s.settings_view()
+    assert {p["field"] for p in view} == {"robot_speed", "skewering_axis"}
+    # No color dims are ever exposed in the overlay.
+    assert all(p["field"] not in COLOR_FIELDS for p in view)
+    p = next(p for p in view if p["field"] == "robot_speed")
+    assert p["editable"] is True
+    assert p["value"] == s.bundle["robot_speed"]
+    assert p["options"] == PREF_OPTIONS["robot_speed"]
+    assert p["description"]  # carries a non-empty description
+
+
+def test_edit_applies_correction_and_carries_to_finalize(bt_dir):
+    model = FakeModel()
+    s = PreferenceSession(model, bt_dir, CTX, web_interface=FakeWeb())
+    s.start()
+    s.ask(["robot_speed"])  # confirmed at first option
+    other = PREF_OPTIONS["robot_speed"][1]
+    assert s.edit("robot_speed", other) is True
+    assert s.bundle["robot_speed"] == other
+    assert s.corrected["robot_speed"] == other
+    s.finalize_meal(day=3)
+    assert model.update_calls[-1]["gt"]["robot_speed"] == other
+    assert model.update_calls[-1]["corrected"]["robot_speed"] == other
+
+
+def test_edit_rejects_invalid_option_and_color_dim(bt_dir):
+    s = PreferenceSession(FakeModel(), bt_dir, CTX, web_interface=FakeWeb())
+    s.start()
+    s.ask(["robot_speed"])
+    assert s.edit("robot_speed", "not-an-option") is False
+    assert s.edit("plate_color_fridge", {"h": 1, "s": 2, "v": 3, "range": 0.1}) is False
+    # unchanged
+    assert s.bundle["robot_speed"] == PREF_OPTIONS["robot_speed"][0]
+
+
+def test_microwave_time_locks_after_apply_microwave(bt_dir):
+    s = PreferenceSession(FakeModel(), bt_dir, CTX, web_interface=FakeWeb())
+    s.start()
+    s.ask(["microwave_time"])
+    v = next(p for p in s.settings_view() if p["field"] == "microwave_time")
+    assert v["editable"] is True  # editable before the routing is committed
+
+    s.apply_microwave(set(), object())  # commits FoodHeated routing -> locks the dim
+
+    v = next(p for p in s.settings_view() if p["field"] == "microwave_time")
+    assert v["editable"] is False
+    before = s.bundle["microwave_time"]
+    other = next(o for o in PREF_OPTIONS["microwave_time"] if o != before)
+    assert s.edit("microwave_time", other) is False  # no-op while locked
+    assert s.bundle["microwave_time"] == before
+
+
+def test_transfer_mode_edit_defers_reinit_until_flush(bt_dir):
+    s = PreferenceSession(FakeModel(), bt_dir, CTX, web_interface=FakeWeb())
+    s.start()
+    s.ask(["transfer_mode"])
+    before = s.bundle["transfer_mode"]
+    other = next(o for o in PREF_OPTIONS["transfer_mode"] if o != before)
+    assert s.edit("transfer_mode", other) is True
+    assert s._pending_transfer_reinit is True  # deferred, not applied on the worker
+    s.flush_pending_inmemory()  # main-thread safe boundary
+    assert s._pending_transfer_reinit is False
+
+
+def test_settings_view_and_edit_are_thread_safe(bt_dir):
+    """A reader thread iterating settings_view() concurrently with edits must never
+    raise (e.g. 'dict changed size during iteration')."""
+    import threading
+
+    s = PreferenceSession(FakeModel(), bt_dir, CTX, web_interface=FakeWeb())
+    s.start()
+    cat = [d for d in PREF_FIELDS if PREF_KIND.get(d) != "color"][:6]
+    s.ask(cat)
+
+    errors = []
+    stop = threading.Event()
+
+    def reader():
+        try:
+            while not stop.is_set():
+                for p in s.settings_view():
+                    _ = (p["field"], p["value"], p["editable"])
+        except Exception as e:  # pragma: no cover - failure path
+            errors.append(e)
+
+    t = threading.Thread(target=reader)
+    t.start()
+    try:
+        opts = PREF_OPTIONS["robot_speed"]
+        for i in range(200):
+            s.edit("robot_speed", opts[i % len(opts)])
+    finally:
+        stop.set()
+        t.join()
+    assert not errors
+
+
+def test_save_yaml_is_atomic_under_concurrent_reads(tmp_path):
+    """A concurrent reader must always see a complete YAML file, never a partial
+    one (the property that prevents a settings edit from crashing a skill)."""
+    import threading
+    import time
+
+    fp = tmp_path / "bt.yaml"
+    _save_yaml(fp, {"parameters": [{"name": "A", "value": 0}]})
+
+    errors = []
+    stop = threading.Event()
+
+    def writer():
+        i = 0
+        while not stop.is_set():
+            _save_yaml(fp, {"parameters": [{"name": "A", "value": i}], "pad": "x" * 4000})
+            i += 1
+
+    def reader():
+        try:
+            while not stop.is_set():
+                d = _load_yaml(fp)
+                assert isinstance(d, dict) and "parameters" in d
+        except Exception as e:  # pragma: no cover - failure path
+            errors.append(e)
+
+    tw, tr = threading.Thread(target=writer), threading.Thread(target=reader)
+    tw.start()
+    tr.start()
+    time.sleep(0.5)
+    stop.set()
+    tw.join()
+    tr.join()
+    assert not errors
+
+
 def test_ask_skips_already_finalized_dims(bt_dir):
     # Resume scenario: robot_speed was asked before the crash (finalized). On
     # re-ask it must be skipped, and only the still-open dim is shown.

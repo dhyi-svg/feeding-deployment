@@ -281,6 +281,9 @@ export default {
     this.startCountdown();
     this.publishMessageOnLoad()
     window.addEventListener('resize', this.getImageDimensions)
+    // Opening the settings overlay cancels the autocontinue for this visit (reuses
+    // the same stopCountdown the user's own interaction triggers).
+    window.addEventListener('settings-open', this.stopCountdown)
     this.activeIndex = 0
   },
   beforeUnmount () {
@@ -288,8 +291,9 @@ export default {
       clearInterval(this.countdownInterval);
       this.countdownInterval = null;
     }
-    
+
     window.removeEventListener('resize', this.getImageDimensions)
+    window.removeEventListener('settings-open', this.stopCountdown)
   },
   beforeRouteLeave (to, from, next) {
     if (this.countdownInterval) {

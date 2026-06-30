@@ -155,4 +155,14 @@ if __name__ == "__main__":
         return state["ee_pos"], state["position"]
     
     ee_pose, joint_positions = get_state()
-    arm_client_interface.execute_command(JointCommand(config.left_back_retract_pos))
+
+    before_transfer_pos = [-3.0854968936528, -1.483771146589941, -2.4555141535696507, -1.3825566440970434, 1.3751202993852156, -0.8903261777143525, 1.7401439441938908]
+    acq_pos = [-3.0854968936528, -1.483771146589941, -2.4555141535696507, -1.3825566440970434, 1.3751202993852156, -0.8903261777143525, -3.008976818683771]
+    arm_client_interface.execute_command(JointCommand(config.retract_pos))
+    arm_client_interface.execute_command(JointCommand(before_transfer_pos))
+
+    print("Transfer pos:")
+    ee_pose, joint_positions = get_state()
+    # arm_client_interface.execute_command(JointCommand(acq_pos))
+    # arm_client_interface.execute_command(JointCommand(before_transfer_pos))
+    # arm_client_interface.execute_command(JointCommand(config.retract_pos))

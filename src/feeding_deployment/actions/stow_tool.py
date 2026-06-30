@@ -85,7 +85,6 @@ class StowToolHLA(HighLevelAction):
             last_drink_poses[value].position[0] += y_movement
             last_drink_poses[value].position[1] -= x_movement
 
-        # self.move_to_joint_positions(self.sim.scene_description.drink_before_transfer_pos)
         if abs(x_movement) < 0.01 and abs(y_movement) < 0.01:
             self.move_to_joint_positions(last_drink_pickup_joint_pos)
         self.move_to_ee_pose(last_drink_poses['inside_top_pose'])

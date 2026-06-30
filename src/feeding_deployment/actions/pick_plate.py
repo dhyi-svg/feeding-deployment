@@ -85,6 +85,8 @@ class PickPlateFromApplianceHLA(HighLevelAction):
 
         pickup_pose = result["pickup_pose"]
         pre_pickup_pose = result["pre_pickup_pose"]
+        above_pickup_pose = result["above_pickup_pose"]
+        post_pickup_pose = result["post_pickup_pose"]
 
         new_color = result["handle_color"]
         new_range = result["color_range"]
@@ -101,7 +103,8 @@ class PickPlateFromApplianceHLA(HighLevelAction):
         self.close_gripper()
         self.move_to_ee_pose(pickup_pose)
         self.open_gripper()
-        self.move_to_ee_pose(pre_pickup_pose)
+        self.move_to_ee_pose(above_pickup_pose)
+        self.move_to_ee_pose(post_pickup_pose)
         
         self.move_to_ee_pose(self.sim.scene_description.fridge_inside_intermediate_pose)
         self.move_to_ee_pose(self.sim.scene_description.fridge_above_intermediate_pose)

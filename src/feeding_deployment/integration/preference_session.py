@@ -29,6 +29,7 @@ once, in ``finalize_meal``.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -36,16 +37,20 @@ from feeding_deployment.preference_learning.config.preference_bundle import (
     COLOR_FIELDS,
     COLOR_FIELD_BY_LOCATION,
     DEFAULT_COLOR,
+    PREFERENCE_BUNDLE,
     color_from_bt,
     color_to_bt,
     format_color,
     parse_color,
 )
 from feeding_deployment.preference_learning.methods.prediction_model import (
+    PREF_DESCRIPTIONS,
     PREF_KIND,
     PREF_OPTIONS,
 )
 from feeding_deployment.preference_learning.methods.utils import PREF_FIELDS
+
+_PREF_LABELS: Dict[str, str] = {dim.field: dim.label for dim in PREFERENCE_BUNDLE}
 
 from feeding_deployment.integration.apply_preferences import (
     _load_yaml,
@@ -111,6 +116,22 @@ class PreferenceSession:
         # Dims the user actively CHANGED (learning signal); subset of finalized.
         self.corrected: Dict[str, Any] = {}
 
+        # Guards the in-memory bundle/finalized/corrected against the settings-edit
+        # path (a separate WebInterface worker thread calling settings_view()/edit())
+        # racing the main pipeline thread (ask/record_color/finalize_meal). Reentrant
+        # so the public methods can call each other. The slow LLM predict_bundle call
+        # is deliberately done OUTSIDE this lock (see edit()).
+        self._lock = threading.RLock()
+        # Dims that are no longer live-editable from the settings overlay because
+        # their effect is already committed for this meal (currently just
+        # microwave_time once apply_microwave routes the planner). settings_view()
+        # marks these editable=False and edit() ignores them.
+        self._locked: set[str] = set()
+        # Set by a settings edit that changed transfer_mode; the transfer-object
+        # re-init (apply_transfer_mode) is deferred to flush_pending_inmemory() on
+        # the main thread so it never swaps the transfer under an in-flight motion.
+        self._pending_transfer_reinit = False
+
     # ------------------------------------------------------------------ #
     # Color seeds / BT YAML I/O
     # ------------------------------------------------------------------ #
@@ -168,9 +189,13 @@ class PreferenceSession:
     # ------------------------------------------------------------------ #
     def _overrides(self) -> Dict[str, Any]:
         """Finalized values, pinned during (re)prediction so they never flip."""
-        return {f: self.bundle[f] for f in self.finalized if f in self.bundle}
+        with self._lock:
+            return {f: self.bundle[f] for f in self.finalized if f in self.bundle}
 
     def _predict(self) -> Dict[str, Any]:
+        # predict_bundle may call an LLM (slow). Callers must NOT hold self._lock
+        # across this (see _repredict_open) so the settings worker / execution
+        # thread are never blocked on the network.
         return self._model.predict_bundle(
             self.context,
             self._overrides(),
@@ -179,35 +204,43 @@ class PreferenceSession:
 
     def _repredict_open(self) -> None:
         """Refresh predictions for all still-open dims (finalized dims pinned)."""
-        pred = self._predict()
-        for field in PREF_FIELDS:
-            if field in self.finalized:
-                continue
-            if field in pred:
-                self.bundle[field] = pred[field]
-        self._write_open_colors_to_bt()
+        pred = self._predict()  # LLM call OUTSIDE the lock
+        with self._lock:
+            for field in PREF_FIELDS:
+                if field in self.finalized:
+                    continue
+                if field in pred:
+                    self.bundle[field] = pred[field]
+            self._write_open_colors_to_bt()
 
     # ------------------------------------------------------------------ #
     # Apply
     # ------------------------------------------------------------------ #
-    def _apply_non_planning(self) -> List[str]:
-        """Apply all BT-parameter dims + transfer mode + dip from the current
-        bundle. Idempotent and free of planner side effects (microwave atom is
-        applied separately via apply_microwave)."""
-        warnings = apply_bundle_to_behavior_trees(self._categorical_bundle(), self._bt_dir)
-        if self._scene is not None:
-            apply_transfer_mode(self._categorical_bundle(), self._scene, self._hla_map)
-        apply_dip_preference(self._categorical_bundle(), self._flair)
+    def _apply_non_planning(self, *, reinit_transfer: bool = True) -> List[str]:
+        """Apply all BT-parameter dims + (optionally) transfer mode + dip from the
+        current bundle. Idempotent and free of planner side effects (microwave atom is
+        applied separately via apply_microwave).
+
+        ``reinit_transfer=False`` skips the transfer-object reconstruction
+        (apply_transfer_mode); the settings-edit worker passes this and defers that
+        reconstruction to flush_pending_inmemory() on the main thread so the transfer
+        object is never swapped under an in-flight transfer motion."""
+        bundle = self._categorical_bundle()  # single consistent snapshot
+        warnings = apply_bundle_to_behavior_trees(bundle, self._bt_dir)
+        if reinit_transfer and self._scene is not None:
+            apply_transfer_mode(bundle, self._scene, self._hla_map)
+        apply_dip_preference(bundle, self._flair)
         return warnings
 
     def _categorical_bundle(self) -> Dict[str, str]:
         """Bundle restricted to categorical (string) fields, for the apply_*
         helpers (which expect string values)."""
-        return {
-            f: v
-            for f, v in self.bundle.items()
-            if f not in _COLOR_FIELD_SET and isinstance(v, str)
-        }
+        with self._lock:
+            return {
+                f: v
+                for f, v in self.bundle.items()
+                if f not in _COLOR_FIELD_SET and isinstance(v, str)
+            }
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -290,6 +323,11 @@ class PreferenceSession:
         a duration leaves it unset (planner routes through the microwave) and
         the duration is written to the BT by _apply_non_planning. Returns the
         duration in seconds, or None for 'no microwave'."""
+        # The microwave routing is now committed to the planner for this meal, so
+        # microwave_time can no longer be honored from the settings overlay without
+        # a mid-plan re-plan -> lock it (settings_view marks it editable=False).
+        with self._lock:
+            self._locked.add("microwave_time")
         return apply_microwave_preference(
             self._categorical_bundle(), current_atoms, food_heated_atom
         )
@@ -321,6 +359,74 @@ class PreferenceSession:
             changed=changed,
         )
 
+    # ------------------------------------------------------------------ #
+    # Settings overlay: view + edit already-set preferences
+    # ------------------------------------------------------------------ #
+    def settings_view(self) -> List[Dict[str, Any]]:
+        """Snapshot of the finalized, categorical dims for the settings overlay.
+
+        Only dims the user has already set this meal are shown (still-open dims are
+        re-predicted from the user's edits, so they need not appear). Color dims are
+        excluded (they use the live-camera picker). Locked dims are included but
+        marked ``editable=False``. Safe to call from the WebInterface thread."""
+        out: List[Dict[str, Any]] = []
+        with self._lock:
+            for field in PREF_FIELDS:  # stable display order
+                if field not in self.finalized or PREF_KIND.get(field) == "color":
+                    continue
+                out.append({
+                    "field": field,
+                    "label": _PREF_LABELS.get(field, field.replace("_", " ").title()),
+                    "value": self.bundle.get(field),
+                    "options": list(PREF_OPTIONS.get(field, [])),
+                    "description": PREF_DESCRIPTIONS.get(field, ""),
+                    "editable": field not in self._locked,
+                })
+        return out
+
+    def edit(self, field: str, value: Any) -> bool:
+        """Apply a settings-overlay edit to an already-finalized categorical dim.
+
+        Treated as a *correction* to ground truth: updates the bundle, records it in
+        ``corrected``, re-predicts the still-open dims against the new value, and
+        applies it to the BTs immediately. The transfer-object re-init is deferred to
+        flush_pending_inmemory() (main thread). Returns True if applied, False if the
+        edit was ignored (color dim, locked, or not a valid option). Called from the
+        WebInterface apply-worker thread; the slow LLM re-prediction runs outside the
+        session lock."""
+        if PREF_KIND.get(field) == "color":
+            return False
+        with self._lock:
+            if field in self._locked:
+                return False
+            if value not in PREF_OPTIONS.get(field, []):
+                return False
+            changed = value != self.bundle.get(field)
+
+        # _finalize takes the lock itself (and persists via on_change).
+        self._finalize(field, value, changed=changed)
+        if changed:
+            self._repredict_open()  # LLM outside lock
+            # Apply to BTs + dip now; defer the transfer-object reconstruction so it
+            # never swaps under an in-flight transfer (flush_pending_inmemory).
+            self._apply_non_planning(reinit_transfer=False)
+            if field == "transfer_mode":
+                with self._lock:
+                    self._pending_transfer_reinit = True
+        self._log("preference_settings_edit", field=field, value=value, changed=changed)
+        return True
+
+    def flush_pending_inmemory(self) -> None:
+        """Run deferred in-memory applies on the MAIN thread at a safe boundary
+        (run.py calls this just before each execute_action). Currently only the
+        transfer-object re-init, deferred from edit() so the transfer object is
+        never reconstructed under an in-flight transfer motion."""
+        with self._lock:
+            pending = self._pending_transfer_reinit
+            self._pending_transfer_reinit = False
+        if pending and self._scene is not None:
+            apply_transfer_mode(self._categorical_bundle(), self._scene, self._hla_map)
+
     def finalize_meal(self, day: int) -> Dict[str, Any]:
         """Single per-day memory update with the full finalized bundle.
 
@@ -330,7 +436,8 @@ class PreferenceSession:
             if field not in self.finalized and field in self.bundle:
                 self._finalize(field, self.bundle[field], changed=False)
 
-        ground_truth = dict(self.bundle)
+        with self._lock:
+            ground_truth = dict(self.bundle)
         self._model.update(
             day=day,
             context=self.context,
@@ -356,12 +463,13 @@ class PreferenceSession:
         memory / disk handles), and color *values* already persist in the pickup
         BT YAMLs. Sufficient to (a) avoid re-asking, and (b) keep the end-of-meal
         learning update honest."""
-        return {
-            "context": dict(self.context),
-            "bundle": dict(self.bundle),
-            "finalized": set(self.finalized),
-            "corrected": dict(self.corrected),
-        }
+        with self._lock:
+            return {
+                "context": dict(self.context),
+                "bundle": dict(self.bundle),
+                "finalized": set(self.finalized),
+                "corrected": dict(self.corrected),
+            }
 
     def resume_from_state(self, state: Dict[str, Any]) -> None:
         """Re-hydrate per-meal state after a crash and re-apply it to the BTs /
@@ -385,16 +493,20 @@ class PreferenceSession:
             return
         if field in _COLOR_FIELD_SET:
             value = parse_color(value)
-        self.bundle[field] = value
-        self.finalized.add(field)
-        if changed:
-            self.corrected[field] = value
+        with self._lock:
+            self.bundle[field] = value
+            self.finalized.add(field)
+            if changed:
+                self.corrected[field] = value
+            snapshot = self.capture_state()  # reentrant lock
         # Persist the latest preference state immediately so a crash after this
         # correction (but before the next sub-skill checkpoint) loses nothing.
+        # Done OUTSIDE the lock so a slow on_change can't block settings_view / the
+        # execution thread. Persistence must never break the meal.
         if self._on_change is not None:
             try:
-                self._on_change(self.capture_state())
-            except Exception as e:  # persistence must never break the meal
+                self._on_change(snapshot)
+            except Exception as e:
                 print(f"[preference-session] on_change persist failed: {e}")
 
     def _loggable_bundle(self, only: Optional[List[str]] = None) -> Dict[str, Any]:

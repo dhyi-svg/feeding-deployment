@@ -14,7 +14,7 @@
     <visual>
       <origin xyz="0.3576 0.4515 -0.335" rpy="1.5708 0 -1.5708"/>
       <geometry>
-        <mesh filename="package://feeding_deployment/urdf/meshes/feeding_vention_modification.STL"
+        <mesh filename="package://feeding_deployment/urdf/meshes/feeding_vention_modification_decimated.STL"
               scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="grey"><color rgba="0.7 0.7 0.7 1.0"/></material>

@@ -367,7 +367,7 @@ class Notifier:
 # --------------------------------------------------------------------------- #
 # Main loop
 # --------------------------------------------------------------------------- #
-def setup_logging(logfile):
+def setup_logging(logfile, window_seconds=LOG_WINDOW_SECONDS):
     log.setLevel(logging.INFO)
     fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(message)s",
                             "%H:%M:%S")
@@ -382,7 +382,7 @@ def setup_logging(logfile):
         log_dir = os.path.dirname(logfile)
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
-        fh = RollingWindowFileHandler(logfile, LOG_WINDOW_SECONDS)
+        fh = RollingWindowFileHandler(logfile, window_seconds)
         fh.setFormatter(fmt)
         fh.setLevel(logging.INFO)
         log.addHandler(fh)
@@ -401,9 +401,11 @@ def main():
     ap.add_argument("--no-sound", action="store_true", help="disable sound alerts")
     ap.add_argument("--logfile", default=os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "log", "health_monitor.log"))
+    ap.add_argument("--window-seconds", type=float, default=LOG_WINDOW_SECONDS,
+                    help="rolling log window kept on disk (default 1200 = 20 min)")
     args = ap.parse_args()
 
-    setup_logging(args.logfile)
+    setup_logging(args.logfile, args.window_seconds)
     notifier = Notifier(enable_popup=not args.no_popup,
                         enable_sound=not args.no_sound)
 

@@ -624,7 +624,7 @@ class _Runner:
                 TerminalCorrectionInterface,
             )
             correction_interface = TerminalCorrectionInterface()
-        return PreferenceSession(
+        session = PreferenceSession(
             model,
             self.run_behavior_tree_dir,
             dict(ctx),
@@ -637,6 +637,15 @@ class _Runner:
             # next sub-skill checkpoint loses nothing (see _save_state / resume).
             on_change=self._ckpt.save_pref,
         )
+        # Wire the settings overlay to this session (single site covering both the
+        # fresh and resume paths). Guarded: terminal/no-interface runs have no
+        # web_interface; corrections may go to a terminal adapter, but the overlay
+        # always talks to the real web_interface.
+        if self.web_interface is not None:
+            self.web_interface.register_preferences_accessor(
+                session.settings_view, session.edit
+            )
+        return session
 
     def _restore_preference_session(self, state: dict) -> None:
         """Rehydrate the per-meal preference session on resume: rebuild the model
@@ -775,6 +784,10 @@ class _Runner:
         self._pref_session.finalize_meal(day)
         print(f"[learn] Memory update complete (day {day}).")
         self._pref_session = None
+        # Meal session is gone: drop the settings-overlay accessor and clear the
+        # latched prefs so a later-opening overlay shows the empty state.
+        if self.web_interface is not None:
+            self.web_interface.clear_preferences_accessor()
 
     def run(self, continuous = True) -> None:
 
@@ -1043,6 +1056,19 @@ class _Runner:
 
             # import ipdb; ipdb.set_trace()
             assert operator.preconditions.issubset(self.current_atoms)
+
+            # Don't start the next HLA while the user has the settings overlay open:
+            # a preference edit could change this skill. Stall until they close it
+            # (raise_on_takeover=False so a takeover during the stall returns control
+            # to the existing takeover machinery below, not a new exception). Then
+            # flush any deferred in-memory pref apply (transfer re-init) on this main
+            # thread, just before the BT is read, so it never overlaps a live motion.
+            if self.web_interface is not None:
+                self.web_interface.wait_until_settings_closed(
+                    "robot_paused", raise_on_takeover=False
+                )
+            if self._pref_session is not None:
+                self._pref_session.flush_pending_inmemory()
 
             # Execute the high-level plan in simulation. On a mid-skill takeover
             # the user chooses, via the teleop Done button, whether to redo this

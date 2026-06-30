@@ -49,6 +49,25 @@ CMD6="roslaunch feeding_deployment cartographer_localization.launch load_state_f
 CMD7='roslaunch feeding_deployment shared_autonomy.launch'
 CMD8='python run.py --user bohan_jun27 --run_on_robot --use_interface --resume_from_state 21_stow_utensil --no_waits --day 1'
 
+# ----- 'logger' tmux session (separate from 'feeding') ---------------------- #
+# Two stacked panes: top = system near-hang watchdog, bottom = ROS sensor logger.
+# Both keep a 3 h ROLLING window and stream/flush to disk (negligible RAM).
+#   - health monitor rolls natively via --window-seconds.
+#   - sensor logger accumulates per run, so we re-run it in 3 h chunks and prune
+#     to the newest $LOGGER_KEEP (the rolling-window equivalent for a CSV).
+# Skip entirely with NO_LOGGER=1. Tunables: LOGGER_CYCLE (s), LOGGER_KEEP.
+LOGGER_SESSION=logger
+SAFETY_DIR="$HOME/deployment_ws/src/feeding-deployment/src/feeding_deployment/safety"
+LOGGER_LOG_DIR="$INTEGRATION_DIR/log/system_logs"   # fixed (tmux session isn't tied to a run user)
+LOGGER_CYCLE="${LOGGER_CYCLE:-10800}"     # 3 h per chunk / rolling window
+LOGGER_KEEP="${LOGGER_KEEP:-2}"           # sensor chunks to retain (~6 h on disk)
+# Use `python` for both (the workspace/conda interpreter active in every pane).
+# Both scripts mkdir their output dir, so log/system_logs/ is created as needed.
+CMD_HEALTH="python $INTEGRATION_DIR/compute_health_monitor.py --no-kill --window-seconds $LOGGER_CYCLE --logfile $LOGGER_LOG_DIR/health_monitor.log"
+# Distinct 'sensorlog_' prefix so the prune can NEVER match the existing
+# 'sensor_diag_*' analysis runs (or anything else) in the log dir.
+CMD_SENSORLOG="until rostopic list >/dev/null 2>&1; do sleep 3; done; while true; do python $SAFETY_DIR/sensor_diag_logger.py --duration $LOGGER_CYCLE --outdir $LOGGER_LOG_DIR/sensorlog_\$(date +%Y%m%d_%H%M%S); ls -dt $LOGGER_LOG_DIR/sensorlog_* 2>/dev/null | tail -n +$((LOGGER_KEEP+1)) | xargs -r rm -rf; done"
+
 # Attach to $SESSION, or switch to it if we're already inside another tmux client
 # (plain 'attach' refuses to nest).
 attach_or_switch() {
@@ -57,6 +76,27 @@ attach_or_switch() {
   else
     exec tmux attach -t "$SESSION"
   fi
+}
+
+# Build the detached 'logger' session: top pane health monitor, bottom pane
+# sensor logger. No-op if it already exists, so re-running build won't duplicate.
+build_logger_session() {
+  if tmux has-session -t "$LOGGER_SESSION" 2>/dev/null; then
+    echo "logger session already running -- leaving it."
+    return 0
+  fi
+  tmux new-session -d -s "$LOGGER_SESSION" -n "$LOGGER_SESSION"
+  tmux split-window -v -t "$LOGGER_SESSION"          # top + bottom
+  tmux set-option -w -t "$LOGGER_SESSION" pane-border-status top
+  tmux set-option -w -t "$LOGGER_SESSION" pane-border-format ' #{pane_title} '
+  local lpanes
+  mapfile -t lpanes < <(tmux list-panes -t "$LOGGER_SESSION" \
+      -F '#{pane_top} #{pane_id}' | sort -n -k1,1 | awk '{ print $2 }')
+  tmux select-pane -t "${lpanes[0]}" -T 'health_monitor (3h rolling)'
+  tmux select-pane -t "${lpanes[1]}" -T 'sensor_diag (3h rolling)'
+  tmux send-keys -t "${lpanes[0]}" "$CMD_HEALTH" Enter
+  tmux send-keys -t "${lpanes[1]}" "$CMD_SENSORLOG" Enter
+  echo "Built tmux session '$LOGGER_SESSION' (health top, sensors bottom; ${LOGGER_CYCLE}s rolling)."
 }
 
 # Print the 8 pane ids in VISUAL order (top->bottom, then left->right). Title-free
@@ -111,6 +151,12 @@ do_restart() {
 
 # -------------------------------------------------------------------- build ---
 do_build() {
+  # Ensure the independent 'logger' session exists (built before we possibly
+  # exec into an attach below). Set NO_LOGGER=1 to skip.
+  if [[ -z "${NO_LOGGER:-}" ]]; then
+    build_logger_session
+  fi
+
   if tmux has-session -t "$SESSION" 2>/dev/null; then
     echo "session '$SESSION' already exists -- attaching."
     attach_or_switch

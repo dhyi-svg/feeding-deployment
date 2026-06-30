@@ -12,7 +12,7 @@
     "microwave_time": "1 min",
     "outside_mouth_distance": "near",
     "plate_color_fridge": {
-      "h": 86,
+      "h": 85,
       "range": 0.16,
       "s": 89,
       "v": 180
@@ -39,48 +39,16 @@
   "context": {
     "meal": "chicken nuggets, broccoli, and ketchup",
     "setting": "Personal",
-    "time_of_day": "noon"
+    "time_of_day": "evening"
   },
   "corrected": {
-    "plate_color_fridge": {
-      "h": 86,
-      "range": 0.16,
-      "s": 89,
-      "v": 180
-    },
-    "plate_color_microwave": {
-      "h": 84,
-      "range": 0.1,
-      "s": 73,
-      "v": 211
-    },
-    "plate_color_table": {
-      "h": 81,
-      "range": 0.11,
-      "s": 48,
-      "v": 102
-    }
+    "robot_speed": "medium",
+    "wait_before_autocontinue_seconds": "100 sec"
   },
   "finalized": [
-    "bite_dipping_preference",
-    "convey_robot_ready_for_completing_transfer",
-    "convey_robot_ready_for_initiating_transfer",
-    "detect_user_completed_transfer_drinking",
-    "detect_user_completed_transfer_feeding",
-    "detect_user_completed_transfer_wiping",
-    "detect_user_ready_for_initiating_transfer_drinking",
-    "detect_user_ready_for_initiating_transfer_feeding",
-    "detect_user_ready_for_initiating_transfer_wiping",
     "microwave_time",
-    "outside_mouth_distance",
     "plate_color_fridge",
-    "plate_color_microwave",
-    "plate_color_table",
-    "retract_between_bites",
     "robot_speed",
-    "skewering_axis",
-    "transfer_mode",
-    "wait_before_autocontinue_seconds",
-    "web_interface_confirmation"
+    "wait_before_autocontinue_seconds"
   ]
 }

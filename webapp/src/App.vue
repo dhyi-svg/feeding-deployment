@@ -55,6 +55,72 @@
       >Robot Base Control</button>
       <button class="global-btn arm" @click="controlArm()">Robot Arm Control</button>
     </div>
+
+    <!-- Settings gear: present on (almost) every page. Top-left so it never covers
+         the safety-critical Robot Arm/Base controls (top-right). Position is a
+         design detail and easy to nudge. -->
+    <button
+      v-if="showSettingsButton"
+      class="settings-gear"
+      @click="openSettings"
+      title="Preferences"
+      aria-label="Preferences"
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="3"></circle>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+      </svg>
+    </button>
+
+    <!-- Settings overlay: a shaded modal over the live page (which stays mounted and
+         keeps tracking backend state). Lists the preferences set so far this meal. -->
+    <div v-if="showSettings" class="settings-backdrop">
+      <div class="settings-modal">
+        <button class="settings-close" @click="closeSettings" title="Close">×</button>
+        <div class="settings-head">
+          <div class="settings-title">Your preferences</div>
+          <div class="settings-sub">Change anything you've set so far — the robot updates right away.</div>
+        </div>
+        <div v-if="settingsStatus" class="settings-banner">⏸ {{ settingsStatus }}</div>
+        <div class="settings-body">
+          <div v-if="!settingsPrefs.length" class="settings-empty">
+            No preferences set yet — they'll appear here once the robot asks you about them.
+          </div>
+          <div
+            v-for="p in settingsPrefs"
+            :key="p.field"
+            class="settings-pref"
+            :class="{ locked: !p.editable }"
+          >
+            <div class="settings-p-label">
+              {{ p.label }}
+              <span v-if="!p.editable" class="settings-lock-pill">🔒 locked</span>
+            </div>
+            <div class="settings-p-desc">{{ p.description }}</div>
+            <div class="settings-chips">
+              <div
+                v-for="opt in p.options"
+                :key="opt"
+                class="settings-chip"
+                :class="{ sel: opt === p.value }"
+                @click="setPref(p, opt)"
+              >
+                {{ opt }}
+                <span v-if="opt === p.value" class="settings-tick">✓</span>
+              </div>
+            </div>
+            <div v-if="!p.editable" class="settings-lock-note">
+              Set during meal prep — can't change once the robot has started.
+            </div>
+          </div>
+        </div>
+        <div class="settings-foot">
+          <button class="settings-done" @click="closeSettings">Done</button>
+        </div>
+      </div>
+    </div>
+
     <router-view></router-view>
   </div>
 </template>
@@ -92,7 +158,11 @@ export default {
       // Routes where the button-detection mic is released so the iPad's mic is
       // free for speech-to-text (the transparency / adaptability Q&A pages and
       // the gesture_setup form). Add others here (e.g. '/meal_setup') as needed.
-      micFreeRoutes: ['/transparency', '/adaptability', '/gesture_setup']
+      micFreeRoutes: ['/transparency', '/adaptability', '/gesture_setup'],
+      // Settings overlay (view/edit already-set preferences).
+      showSettings: false,
+      settingsPrefs: [],
+      settingsStatus: ''
     }
   },
   computed: {
@@ -129,6 +199,17 @@ export default {
       // mic the speech recognizer needs.
       return !excluded.includes(p) && !this.micFreeRoutes.includes(p)
     },
+    showSettingsButton () {
+      // Hidden on teleop pages, the mic test, and the active preference-correction
+      // pages (so the gear can't race the correction wizard). Everywhere else the
+      // overlay is non-destructive (it just shows the empty state when no meal /
+      // no prefs set yet).
+      const excluded = [
+        '/manipulation_teleop', '/manipulation_done', '/navigation_teleop', '/mictest',
+        '/preference_correction', '/preference_context'
+      ]
+      return !excluded.includes(this.$route.path)
+    },
   },
   watch: {
     // When navigating onto a voice page (e.g. transparency), release the
@@ -138,6 +219,15 @@ export default {
     '$route.path': {
       immediate: true,
       handler (path) {
+        // A route change while the overlay is open is always backend-driven (the
+        // gear no longer navigates). Auto-dismiss so a confirmation / teleop prompt
+        // underneath reaches the user. Preference asks are stalled by the backend
+        // while the panel is open, so they don't reach here until after close.
+        if (this.showSettings) {
+          this.showSettings = false
+          this.settingsStatus = ''
+          this._publishSettings({ action: 'close' })
+        }
         this._syncMicForRoute(path)
       }
     }
@@ -199,6 +289,26 @@ export default {
         messageType: 'std_msgs/String'
       })
       this.speakListener.subscribe((msg) => this.speakText(msg.data))
+
+      // Settings overlay: dedicated topic pair (isolated from /robot_to_webapp).
+      // The robot->app topic is latched, so (re)subscribing immediately re-delivers
+      // the current prefs — including after a reconnect.
+      this.settingsPublisher = new ROSLIB.Topic({
+        ros,
+        name: '/webapp_settings_to_robot',
+        messageType: 'std_msgs/String'
+      })
+      this.settingsListener = new ROSLIB.Topic({
+        ros,
+        name: '/robot_settings_to_webapp',
+        messageType: 'std_msgs/String'
+      })
+      this.settingsListener.subscribe((msg) => this.onSettingsMessage(msg))
+      // If we reconnect while the panel is open, re-assert "open" so the backend
+      // re-sends prefs and keeps its stalls aligned with the UI.
+      ros.on('connection', () => {
+        if (this.showSettings) this._publishSettings({ action: 'open' })
+      })
     },
     enableAudio () {
       // iPad Safari blocks speechSynthesis until speak() is first called from an
@@ -237,6 +347,44 @@ export default {
       const skill = this.skillCurrent >= 0 ? this.skillPlan[this.skillCurrent] : null
       const query = (skill && categoryOf(skill) === 'navigation') ? { hla: skill } : {}
       this.$router.push({ path: '/navigation_teleop', query })
+    },
+
+    // ---- Settings overlay ----
+    openSettings () {
+      this.showSettings = true
+      this.settingsStatus = ''
+      // Cancel any on-screen autocontinue on the live page underneath, so a
+      // countdown can't auto-advance while the user edits (see the 4 countdown
+      // views' 'settings-open' listeners). Not re-engaged on close.
+      window.dispatchEvent(new CustomEvent('settings-open'))
+      this._publishSettings({ action: 'open' })
+    },
+    closeSettings () {
+      this.showSettings = false
+      this.settingsStatus = ''
+      this._publishSettings({ action: 'close' })
+    },
+    setPref (pref, value) {
+      if (!pref.editable || value === pref.value) return
+      // Optimistic highlight; the backend re-publishes the authoritative prefs.
+      pref.value = value
+      this._publishSettings({ action: 'set', field: pref.field, value })
+    },
+    onSettingsMessage (msg) {
+      try {
+        const data = JSON.parse(msg.data)
+        if (Array.isArray(data.preferences)) this.settingsPrefs = data.preferences
+        if (data.status) {
+          this.settingsStatus = data.status === 'robot_waiting'
+            ? "The robot is ready to ask about more preferences — close this panel when you're done."
+            : "The robot is paused while you make changes — close this panel when you're done."
+        }
+      } catch (e) { /* ignore non-JSON */ }
+    },
+    _publishSettings (obj) {
+      if (this.settingsPublisher) {
+        this.settingsPublisher.publish(new ROSLIB.Message({ data: JSON.stringify(obj) }))
+      }
     },
 
     async enableTakeoverMic () {
@@ -442,7 +590,8 @@ nav a.router-link-exact-active {
 .global-controls {
   position: fixed;
   top: 0;
-  right: 2.5vw;
+  /* Sit to the left of the global settings gear (top-right corner). */
+  right: calc(3vw + var(--gear-w, 6.4vh));
   height: 10vh;
   z-index: 1000;
   display: flex;
@@ -621,6 +770,199 @@ nav a.router-link-exact-active {
   box-shadow: 0 4px 14px rgba(240, 165, 0, .45);
   cursor: pointer;
 }
+/* ── Settings overlay (view/edit already-set preferences) ── */
+.settings-gear {
+  position: fixed;
+  top: 1.8vh;
+  right: 2vw;
+  width: var(--gear-w, 6.4vh);
+  height: var(--gear-w, 6.4vh);
+  min-width: 44px;
+  min-height: 44px;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--t, #F5F0E8);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+/* Bare gear icon (no circle), sized to the tap target. Cream stroke reads clearly
+   on the dark top bar; a soft shadow keeps it visible over busier backgrounds. */
+.settings-gear svg {
+  width: 86%;
+  height: 86%;
+  display: block;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .45));
+}
+.settings-gear:active { opacity: .55; }
+
+.settings-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4vh 4vw;
+  background: rgba(5, 10, 18, .62);
+}
+.settings-modal {
+  position: relative;
+  width: min(860px, 94vw);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--s1, #162535);
+  border: 2px solid var(--s3, #243C54);
+  border-radius: var(--rl, 20px);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .5);
+  text-align: left;
+}
+.settings-close {
+  position: absolute;
+  top: 1.2vh;
+  right: 1vw;
+  width: 46px;
+  height: 46px;
+  min-height: 44px;
+  border-radius: 50%;
+  border: 1px solid var(--s3, #243C54);
+  background: var(--s2, #1E3347);
+  color: var(--t, #F5F0E8);
+  font-size: 3vh;
+  line-height: 1;
+  cursor: pointer;
+}
+.settings-head {
+  padding: 2.4vh 2.4vw 1.4vh;
+  border-bottom: 1px solid var(--s3, #243C54);
+}
+.settings-title {
+  font-family: Georgia, serif;
+  font-size: 3.6vh;
+  color: var(--t, #F5F0E8);
+  margin-right: 52px;
+}
+.settings-sub {
+  margin-top: .6vh;
+  color: var(--tm, #8BA8C4);
+  font-size: 2.1vh;
+}
+.settings-banner {
+  margin: 1.4vh 2.4vw 0;
+  padding: 1.2vh 1.4vw;
+  border-radius: var(--r, 14px);
+  background: rgba(240, 165, 0, .10);
+  border: 1px solid rgba(240, 165, 0, .5);
+  color: var(--a, #F0A500);
+  font-size: 2vh;
+  font-weight: 700;
+}
+.settings-body {
+  overflow-y: auto;
+  padding: 1.6vh 2.4vw .8vh;
+}
+.settings-empty {
+  color: var(--tm, #8BA8C4);
+  font-size: 2.3vh;
+  text-align: center;
+  padding: 6vh 2vw;
+}
+.settings-pref {
+  padding: 1.8vh 0;
+  border-bottom: 1px solid rgba(36, 60, 84, .5);
+}
+.settings-pref:last-child { border-bottom: none; }
+.settings-p-label {
+  color: var(--t, #F5F0E8);
+  font-size: 2.6vh;
+  font-weight: 700;
+}
+.settings-p-desc {
+  color: var(--tm, #8BA8C4);
+  font-size: 1.9vh;
+  margin-top: .3vh;
+  line-height: 1.35;
+}
+.settings-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1vh;
+  margin-top: 1.2vh;
+}
+.settings-chip {
+  background: var(--s2, #1E3347);
+  border: 2px solid transparent;
+  border-radius: var(--r, 14px);
+  color: var(--t, #F5F0E8);
+  font-size: 2.2vh;
+  font-weight: 600;
+  padding: 1.2vh 1.6vw;
+  min-height: 6vh;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+.settings-chip.sel {
+  border-color: var(--a, #F0A500);
+  background: rgba(240, 165, 0, .08);
+}
+.settings-tick {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--a, #F0A500);
+  color: var(--g, #0D1B2A);
+  font-size: 15px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.settings-pref.locked .settings-p-label,
+.settings-pref.locked .settings-p-desc { opacity: .6; }
+.settings-pref.locked .settings-chip { opacity: .5; cursor: not-allowed; }
+.settings-pref.locked .settings-chip.sel {
+  border-color: var(--s3, #243C54);
+  background: var(--s2, #1E3347);
+}
+.settings-lock-pill {
+  margin-left: 10px;
+  font-size: 1.6vh;
+  font-weight: 700;
+  color: var(--tm, #8BA8C4);
+  border: 1px solid var(--s3, #243C54);
+  border-radius: 999px;
+  padding: 2px 10px;
+}
+.settings-lock-note {
+  margin-top: 1vh;
+  color: var(--tm, #8BA8C4);
+  font-size: 1.7vh;
+  font-style: italic;
+}
+.settings-foot {
+  padding: 1.6vh 2.4vw 2.2vh;
+  border-top: 1px solid var(--s3, #243C54);
+  display: flex;
+  justify-content: flex-end;
+}
+.settings-done {
+  background: var(--a, #F0A500);
+  color: var(--g, #0D1B2A);
+  border: none;
+  border-radius: var(--r, 14px);
+  font-size: 2.4vh;
+  font-weight: 800;
+  padding: 1.4vh 4vw;
+  cursor: pointer;
+}
+
 @media (max-width: 720px) {
   .mic-channel-grid {
     grid-template-columns: 1fr;

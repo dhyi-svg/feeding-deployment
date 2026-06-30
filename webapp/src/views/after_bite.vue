@@ -16,7 +16,7 @@
               <div class="tc-i"><img src="../assets/for.png" alt="Bite"></div>
               <div class="tc-l">Take a Bite</div>
             </div>
-            <p class="cdown">Auto-confirming in <span>{{ countdown }}s</span></p>
+            <p v-if="!autocontinueCancelled" class="cdown">Auto-confirming in <span>{{ countdown }}s</span></p>
           </div>
           <div class="tc" @click="handleButtonClickR">
             <div class="tc-i"><img src="../assets/drin.png" alt="Sip"></div>
@@ -48,6 +48,9 @@ export default {
       username: USER,
       countdown: 1000,
       countdownInterval: null,
+      // Set when the user opens the settings overlay: cancels the on-screen
+      // autocontinue for this page visit (not re-engaged on close).
+      autocontinueCancelled: false,
     }
   },
   mounted () {
@@ -55,8 +58,10 @@ export default {
     this.startCountdown();
     this.initSubscriber()
     this.initPublisher()
+    window.addEventListener('settings-open', this.onSettingsOpen)
   },
   beforeUnmount () {
+    window.removeEventListener('settings-open', this.onSettingsOpen)
     if (this.countdownInterval) {
       clearInterval(this.countdownInterval);
       this.countdownInterval = null;
@@ -81,6 +86,8 @@ export default {
   },
   methods: {
     startCountdown() {
+      // Don't re-arm once the user has opened settings on this page visit.
+      if (this.autocontinueCancelled) return;
       this.countdownInterval = setInterval(() => {
         if (this.countdown > 0) {
           this.countdown -= 1;
@@ -89,6 +96,14 @@ export default {
           this.handleButtonClick();
         }
       }, 1000);
+    },
+    onSettingsOpen() {
+      // User entered settings: stop auto-advancing and wait for an explicit tap.
+      this.autocontinueCancelled = true;
+      if (this.countdownInterval) {
+        clearInterval(this.countdownInterval);
+        this.countdownInterval = null;
+      }
     },
     initSubscriber() {
 

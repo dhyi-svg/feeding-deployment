@@ -27,7 +27,7 @@ class OpenDoorHLA(HighLevelAction):
     # Collision threshold applied while moving into the handle grasp pose, where
     # contact with the handle produces larger torque error. Tune on the real
     # robot; reverts to the sensor default automatically after the move.
-    PULL_COLLISION_THRESHOLD = 25.0
+    PULL_COLLISION_THRESHOLD = 30.0
     SLIGHT_PUSH_COLLISION_THRESHOLD = 15.0
     HARD_PUSH_COLLISION_THRESHOLD = 25.0
 

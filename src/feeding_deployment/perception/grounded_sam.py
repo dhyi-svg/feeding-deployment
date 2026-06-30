@@ -12,11 +12,11 @@ class GroundedSAM:
     def __init__(self):
         self.DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-        # GroundingDINO config and checkpoint
-        self.GROUNDING_DINO_CONFIG_PATH = PATH_TO_GROUNDED_SAM + "/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
-        self.GROUNDING_DINO_CHECKPOINT_PATH = PATH_TO_GROUNDED_SAM + "/groundingdino_swint_ogc.pth"
+        # GroundingDINO config and checkpoint (Swin-B)
+        self.GROUNDING_DINO_CONFIG_PATH = PATH_TO_GROUNDED_SAM + "/GroundingDINO/groundingdino/config/GroundingDINO_SwinB.py"
+        self.GROUNDING_DINO_CHECKPOINT_PATH = PATH_TO_GROUNDED_SAM + "/groundingdino_swinb_cogcoor.pth"
 
-        print("Initializing shared Grounding DINO")
+        print("Initializing shared Grounding DINO (Swin-B)")
         self.grounding_dino_model = Model(
             model_config_path=self.GROUNDING_DINO_CONFIG_PATH,
             model_checkpoint_path=self.GROUNDING_DINO_CHECKPOINT_PATH

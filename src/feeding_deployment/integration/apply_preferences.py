@@ -10,6 +10,8 @@ loaded fresh on each tick).
 
 from __future__ import annotations
 
+import os
+import tempfile
 import warnings as _warnings
 from pathlib import Path
 from typing import Any
@@ -225,8 +227,27 @@ def _load_yaml(path: Path) -> dict:
 
 
 def _save_yaml(path: Path, data: dict) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(yaml.dump(data, Dumper=_Dumper, sort_keys=False, default_flow_style=False))
+    # Atomic write: dump to a temp file in the same directory, then os.replace onto
+    # the target (atomic on POSIX, same filesystem). The BT executor reads these
+    # YAMLs fresh on each skill (load_behavior_tree), possibly from a *different*
+    # thread than the writer (the settings-edit apply-worker). A plain truncate-then-
+    # write could hand a concurrent reader a partial file -> YAML parse error ->
+    # FatalSkillFailure. With os.replace, a reader always sees a complete old-or-new
+    # file. Single-threaded callers are unaffected.
+    text = yaml.dump(data, Dumper=_Dumper, sort_keys=False, default_flow_style=False)
+    path = Path(path)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp_name, path)
+    except BaseException:
+        # Best-effort cleanup; never leave a stray temp file on failure.
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def _set_param_value(bt_data: dict, param_name: str, new_value: Any) -> bool:

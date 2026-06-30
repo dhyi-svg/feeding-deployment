@@ -10,6 +10,9 @@
   --bd: #1E3347;
   --r: 14px;
   --rl: 20px;
+  /* Width of the global settings gear (top-right). Other top-right content (the
+     status dot in .tb and the global Arm/Base controls) reserves room for it. */
+  --gear-w: 6.4vh;
 }
 
 button, input, textarea, select {
@@ -76,6 +79,9 @@ input, textarea {
 .tb {
   background: var(--s1);
   padding: 1.4vh 2.5vw;
+  /* Reserve room on the right for the global settings gear so the status dot (and
+     any other right-aligned bar content) shifts left instead of sitting under it. */
+  padding-right: calc(3vw + var(--gear-w));
   display: flex;
   align-items: center;
   gap: 1.4vw;

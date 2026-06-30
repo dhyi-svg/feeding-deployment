@@ -866,7 +866,22 @@ class PerceptionInterface:
 
             status = msg.get("status", "")
 
-            if status in ("rerun", "confirm"):
+            if status == "confirm":
+                # Manipulate with the pose from the detection the user just approved
+                # (the last successful Rerun) -- do NOT re-detect on a fresh frame
+                # here, or the robot would act on a different frame than the mask the
+                # user confirmed (auto-exposure drift / scene shift between the last
+                # Rerun and the Confirm click would diverge). The UI only enables
+                # Confirm after a successful Rerun, so last_attachment_pose /
+                # current_color / current_range already match the approved result.
+                if last_attachment_pose is not None:
+                    web_interface.switch_to_explanation_page()
+                    return True, current_color, current_range, last_attachment_pose
+                # Shouldn't happen (Confirm is UI-gated on a successful detection),
+                # but stay in the loop so the user can adjust and rerun.
+                print("Confirm pressed but no valid detection — ask user to adjust and rerun.")
+
+            elif status == "rerun":
                 r = int(msg.get("r", 0))
                 g = int(msg.get("g", 0))
                 b = int(msg.get("b", 0))
@@ -902,13 +917,6 @@ class PerceptionInterface:
                 # failure too so the user re-picks on the latest frame.
                 if fresh_rgb is not None:
                     web_interface.update_color_correction_pick_image(fresh_rgb, flip=flip)
-
-                if status == "confirm":
-                    if last_attachment_pose is not None:
-                        web_interface.switch_to_explanation_page()
-                        return True, current_color, current_range, last_attachment_pose
-                    # No pose yet (rerun failed) — stay in loop so user can adjust
-                    print("Confirm pressed but no valid detection — ask user to adjust and rerun.")
 
             elif status == "back":
                 return False, initial_color, initial_range, initial_attachment_pose
@@ -1018,22 +1026,30 @@ class PerceptionInterface:
         if handle_type == "microwave":
             offset[:3, 3] = np.array([0, 0.009, -0.11])
         elif handle_type == "bottom textured fridge door":
-            offset[:3, 3] = np.array([0, -0.012, -0.11])
+            offset[:3, 3] = np.array([0, -0.012, -0.10])
         elif handle_type == "table":
-            offset[:3, 3] = np.array([0, -0.008, -0.11])
+            offset[:3, 3] = np.array([0, -0.008, -0.10])
         else:
             raise ValueError(f"Unknown handle type: {handle_type}")
 
         pre_pickup_pose = self.matrix_to_pose(self.pose_to_matrix(attachment_pose) @ offset)
 
         offset_for_above = np.eye(4)
-        offset_for_above[:3, 3] = np.array([0, 0.1, 0.0])
+        if handle_type == "bottom textured fridge door":
+            offset_for_above[:3, 3] = np.array([0, 0.02, 0.0])
+        else:
+            offset_for_above[:3, 3] = np.array([0, 0.1, 0.0])
         above_pickup_pose = self.matrix_to_pose(self.pose_to_matrix(pickup_pose) @ offset_for_above)
+
+        offset_for_post_pickup = np.eye(4)
+        offset_for_post_pickup[:3, 3] = np.array([0, 0.0, -0.10])
+        post_pickup_pose = self.matrix_to_pose(self.pose_to_matrix(above_pickup_pose) @ offset_for_post_pickup)
 
         attachment_poses = {
             "pickup_pose": pickup_pose,
             "pre_pickup_pose": pre_pickup_pose,
             "above_pickup_pose": above_pickup_pose,
+            "post_pickup_pose": post_pickup_pose,
             "handle_color": current_color,
             "color_range": current_range,
         }
