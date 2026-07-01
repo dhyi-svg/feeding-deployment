@@ -46,9 +46,11 @@ _PM_MODULE = "feeding_deployment.preference_learning.methods.prediction_model"
 
 def _assert_valid_value(field, value):
     """Categorical fields must be an allowed option; color fields must be a
-    canonical HSV dict."""
+    canonical HSV dict; text fields must be a non-empty string."""
     if PREF_KIND.get(field) == "color":
         assert isinstance(value, dict) and {"h", "s", "v", "range"} <= set(value)
+    elif PREF_KIND.get(field) == "text":
+        assert isinstance(value, str) and value.strip(), f"{field} must be a non-empty string"
     else:
         assert value in PREF_OPTIONS[field], f"{field}={value} not in allowed options"
 
@@ -195,11 +197,14 @@ def _mock_anthropic():
 
 def _default_bundle() -> dict:
     """A valid full bundle: first option for categorical dims, an HSV object for
-    color dims (matches the LLM output shape predict_bundle expects)."""
+    color dims, a free-text string for text dims (matches the LLM output shape
+    predict_bundle expects)."""
     bundle = {}
     for field in PREF_FIELDS:
         if PREF_KIND.get(field) == "color":
             bundle[field] = dict(DEFAULT_COLOR)
+        elif PREF_KIND.get(field) == "text":
+            bundle[field] = f"predicted {field}"
         else:
             bundle[field] = PREF_OPTIONS[field][0]
     return bundle
@@ -430,10 +435,10 @@ class TestPrefOptionsConsistency:
         assert set(PREF_FIELDS) == set(PREF_OPTIONS.keys())
 
     def test_every_categorical_field_has_at_least_two_options(self):
-        # Color dims are continuous (no option list); only categorical dims
-        # must offer a real choice.
+        # Color dims are continuous and text dims are free-form (no option list);
+        # only categorical dims must offer a real choice.
         for field, opts in PREF_OPTIONS.items():
-            if PREF_KIND.get(field) == "color":
+            if PREF_KIND.get(field) in ("color", "text"):
                 assert opts == []
                 continue
             assert len(opts) >= 2, f"{field} has fewer than 2 options"

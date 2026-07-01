@@ -157,7 +157,7 @@ export default {
       micSetupStatus: 'Choose the button and voice channels.',
       // Routes where the button-detection mic is released so the iPad's mic is
       // free for speech-to-text (the transparency / adaptability Q&A pages and
-      // the gesture_setup form). Add others here (e.g. '/meal_setup') as needed.
+      // the gesture_setup form). Add others here as needed.
       micFreeRoutes: ['/transparency', '/adaptability', '/gesture_setup'],
       // Settings overlay (view/edit already-set preferences).
       showSettings: false,

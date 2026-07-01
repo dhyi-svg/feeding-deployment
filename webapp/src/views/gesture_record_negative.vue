@@ -205,12 +205,9 @@ export default {
       this.listener.subscribe((msg) => {
 
         try {
-          const parsedMessage = JSON.parse(msg.data);
-          if (parsedMessage.state === 'prepare_bite' && parsedMessage.status === 'completed') {
-            this.$router.push('/meal_setup');
-          } else {
-            this.handleRosMessage(msg);
-          }
+          // meal_setup was removed; prepare_bite.completed routes to bite_selection
+          // (feeding) via the shared routeMap inside handleRosMessage.
+          this.handleRosMessage(msg);
         } catch (error) {
         }
       })

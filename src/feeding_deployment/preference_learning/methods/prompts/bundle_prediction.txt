@@ -25,6 +25,9 @@ Context for current meal:
 - setting: {setting}
 - time_of_day: {time_of_day}
 
+Contents of the current meal (use these exact food/dip names when predicting any ordering or dipping-pairing preference):
+{meal_contents}
+
 Corrections made by the user for preference dimensions so far:
 {corrected_block}
 
@@ -37,7 +40,7 @@ Use the following information in decreasing order of priority:
 3. EPISODIC MEMORY
 4. SEMANTIC MEMORY
 
-Allowed values per dimension. Most dimensions are CATEGORICAL: you MUST choose exactly one of the listed strings. A few dimensions are COLOR dimensions (the plate_color_* fields): for these you MUST output an object {{"h": <0-179>, "s": <0-255>, "v": <0-255>, "range": <0.0-1.0>}}. Each color line shows a "seed" value (the user's current saved color); return the seed unchanged unless memory/corrections give clear evidence to change it. The three plate_color_* dims are the SAME physical plate handle under different lighting, so a correction to one is strong evidence for the others.
+Allowed values per dimension. Most dimensions are CATEGORICAL: you MUST choose exactly one of the listed strings. A few dimensions are COLOR dimensions (the plate_color_* fields): for these you MUST output an object {{"h": <0-179>, "s": <0-255>, "v": <0-255>, "range": <0.0-1.0>}}. Each color line shows a "seed" value (the user's current saved color); return the seed unchanged unless memory/corrections give clear evidence to change it. The three plate_color_* dims are the SAME physical plate handle under different lighting, so a correction to one is strong evidence for the others. The bite_ordering dimension is a TEXT dimension: output a single concise natural-language sentence describing the order in which the meal's foods should be fed and which solids to pair with which dips, using the exact food/dip names from the meal contents above. If there is no evidence of any ordering or dipping-pairing preference, output "no particular order".
 {options_block}
 
 HARD RULES (must always be satisfied):

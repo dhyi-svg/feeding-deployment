@@ -271,16 +271,16 @@ class AttachmentPerception(TFInterface):
         """Tint the color-filtered pixels onto ``vis``.
 
         Pixels that pass the color threshold but are discarded by DBSCAN clustering
-        are tinted cyan (rejected); the kept cluster -- the pixels actually used to
-        fit the attachment -- is tinted bold red. So the user sees what the color
-        filter caught versus what was actually used.
+        are painted white (rejected); the kept cluster -- the pixels actually used
+        to fit the attachment -- is painted bold red. So the user sees what the
+        color filter caught versus what was actually used.
         """
-        # DEBUG: solid colors, no alpha -- discarded matches = red, kept cluster = black.
+        # Solid colors, no alpha -- rejected matches = white, selected cluster = red.
         if raw_mask is not None and cluster_mask is not None:
             rejected = (raw_mask > 0) & (cluster_mask == 0)
-            vis[rejected] = (0, 0, 255)        # solid red
+            vis[rejected] = (255, 255, 255)      # solid white
         if cluster_mask is not None:
-            vis[cluster_mask > 0] = (0, 0, 0)  # solid black
+            vis[cluster_mask > 0] = (0, 0, 255)  # solid red
         return vis
 
     @staticmethod

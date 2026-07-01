@@ -512,27 +512,10 @@ class WebInterface:
 
     #### Meal Assistance Pages ####
 
-    def get_new_meal_input(self, plate_image) -> None:
-
-        self.current_page = "meal_assistance"
-
-        # Jump to new meal input page
-        self._send_message({"state": "meal_setup", "status": "jump"})
-
-        # Wait for the web interface to be ready for initial data
-        time.sleep(0.5)
-
-        # Send the plate image to the web interface
-        self._send_image(plate_image)
-
-        # Get the user's new meal input (always true)
-        while self.active:
-            msg_dict = self.get_required_web_interface_message(lambda msg_dict: True)
-            # data: "{\"state\":\"order_selection\",\"status\":\"ready_for_initial_data\"}"
-            if msg_dict["state"] != "meal_setup":
-                break
-
-        return msg_dict["state"], msg_dict["status"]
+    # NOTE: the old meal_setup page (get_new_meal_input) was removed. Food items
+    # now come from the chosen meal's MealContents and the bite-ordering
+    # preference is predicted/corrected via the preference session, so FLAIR is
+    # already configured before bite acquisition begins.
 
     def get_next_bite_selection(self, plate_image, n_solid_food_types, bite_data, predicted_bite, n_dip_food_types, dip_data, autocontinue_timeout) -> None:
 
@@ -926,9 +909,14 @@ class WebInterface:
         step: int,
         total: int,
         autocontinue_seconds: float,
+        kind: str = "categorical",
     ) -> str:
         """Show one preference dim (predicted value highlighted) and return the
-        user's selection. On autocontinue/no-change the page echoes ``predicted``."""
+        user's selection. On autocontinue/no-change the page echoes ``predicted``.
+
+        ``kind`` tells the page how to render the dim: "categorical" shows option
+        chips; "text" (e.g. bite_ordering) shows the predicted sentence with an
+        "Other..." free text/voice editor."""
         label = _PREF_LABELS.get(field, field.replace("_", " ").title())
         self._send_message({
             "state": "preference_correction_data",
@@ -936,6 +924,7 @@ class WebInterface:
             "label": label,
             "predicted": predicted,
             "options": list(options),
+            "kind": kind,
             "step": int(step),
             "total": int(total),
             "autocontinue_seconds": float(autocontinue_seconds),

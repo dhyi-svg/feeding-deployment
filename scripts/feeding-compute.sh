@@ -36,7 +36,7 @@ INTER_DELAY="${INTER_DELAY:-5}"                   # after cartographer (6), befo
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
 INTEGRATION_DIR="$HOME/deployment_ws/src/feeding-deployment/src/feeding_deployment/integration"
-MAP_FILE="$HOME/deployment_ws/src/feeding-deployment/maps/aimee-6-27.pbstream"
+MAP_FILE="$HOME/deployment_ws/src/feeding-deployment/maps/emprise_572_6-8.pbstream"
 
 # Commands per pane (1..8). Defined once; shared by build and restart so they
 # can't drift. Panes 6/7/8 are the ones the restart relaunches besides 5.

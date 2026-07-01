@@ -53,7 +53,16 @@ class TerminalCorrectionInterface:
         step: int,
         total: int,
         autocontinue_seconds: float,
+        kind: str = "categorical",
     ) -> str:
+        # Free-text dim (e.g. bite_ordering): accept the predicted sentence or
+        # type a replacement.
+        if kind == "text":
+            print(f"\n[{step + 1}/{total}] {field}")
+            print(f"  predicted: {predicted}")
+            raw = input("Press Enter to accept, or type your own: ").strip()
+            return raw if raw else predicted
+
         opts = list(options)
         pred_idx = opts.index(predicted) + 1 if predicted in opts else "?"
         print(f"\n[{step + 1}/{total}] {field}")

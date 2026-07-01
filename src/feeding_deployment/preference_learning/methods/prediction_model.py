@@ -12,7 +12,9 @@ import feeding_deployment.preference_learning.config as root_config  # type: ign
 from feeding_deployment.preference_learning.config.preference_bundle import (
     PREFERENCE_BUNDLE as _PREF_BUNDLE_DIMS,
     COLOR_FIELDS,
+    TEXT_FIELDS,
     DEFAULT_COLOR,
+    DEFAULT_BITE_ORDERING,
     parse_color,
     format_color,
 )
@@ -28,6 +30,11 @@ PREF_OPTIONS: Dict[str, List[str]] = {name: opts for (name, _, opts) in root_con
 PREF_DESCRIPTIONS: Dict[str, str] = {dim.field: dim.description for dim in _PREF_BUNDLE_DIMS}
 PREF_KIND: Dict[str, str] = {dim.field: getattr(dim, "kind", "categorical") for dim in _PREF_BUNDLE_DIMS}
 _COLOR_FIELD_SET = set(COLOR_FIELDS)
+_TEXT_FIELD_SET = set(TEXT_FIELDS)
+
+# Per-field default for text dims when the LLM output is empty/missing (kept
+# non-empty so downstream consumers -- e.g. FLAIR -- always get a usable value).
+_TEXT_DEFAULTS: Dict[str, str] = {"bite_ordering": DEFAULT_BITE_ORDERING}
 
 
 def _strip_code_fences(s: str) -> str:
@@ -82,6 +89,7 @@ def _build_options_block(color_seeds: Optional[Dict[str, Any]] = None) -> str:
     Bundle-prediction options block.
     - categorical field: ``- field: [opt1, opt2, ...]``
     - color field:       ``- field: HSV object {...}; seed = h=..,s=..,v=..,range=..``
+    - text field:        ``- field: free-text string (...)``
     """
     color_seeds = color_seeds or {}
     lines: List[str] = []
@@ -92,10 +100,27 @@ def _build_options_block(color_seeds: Optional[Dict[str, Any]] = None) -> str:
                 f'- {field}: HSV object {{"h":0-179,"s":0-255,"v":0-255,"range":0.0-1.0}}; '
                 f"seed = {format_color(seed)}"
             )
+        elif PREF_KIND.get(field) == "text":
+            lines.append(
+                f"- {field}: free-text string (a single concise natural-language "
+                f"sentence grounded in this meal's foods/dips)"
+            )
         else:
             opts = PREF_OPTIONS[field]
             lines.append(f"- {field}: [{', '.join(opts)}]")
     return "\n".join(lines)
+
+
+def _build_meal_contents_block(meal: str) -> str:
+    """Human-readable solids/dips for the chosen meal, so the LLM can ground a
+    text dim (e.g. bite_ordering) in concrete foods. Falls back gracefully for
+    a meal not in the catalog."""
+    info = _get_meal_info(meal)
+    if not info["known_meal"]:
+        return f"meal: {meal} (contents unknown)"
+    solids = ", ".join(info["dippable_items"]) or "(none)"
+    dips = ", ".join(info["sauces"]) or "(none)"
+    return f"solid items: {solids}\ndips/sauces: {dips}"
 
 
 def _format_corrected_block(corrected: Dict[str, Any]) -> str:
@@ -336,6 +361,7 @@ class PredictionModel:
         # Prompt blocks
         options_block = _build_options_block(color_seeds)
         corrected_block = _format_corrected_block(corrected)
+        meal_contents_block = _build_meal_contents_block(str(context.get("meal", "")))
 
         prompt = get_bundle_prediction_prompt(
             physical_profile_label=self.physical_profile_label,
@@ -344,6 +370,7 @@ class PredictionModel:
             context=context,
             corrected_block=corrected_block,
             options_block=options_block,
+            meal_contents=meal_contents_block,
             physical_profile_description=self.physical_profile_description,
         )
 
@@ -370,12 +397,16 @@ class PredictionModel:
                 log_file.write_text(f"===PROMPT===\n{prompt}\n\n===RESPONSE===\nFailed to parse response as JSON. Raw response:\n{resp}", encoding="utf-8")
 
         # Validate each field; categorical -> allowed option (fallback to
-        # corrected/default), color -> parsed HSV (fallback to seed).
+        # corrected/default), color -> parsed HSV (fallback to seed), text ->
+        # free string (fallback to corrected/per-field default, never empty).
         out: Dict[str, Any] = {}
         for field in PREF_FIELDS:
             if PREF_KIND.get(field) == "color":
                 seed = parse_color(color_seeds.get(field), seed=DEFAULT_COLOR)
                 out[field] = parse_color(data.get(field), seed=seed)
+            elif PREF_KIND.get(field) == "text":
+                val = str(data.get(field, "")).strip()
+                out[field] = val or corrected.get(field) or _TEXT_DEFAULTS.get(field, "")
             else:
                 val = str(data.get(field, "")).strip()
                 if val in PREF_OPTIONS[field]:
@@ -392,9 +423,10 @@ class PredictionModel:
             else:
                 out[k] = v
 
-        # Final validation (categorical only; color values are already canonical).
+        # Final validation (categorical only; color/text values are already
+        # canonical free-form and have no fixed option list).
         for field in PREF_FIELDS:
-            if PREF_KIND.get(field) == "color":
+            if PREF_KIND.get(field) in ("color", "text"):
                 continue
             if out[field] not in PREF_OPTIONS[field]:
                 out[field] = PREF_OPTIONS[field][0]

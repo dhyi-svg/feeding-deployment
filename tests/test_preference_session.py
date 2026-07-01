@@ -52,6 +52,8 @@ class FakeModel:
         for f in PREF_FIELDS:
             if PREF_KIND.get(f) == "color":
                 out[f] = parse_color((color_seeds or {}).get(f))
+            elif PREF_KIND.get(f) == "text":
+                out[f] = f"predicted {f}"
             else:
                 out[f] = PREF_OPTIONS[f][0]
         for k, v in corrected.items():
@@ -77,7 +79,7 @@ class FakeWeb:
     def start_preference_correction(self, total, secs):
         self.started = (total, secs)
 
-    def send_preference_step(self, field, predicted, options, step, total, autocontinue_seconds):
+    def send_preference_step(self, field, predicted, options, step, total, autocontinue_seconds, kind="categorical"):
         self.steps.append((field, autocontinue_seconds))
         return self.answers.get(field, predicted)
 

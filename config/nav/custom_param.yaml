@@ -3,13 +3,13 @@
 #
 # Post-nav refinement window: after move_base reports SUCCEEDED it has only
 # driven to within its goal tolerance and then stopped. This window optionally
-# runs a slow go-to-pose controller for up to `timeout_s` to close the last
-# gap to the exact goal, then stops.
+# rotates in place toward the goal heading for up to `timeout_s` to close the
+# last heading gap, then stops. (xy is left as move_base parked — see below.)
 #
 # Hardware reality (see cmd_vel_bridge_basicmicro): linear commands are floored
 # at ~0.31 m/s (min_lin_units/linear_scale), so fine LINEAR nudges overshoot —
-# linear drive only engages past `lin_engage_dist_m`. Rotation has no such floor,
-# so HEADING is what this refines smoothly. Keep that in mind when tuning.
+# which is why refinement corrects HEADING ONLY and never translates. Rotation
+# has no such floor, so heading is what this base refines smoothly.
 refinement:
   # --- master switches -------------------------------------------------------
   enabled: true          # run the refinement window at all
@@ -20,29 +20,22 @@ refinement:
   rate_hz: 10.0          # control/sample rate (must exceed cmd_vel bridge cmd_timeout)
   window_s: 1.0          # sliding-average window over the error (smooths jitter)
   warmup_s: 1.0          # delay before the divergence safety check arms
-  localization_settle_s: 30.0  # wait after move_base succeeds, before pre-refinement error read
+  localization_settle_s: 5.0   # short settle before the pre-refinement error read; the heavy
+                               # ~25s post-arrival settle + single replan now happens upstream
+                               # (navigate.py _GOAL_CONFIRM_SETTLE_S) before refinement runs
 
-  # --- stop-when-good thresholds --------------------------------------------
-  # null => use half the active planner's goal tolerance (move_base/TEB).
-  # Heading-only refinement: success_xy_m is set above the worst observed
-  # move_base park (~4.6cm) so xy never blocks convergence and the FAR regime
-  # (turn-to-face + forward drive, which spikes yaw) never triggers. This base
-  # cannot refine xy (floored linear drive) but refines yaw smoothly, so we
-  # accept move_base's position and only fix heading. Bump to 0.08 if parks
-  # regularly exceed ~5cm. success_yaw_rad stays null (~1.43deg) — yaw was never
-  # the blocker.
-  success_xy_m: 0.06
+  # --- stop-when-good threshold ---------------------------------------------
+  # Heading-only refinement: the controller ALWAYS rotates toward the goal
+  # heading (see _refine_cmd) and never translates, so convergence is gated on
+  # yaw alone and move_base's position is accepted as parked (x/y are still
+  # measured and logged, just never actuated). null => half the planner's
+  # yaw_goal_tolerance (~1.43deg) — the heading we refine down to.
   success_yaw_rad: null
 
-  # --- divergence safety (stop if clearly getting worse) ---------------------
-  divergence_margin_m: 0.03      # stop if avg xy rises this far above its best
+  # --- divergence safety (stop if the heading clearly gets worse) ------------
   divergence_margin_rad: 0.02    # stop if avg yaw rises this far above its best (~1.1 deg)
 
-  # --- go-to-pose controller (only used when actuate: true) ------------------
+  # --- heading controller (only used when actuate: true) ---------------------
   cmd_vel_topic: /cmd_vel
   k_ang: 1.2             # proportional gain on heading error -> angular vel
   max_ang_rps: 0.4       # clamp on angular velocity (rad/s)
-  k_lin: 0.8             # proportional gain on distance -> linear vel
-  max_lin_mps: 0.08      # clamp on linear velocity (m/s)
-  lin_engage_dist_m: 0.06  # = success_xy_m so forward drive (the yaw-spiker) never engages
-  face_goal_tol_rad: 0.35  # must be within this heading-to-goal before driving forward

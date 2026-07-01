@@ -114,25 +114,15 @@ class AcquireBiteHLA(HighLevelAction):
                         self.perception_interface.get_camera_data()
                     )
 
-                    if not self.flair.is_preference_set():
-                        plate_image = self.flair.crop_plate(camera_color_data)
-                        if self.web_interface is not None:
-                            while self.web_interface.active:
-                                user_input_food_items, user_input_bite_ordering_preference = self.web_interface.get_new_meal_input(plate_image)
-                                food_items, bite_ordering_preference = self.flair.parse_new_meal(user_input_food_items, user_input_bite_ordering_preference)
-                                if food_items is not None and bite_ordering_preference is not None:
-                                    break
-                                else:
-                                    print("Failed to parse user input. Trying again ...")
-                                    time.sleep(1.0)
-                        else:
-                            # Use command line input for preference setting.
-                            user_input_food_items = input("Enter food items as a python list: ")
-                            user_input_bite_ordering_preference = input("Enter bite ordering preference: ")
-                            food_items, bite_ordering_preference = self.flair.parse_new_meal(user_input_food_items, user_input_bite_ordering_preference)
-
-                        self.flair.set_food_items(food_items)
-                        self.flair.set_preference(bite_ordering_preference)
+                    # Food items (from the meal's MealContents) and the
+                    # bite-ordering preference (predicted/corrected) are configured
+                    # upstream by the preference session before feeding begins. The
+                    # old meal_setup page is gone -- guard that FLAIR was set up.
+                    assert self.flair.is_preference_set(), (
+                        "FLAIR food items / bite-ordering preference were not set "
+                        "before bite acquisition. The preference session must run "
+                        "first (the meal_setup page was removed)."
+                    )
 
                     items_detection = self.flair.detect_items(camera_color_data, camera_depth_data, camera_info_data, log_path=None)
 

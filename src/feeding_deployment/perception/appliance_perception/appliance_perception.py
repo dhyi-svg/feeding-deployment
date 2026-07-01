@@ -54,8 +54,11 @@ _OVERLAY_REF_W = 1280
 # Swing-out arrow: wide, shallow elliptical arc about the hinge sweeping to the
 # foreground (foreshortened projection of the door's out-of-plane swing).
 _SWING_SWEEP_DEG = 43.0
-_SWING_KY = {"bottom textured fridge door": 0.37}   # vertical squash per appliance
-_SWING_KY_DEFAULT = 0.22                            # microwave / others
+_SWING_KY = {
+    "bottom textured fridge door": 0.37,   # up-left (unchanged)
+    "microwave": -0.22,                    # mirror vertical so the left-hinged door sweeps up-right
+}
+_SWING_KY_DEFAULT = 0.22                    # others (kept positive / upward)
 _SWING_DASH_ON, _SWING_DASH_OFF, _SWING_NSEG = 7, 6, 60
 
 

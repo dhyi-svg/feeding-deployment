@@ -69,6 +69,18 @@ class NavigateHLA(HighLevelAction):
     # re-try, up to this many times, before giving up (fatal).
     _MAX_RECOVERY_ATTEMPTS = 3
 
+    # Post-arrival goal confirmation. move_base/TEB declares SUCCEEDED against the
+    # map->base ESTIMATE, which Cartographer keeps correcting in discrete jumps for
+    # a while after the base stops -- so the first "reached" can be on a stale
+    # estimate that later snaps several cm off the true pose. After the first
+    # SUCCEEDED we wait this long for localization to correct, then re-send the
+    # SAME goal ONCE: TEB now sees the revealed gap (if any) and drives it out
+    # against the corrected estimate. A single replan, not a loop. The subsequent
+    # refinement window's before-residual records whether the second park truly
+    # landed within tolerance. (Pure wait -- no shared clock with the refinement
+    # timeout, so it cannot eat into the refinement driving budget.)
+    _GOAL_CONFIRM_SETTLE_S = 25.0
+
     # Defaults for the post-nav refinement window. Overridden at runtime by
     # config/nav/custom_param.yaml (section: refinement); see that file for the
     # meaning of each field. These are the fallbacks if the file is
@@ -80,18 +92,12 @@ class NavigateHLA(HighLevelAction):
         "rate_hz": 10.0,
         "window_s": 1.0,
         "warmup_s": 1.0,
-        "localization_settle_s": 30.0,
-        "success_xy_m": None,       # None => half of move_base xy_goal_tolerance
+        "localization_settle_s": 5.0,
         "success_yaw_rad": None,    # None => half of move_base yaw_goal_tolerance
-        "divergence_margin_m": 0.03,
         "divergence_margin_rad": 0.02,
         "cmd_vel_topic": "/cmd_vel",
         "k_ang": 1.2,
         "max_ang_rps": 0.4,
-        "k_lin": 0.8,
-        "max_lin_mps": 0.08,
-        "lin_engage_dist_m": 0.04,
-        "face_goal_tol_rad": 0.35,
     }
 
     def _default_location_yaml(self) -> Path:
@@ -288,8 +294,17 @@ class NavigateHLA(HighLevelAction):
             pose = self._load_target_pose(wp)
             self._drive_to_pose(wp, pose)
             if i == len(waypoints) - 1:
-                # Fine-tune the parking pose only at the final destination;
-                # intermediate staging poses just need to be reached coarsely.
+                # Final destination only -- staging poses just need to be reached
+                # coarsely. move_base's first SUCCEEDED is against a map->base
+                # estimate Cartographer is still correcting, so wait for it to
+                # settle, then re-send the SAME goal ONCE: TEB drives out whatever
+                # gap the correction revealed (a no-op if it was already there),
+                # against the now-corrected estimate. Then fine-tune the heading.
+                self._wait_for_localization_settle(
+                    self._GOAL_CONFIRM_SETTLE_S,
+                    "confirming the goal pose (replan once)",
+                )
+                self._drive_to_pose(wp, pose)
                 self._refinement_window(wp, pose)
 
     def _await_nav_result(self, client, location_name: str) -> str:
@@ -459,28 +474,22 @@ class NavigateHLA(HighLevelAction):
             remaining_s = (deadline - rospy.Time.now()).to_sec()
             rospy.sleep(min(1.0, max(0.0, remaining_s)))
 
-    def _refine_cmd(
-        self, x: float, y: float, yaw: float,
-        gx: float, gy: float, goal_yaw: float,
-        success_xy_m: float, cfg: dict,
-    ) -> "Twist":
-        """Slow diff-drive go-to-pose command toward (gx, gy, goal_yaw).
+    def _refine_cmd(self, yaw: float, goal_yaw: float, cfg: dict) -> "Twist":
+        """Rotate in place toward the goal pose's heading.
 
-        Turn-to-face then creep forward while the xy error is large enough to be
-        worth a (coarse, stiction-floored) linear move; once close in xy, just
-        rotate to the final heading — the part this base can refine smoothly.
+        Heading-only refinement: no matter how far off in xy move_base parked,
+        we ALWAYS rotate toward the goal orientation and never translate. This
+        base cannot creep position smoothly (the cmd_vel bridge floors linear
+        commands), and turning to face the goal *point* would swing the base
+        away from its final heading and make yaw worse -- that turn-to-face was
+        the divergence seen on >6cm parks. So we accept move_base's position and
+        refine heading alone -- the part this base refines smoothly.
         """
         cmd = Twist()
-        dx, dy = gx - x, gy - y
-        dist = math.hypot(dx, dy)
-        if dist > max(success_xy_m, float(cfg["lin_engage_dist_m"])):
-            bearing = self._wrap(math.atan2(dy, dx) - yaw)
-            cmd.angular.z = self._clamp(float(cfg["k_ang"]) * bearing, float(cfg["max_ang_rps"]))
-            if abs(bearing) < float(cfg["face_goal_tol_rad"]):
-                cmd.linear.x = self._clamp(float(cfg["k_lin"]) * dist, float(cfg["max_lin_mps"]))
-        else:
-            final_yaw_err = self._wrap(goal_yaw - yaw)
-            cmd.angular.z = self._clamp(float(cfg["k_ang"]) * final_yaw_err, float(cfg["max_ang_rps"]))
+        final_yaw_err = self._wrap(goal_yaw - yaw)
+        cmd.angular.z = self._clamp(
+            float(cfg["k_ang"]) * final_yaw_err, float(cfg["max_ang_rps"])
+        )
         return cmd
 
     def _refinement_window(self, location_name: str, pose: dict) -> None:
@@ -488,15 +497,15 @@ class NavigateHLA(HighLevelAction):
 
         move_base/TEB only drives until it is within its goal tolerance, then
         stops — leaving the last few cm/deg on the table. When actuate=true this
-        window runs a slow go-to-pose controller toward the exact goal and stops
-        on convergence, divergence (safety), or timeout. When actuate=false it
-        is a passive monitor (old behavior). Tunables live in
-        config/nav/custom_param.yaml.
+        window rotates in place toward the goal *heading* (xy is left as
+        move_base parked; see _refine_cmd) and stops on convergence, divergence
+        (safety), or timeout. When actuate=false it is a passive monitor (old
+        behavior). Tunables live in config/nav/custom_param.yaml.
 
-        Hardware note: the cmd_vel bridge floors linear commands at
-        ~0.31 m/s (min_lin_units/linear_scale), so fine *linear* nudges overshoot
-        — linear drive only engages past `lin_engage_dist_m`. Rotation has no
-        floor (min_rot_units=0), so *heading* is what this refines smoothly.
+        Hardware note: the cmd_vel bridge floors linear commands at ~0.31 m/s
+        (min_lin_units/linear_scale), so fine *linear* nudges overshoot — which
+        is why this refines heading only and never translates. Rotation has no
+        floor (min_rot_units=0), so *heading* is what this base refines smoothly.
         """
         if not ROS_NAV_IMPORTED:
             return
@@ -504,18 +513,15 @@ class NavigateHLA(HighLevelAction):
         if not cfg["enabled"]:
             return
 
-        # Success thresholds: explicit config value, else half the active
-        # planner's goal tolerance (stop once comfortably inside what the
-        # controller required). TEB nests its tolerances under
-        # TebLocalPlannerROS, not at the move_base root. No get_param default on
-        # purpose: missing params mean move_base isn't configured as expected and
-        # we want to fail loudly rather than refine to a wrong threshold.
-        # (Switching planners changes this namespace, e.g. DWAPlannerROS.)
-        xy_tol = rospy.get_param("move_base/TebLocalPlannerROS/xy_goal_tolerance")
+        # Success threshold (yaw only — we refine heading, not position):
+        # explicit config value, else half the active planner's
+        # yaw_goal_tolerance (stop once comfortably inside what the controller
+        # required). TEB nests its tolerances under TebLocalPlannerROS, not at
+        # the move_base root. No get_param default on purpose: a missing param
+        # means move_base isn't configured as expected and we want to fail loudly
+        # rather than refine to a wrong threshold. (Switching planners changes
+        # this namespace, e.g. DWAPlannerROS.)
         yaw_tol = rospy.get_param("move_base/TebLocalPlannerROS/yaw_goal_tolerance")
-        success_xy_m = (
-            float(cfg["success_xy_m"]) if cfg["success_xy_m"] is not None else xy_tol * 0.5
-        )
         success_yaw_rad = (
             float(cfg["success_yaw_rad"]) if cfg["success_yaw_rad"] is not None else yaw_tol * 0.5
         )
@@ -568,13 +574,13 @@ class NavigateHLA(HighLevelAction):
         if actuate:
             rospy.sleep(0.2)  # let the cmd_vel publisher connect before commanding
         window: deque = deque()  # (elapsed_s, err_xy, err_yaw)
-        best_xy = float("inf")
         best_yaw = float("inf")
 
         mode = "actuating" if actuate else "monitoring"
         print(
-            f"Refinement window: {mode} (target xy<{success_xy_m*100:.1f}cm "
-            f"yaw<{math.degrees(success_yaw_rad):.2f}deg)..."
+            f"Refinement window: {mode} heading-only — rotating to goal heading "
+            f"(success yaw<{math.degrees(success_yaw_rad):.2f}deg; "
+            f"xy left as parked)..."
         )
 
         # Residual pose error the moment move_base declared the goal reached,
@@ -628,43 +634,39 @@ class NavigateHLA(HighLevelAction):
                 avg_xy = sum(w[1] for w in window) / len(window)
                 avg_yaw = sum(w[2] for w in window) / len(window)
 
-                best_xy = min(best_xy, avg_xy)
                 best_yaw = min(best_yaw, avg_yaw)
 
                 print(
-                    f"\r  [{elapsed_s:4.1f}s] xy={avg_xy*100:.1f}cm "
-                    f"(best {best_xy*100:.1f})  "
+                    f"\r  [{elapsed_s:4.1f}s] xy={avg_xy*100:.1f}cm (parked)  "
                     f"yaw={math.degrees(avg_yaw):.2f}deg "
                     f"(best {math.degrees(best_yaw):.2f})   ",
                     end="", flush=True,
                 )
 
-                if avg_xy < success_xy_m and avg_yaw < success_yaw_rad:
+                # Heading-only: converge on yaw alone. xy is deliberately NOT a
+                # gate -- this base can't refine position, so move_base's park is
+                # accepted as-is and only reported (avg_xy above).
+                if avg_yaw < success_yaw_rad:
                     print(
-                        f"\n  Converged: xy={avg_xy*100:.1f}cm "
-                        f"yaw={math.degrees(avg_yaw):.2f}deg"
+                        f"\n  Converged: yaw={math.degrees(avg_yaw):.2f}deg "
+                        f"(xy={avg_xy*100:.1f}cm, accepted as parked)"
                     )
                     break
 
-                # Divergence safety: stop if the windowed error clearly worsens.
+                # Divergence safety, on yaw only (the only axis we drive): stop
+                # if the windowed heading error clearly worsens.
                 if elapsed_s >= float(cfg["warmup_s"]):
-                    xy_diverging = avg_xy > best_xy + float(cfg["divergence_margin_m"])
-                    yaw_diverging = avg_yaw > best_yaw + float(cfg["divergence_margin_rad"])
-                    if xy_diverging or yaw_diverging:
+                    if avg_yaw > best_yaw + float(cfg["divergence_margin_rad"]):
                         print(
-                            f"\n  Stopped: diverging — "
-                            f"xy={avg_xy*100:.1f}cm vs best {best_xy*100:.1f}cm, "
-                            f"yaw={math.degrees(avg_yaw):.2f}deg vs best {math.degrees(best_yaw):.2f}deg"
+                            f"\n  Stopped: yaw diverging — "
+                            f"yaw={math.degrees(avg_yaw):.2f}deg vs best "
+                            f"{math.degrees(best_yaw):.2f}deg"
                         )
                         break
 
                 # Drive toward the exact goal using the instantaneous pose.
                 if actuate and cmd_pub is not None:
-                    cmd_pub.publish(
-                        self._refine_cmd(
-                            tr.x, tr.y, cur_yaw, gx, gy, goal_yaw, success_xy_m, cfg
-                        )
-                    )
+                    cmd_pub.publish(self._refine_cmd(cur_yaw, goal_yaw, cfg))
 
                 rate.sleep()
         finally:

@@ -11,9 +11,6 @@ const routeMap = {
   prepare_bite: {
     completed: '/bite_selection'
   },
-  meal_setup: {
-    jump: '/meal_setup'
-  },
   bite_selection: {
     jump: '/bite_selection'
   },

@@ -20,11 +20,6 @@ const routes = [
     name: 'bite_selection',
     component: () => import('../views/bite_selection.vue')
   },
-  {
-    path: '/meal_setup',
-    name: 'meal_setup',
-    component: () => import('../views/meal_setup.vue')
-  },
 {
     path: '/bite_confirm_transfer',
     name: 'bite_confirm_transfer',

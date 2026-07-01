@@ -18,6 +18,10 @@ from typing import Any
 
 import yaml
 
+from feeding_deployment.preference_learning.config.preference_bundle import (
+    DEFAULT_BITE_ORDERING,
+)
+
 # ---------------------------------------------------------------------------
 # Value translators: bundle option string  →  BT parameter value
 # ---------------------------------------------------------------------------
@@ -434,3 +438,20 @@ def apply_dip_preference(
     if dip_pref is None or flair is None:
         return
     flair.set_allow_dip(dip_pref != "do not dip")
+
+
+def apply_bite_ordering(
+    bundle: dict[str, str],
+    flair: Any,
+) -> None:
+    """Push the predicted/corrected bite_ordering text into FLAIR as the user's
+    bite-ordering preference (consumed by FLAIR's preference planner).
+
+    Always sets a non-empty string (falls back to DEFAULT_BITE_ORDERING) so
+    flair.is_preference_set() stays true and the (removed) meal_setup branch is
+    never re-entered.
+    """
+    if flair is None:
+        return
+    ordering = bundle.get("bite_ordering") or DEFAULT_BITE_ORDERING
+    flair.set_preference(ordering)

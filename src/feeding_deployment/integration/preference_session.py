@@ -38,10 +38,14 @@ from feeding_deployment.preference_learning.config.preference_bundle import (
     COLOR_FIELD_BY_LOCATION,
     DEFAULT_COLOR,
     PREFERENCE_BUNDLE,
+    TEXT_FIELDS,
     color_from_bt,
     color_to_bt,
     format_color,
     parse_color,
+)
+from feeding_deployment.preference_learning.config.mealtime_context import (
+    food_items_for_flair,
 )
 from feeding_deployment.preference_learning.methods.prediction_model import (
     PREF_DESCRIPTIONS,
@@ -56,6 +60,7 @@ from feeding_deployment.integration.apply_preferences import (
     _load_yaml,
     _save_yaml,
     _set_param_value,
+    apply_bite_ordering,
     apply_bundle_to_behavior_trees,
     apply_dip_preference,
     apply_microwave_preference,
@@ -63,6 +68,7 @@ from feeding_deployment.integration.apply_preferences import (
 )
 
 _COLOR_FIELD_SET = set(COLOR_FIELDS)
+_TEXT_FIELD_SET = set(TEXT_FIELDS)
 
 # Default autocontinue (seconds) for the correction page before the user's
 # wait_before_autocontinue_seconds preference has been finalized.
@@ -230,6 +236,7 @@ class PreferenceSession:
         if reinit_transfer and self._scene is not None:
             apply_transfer_mode(bundle, self._scene, self._hla_map)
         apply_dip_preference(bundle, self._flair)
+        apply_bite_ordering(bundle, self._flair)
         return warnings
 
     def _categorical_bundle(self) -> Dict[str, str]:
@@ -245,8 +252,42 @@ class PreferenceSession:
     # ------------------------------------------------------------------ #
     # Public API
     # ------------------------------------------------------------------ #
+    def _apply_food_items(self) -> None:
+        """Derive FLAIR's food items (solids/dips) from the chosen meal and set
+        them on FLAIR. Deterministic (no LLM); replaces the old meal_setup
+        food-item entry. No-op when there is no FLAIR (unit tests / replay)."""
+        if self._flair is None:
+            return
+        meal = str(self.context.get("meal", ""))
+        food_items = food_items_for_flair(meal)  # raises KeyError if not in catalog
+        if not food_items["solid"]:
+            raise ValueError(
+                f"Meal {meal!r} has no solid food items to give FLAIR for detection."
+            )
+        self._flair.set_food_items(food_items)
+
+    def _clean_text_correction(self, field: str, text: str) -> str:
+        """Best-effort grammar/grounding cleanup of a free-text correction using
+        FLAIR's meal parser (the same parser the old meal_setup used). Returns the
+        cleaned string, or the raw text on any failure -- the user's input is
+        never dropped."""
+        if field != "bite_ordering" or not text or self._flair is None:
+            return text
+        parser = getattr(self._flair, "new_meal_parser", None)
+        if parser is None:
+            return text
+        try:
+            food_items = food_items_for_flair(str(self.context.get("meal", "")))
+            food_str = ", ".join(food_items["solid"] + food_items["dip"])
+            _solids, _dips, cleaned = parser.parse_user_message(food_str, text)
+            return cleaned or text
+        except Exception as e:  # cleanup must never break the correction flow
+            print(f"[preference-session] bite-ordering cleanup failed: {e}")
+            return text
+
     def start(self) -> None:
         """Predict the full bundle, seed/write colors, apply non-planning dims."""
+        self._apply_food_items()
         self.bundle = self._predict()
         self._write_open_colors_to_bt()
         warnings = self._apply_non_planning()
@@ -296,9 +337,14 @@ class PreferenceSession:
                     step=step,
                     total=total,
                     autocontinue_seconds=self.wait_seconds,
+                    kind=PREF_KIND.get(field, "categorical"),
                 )
                 if user_value is None:
                     user_value = predicted
+                # A free-text "Other..." correction is cleaned for grammar /
+                # grounding (raw text kept on any failure -- never dropped).
+                if PREF_KIND.get(field) == "text" and user_value != predicted:
+                    user_value = self._clean_text_correction(field, user_value)
                 changed = user_value != predicted
                 self._finalize(field, user_value, changed=changed)
                 if changed:
@@ -372,7 +418,10 @@ class PreferenceSession:
         out: List[Dict[str, Any]] = []
         with self._lock:
             for field in PREF_FIELDS:  # stable display order
-                if field not in self.finalized or PREF_KIND.get(field) == "color":
+                # Color dims use the live-camera picker; text dims (e.g.
+                # bite_ordering) have no option list to render as chips and are
+                # only editable at their ask() step -- exclude both here.
+                if field not in self.finalized or PREF_KIND.get(field) in ("color", "text"):
                     continue
                 out.append({
                     "field": field,
@@ -394,7 +443,7 @@ class PreferenceSession:
         edit was ignored (color dim, locked, or not a valid option). Called from the
         WebInterface apply-worker thread; the slow LLM re-prediction runs outside the
         session lock."""
-        if PREF_KIND.get(field) == "color":
+        if PREF_KIND.get(field) in ("color", "text"):
             return False
         with self._lock:
             if field in self._locked:
@@ -482,6 +531,7 @@ class PreferenceSession:
         self.bundle = dict(state["bundle"])
         self.finalized = set(state["finalized"])
         self.corrected = dict(state["corrected"])
+        self._apply_food_items()
         self._write_open_colors_to_bt()
         self._apply_non_planning()
 

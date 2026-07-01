@@ -29,6 +29,7 @@ def get_bundle_prediction_prompt(
     context: dict,
     corrected_block: str,
     options_block: str,
+    meal_contents: str = "(not provided)",
     *,
     physical_profile_description: str | None = None,
 ) -> str:
@@ -54,6 +55,7 @@ def get_bundle_prediction_prompt(
         meal=context.get("meal"),
         setting=context.get("setting"),
         time_of_day=context.get("time_of_day"),
+        meal_contents=meal_contents,
         corrected_block=corrected_block,
         options_block=options_block,
         pref_fields_csv=", ".join(_PREF_FIELDS),
@@ -143,6 +145,15 @@ def main() -> int:
     # Options block (all dimensions + allowed options)
     options_block = _build_options_block()
 
+    # Meal contents (solids/dips) so text dims can be grounded in concrete foods.
+    meal_info = root_config.MEAL_STRUCTURE.get(str(context.get("meal", "")), {})
+    if meal_info:
+        solids = ", ".join(meal_info.get("dippable_items", []) or []) or "(none)"
+        dips = ", ".join(meal_info.get("sauces", []) or []) or "(none)"
+        meal_contents = f"solid items: {solids}\ndips/sauces: {dips}"
+    else:
+        meal_contents = f"meal: {context.get('meal')} (contents unknown)"
+
     prompt = get_bundle_prediction_prompt(
         physical_profile_label=physical_profile_label,
         ltm_summary=ltm_summary,
@@ -150,6 +161,7 @@ def main() -> int:
         context=context,
         corrected_block=corrected_block,
         options_block=options_block,
+        meal_contents=meal_contents,
     )
 
     print(f"User={user} | physical_profile_label={physical_profile_label} | day={args.day}", flush=True)

@@ -158,6 +158,7 @@ _TABLE_PREF_DIMS = [
     "skewering_axis",
     "web_interface_confirmation",
     "bite_dipping_preference",
+    "bite_ordering",
     "transfer_mode",
     "outside_mouth_distance",
     "convey_robot_ready_for_initiating_transfer",

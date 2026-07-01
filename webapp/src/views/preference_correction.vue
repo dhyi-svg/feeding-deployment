@@ -29,10 +29,46 @@
         <div class="pref-body">
           <div class="pref-q">
             <h1 class="pq">{{ current.label }}</h1>
-            <p class="pred">Predicted: <strong>{{ current.predicted }}</strong></p>
+            <p v-if="current.kind !== 'text'" class="pred">Predicted: <strong>{{ current.predicted }}</strong></p>
             <p class="pref-help">Change it if this doesn't match what you'd like — the robot learns from each correction.</p>
           </div>
-          <div class="pref-options">
+
+          <!-- Free-text dim (e.g. bite ordering): accept the predicted sentence, or write your own. -->
+          <div v-if="current.kind === 'text'" class="pref-options">
+            <div class="opts">
+              <div class="oc" :class="{ sel: !otherMode }" @click="choosePredicted">
+                <span class="ot">{{ current.predicted }}</span>
+                <div class="och" v-if="!otherMode">✓</div>
+              </div>
+              <div class="oc" :class="{ sel: otherMode }" @click="chooseOther">
+                <span class="ot">Other…</span>
+                <div class="och" v-if="otherMode">✓</div>
+              </div>
+            </div>
+            <div v-if="otherMode" class="field-box tall other-box">
+              <textarea
+                v-model="otherText"
+                placeholder="Type your preferred bite ordering..."
+                ref="otherTextarea"
+                class="field-input"
+                @input="userInteracted = true"
+              ></textarea>
+              <button @click="startOtherSpeech"
+                      class="icon-btn"
+                      :class="{ 'amber-ic': isRecognizingOther }"
+                      :disabled="isRecognizingOther"
+                      title="voice">
+                <img alt="voice" src="../assets/voice.png">
+              </button>
+              <button @click="otherText = ''" class="icon-btn" title="clear">
+                <img alt="clear" src="../assets/clear.png">
+              </button>
+            </div>
+            <p v-if="!userInteracted" class="cdown auto-note">Auto-confirming the predicted ordering in <span>{{ countdown }}s</span></p>
+          </div>
+
+          <!-- Categorical dim: option chips. -->
+          <div v-else class="pref-options">
             <div class="opts">
               <div
                 class="oc"
@@ -80,6 +116,12 @@ export default {
       // True once the user clicks an option — cancels auto-confirm so they must
       // explicitly confirm their correction.
       userInteracted: false,
+      // Free-text ("text" kind) dim state: otherMode toggles the custom editor,
+      // otherText holds the typed/spoken override.
+      otherMode: false,
+      otherText: '',
+      isRecognizingOther: false,
+      recognitionOther: null,
       step: 0,
       total: 0,
       autocontinueSeconds: DEFAULT_AUTOCONTINUE_SECONDS,
@@ -200,11 +242,58 @@ export default {
         ? message.autocontinue_seconds
         : DEFAULT_AUTOCONTINUE_SECONDS
 
-      this.current = { field, label: message.label || this.formatLabel(field), predicted, options: rawOptions }
+      const kind = message.kind || 'categorical'
+      this.current = { field, label: message.label || this.formatLabel(field), predicted, options: rawOptions, kind }
       this.selected = predicted
       this.userInteracted = false
       this.isSubmitting = false
+      // Reset free-text editor state for the new step.
+      this.otherMode = false
+      this.otherText = ''
+      this.stopOtherSpeech()
       this.restartCountdown()
+    },
+    choosePredicted() {
+      this.otherMode = false
+      this.selected = this.current.predicted
+      this.userInteracted = true
+      this.clearCountdownTimer()
+    },
+    chooseOther() {
+      this.otherMode = true
+      this.userInteracted = true
+      this.clearCountdownTimer()
+      // Seed the editor with the prediction so the user can tweak rather than
+      // retype; they can clear it to start fresh.
+      if (!this.otherText) this.otherText = this.current.predicted || ''
+      this.$nextTick(() => {
+        if (this.$refs.otherTextarea) this.$refs.otherTextarea.focus()
+      })
+    },
+    startOtherSpeech() {
+      if (this.isRecognizingOther) return
+      if (!this.recognitionOther) {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+        if (!SpeechRecognition) return
+        this.recognitionOther = new SpeechRecognition()
+        this.recognitionOther.lang = 'en-US'
+        this.recognitionOther.continuous = false
+        this.recognitionOther.onresult = (event) => {
+          this.otherText += event.results[0][0].transcript
+          this.isRecognizingOther = false
+        }
+        this.recognitionOther.onerror = () => { this.isRecognizingOther = false }
+        this.recognitionOther.onend = () => { this.isRecognizingOther = false }
+      }
+      this.userInteracted = true
+      this.isRecognizingOther = true
+      this.recognitionOther.start()
+    },
+    stopOtherSpeech() {
+      this.isRecognizingOther = false
+      if (this.recognitionOther) {
+        try { this.recognitionOther.abort() } catch (e) { /* ignore */ }
+      }
     },
     confirmStep() {
       if (!this.publisher || !this.current || this.isSubmitting) return
@@ -212,11 +301,19 @@ export default {
       this.isSubmitting = true
       this.waitingMessage = 'Sending your choice to the robot...'
 
+      // For a free-text dim in "Other" mode, the typed/spoken text is the value;
+      // an empty entry falls back to the prediction.
+      let value = this.selected
+      if (this.current.kind === 'text' && this.otherMode) {
+        value = (this.otherText || '').trim() || this.current.predicted
+      }
+      this.stopOtherSpeech()
+
       this.publisher.publish(new ROSLIB.Message({
         data: JSON.stringify({
           state: 'preference_correction_response',
           field: this.current.field,
-          value: this.selected
+          value
         })
       }))
       // Wait for the next step (or "done"); clear the current dim so the
@@ -252,6 +349,7 @@ export default {
     },
     teardownRos() {
       this.clearCountdownTimer()
+      this.stopOtherSpeech()
       if (this.listener) {
         this.listener.unsubscribe()
         if (this.listener.ros) this.listener.ros.close()
@@ -292,6 +390,11 @@ export default {
 
 .auto-note {
   text-align: left;
+  margin-top: 1.2vh;
+  flex-shrink: 0;
+}
+
+.other-box {
   margin-top: 1.2vh;
   flex-shrink: 0;
 }

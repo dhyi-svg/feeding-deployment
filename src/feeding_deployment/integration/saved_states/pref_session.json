@@ -1,6 +1,7 @@
 {
   "bundle": {
-    "bite_dipping_preference": "more",
+    "bite_dipping_preference": "do not dip",
+    "bite_ordering": "no particular order",
     "convey_robot_ready_for_completing_transfer": "speech",
     "convey_robot_ready_for_initiating_transfer": "speech",
     "detect_user_completed_transfer_drinking": "perception",
@@ -10,24 +11,24 @@
     "detect_user_ready_for_initiating_transfer_feeding": "open mouth",
     "detect_user_ready_for_initiating_transfer_wiping": "open mouth",
     "microwave_time": "1 min",
-    "outside_mouth_distance": "near",
+    "outside_mouth_distance": "medium",
     "plate_color_fridge": {
-      "h": 85,
-      "range": 0.16,
-      "s": 89,
-      "v": 180
+      "h": 66,
+      "range": 0.09,
+      "s": 63,
+      "v": 121
     },
     "plate_color_microwave": {
-      "h": 84,
+      "h": 44,
       "range": 0.1,
-      "s": 73,
-      "v": 211
+      "s": 61,
+      "v": 150
     },
     "plate_color_table": {
-      "h": 81,
+      "h": 90,
       "range": 0.11,
-      "s": 48,
-      "v": 102
+      "s": 69,
+      "v": 200
     },
     "retract_between_bites": "no",
     "robot_speed": "medium",
@@ -37,18 +38,52 @@
     "web_interface_confirmation": "yes"
   },
   "context": {
-    "meal": "chicken nuggets, broccoli, and ketchup",
+    "meal": "chicken nuggets",
     "setting": "Personal",
     "time_of_day": "evening"
   },
   "corrected": {
-    "robot_speed": "medium",
-    "wait_before_autocontinue_seconds": "100 sec"
+    "microwave_time": "1 min",
+    "plate_color_fridge": {
+      "h": 66,
+      "range": 0.09,
+      "s": 63,
+      "v": 121
+    },
+    "plate_color_microwave": {
+      "h": 44,
+      "range": 0.1,
+      "s": 61,
+      "v": 150
+    },
+    "plate_color_table": {
+      "h": 90,
+      "range": 0.11,
+      "s": 69,
+      "v": 200
+    }
   },
   "finalized": [
+    "bite_dipping_preference",
+    "bite_ordering",
+    "convey_robot_ready_for_completing_transfer",
+    "convey_robot_ready_for_initiating_transfer",
+    "detect_user_completed_transfer_drinking",
+    "detect_user_completed_transfer_feeding",
+    "detect_user_completed_transfer_wiping",
+    "detect_user_ready_for_initiating_transfer_drinking",
+    "detect_user_ready_for_initiating_transfer_feeding",
+    "detect_user_ready_for_initiating_transfer_wiping",
     "microwave_time",
+    "outside_mouth_distance",
     "plate_color_fridge",
+    "plate_color_microwave",
+    "plate_color_table",
+    "retract_between_bites",
     "robot_speed",
-    "wait_before_autocontinue_seconds"
+    "skewering_axis",
+    "transfer_mode",
+    "wait_before_autocontinue_seconds",
+    "web_interface_confirmation"
   ]
 }

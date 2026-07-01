@@ -111,6 +111,13 @@ PREFERENCE_BUNDLE: List[PreferenceDim] = [
         description="How much sauce should be applied when dipping. This depends on the user's personal preference, as well as the context (e.g., some users might prefer more dipping when eating alone in a personal setting and less dipping when eating in a social setting to avoid messiness). Choose do not dip when the user prefers not to dip or when the meal does not have any dippable items or sauces."
     ),
     PreferenceDim(
+        field="bite_ordering",
+        label="Bite ordering",
+        options=[],
+        kind="text",
+        description="The order in which the food items on the plate should be fed, as a short natural-language instruction grounded in THIS meal's actual foods and dips. Capture both (a) how the solid items are ordered relative to each other (e.g., all of one item before the next, or alternating between items) and (b) which solids should be paired with which dips (e.g., dip a particular item in a particular sauce). Base the prediction on the user's known preferences and the meal contents; if there is no evidence of any ordering or dipping-pairing preference, predict 'no particular order'. Keep it to a single concise sentence. This is separate from bite_dipping_preference, which only controls how much sauce is applied."
+    ),
+    PreferenceDim(
         field="wait_before_autocontinue_seconds",
         label="Time to wait before autocontinue",
         options=["10 sec", "100 sec", "1000 sec"],
@@ -160,6 +167,21 @@ PREFERENCE_BUNDLE: List[PreferenceDim] = [
 # ---------------------------------------------------------------------------
 
 COLOR_FIELDS: List[str] = [dim.field for dim in PREFERENCE_BUNDLE if dim.kind == "color"]
+
+# ---------------------------------------------------------------------------
+# Text-dimension helpers
+#
+# A text value is a free-form natural-language string (the LLM emits it for
+# kind="text" dims). It flows through the bundle, episode text, and -- for
+# bite_ordering -- into FLAIR's preference planner as the user's bite-ordering
+# instruction. Unlike categorical dims there is no option list to validate
+# against; an empty/missing prediction falls back to DEFAULT_BITE_ORDERING so
+# the value is never None (FLAIR.is_preference_set() keys off non-None).
+# ---------------------------------------------------------------------------
+
+TEXT_FIELDS: List[str] = [dim.field for dim in PREFERENCE_BUNDLE if dim.kind == "text"]
+
+DEFAULT_BITE_ORDERING: str = "no particular order"
 
 DEFAULT_COLOR: dict = {"h": 82, "s": 55, "v": 84, "range": 0.1}
 
