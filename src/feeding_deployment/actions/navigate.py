@@ -273,6 +273,14 @@ class NavigateHLA(HighLevelAction):
         #     print(f"[SIM] Would navigate to {location_name} (speed={speed}).")
         #     return
 
+        # Tuck the arm into the left-back retract config before driving the base,
+        # so the arm is in a safe, compact pose for the whole navigation (all
+        # via waypoints + destination). No-op visualization in sim.
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed)
+        print("Retracting arm to left_back_retract_pos before navigation ...")
+        self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
+
         if not ROS_NAV_IMPORTED:
             raise RuntimeError(
                 "ROS navigation modules not found. "

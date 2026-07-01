@@ -13,22 +13,22 @@
     "microwave_time": "1 min",
     "outside_mouth_distance": "medium",
     "plate_color_fridge": {
-      "h": 66,
+      "h": 86,
       "range": 0.09,
-      "s": 63,
-      "v": 121
+      "s": 90,
+      "v": 170
     },
     "plate_color_microwave": {
-      "h": 44,
+      "h": 83,
       "range": 0.1,
-      "s": 61,
-      "v": 150
+      "s": 70,
+      "v": 203
     },
     "plate_color_table": {
-      "h": 90,
-      "range": 0.11,
-      "s": 69,
-      "v": 200
+      "h": 91,
+      "range": 0.03,
+      "s": 64,
+      "v": 88
     },
     "retract_between_bites": "no",
     "robot_speed": "medium",
@@ -40,27 +40,26 @@
   "context": {
     "meal": "chicken nuggets",
     "setting": "Personal",
-    "time_of_day": "evening"
+    "time_of_day": "noon"
   },
   "corrected": {
-    "microwave_time": "1 min",
     "plate_color_fridge": {
-      "h": 66,
+      "h": 86,
       "range": 0.09,
-      "s": 63,
-      "v": 121
+      "s": 90,
+      "v": 170
     },
     "plate_color_microwave": {
-      "h": 44,
+      "h": 83,
       "range": 0.1,
-      "s": 61,
-      "v": 150
+      "s": 70,
+      "v": 203
     },
     "plate_color_table": {
-      "h": 90,
-      "range": 0.11,
-      "s": 69,
-      "v": 200
+      "h": 91,
+      "range": 0.03,
+      "s": 64,
+      "v": 88
     }
   },
   "finalized": [

@@ -462,7 +462,7 @@ class HighLevelAction(abc.ABC):
         session = TeleopRecoverySession(
             robot_interface=self.robot_interface,
             web_interface=self.web_interface,
-            retract_joint_config=self.sim.scene_description.retract_pos,
+            retract_joint_config=self.sim.scene_description.left_back_retract_pos,
             joint_lower_limits=self.arm_joint_lower_limits,
             joint_upper_limits=self.arm_joint_upper_limits,
             log_dir=self.log_dir,

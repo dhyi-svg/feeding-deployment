@@ -1,0 +1,22 @@
+# NUC ~/.tmux.conf pane-logging block.
+#
+# After `git pull` on the NUC (user emprise), append this to the NUC's
+# ~/.tmux.conf so pane logging survives a full tmux-server restart:
+#
+#     cat ~/feeding-deployment/scripts/nuc-tmux.conf.snippet >> ~/.tmux.conf
+#
+# feeding-nuc.sh installs the same hooks at build time; this is only the
+# survive-a-server-restart mirror (same idea as its 'bind r' line). The helper
+# resolves the dated bundle via the stable 'current_session' symlink, so this
+# static config never needs a timestamp. Paths are absolute (a '~' in the
+# TMUXLOG_ROOT assignment would not expand). Adjust /home/emprise if the NUC
+# user differs.
+#
+# window-linked covers new sessions/windows, after-split-window covers splits (no
+# overlap). Plain pipe-pane (no -o): -o TOGGLES, so a pane hit by two hooks would
+# open then close its pipe.
+set-hook -g  window-linked      'pipe-pane "TMUXLOG_ROOT=/home/emprise/feeding-deployment/src/feeding_deployment/integration/log/system_logs/current_session/robot exec /home/emprise/feeding-deployment/scripts/tmux-pane-log.sh #{session_name} #{window_index} #{pane_index} #{pane_id}"'
+set-hook -ag window-linked      'run-shell -b "TMUXLOG_ROOT=/home/emprise/feeding-deployment/src/feeding_deployment/integration/log/system_logs/current_session/robot /home/emprise/feeding-deployment/scripts/tmux-pane-log.sh --event #{hook} #{session_name} #{window_index} #{pane_index}"'
+set-hook -g  after-split-window 'pipe-pane "TMUXLOG_ROOT=/home/emprise/feeding-deployment/src/feeding_deployment/integration/log/system_logs/current_session/robot exec /home/emprise/feeding-deployment/scripts/tmux-pane-log.sh #{session_name} #{window_index} #{pane_index} #{pane_id}"'
+set-hook -ag after-split-window 'run-shell -b "TMUXLOG_ROOT=/home/emprise/feeding-deployment/src/feeding_deployment/integration/log/system_logs/current_session/robot /home/emprise/feeding-deployment/scripts/tmux-pane-log.sh --event #{hook} #{session_name} #{window_index} #{pane_index}"'
+set-hook -g  pane-exited        'run-shell -b "TMUXLOG_ROOT=/home/emprise/feeding-deployment/src/feeding_deployment/integration/log/system_logs/current_session/robot /home/emprise/feeding-deployment/scripts/tmux-pane-log.sh --event pane-exited #{session_name} #{window_index} #{pane_index}"'
