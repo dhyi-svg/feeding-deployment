@@ -15,8 +15,9 @@ from relational_structs import Object
 from pybullet_helpers.geometry import Pose
 from pybullet_helpers.link import get_relative_link_pose
 
-from feeding_deployment.actions.base import tool_type, table_type
+from feeding_deployment.actions.base import tool_type, table_type, plate_type, appliance_type
 from feeding_deployment.actions.pick_tool import PickToolHLA
+from feeding_deployment.actions.pick_plate import PickPlateFromApplianceHLA, PickPlateFromTableHLA
 from feeding_deployment.actions.stow_tool import StowToolHLA
 from feeding_deployment.interfaces.perception_interface import PerceptionInterface
 from feeding_deployment.interfaces.web_interface import WebInterface
@@ -74,8 +75,24 @@ def test_StowToolHLA(tool, sim, robot_interface, perception_interface, rviz_inte
     high_level_action.execute_action(objects=[tool_obj, table_obj], params={})
 
 
+def test_PickPlateHLA(location, sim, robot_interface, perception_interface, rviz_interface, web_interface, hla_hyperparams, wrist_interface, no_waits, log_dir, run_behavior_tree_dir, execution_log, gesture_detectors_dir):
+
+    assert location in ["table", "fridge", "microwave"], f"Location {location} not recognized"
+
+    hla_cls = PickPlateFromTableHLA if location == "table" else PickPlateFromApplianceHLA
+    high_level_action = hla_cls(sim, robot_interface, perception_interface, rviz_interface, web_interface, hla_hyperparams, wrist_interface, None, no_waits, log_dir, run_behavior_tree_dir, execution_log, gesture_detectors_dir)
+
+    # PickPlate requires an empty gripper.
+    sim.held_object_name = None
+
+    plate_obj = Object("plate", plate_type)
+    location_obj = Object(location, table_type if location == "table" else appliance_type)
+    # Speed / HandleColor / ColorRange come from the behavior tree's parameter defaults.
+    high_level_action.execute_action(objects=[plate_obj, location_obj], params={})
+
+
 def _main(
-    scene_config: str, transfer_type: str, run_on_robot: bool, use_interface: bool, simulate_head_perception: bool, use_gui: bool, max_motion_planning_time: float = 10, tool: str = "utensil", no_waits: bool = False
+    scene_config: str, transfer_type: str, run_on_robot: bool, use_interface: bool, simulate_head_perception: bool, use_gui: bool, max_motion_planning_time: float = 10, tool: str = "utensil", no_waits: bool = False, action: str = "tool", location: str = "table"
 ) -> None:
     """Testing pick and stow tool actions."""
 
@@ -137,9 +154,13 @@ def _main(
 
     hla_hyperparams = {"max_motion_planning_time": max_motion_planning_time}
 
-    # Pick the tool, then stow it.
-    test_PickToolHLA(tool, sim, robot_interface, perception_interface, rviz_interface, web_interface, hla_hyperparams, wrist_interface, no_waits, log_dir, run_behavior_tree_dir, execution_log, gesture_detectors_dir)
-    test_StowToolHLA(tool, sim, robot_interface, perception_interface, rviz_interface, web_interface, hla_hyperparams, wrist_interface, no_waits, log_dir, run_behavior_tree_dir, execution_log, gesture_detectors_dir)
+    if action == "pick_plate":
+        # Pick the plate from the given location (table / fridge / microwave).
+        test_PickPlateHLA(location, sim, robot_interface, perception_interface, rviz_interface, web_interface, hla_hyperparams, wrist_interface, no_waits, log_dir, run_behavior_tree_dir, execution_log, gesture_detectors_dir)
+    else:
+        # Pick the tool, then stow it.
+        test_PickToolHLA(tool, sim, robot_interface, perception_interface, rviz_interface, web_interface, hla_hyperparams, wrist_interface, no_waits, log_dir, run_behavior_tree_dir, execution_log, gesture_detectors_dir)
+        test_StowToolHLA(tool, sim, robot_interface, perception_interface, rviz_interface, web_interface, hla_hyperparams, wrist_interface, no_waits, log_dir, run_behavior_tree_dir, execution_log, gesture_detectors_dir)
 
 
 if __name__ == "__main__":
@@ -155,6 +176,8 @@ if __name__ == "__main__":
     parser.add_argument("--max_motion_planning_time", type=float, default=10.0)
     parser.add_argument("--tool", type=str, default="utensil")
     parser.add_argument("--no_waits", action="store_true")
+    parser.add_argument("--action", type=str, default="tool", choices=["tool", "pick_plate"])
+    parser.add_argument("--location", type=str, default="table", choices=["table", "fridge", "microwave"])
     args = parser.parse_args()
 
-    _main(args.scene_config, args.transfer_type, args.run_on_robot, args.use_interface, args.simulate_head_perception, args.use_gui, args.max_motion_planning_time, args.tool, args.no_waits)
+    _main(args.scene_config, args.transfer_type, args.run_on_robot, args.use_interface, args.simulate_head_perception, args.use_gui, args.max_motion_planning_time, args.tool, args.no_waits, args.action, args.location)

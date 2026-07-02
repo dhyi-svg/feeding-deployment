@@ -268,8 +268,13 @@ class AppliancePerception(TFInterface):
 
         print("Got images")
         self._log_image("rgb", rgb_image)
-        depth_mm = (depth_image * 1000.0).astype("uint16")
+        # depth_image is already in millimeters (RealSense 32FC1; pixel2World divides
+        # by 1000). Cast directly -- the old *1000 wrapped uint16 and logged garbage.
+        depth_mm = np.nan_to_num(depth_image, nan=0.0, posinf=0.0, neginf=0.0).astype("uint16")
         self._log_image("depth", depth_mm)
+
+        # Log the inputs (intrinsics + base<-camera transform) for offline replay.
+        self._log_detection_inputs("detect_start_button", camera_info_msg, transform)
 
         rgb_image_flipped = cv2.flip(rgb_image.copy(), -1)
         self._log_image("rgb_flipped", rgb_image_flipped)
@@ -327,8 +332,14 @@ class AppliancePerception(TFInterface):
 
         print("Got images")
         self._log_image("rgb", rgb_image)
-        depth_mm = (depth_image * 1000.0).astype("uint16")
+        # depth_image is already in millimeters (RealSense 32FC1; pixel2World divides
+        # by 1000). Cast directly -- the old *1000 wrapped uint16 and logged garbage.
+        depth_mm = np.nan_to_num(depth_image, nan=0.0, posinf=0.0, neginf=0.0).astype("uint16")
         self._log_image("depth", depth_mm)
+
+        # Log the inputs (intrinsics + base<-camera transform + handle type) for offline replay.
+        self._log_detection_inputs("detect_handle_and_placement", camera_info_msg, transform,
+                                   handle_type=handle_type)
 
         detection = self.detect_items(rgb_image, [handle_type])
 
@@ -536,8 +547,13 @@ class AppliancePerception(TFInterface):
 
         print("Got images")
         self._log_image("rgb", rgb_image)
-        depth_mm = (depth_image * 1000.0).astype("uint16")
+        # depth_image is already in millimeters (RealSense 32FC1; pixel2World divides
+        # by 1000). Cast directly -- the old *1000 wrapped uint16 and logged garbage.
+        depth_mm = np.nan_to_num(depth_image, nan=0.0, posinf=0.0, neginf=0.0).astype("uint16")
         self._log_image("depth", depth_mm)
+
+        # Log the inputs (intrinsics + base<-camera transform) for offline replay.
+        self._log_detection_inputs("detect_sink_placement", camera_info_msg, transform)
 
         detection = self.detect_items(rgb_image, ["sink basin tap"])
 
@@ -586,8 +602,13 @@ class AppliancePerception(TFInterface):
 
         print("Got images")
         self._log_image("rgb", rgb_image)
-        depth_mm = (depth_image * 1000.0).astype("uint16")
+        # depth_image is already in millimeters (RealSense 32FC1; pixel2World divides
+        # by 1000). Cast directly -- the old *1000 wrapped uint16 and logged garbage.
+        depth_mm = np.nan_to_num(depth_image, nan=0.0, posinf=0.0, neginf=0.0).astype("uint16")
         self._log_image("depth", depth_mm)
+
+        # Log the inputs (intrinsics + base<-camera transform) for offline replay.
+        self._log_detection_inputs("detect_table_placement", camera_info_msg, transform)
 
         detection = self.detect_items(rgb_image, ["blue square on table"])
 

@@ -136,6 +136,44 @@ class DataLogger:
             pass
         self._metadata_path.write_text(json.dumps(meta, indent=2, default=str), encoding="utf-8")
 
+    def _reserve_slot(self, name: str) -> tuple:
+        """Reserve the next capture slot for ``name`` -> ``(seq, folder, run, retry, stem)``.
+
+        Encapsulates the per-HLA run/retry grouping (see ``log_image``) so that
+        non-image artifacts -- e.g. a ``detection_inputs.json`` sidecar -- can share the
+        exact same ``<run>[_<retry>]_<name>`` prefix as the images captured in the same
+        detection, and thus be joined back to them by (folder, run, retry). Acquires the
+        lock itself; callers must not already hold it.
+        """
+        with self._lock:
+            seq = self._image_seq
+            self._image_seq += 1
+            if name == "webapp":
+                folder = "webapp_images"
+                run: int | None = None
+                retry: int | None = None
+                stem = f"{self._webapp_seq}_webapp"
+                self._webapp_seq += 1
+            else:
+                folder = self._current_hla or "misc"
+                if folder not in self._run:
+                    self._run[folder] = 0
+                    self._retry[folder] = 0
+                    self._group_used[folder] = set()
+                # A repeated name signals a re-detection -> open the next retry.
+                if name in self._group_used[folder]:
+                    self._retry[folder] += 1
+                    self._group_used[folder] = set()
+                run = self._run[folder]
+                retry = self._retry[folder]
+                self._group_used[folder].add(name)
+                # First capture of a run uses a double underscore (0__rgb); reruns add
+                # the retry index (0_1_rgb). The extra '_' sorts before the digit in the
+                # file explorer, so the base capture lists ahead of its reruns while all
+                # of a run's files cluster.
+                stem = f"{run}__{name}" if retry == 0 else f"{run}_{retry}_{name}"
+        return seq, folder, run, retry, stem
+
     # -- public API ---------------------------------------------------------
 
     def log_user_input(self, source: str, payload: Any) -> None:
@@ -215,33 +253,7 @@ class DataLogger:
             return None
         try:
             ts = self._timestamp()
-            with self._lock:
-                seq = self._image_seq
-                self._image_seq += 1
-                if name == "webapp":
-                    folder = "webapp_images"
-                    run: int | None = None
-                    retry: int | None = None
-                    stem = f"{self._webapp_seq}_webapp"
-                    self._webapp_seq += 1
-                else:
-                    folder = self._current_hla or "misc"
-                    if folder not in self._run:
-                        self._run[folder] = 0
-                        self._retry[folder] = 0
-                        self._group_used[folder] = set()
-                    # A repeated name signals a re-detection -> open the next retry.
-                    if name in self._group_used[folder]:
-                        self._retry[folder] += 1
-                        self._group_used[folder] = set()
-                    run = self._run[folder]
-                    retry = self._retry[folder]
-                    self._group_used[folder].add(name)
-                    # First capture of a run uses a double underscore (0__rgb);
-                    # reruns add the retry index (0_1_rgb). The extra '_' sorts
-                    # before the digit in the file explorer, so the base capture
-                    # lists ahead of its reruns while all of a run's files cluster.
-                    stem = f"{run}__{name}" if retry == 0 else f"{run}_{retry}_{name}"
+            seq, folder, run, retry, stem = self._reserve_slot(name)
 
             category_dir = self.images_dir / folder
             category_dir.mkdir(parents=True, exist_ok=True)
@@ -269,6 +281,49 @@ class DataLogger:
             return str(out_path)
         except Exception as e:  # noqa: BLE001
             print(f"[data_logger] Failed to log image '{name}': {e}")
+            return None
+
+    def log_json(self, name: str, payload: Any, **metadata: Any) -> str | None:
+        """Write a structured JSON sidecar into the active skill's folder and index it.
+
+        Uses the same run/retry grouping as ``log_image``, so ``detection_inputs`` from a
+        capture lands as ``images/<hla>/<run>[_<retry>]_detection_inputs.json`` right
+        beside that capture's ``..._rgb.png`` / ``..._depth.png``. The index row carries
+        ``kind="json"`` so offline tooling can distinguish sidecars from images and join
+        them to the frames by (folder, run, retry). Best-effort; returns the saved path or
+        None on failure / when disabled.
+        """
+        if not self.enabled:
+            return None
+        if payload is None:
+            return None
+        try:
+            ts = self._timestamp()
+            seq, folder, run, retry, stem = self._reserve_slot(name)
+
+            category_dir = self.images_dir / folder
+            category_dir.mkdir(parents=True, exist_ok=True)
+            out_path = category_dir / f"{stem}.json"
+            out_path.write_text(
+                json.dumps(payload, indent=2, default=str), encoding="utf-8"
+            )
+
+            record = {
+                **ts,
+                "seq": seq,
+                "folder": folder,
+                "name": name,
+                "run": run,
+                "retry": retry,
+                "kind": "json",
+                "path": str(out_path.relative_to(self.day_dir)),
+                **metadata,
+            }
+            with self._lock:
+                self._append_jsonl(self._images_index_path, record)
+            return str(out_path)
+        except Exception as e:  # noqa: BLE001
+            print(f"[data_logger] Failed to log json '{name}': {e}")
             return None
 
     def close(self) -> None:

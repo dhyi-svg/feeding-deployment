@@ -1,6 +1,7 @@
 from typing import Any
 
 import time
+from contextlib import nullcontext
 
 from relational_structs import (
     GroundAtom,

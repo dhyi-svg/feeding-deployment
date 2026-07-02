@@ -45,7 +45,7 @@ class AttachmentPerception(TFInterface):
         if self._data_logger is not None:
             self._data_logger.log_image(name, image)
 
-    def detect_attachment(self, rgb_image, camera_info_msg, depth_image, handle_orientation="front", handle_color=None, color_range=0.1):
+    def detect_attachment(self, rgb_image, camera_info_msg, depth_image, handle_orientation="front", handle_color=None, color_range=0.1, perceive_yaw=True, max_yaw_deg=60.0):
         if rgb_image is None:
             print("No camera data provided.")
             return None
@@ -54,8 +54,22 @@ class AttachmentPerception(TFInterface):
 
         print("Got images")
         self._log_image("rgb", rgb_image)
-        depth_mm = (depth_image * 1000.0).astype("uint16")
+        # depth_image is already in millimeters (RealSense 32FC1; pixel2World divides
+        # by 1000). Cast directly -- the old *1000 wrapped uint16 and logged garbage.
+        depth_mm = np.nan_to_num(depth_image, nan=0.0, posinf=0.0, neginf=0.0).astype("uint16")
         self._log_image("depth", depth_mm)
+
+        # Log everything needed to re-run this exact detection offline (intrinsics,
+        # base<-camera transform, and the color/orientation knobs) as a sidecar next
+        # to the rgb/depth frames above.
+        self._log_detection_inputs(
+            "detect_attachment", camera_info_msg, transform,
+            handle_orientation=handle_orientation,
+            handle_color=handle_color,
+            color_range=color_range,
+            perceive_yaw=perceive_yaw,
+            max_yaw_deg=max_yaw_deg,
+        )
 
         # -----------------------------
         # Color mask
@@ -191,12 +205,12 @@ class AttachmentPerception(TFInterface):
             uv = self.world2Pixel(camera_info_msg, world_x=p3d[0], world_y=p3d[1], world_z=p3d[2])
             corner_uvs.append((int(uv[0]), int(uv[1])))
 
-        # Viewfinder brackets at the corners + center dot (amber, matching).
+        # Viewfinder brackets at the corners + center dot (amber, matching). The pose
+        # gizmo (showing the *applied* orientation incl. the perceived yaw) is drawn on
+        # top and logged once the final rotation is known, further below.
         self._draw_corner_brackets(corner_vis, corner_uvs)
         uv_center = self.world2Pixel(camera_info_msg, world_x=center_3d[0], world_y=center_3d[1], world_z=center_3d[2])
         self._halo_marker(corner_vis, (int(uv_center[0]), int(uv_center[1])), self._OVERLAY_ACCENT)
-
-        self._log_image("attachment_corners", corner_vis)
 
         corners_3d = np.array(corners_3d)
 
@@ -249,17 +263,93 @@ class AttachmentPerception(TFInterface):
             # base to tag homogeneous transform and update tf
             base_to_tag = np.dot(base_to_camera, camera_to_tag)
 
-            if handle_orientation == "front":
-                # Rajat Hack: Override rotation to fix handle facing the robot
-                base_to_tag[:3, :3] = Rotation.from_quat([-0.5, 0.5, 0.5, -0.5]).as_matrix()
-            elif handle_orientation == "left": # convention of quaternion is (x, y, z, w)
-                base_to_tag[:3, :3] = Rotation.from_quat([0.0, 0.7071, 0.7071, 0.0]).as_matrix()
+            # The holder is mounted perpendicular to the plate, so its flat face
+            # points back at the camera: roll/pitch are fixed by the mounting and only
+            # the yaw (how the plate is rotated about the vertical axis) varies between
+            # pickups. Keep the hand-tuned nominal orientation -- which bakes in the
+            # correct roll/pitch and the gripper approach direction -- and rotate it
+            # about base +Z by the yaw read off the detected face plane. This is far
+            # more robust than trusting the full RANSAC/rectangle rotation, whose
+            # roll/pitch are noisy on a small, near-planar patch. The pickup offsets
+            # downstream are applied in this frame, so the approach automatically
+            # follows the perceived yaw while "up" (+Y) stays vertical.
+            nominal_quat = self._NOMINAL_HANDLE_QUAT.get(handle_orientation)
+            if nominal_quat is not None:
+                nominal_R = Rotation.from_quat(nominal_quat).as_matrix()
+                dyaw = self._perceived_face_yaw(
+                    n, base_to_camera[:3, :3], nominal_R, max_yaw_deg
+                ) if perceive_yaw else 0.0
+                yaw_R = Rotation.from_rotvec([0.0, 0.0, dyaw]).as_matrix()
+                base_to_tag[:3, :3] = yaw_R @ nominal_R
+            # else: unknown orientation -> keep the fully perceived rotation.
+
+            # Draw the *applied* orientation as an axis gizmo at the detected center so
+            # the operator can sanity-check the pose (esp. the perceived yaw: the
+            # horizontal X/Z axes swing with it while Y/up stays vertical) before hitting
+            # Confirm. Project it via the camera-frame rotation of the final pose.
+            R_cam_final = base_to_camera[:3, :3].T @ base_to_tag[:3, :3]
+            self._draw_pose_axes(corner_vis, camera_info_msg, center_3d, R_cam_final)
+            self._log_image("attachment_corners", corner_vis)
 
             self.updateTF("arm_base_link", "attachment", base_to_tag)
             return self.matrix_to_pose(base_to_tag)
 
+        # No transform: still surface the detection (brackets only) for the UI relay.
+        self._log_image("attachment_corners", corner_vis)
         print("Could not find transform between arm_base_link and camera_color_optical_frame.")
         return None
+
+    # Nominal base-frame orientation of the attachment per mounting, with the correct
+    # roll/pitch (flat face toward the camera) and gripper approach direction baked in
+    # -- (x, y, z, w). Their common local +Y is base +Z (up); their local +Z is the
+    # (horizontal) approach axis. We keep these fixed and add only the perceived yaw.
+    _NOMINAL_HANDLE_QUAT = {
+        "front": [-0.5, 0.5, 0.5, -0.5],
+        "left": [0.0, 0.7071, 0.7071, 0.0],  # convention (x, y, z, w)
+    }
+
+    @staticmethod
+    def _perceived_face_yaw(n_cam, base_R_camera, nominal_R, max_yaw_deg=60.0, min_horiz=0.3):
+        """Yaw offset (radians, about base +Z) of the detected holder face relative to
+        the nominal orientation.
+
+        The holder's flat face points back at the camera, so the detected plane
+        normal's heading in the horizontal plane *is* the holder yaw. We compare it
+        against the nominal orientation's approach axis (its local +Z, column 2) and
+        return the signed rotation about vertical that lines them up.
+
+        Returns 0.0 when the detection is unreliable -- the face normal is too close
+        to vertical (holder not actually facing the camera, or a bad plane fit). The
+        offset is clamped to +/-``max_yaw_deg`` so a stray detection can only nudge,
+        not flip, the hand-tuned nominal orientation.
+        """
+        # Face normal in the base frame; yaw is its heading in the horizontal plane.
+        n_base = base_R_camera @ np.asarray(n_cam, dtype=float)
+        n_h = n_base[:2]
+        if np.linalg.norm(n_h) < min_horiz:
+            print("[attachment] face normal near-vertical; skipping perceived yaw.")
+            return 0.0
+
+        # Nominal approach axis (local +Z), projected to horizontal.
+        z_nom_h = nominal_R[:2, 2]
+
+        # A plane normal's sign is arbitrary; flip it into the same half-plane as the
+        # nominal approach axis so a well-aligned holder reads as ~0 yaw (this assumes
+        # the true yaw stays within +/-90 deg of nominal, which the clamp enforces).
+        if np.dot(n_h, z_nom_h) < 0:
+            n_h = -n_h
+
+        dtheta = math.atan2(n_h[1], n_h[0]) - math.atan2(z_nom_h[1], z_nom_h[0])
+        dyaw = math.atan2(math.sin(dtheta), math.cos(dtheta))  # wrap to [-pi, pi]
+
+        max_yaw = math.radians(max_yaw_deg)
+        if abs(dyaw) > max_yaw:
+            print(f"[attachment] perceived yaw {math.degrees(dyaw):.1f} deg exceeds "
+                  f"+/-{max_yaw_deg:.0f} deg; clamping.")
+            dyaw = max(-max_yaw, min(max_yaw, dyaw))
+        else:
+            print(f"[attachment] perceived yaw offset: {math.degrees(dyaw):.1f} deg")
+        return dyaw
 
     # BGR constants for the user-facing detection overlay.
     _OVERLAY_HL = (0, 0, 255)         # red:  color pixels kept (used to fit the attachment)
@@ -303,6 +393,31 @@ class AttachmentPerception(TFInterface):
         """Filled dot with a white ring so it reads on any background."""
         cv2.circle(vis, pt, radius + 4, (255, 255, 255), -1, cv2.LINE_AA)
         cv2.circle(vis, pt, radius, color, -1, cv2.LINE_AA)
+
+    def _draw_pose_axes(self, vis, camera_info, origin_3d_cam, R_cam, length=0.06, thickness=3):
+        """Project a right-handed axis gizmo of the attachment's *applied* orientation
+        onto the image, so the operator can eyeball the pose before confirming.
+
+        ``origin_3d_cam`` is the attachment center and ``R_cam`` its rotation, both in
+        the camera frame; each column of ``R_cam`` is drawn as an arrow (X red, Y green,
+        Z blue -- the RViz convention). Y is the holder's "up" and stays vertical; the
+        perceived yaw shows up as the X/Z arrows swinging in the horizontal plane. No
+        text is baked in, so the gizmo survives the central 180 deg display flip.
+        """
+        o = np.asarray(origin_3d_cam, dtype=float)
+        if o[2] <= 1e-6:
+            return  # center behind the camera; nothing sensible to project
+        ou = self.world2Pixel(camera_info, world_x=o[0], world_y=o[1], world_z=o[2])
+        axis_bgr = [(0, 0, 255), (0, 255, 0), (255, 0, 0)]  # X red, Y green, Z blue
+        # Draw the (mostly out-of-plane, foreshortened) approach/normal axis first so the
+        # in-plane axes render on top.
+        for i in (2, 0, 1):
+            tip = o + length * R_cam[:, i]
+            if tip[2] <= 1e-6:
+                continue
+            tu = self.world2Pixel(camera_info, world_x=tip[0], world_y=tip[1], world_z=tip[2])
+            cv2.arrowedLine(vis, (int(ou[0]), int(ou[1])), (int(tu[0]), int(tu[1])),
+                            axis_bgr[i], thickness, cv2.LINE_AA, tipLength=0.25)
 
     def detect_attachment_color(self, bgr_image, handle_color=None, color_range=0.1):
         hsv = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV)

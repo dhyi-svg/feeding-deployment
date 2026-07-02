@@ -1018,7 +1018,7 @@ class PerceptionInterface:
         elif handle_type == "bottom textured fridge door":
             offset[:3, 3] = np.array([0, -0.012, 0.0])
         elif handle_type == "table":
-            offset[:3, 3] = np.array([0, -0.008, 0.0])
+            offset[:3, 3] = np.array([0, -0.008, -0.015])
         else:
             raise ValueError(f"Unknown handle type: {handle_type}")
         pickup_pose = self.matrix_to_pose(self.pose_to_matrix(attachment_pose) @ offset)
@@ -1028,7 +1028,7 @@ class PerceptionInterface:
         elif handle_type == "bottom textured fridge door":
             offset[:3, 3] = np.array([0, -0.012, -0.10])
         elif handle_type == "table":
-            offset[:3, 3] = np.array([0, -0.008, -0.10])
+            offset[:3, 3] = np.array([0, -0.008, -0.115])
         else:
             raise ValueError(f"Unknown handle type: {handle_type}")
 
