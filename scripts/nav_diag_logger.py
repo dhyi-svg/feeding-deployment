@@ -172,7 +172,7 @@ class NavDiagLogger:
         except Exception:
             snap["_meta"]["git_sha"] = "unknown"
         complete = True
-        for ns in ("/move_base", "/zed_mini/zed_node"):
+        for ns in ("/move_base", "/zed_mini/zed_node", "/cmd_vel_bridge_basicmicro"):
             try:
                 snap[ns] = rospy.get_param(ns)
             except Exception:
@@ -187,7 +187,15 @@ class NavDiagLogger:
         for pat in ("config/*.lua", "config/nav/*.yaml", "launch/sensors.launch"):
             for p in glob.glob(os.path.join(REPO_DIR, pat)):
                 try:
-                    shutil.copy(p, cfgdir)
+                    dst = os.path.basename(p)
+                    if dst.endswith(".launch"):
+                        # rename: roslaunch resolves "pkg file.launch" by
+                        # searching the whole package tree, and this snapshot
+                        # lives inside it -- a copy named sensors.launch makes
+                        # every `roslaunch feeding_deployment sensors.launch`
+                        # ambiguous.
+                        dst = "logged_" + dst
+                    shutil.copy(p, os.path.join(cfgdir, dst))
                 except Exception:
                     pass
         try:
