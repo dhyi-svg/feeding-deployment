@@ -35,6 +35,7 @@ from feeding_deployment.actions.base import (
     SafeToNavigate,
     GripperFree,
 )
+from feeding_deployment.interfaces.web_interface import WebInterfaceTakeoverInterrupt
 
 
 class NavigateHLA(HighLevelAction):
@@ -80,6 +81,31 @@ class NavigateHLA(HighLevelAction):
     # landed within tolerance. (Pure wait -- no shared clock with the refinement
     # timeout, so it cannot eat into the refinement driving budget.)
     _GOAL_CONFIRM_SETTLE_S = 25.0
+
+    # Learned per-location navigation offset (PositionOffset BT parameter):
+    # an SE(2) correction (dx m, dy m, dyaw rad) in the goal pose's LOCAL frame,
+    # accumulated from the user's post-arrival teleop adjustments and applied to
+    # the nominal goal on every navigation. Bounds must match the Box space in
+    # the navigate_to_*.yaml behavior trees (and preference_bundle's
+    # NAV_OFFSET_BOUNDS).
+    _MAX_OFFSET_XY_M = 0.5
+    _MAX_OFFSET_YAW_RAD = math.radians(45.0)
+    # A post-arrival adjustment smaller than BOTH of these (measured on the
+    # user's actual movement between the two settled pose reads, not on the
+    # residual vs the goal) does not update the learned offset: TEB parks with
+    # up to 5 cm / 2.9 deg scatter (xy/yaw_goal_tolerance) and folding that
+    # noise into the offset would make it drift. The TF noise floor between two
+    # settled reads is ~1 cm, so 2 cm / 2 deg separates intent from noise.
+    _MIN_ADJUST_XY_M = 0.02
+    _MIN_ADJUST_YAW_RAD = math.radians(2.0)
+    # Localization settle before measuring the adjusted pose. Shorter than
+    # _GOAL_CONFIRM_SETTLE_S (which absorbs move_base's stale-estimate
+    # SUCCEEDED): here the base has been stationary since the user pressed
+    # Done, matching the refinement window's settle scale.
+    _ADJUST_SETTLE_S = 10.0
+    # Fallback autocontinue for the "Position OK / Adjust" prompt when no
+    # preference session is wired in (get_autocontinue_seconds is None).
+    _ADJUST_AUTOCONTINUE_S = 20.0
 
     # Defaults for the post-nav refinement window. Overridden at runtime by
     # config/nav/custom_param.yaml (section: refinement); see that file for the
@@ -228,11 +254,19 @@ class NavigateHLA(HighLevelAction):
         if getattr(self, "_teleop_subs_ready", False):
             return
         self._teleop_active = False
+        # End-of-adjustment signal for the post-arrival fine-adjust flow (which
+        # runs WITHOUT an active move_base goal): "done" = user parked it where
+        # they want (measure), "resume" = user handed back without finishing
+        # (abort, no update).
+        self._adjust_end_reason = None
         rospy.Subscriber(
             "/shared_autonomy/takeover", Empty, self._on_teleop_takeover, queue_size=1
         )
         rospy.Subscriber(
             "/shared_autonomy/resume", Empty, self._on_teleop_resume, queue_size=1
+        )
+        rospy.Subscriber(
+            "/shared_autonomy/done", Empty, self._on_teleop_done, queue_size=1
         )
         # We also PUBLISH takeover to start a recovery leg ourselves: re-send the
         # failed goal, then assert a takeover so the manager cancels move_base and
@@ -247,6 +281,13 @@ class NavigateHLA(HighLevelAction):
 
     def _on_teleop_resume(self, _msg: "Empty") -> None:
         self._teleop_active = False
+        self._adjust_end_reason = "resume"
+
+    def _on_teleop_done(self, _msg: "Empty") -> None:
+        # During goal-driven navigation "done" terminates the action via the
+        # manager; this flag only matters for the goal-less adjust flow.
+        self._teleop_active = False
+        self._adjust_end_reason = "done"
 
     def _publish_base_takeover(self) -> None:
         """Assert a shared-autonomy takeover from the backend so the manager
@@ -267,7 +308,7 @@ class NavigateHLA(HighLevelAction):
             rate.sleep()
 
     def _navigate_to_target(
-        self, location_name: str, speed: str, via: list = None
+        self, location_name: str, speed: str, via: list = None, position_offset=None
     ) -> None:
         # if self.robot_interface is None:
         #     print(f"[SIM] Would navigate to {location_name} (speed={speed}).")
@@ -300,20 +341,36 @@ class NavigateHLA(HighLevelAction):
 
         for i, wp in enumerate(waypoints):
             pose = self._load_target_pose(wp)
+            is_final = i == len(waypoints) - 1
+            if is_final:
+                # The learned offset applies ONLY to the final destination;
+                # staging/via poses are driven exactly as mapped. Keep the
+                # nominal pose around: the post-arrival adjustment measures the
+                # new TOTAL offset against it (final user pose vs nominal).
+                nominal_pose = dict(pose)
+                pose = self._apply_offset_to_pose(pose, position_offset)
             self._drive_to_pose(wp, pose)
-            if i == len(waypoints) - 1:
+            if is_final:
                 # Final destination only -- staging poses just need to be reached
                 # coarsely. move_base's first SUCCEEDED is against a map->base
                 # estimate Cartographer is still correcting, so wait for it to
                 # settle, then re-send the SAME goal ONCE: TEB drives out whatever
                 # gap the correction revealed (a no-op if it was already there),
                 # against the now-corrected estimate. Then fine-tune the heading.
+                # Recovery use is accumulated across BOTH drives: the confirm
+                # resend usually succeeds trivially (attempts == 0) and would
+                # otherwise mask a recovery on the initial drive.
+                leg_used_recovery = getattr(self, "_last_leg_used_recovery", False)
                 self._wait_for_localization_settle(
                     self._GOAL_CONFIRM_SETTLE_S,
                     "confirming the goal pose (replan once)",
                 )
                 self._drive_to_pose(wp, pose)
+                leg_used_recovery |= getattr(self, "_last_leg_used_recovery", False)
                 self._refinement_window(wp, pose)
+                self._offer_position_adjustment(
+                    wp, nominal_pose, pose, position_offset, leg_used_recovery
+                )
 
     def _await_nav_result(self, client, location_name: str) -> str:
         """Block until the current navigation goal terminates, under the
@@ -358,6 +415,20 @@ class NavigateHLA(HighLevelAction):
         print(f"[nav] move_base failed for {location_name}. Action state code={state}")
         return "failed"
 
+    @staticmethod
+    def _make_goal(pose: dict[str, Any]) -> "MoveBaseGoal":
+        """Build a MoveBaseGoal from a pose dict (see _load_target_pose)."""
+        goal = MoveBaseGoal()
+        goal.target_pose.header.frame_id = str(pose["frame_id"])
+        goal.target_pose.pose.position.x = pose["x"]
+        goal.target_pose.pose.position.y = pose["y"]
+        goal.target_pose.pose.position.z = pose["z"]
+        goal.target_pose.pose.orientation.x = pose["qx"]
+        goal.target_pose.pose.orientation.y = pose["qy"]
+        goal.target_pose.pose.orientation.z = pose["qz"]
+        goal.target_pose.pose.orientation.w = pose["qw"]
+        return goal
+
     def _drive_to_pose(self, location_name: str, pose: dict[str, Any]) -> None:
         """Drive to one pose under the localization-stall watchdog, with manual
         teleop recovery on failure.
@@ -374,15 +445,7 @@ class NavigateHLA(HighLevelAction):
         """
         client = self._get_move_base_client()
 
-        goal = MoveBaseGoal()
-        goal.target_pose.header.frame_id = str(pose["frame_id"])
-        goal.target_pose.pose.position.x = pose["x"]
-        goal.target_pose.pose.position.y = pose["y"]
-        goal.target_pose.pose.position.z = pose["z"]
-        goal.target_pose.pose.orientation.x = pose["qx"]
-        goal.target_pose.pose.orientation.y = pose["qy"]
-        goal.target_pose.pose.orientation.z = pose["qz"]
-        goal.target_pose.pose.orientation.w = pose["qw"]
+        goal = self._make_goal(pose)
 
         print(
             f"Navigating to {location_name} using {self._location_yaml()} ...\n"
@@ -393,6 +456,11 @@ class NavigateHLA(HighLevelAction):
 
         attempts = 0
         recovering = False
+        # Whether THIS leg ended up needing the failure-recovery teleop. The
+        # post-arrival adjustment step skips (and does not log) recovery-rescued
+        # navigations -- a recovery park is "get past the failure", not a
+        # position preference.
+        self._last_leg_used_recovery = False
         while True:
             goal.target_pose.header.stamp = rospy.Time.now()
             client.send_goal(goal)
@@ -415,6 +483,7 @@ class NavigateHLA(HighLevelAction):
                 self._set_base_control_available(False)
 
             if outcome == "succeeded":
+                self._last_leg_used_recovery = attempts > 0
                 print(f"Reached {location_name}.")
                 return
 
@@ -440,6 +509,49 @@ class NavigateHLA(HighLevelAction):
     @staticmethod
     def _yaw_from_quat(qx: float, qy: float, qz: float, qw: float) -> float:
         return math.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+
+    @staticmethod
+    def _quat_from_yaw(yaw: float) -> tuple:
+        return (0.0, 0.0, math.sin(yaw / 2.0), math.cos(yaw / 2.0))
+
+    @staticmethod
+    def _se2_compose(x: float, y: float, yaw: float, dx: float, dy: float, dyaw: float) -> tuple:
+        """(x,y,yaw) o (dx,dy,dyaw): apply a local-frame offset to a map-frame pose."""
+        c, s = math.cos(yaw), math.sin(yaw)
+        return x + dx * c - dy * s, y + dx * s + dy * c, NavigateHLA._wrap(yaw + dyaw)
+
+    @staticmethod
+    def _se2_relative(ax: float, ay: float, ayaw: float, bx: float, by: float, byaw: float) -> tuple:
+        """a^-1 o b: pose b expressed in pose a's local frame."""
+        c, s = math.cos(ayaw), math.sin(ayaw)
+        ddx, ddy = bx - ax, by - ay
+        return c * ddx + s * ddy, -s * ddx + c * ddy, NavigateHLA._wrap(byaw - ayaw)
+
+    def _apply_offset_to_pose(self, pose: dict, offset) -> dict:
+        """Compose the learned PositionOffset onto a nominal goal pose.
+
+        ``offset`` is the BT parameter value ([dx, dy, dyaw] in the goal's
+        local frame) or None (per-user trees that predate the parameter).
+        Components are clamped to the same bounds the BT Box space encodes.
+        """
+        if offset is None:
+            return dict(pose)
+        dx, dy, dyaw = (float(v) for v in offset)
+        dx = self._clamp(dx, self._MAX_OFFSET_XY_M)
+        dy = self._clamp(dy, self._MAX_OFFSET_XY_M)
+        dyaw = self._clamp(dyaw, self._MAX_OFFSET_YAW_RAD)
+        if dx == 0.0 and dy == 0.0 and dyaw == 0.0:
+            return dict(pose)
+        yaw = self._yaw_from_quat(pose["qx"], pose["qy"], pose["qz"], pose["qw"])
+        nx, ny, nyaw = self._se2_compose(pose["x"], pose["y"], yaw, dx, dy, dyaw)
+        qx, qy, qz, qw = self._quat_from_yaw(nyaw)
+        out = dict(pose)
+        out.update(x=nx, y=ny, qx=qx, qy=qy, qz=qz, qw=qw)
+        print(
+            f"[nav-offset] applying learned offset to goal: "
+            f"dx={dx:+.3f}m dy={dy:+.3f}m dyaw={math.degrees(dyaw):+.1f}deg"
+        )
+        return out
 
     def _refinement_config_path(self) -> Path:
         return Path(__file__).resolve().parents[3] / "config" / "nav" / "custom_param.yaml"
@@ -758,6 +870,274 @@ class NavigateHLA(HighLevelAction):
         except Exception as e:
             print(f"Could not signal base-control availability: {e}")
 
+    # ------------------------------------------------------------------ #
+    # Post-arrival position adjustment (learned per-location nav offset)
+    # ------------------------------------------------------------------ #
+    def _read_base_pose_se2(self):
+        """(x, y, yaw) of map->base from TF, or None if localization is stale.
+
+        Closed-loop on localization (the same Cartographer/VIO chain the
+        refinement window trusts) -- teleop cmd_vel is never integrated.
+        """
+        if not self._localization_fresh():
+            return None
+        try:
+            tf = self._get_tf_buffer().lookup_transform(
+                self._MAP_FRAME, self._BASE_FRAME, rospy.Time(0), rospy.Duration(1.0)
+            )
+        except tf2_ros.TransformException:
+            return None
+        t = tf.transform.translation
+        q = tf.transform.rotation
+        return t.x, t.y, self._yaw_from_quat(q.x, q.y, q.z, q.w)
+
+    @staticmethod
+    def _pose_dict_se2(pose: dict[str, Any]) -> tuple:
+        """(x, y, yaw) of a _load_target_pose-style dict."""
+        return (
+            pose["x"],
+            pose["y"],
+            NavigateHLA._yaw_from_quat(pose["qx"], pose["qy"], pose["qz"], pose["qw"]),
+        )
+
+    def _adjust_autocontinue_seconds(self) -> float:
+        """Autocontinue for the adjust prompt, from the preference session's
+        wait_before_autocontinue_seconds (via the injected provider) when
+        available."""
+        provider = getattr(self, "get_autocontinue_seconds", None)
+        if provider is None:
+            return self._ADJUST_AUTOCONTINUE_S
+        try:
+            return float(provider())
+        except Exception:
+            return self._ADJUST_AUTOCONTINUE_S
+
+    def _offer_position_adjustment(
+        self,
+        location_name: str,
+        nominal_pose: dict[str, Any],
+        commanded_pose: dict[str, Any],
+        prev_offset,
+        leg_used_recovery: bool = False,
+    ) -> None:
+        """After arrival at a real destination, let the user teleop the base to
+        fine-adjust its position, and fold the adjustment into the learned
+        PositionOffset for this location.
+
+        The new TOTAL offset is the user's final localized pose expressed in
+        the NOMINAL (mapped) goal's local frame -- this accumulates previous
+        corrections by construction and does not double-count nav noise the
+        user just drove out. Best-effort throughout: a failure here must never
+        break the navigation that already succeeded.
+        """
+        if self.no_waits or self.web_interface is None:
+            return
+        if location_name not in self._VALID_TARGETS:
+            return
+        if leg_used_recovery:
+            # User decision: a recovery-teleop rescue is "get past the
+            # failure", not a position preference. No prompt, no dataset row.
+            print(
+                f"[nav-offset] {location_name}: final leg used recovery teleop; "
+                "skipping the position-adjustment prompt."
+            )
+            return
+
+        pose_before = self._read_base_pose_se2()
+        if pose_before is None:
+            print(
+                f"[nav-offset] {location_name}: localization stale before the "
+                "adjustment prompt; cannot measure -- skipping."
+            )
+            return
+
+        try:
+            choice = self.web_interface.get_nav_position_adjust_choice(
+                location_name, self._adjust_autocontinue_seconds()
+            )
+        except WebInterfaceTakeoverInterrupt:
+            # A mid-skill arm takeover during the prompt wait must reach the
+            # HLA boundary (execute_action), which owns the takeover flow.
+            raise
+        except Exception as e:
+            print(f"[nav-offset] adjustment prompt failed ({e}); skipping.")
+            return
+
+        nominal_se2 = self._pose_dict_se2(nominal_pose)
+        commanded_se2 = self._pose_dict_se2(commanded_pose)
+
+        if choice != "adjust":
+            self._log_offset_event(
+                location_name, "declined",
+                nominal_se2, commanded_se2, pose_before, None, prev_offset,
+            )
+            return
+
+        # Hand the base to the user WITHOUT re-sending a move_base goal: the
+        # robot is already within tolerance of the commanded pose, so a fresh
+        # goal can be declared SUCCEEDED before a takeover lands and the user
+        # would never get to drive. The webapp joystick publishes /cmd_vel
+        # directly (no active goal needed); we wait on the teleop screen's
+        # /shared_autonomy/done ("parked where I want it" -> measure) or
+        # /shared_autonomy/resume ("hand back without finishing" -> abort, no
+        # update). Both routes return the iPad to robot_executing; the
+        # manager's stale takeover/done flags are cleared at the next goal
+        # start, so they are harmless without an active goal.
+        print(f"[nav-offset] {location_name}: handing base to the user for fine adjustment.")
+        self._adjust_end_reason = None
+        self._set_base_control_available(True)
+        try:
+            self.web_interface._send_message(
+                {"state": "navigation_teleop", "status": "recover"}
+            )
+            while not rospy.is_shutdown() and self._adjust_end_reason is None:
+                rospy.sleep(0.2)
+        finally:
+            self._set_base_control_available(False)
+
+        if self._adjust_end_reason != "done":
+            print(
+                f"[nav-offset] {location_name}: adjustment ended via "
+                f"{self._adjust_end_reason or 'shutdown'}; not updating."
+            )
+            self._log_offset_event(
+                location_name, "aborted",
+                nominal_se2, commanded_se2, pose_before, None, prev_offset,
+            )
+            return
+
+        self._wait_for_localization_settle(
+            self._ADJUST_SETTLE_S, "measuring the adjusted pose"
+        )
+        pose_after = self._read_base_pose_se2()
+        if pose_after is None:
+            print(
+                f"[nav-offset] {location_name}: localization stale after the "
+                "adjustment; cannot measure -- not updating."
+            )
+            self._log_offset_event(
+                location_name, "localization_stale",
+                nominal_se2, commanded_se2, pose_before, None, prev_offset,
+            )
+            return
+
+        # Pure user motion between the two settled reads gates the update;
+        # the TOTAL offset is measured against the nominal (mapped) goal.
+        movement = self._se2_relative(*pose_before, *pose_after)
+        total = self._se2_relative(*nominal_se2, *pose_after)
+
+        if (
+            math.hypot(movement[0], movement[1]) < self._MIN_ADJUST_XY_M
+            and abs(movement[2]) < self._MIN_ADJUST_YAW_RAD
+        ):
+            print(
+                f"[nav-offset] {location_name}: adjustment below the "
+                f"{self._MIN_ADJUST_XY_M * 100:.0f}cm/"
+                f"{math.degrees(self._MIN_ADJUST_YAW_RAD):.0f}deg threshold; not updating."
+            )
+            self._log_offset_event(
+                location_name, "below_threshold",
+                nominal_se2, commanded_se2, pose_before, pose_after, prev_offset,
+            )
+            return
+
+        clamped = [
+            self._clamp(total[0], self._MAX_OFFSET_XY_M),
+            self._clamp(total[1], self._MAX_OFFSET_XY_M),
+            self._clamp(total[2], self._MAX_OFFSET_YAW_RAD),
+        ]
+        if clamped != list(total):
+            print(
+                f"[nav-offset] {location_name}: total offset saturated at the "
+                f"+/-{self._MAX_OFFSET_XY_M}m / +/-{math.degrees(self._MAX_OFFSET_YAW_RAD):.0f}deg "
+                "bounds; consider re-capturing the named location instead."
+            )
+
+        # Persist the new TOTAL into this navigation's BT YAML (the same
+        # write-back mechanism the plate pickups use for corrected colors).
+        # The preference session reads it back after the HLA completes.
+        objects = (
+            Object(location_name, nav_target_type),
+            Object(location_name, nav_target_type),
+        )
+        node_name = f"NavigateTo{location_name.capitalize()}"
+        result = self.process_behavior_tree_parameter_update(
+            objects, {}, node_name, "PositionOffset",
+            [float(clamped[0]), float(clamped[1]), float(clamped[2])],
+        )
+        print(
+            f"[nav-offset] {location_name}: user moved "
+            f"dx={movement[0] * 100:+.1f}cm dy={movement[1] * 100:+.1f}cm "
+            f"dyaw={math.degrees(movement[2]):+.1f}deg; new total offset "
+            f"[{clamped[0]:+.3f}, {clamped[1]:+.3f}, {clamped[2]:+.3f}]. BT update: {result}"
+        )
+        if not str(result).startswith("Success"):
+            # The measurement happened but the persist failed (e.g. stale
+            # per-user tree without the param and no upsert path here) -- log
+            # it as such so the dataset never claims an update that isn't in
+            # the YAML.
+            self._log_offset_event(
+                location_name, "bt_write_failed",
+                nominal_se2, commanded_se2, pose_before, pose_after, prev_offset,
+                total_offset=clamped,
+            )
+            return
+        self._log_offset_event(
+            location_name, "updated",
+            nominal_se2, commanded_se2, pose_before, pose_after, prev_offset,
+            total_offset=clamped,
+        )
+
+    @staticmethod
+    def _se2_record(se2) -> "dict[str, float] | None":
+        if se2 is None:
+            return None
+        x, y, yaw = se2
+        return {"x": float(x), "y": float(y), "yaw": float(yaw)}
+
+    def _log_offset_event(
+        self,
+        location_name: str,
+        outcome: str,
+        nominal_se2,
+        commanded_se2,
+        pose_before,
+        pose_after,
+        prev_offset,
+        total_offset=None,
+    ) -> None:
+        """Append one position-adjustment event to the per-user log
+        (log/<user>/nav_offset_log.jsonl). Best-effort: a logging failure must
+        never break navigation."""
+        log_dir = getattr(self, "log_dir", None)
+        if log_dir is None:
+            return
+        delta = None
+        movement = None
+        if pose_after is not None:
+            delta = list(self._se2_relative(*commanded_se2, *pose_after))
+            movement = list(self._se2_relative(*pose_before, *pose_after))
+        record = {
+            "t": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "location": location_name,
+            "outcome": outcome,
+            "nominal_pose": self._se2_record(nominal_se2),
+            "commanded_pose": self._se2_record(commanded_se2),
+            "pose_before_adjust": self._se2_record(pose_before),
+            "pose_after_adjust": self._se2_record(pose_after),
+            "previous_offset": [float(v) for v in prev_offset] if prev_offset is not None else None,
+            "delta": delta,
+            "user_movement": movement,
+            "total_offset": [float(v) for v in total_offset] if total_offset is not None else None,
+        }
+        try:
+            log_dir = Path(log_dir)
+            log_dir.mkdir(parents=True, exist_ok=True)
+            with open(log_dir / "nav_offset_log.jsonl", "a", encoding="utf-8") as f:
+                f.write(json.dumps(record) + "\n")
+        except Exception as exc:  # noqa: BLE001 - logging must never break nav
+            print(f"[nav-offset] could not write offset log: {exc}")
+
     def get_name(self) -> str:
         return "Navigate"
 
@@ -793,19 +1173,23 @@ class NavigateHLA(HighLevelAction):
         assert dst.name in self._VALID_TARGETS
         return f"navigate_to_{dst.name}.yaml"
 
-    def navigate_to_fridge(self, speed: str) -> None:
-        self._navigate_to_target("fridge", speed)
+    # position_offset defaults to None so per-user behavior trees that predate
+    # the PositionOffset parameter still execute (treated as a zero offset).
+    def navigate_to_fridge(self, speed: str, position_offset=None) -> None:
+        self._navigate_to_target("fridge", speed, position_offset=position_offset)
 
-    def navigate_to_microwave(self, speed: str) -> None:
-        self._navigate_to_target("microwave", speed)
+    def navigate_to_microwave(self, speed: str, position_offset=None) -> None:
+        self._navigate_to_target("microwave", speed, position_offset=position_offset)
 
-    def navigate_to_sink(self, speed: str) -> None:
-        self._navigate_to_target("sink", speed)
+    def navigate_to_sink(self, speed: str, position_offset=None) -> None:
+        self._navigate_to_target("sink", speed, position_offset=position_offset)
 
-    def navigate_to_table(self, speed: str) -> None:
+    def navigate_to_table(self, speed: str, position_offset=None) -> None:
         # microwave -> table is the kitchen egress: reverse out through the narrow
         # corridor to the open staging area, then turn and drive to the table.
         # Routing via the staging waypoint stops TEB from oscillating as it tries
         # to turn inside the corridor. (Auto-skipped while the staging pose is an
         # unset placeholder.)
-        self._navigate_to_target("table", speed, via=[self._STAGING_WAYPOINT])
+        self._navigate_to_target(
+            "table", speed, via=[self._STAGING_WAYPOINT], position_offset=position_offset
+        )

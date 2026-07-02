@@ -13,10 +13,14 @@ from feeding_deployment.preference_learning.config.preference_bundle import (
     PREFERENCE_BUNDLE as _PREF_BUNDLE_DIMS,
     COLOR_FIELDS,
     TEXT_FIELDS,
+    NAV_OFFSET_FIELDS,
     DEFAULT_COLOR,
+    DEFAULT_NAV_OFFSET,
     DEFAULT_BITE_ORDERING,
     parse_color,
     format_color,
+    parse_nav_offset,
+    format_nav_offset,
 )
 from feeding_deployment.preference_learning.methods.episodic_memory import EpisodicMemoryModel
 from feeding_deployment.preference_learning.methods.long_term_memory import LongTermMemoryModel
@@ -31,6 +35,7 @@ PREF_DESCRIPTIONS: Dict[str, str] = {dim.field: dim.description for dim in _PREF
 PREF_KIND: Dict[str, str] = {dim.field: getattr(dim, "kind", "categorical") for dim in _PREF_BUNDLE_DIMS}
 _COLOR_FIELD_SET = set(COLOR_FIELDS)
 _TEXT_FIELD_SET = set(TEXT_FIELDS)
+_NAV_OFFSET_FIELD_SET = set(NAV_OFFSET_FIELDS)
 
 # Per-field default for text dims when the LLM output is empty/missing (kept
 # non-empty so downstream consumers -- e.g. FLAIR -- always get a usable value).
@@ -84,14 +89,19 @@ def _apply_hard_rules(prefs: Dict[str, str], meal: str, corrected: Dict[str, str
 
     return out
 
-def _build_options_block(color_seeds: Optional[Dict[str, Any]] = None) -> str:
+def _build_options_block(
+    color_seeds: Optional[Dict[str, Any]] = None,
+    nav_offset_seeds: Optional[Dict[str, Any]] = None,
+) -> str:
     """
     Bundle-prediction options block.
     - categorical field: ``- field: [opt1, opt2, ...]``
     - color field:       ``- field: HSV object {...}; seed = h=..,s=..,v=..,range=..``
+    - nav offset field:  ``- field: offset object {...}; seed = dx=..,dy=..,dyaw=..``
     - text field:        ``- field: free-text string (...)``
     """
     color_seeds = color_seeds or {}
+    nav_offset_seeds = nav_offset_seeds or {}
     lines: List[str] = []
     for field in PREF_FIELDS:
         if PREF_KIND.get(field) == "color":
@@ -99,6 +109,12 @@ def _build_options_block(color_seeds: Optional[Dict[str, Any]] = None) -> str:
             lines.append(
                 f'- {field}: HSV object {{"h":0-179,"s":0-255,"v":0-255,"range":0.0-1.0}}; '
                 f"seed = {format_color(seed)}"
+            )
+        elif PREF_KIND.get(field) == "nav_offset":
+            seed = parse_nav_offset(nav_offset_seeds.get(field), seed=DEFAULT_NAV_OFFSET)
+            lines.append(
+                f'- {field}: offset object {{"dx":-0.5-0.5 (m),"dy":-0.5-0.5 (m),'
+                f'"dyaw":-0.785-0.785 (rad)}}; seed = {format_nav_offset(seed)}'
             )
         elif PREF_KIND.get(field) == "text":
             lines.append(
@@ -134,6 +150,8 @@ def _format_corrected_block(corrected: Dict[str, Any]) -> str:
     for k, v in corrected.items():
         if k in _COLOR_FIELD_SET:
             out.append(f"{k}={format_color(v if isinstance(v, dict) else {})}")
+        elif k in _NAV_OFFSET_FIELD_SET:
+            out.append(f"{k}={format_nav_offset(v if isinstance(v, dict) else {})}")
         else:
             out.append(f"{k}={v}")
     return "\n".join(out)
@@ -340,6 +358,7 @@ class PredictionModel:
         context: Dict[str, Any],
         corrected: Dict[str, Any],
         color_seeds: Optional[Dict[str, Any]] = None,
+        nav_offset_seeds: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Returns predicted_bundle.
@@ -347,8 +366,13 @@ class PredictionModel:
         ``color_seeds`` maps each plate_color_* field to its current saved color
         (canonical dict / BT YAML value). Color predictions are seeded with these
         and fall back to them when the LLM output cannot be parsed.
+
+        ``nav_offset_seeds`` maps each nav_offset_* field to its current saved
+        offset (canonical dict / BT YAML value); same seeding/fallback contract
+        as colors.
         """
         color_seeds = color_seeds or {}
+        nav_offset_seeds = nav_offset_seeds or {}
 
         episodic_memory = ""
         if self.episodic_memory_model:
@@ -359,7 +383,7 @@ class PredictionModel:
             long_term_memory = self.long_term_memory_model.get_ltm()  # JSON string (or empty)
 
         # Prompt blocks
-        options_block = _build_options_block(color_seeds)
+        options_block = _build_options_block(color_seeds, nav_offset_seeds)
         corrected_block = _format_corrected_block(corrected)
         meal_contents_block = _build_meal_contents_block(str(context.get("meal", "")))
 
@@ -397,13 +421,17 @@ class PredictionModel:
                 log_file.write_text(f"===PROMPT===\n{prompt}\n\n===RESPONSE===\nFailed to parse response as JSON. Raw response:\n{resp}", encoding="utf-8")
 
         # Validate each field; categorical -> allowed option (fallback to
-        # corrected/default), color -> parsed HSV (fallback to seed), text ->
-        # free string (fallback to corrected/per-field default, never empty).
+        # corrected/default), color -> parsed HSV (fallback to seed), nav
+        # offset -> parsed dx/dy/dyaw (fallback to seed), text -> free string
+        # (fallback to corrected/per-field default, never empty).
         out: Dict[str, Any] = {}
         for field in PREF_FIELDS:
             if PREF_KIND.get(field) == "color":
                 seed = parse_color(color_seeds.get(field), seed=DEFAULT_COLOR)
                 out[field] = parse_color(data.get(field), seed=seed)
+            elif PREF_KIND.get(field) == "nav_offset":
+                seed = parse_nav_offset(nav_offset_seeds.get(field), seed=DEFAULT_NAV_OFFSET)
+                out[field] = parse_nav_offset(data.get(field), seed=seed)
             elif PREF_KIND.get(field) == "text":
                 val = str(data.get(field, "")).strip()
                 out[field] = val or corrected.get(field) or _TEXT_DEFAULTS.get(field, "")
@@ -416,17 +444,19 @@ class PredictionModel:
 
         out = _apply_hard_rules(out, meal=str(context.get("meal", "")), corrected=corrected)
 
-        # Corrected always overrides (canonicalize color corrections).
+        # Corrected always overrides (canonicalize color/offset corrections).
         for k, v in corrected.items():
             if k in _COLOR_FIELD_SET:
                 out[k] = parse_color(v, seed=parse_color(color_seeds.get(k), seed=DEFAULT_COLOR))
+            elif k in _NAV_OFFSET_FIELD_SET:
+                out[k] = parse_nav_offset(v, seed=parse_nav_offset(nav_offset_seeds.get(k), seed=DEFAULT_NAV_OFFSET))
             else:
                 out[k] = v
 
-        # Final validation (categorical only; color/text values are already
-        # canonical free-form and have no fixed option list).
+        # Final validation (categorical only; color/nav-offset/text values are
+        # already canonical free-form and have no fixed option list).
         for field in PREF_FIELDS:
-            if PREF_KIND.get(field) in ("color", "text"):
+            if PREF_KIND.get(field) in ("color", "text", "nav_offset"):
                 continue
             if out[field] not in PREF_OPTIONS[field]:
                 out[field] = PREF_OPTIONS[field][0]

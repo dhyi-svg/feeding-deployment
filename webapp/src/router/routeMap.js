@@ -29,6 +29,12 @@ const routeMap = {
   wipe_confirm_transfer: {
     jump: '/wipe_confirm_transfer'
   },
+  plate_release_confirm: {
+    microwave: '/plate_release_confirm?location=microwave',
+    table: '/plate_release_confirm?location=table',
+    sink: '/plate_release_confirm?location=sink',
+    jump: '/plate_release_confirm'
+  },
   detection_confirm: {
     jump: '/detection_confirm'
   },
@@ -71,6 +77,9 @@ teleop: {
   navigation_teleop: {
     jump: '/navigation_teleop',
     recover: '/navigation_teleop?recover=1'
+  },
+  nav_adjust: {
+    jump: '/nav_adjust_confirm'
   },
   gesture_record: {
     jump: '/gesture_record_positive'

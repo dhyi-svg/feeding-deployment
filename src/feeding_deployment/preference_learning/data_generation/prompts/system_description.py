@@ -16,6 +16,11 @@ def render_preference_dimensions(bundle: List[PreferenceDim]) -> str:
                 "Value type: HSV color. Emit an object "
                 '{"h": <0-179>, "s": <0-255>, "v": <0-255>, "range": <0.0-1.0>}.'
             )
+        elif getattr(dim, "kind", "categorical") == "nav_offset":
+            lines.append(
+                "Value type: navigation pose offset. Emit an object "
+                '{"dx": <-0.5-0.5 m>, "dy": <-0.5-0.5 m>, "dyaw": <-0.785-0.785 rad>}.'
+            )
         else:
             lines.append(f"Allowed options: [{', '.join(dim.options)}]")
         lines.append(dim.description)

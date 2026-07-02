@@ -220,6 +220,15 @@ class WorkflowSim:
                 self.publish_plan(["place_plate_in_sink"], 0)
                 self.send({"state": "executing", "status": "Cleaning up — taking the plate to the sink…"})
                 time.sleep(STEP_SECONDS)
+                # Ask the user to confirm the plate release before "ungrasping"
+                # (mirrors WebInterface.get_plate_release_confirmation).
+                self.send({"state": "plate_release_confirm", "status": "sink"})
+                self.wait_for(
+                    lambda d: d.get("state") == "plate_release_confirm"
+                    and d.get("status") == "confirm",
+                    "user confirm on plate_release_confirm")
+                self.back_to_executing()
+                time.sleep(STEP_SECONDS / 2)
                 self.clear_plan()
                 print("  meal finished.")
                 return

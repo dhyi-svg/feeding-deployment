@@ -86,6 +86,7 @@ class PlacePlateInApplianceHLA(HighLevelAction):
 
         self.move_to_joint_positions(self.sim.scene_description.microwave_plate_staging_pos)
         self.move_to_ee_pose(placement_pose)
+        self.confirm_plate_release("microwave")
         self.close_gripper()
         self.move_to_ee_pose(behind_placement_pose)
         self.move_to_ee_pose(self.sim.scene_description.microwave_plate_staging_pose)
@@ -214,6 +215,7 @@ class PlacePlateInSinkHLA(HighLevelAction):
 
         self.move_to_joint_positions(self.sim.scene_description.sink_plate_staging_pos)
         self.move_to_ee_pose(placement_poses["sink_placement_pose"])
+        self.confirm_plate_release("sink")
         self.close_gripper()
         self.move_to_ee_pose(self.sim.scene_description.sink_plate_staging_pose)
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
@@ -281,6 +283,7 @@ class PlacePlateOnTableHLA(HighLevelAction):
 
         self.move_to_ee_pose(placement_poses["pre_table_placement_pose"])
         self.move_to_ee_pose(placement_poses["table_placement_pose"])
+        self.confirm_plate_release("table")
         self.close_gripper()
         self.move_to_ee_pose(placement_poses["behind_table_placement_pose"])
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)

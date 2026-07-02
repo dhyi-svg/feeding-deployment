@@ -343,7 +343,15 @@ class _Runner:
         self.hlas = {
             cls(self.sim, self.robot_interface, self.perception_interface, self.rviz_interface, self.web_interface, hla_hyperparams,
                 self.wrist_interface, self.flair, self.no_waits, self.log_dir, self.run_behavior_tree_dir, self.execution_log, self.gesture_detectors_dir,
-                self.register_gesture_detector, self.load_synthesized_gestures) for cls in HLAS  # type: ignore
+                self.register_gesture_detector, self.load_synthesized_gestures,
+                # Post-arrival adjust prompt reuses the user's
+                # wait_before_autocontinue_seconds preference when a session is
+                # live (the session is created per meal, after the HLAs).
+                get_autocontinue_seconds=lambda: (
+                    self._pref_session.wait_seconds
+                    if getattr(self, "_pref_session", None) is not None
+                    else 20.0
+                )) for cls in HLAS  # type: ignore
         }
         print("HLAs created.")
         self.hla_name_to_hla = {hla.get_name(): hla for hla in self.hlas}
@@ -1128,6 +1136,14 @@ class _Runner:
                     location = bt_name[len("pick_plate_from_"):]
                     if location in ("fridge", "microwave", "table"):
                         self._pref_session.record_color(location)
+                # Nav offset is a preference dimension: after a navigation, the
+                # HLA has already written any post-arrival teleop adjustment
+                # (as the new accumulated total) back to its BT YAML; read it
+                # back and finalize the location's offset dim.
+                elif bt_name.startswith("navigate_to_"):
+                    location = bt_name[len("navigate_to_"):]
+                    if location in ("fridge", "microwave", "sink", "table"):
+                        self._pref_session.record_nav_offset(location)
 
             # Save the latest state in case we want to resume execution
             # after a crash. skill_plan_names[i] is this skill's BT filename

@@ -9,4 +9,12 @@ parameters:
       elements: ["low", "medium", "high"]
     is_user_editable: True
     value: "medium"
+  - name: "PositionOffset"
+    description: "Learned SE(2) offset (dx m, dy m, dyaw rad) applied to the nominal goal pose in the goal's local frame, accumulated from the user's post-arrival position corrections."
+    space:
+      type: Box
+      lower: [-0.5, -0.5, -0.7853981633974483]
+      upper: [0.5, 0.5, 0.7853981633974483]
+    is_user_editable: True
+    value: [0.0, 0.0, 0.0]
 fn: !hla navigate_to_fridge

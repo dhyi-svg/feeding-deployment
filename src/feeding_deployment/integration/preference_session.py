@@ -37,12 +37,21 @@ from feeding_deployment.preference_learning.config.preference_bundle import (
     COLOR_FIELDS,
     COLOR_FIELD_BY_LOCATION,
     DEFAULT_COLOR,
+    DEFAULT_NAV_OFFSET,
+    NAV_OFFSET_BOUNDS,
+    NAV_OFFSET_FIELDS,
+    OFFSET_FIELD_BY_LOCATION,
     PREFERENCE_BUNDLE,
     TEXT_FIELDS,
     color_from_bt,
     color_to_bt,
     format_color,
+    format_nav_offset,
+    nav_offset_from_bt,
+    nav_offset_to_bt,
+    nav_offsets_equal,
     parse_color,
+    parse_nav_offset,
 )
 from feeding_deployment.preference_learning.config.mealtime_context import (
     food_items_for_flair,
@@ -69,6 +78,7 @@ from feeding_deployment.integration.apply_preferences import (
 
 _COLOR_FIELD_SET = set(COLOR_FIELDS)
 _TEXT_FIELD_SET = set(TEXT_FIELDS)
+_NAV_OFFSET_FIELD_SET = set(NAV_OFFSET_FIELDS)
 
 # Default autocontinue (seconds) for the correction page before the user's
 # wait_before_autocontinue_seconds preference has been finalized.
@@ -77,6 +87,30 @@ _DEFAULT_AUTOCONTINUE_SECONDS = 10.0
 
 def _pickup_yaml_name(location: str) -> str:
     return f"pick_plate_from_{location}.yaml"
+
+
+def _nav_yaml_name(location: str) -> str:
+    return f"navigate_to_{location}.yaml"
+
+
+# Full parameter block for upserting PositionOffset into a per-user navigate
+# BT YAML that predates the parameter (per-user trees are copied from factory
+# only for NEW users, so existing deployments never pick it up otherwise).
+# Must match the factory navigate_to_*.yaml definition.
+_NAV_OFFSET_PARAM = {
+    "name": "PositionOffset",
+    "description": (
+        "Learned SE(2) offset (dx m, dy m, dyaw rad) applied to the nominal "
+        "goal pose in the goal's local frame, accumulated from the user's "
+        "post-arrival position corrections."
+    ),
+    "space": {
+        "type": "Box",
+        "lower": [-NAV_OFFSET_BOUNDS["dx"], -NAV_OFFSET_BOUNDS["dy"], -NAV_OFFSET_BOUNDS["dyaw"]],
+        "upper": [NAV_OFFSET_BOUNDS["dx"], NAV_OFFSET_BOUNDS["dy"], NAV_OFFSET_BOUNDS["dyaw"]],
+    },
+    "is_user_editable": True,
+}
 
 
 def _wait_pref_to_seconds(value: Optional[str]) -> float:
@@ -191,6 +225,61 @@ class PreferenceSession:
                 self._write_color_to_bt(field, color)
 
     # ------------------------------------------------------------------ #
+    # Nav-offset seeds / BT YAML I/O (mirrors the color block above)
+    # ------------------------------------------------------------------ #
+    def _read_nav_offset_seed(self, field: str) -> Dict[str, Any]:
+        """Current saved offset for a nav-offset field from its navigate BT YAML.
+
+        Day 1 this is the factory zero offset copied into the per-user tree;
+        later days it is the accumulated total from the user's post-arrival
+        adjustments (the tree persists across days). Falls back to
+        DEFAULT_NAV_OFFSET if the YAML/param is missing (e.g. a per-user tree
+        that predates the parameter).
+        """
+        location = field.rsplit("_", 1)[-1]  # nav_offset_fridge -> fridge
+        fpath = self._bt_dir / _nav_yaml_name(location)
+        if not fpath.exists():
+            return dict(DEFAULT_NAV_OFFSET)
+        data = _load_yaml(fpath)
+        value = None
+        for param in data.get("parameters", []):
+            if param.get("name") == "PositionOffset":
+                value = param.get("value")
+        return nav_offset_from_bt(value)
+
+    def _nav_offset_seeds(self) -> Dict[str, Any]:
+        return {f: self._read_nav_offset_seed(f) for f in NAV_OFFSET_FIELDS}
+
+    def _write_nav_offset_to_bt(self, field: str, offset: Dict[str, Any]) -> None:
+        """Write a canonical offset into its navigate BT YAML (PositionOffset).
+
+        Unlike colors (whose params shipped in the factory YAMLs from day one),
+        a pre-existing per-user tree may lack the parameter entirely -- upsert
+        the full block in that case so the value isn't silently dropped."""
+        location = field.rsplit("_", 1)[-1]
+        fpath = self._bt_dir / _nav_yaml_name(location)
+        if not fpath.exists():
+            return
+        data = _load_yaml(fpath)
+        value = nav_offset_to_bt(offset)
+        if _set_param_value(data, "PositionOffset", value):
+            _save_yaml(fpath, data)
+        else:
+            data.setdefault("parameters", []).append({**_NAV_OFFSET_PARAM, "value": value})
+            _save_yaml(fpath, data)
+
+    def _write_open_nav_offsets_to_bt(self) -> None:
+        """Push current predictions for still-open nav-offset dims into their
+        BT YAML so the next navigation uses the latest prediction. Finalized
+        offsets are left as-is (they already hold the user's ground truth)."""
+        for field in NAV_OFFSET_FIELDS:
+            if field in self.finalized:
+                continue
+            offset = self.bundle.get(field)
+            if isinstance(offset, dict):
+                self._write_nav_offset_to_bt(field, offset)
+
+    # ------------------------------------------------------------------ #
     # Prediction
     # ------------------------------------------------------------------ #
     def _overrides(self) -> Dict[str, Any]:
@@ -206,6 +295,7 @@ class PreferenceSession:
             self.context,
             self._overrides(),
             color_seeds=self._color_seeds(),
+            nav_offset_seeds=self._nav_offset_seeds(),
         )
 
     def _repredict_open(self) -> None:
@@ -218,6 +308,7 @@ class PreferenceSession:
                 if field in pred:
                     self.bundle[field] = pred[field]
             self._write_open_colors_to_bt()
+            self._write_open_nav_offsets_to_bt()
 
     # ------------------------------------------------------------------ #
     # Apply
@@ -286,10 +377,12 @@ class PreferenceSession:
             return text
 
     def start(self) -> None:
-        """Predict the full bundle, seed/write colors, apply non-planning dims."""
+        """Predict the full bundle, seed/write colors + nav offsets, apply
+        non-planning dims."""
         self._apply_food_items()
         self.bundle = self._predict()
         self._write_open_colors_to_bt()
+        self._write_open_nav_offsets_to_bt()
         warnings = self._apply_non_planning()
         for w in warnings:
             print(f"[preference-apply] WARNING: {w}")
@@ -309,8 +402,10 @@ class PreferenceSession:
         """Show the prediction for each categorical dim in ``dims`` one at a
         time; lock each as ground truth; repredict still-open dims after any
         correction; apply after each. Color dims are NOT asked here (they use
-        the pickup color picker)."""
-        dims = [d for d in dims if PREF_KIND.get(d) != "color"]
+        the pickup color picker); nav-offset dims are NOT asked here either
+        (they are corrected physically via the post-arrival teleop
+        adjustment)."""
+        dims = [d for d in dims if PREF_KIND.get(d) not in ("color", "nav_offset")]
         # Resume: dims already locked as ground truth (asked/corrected before a
         # crash) are not re-asked. This also lets a partially-completed ask()
         # batch resume on exactly the still-open dims.
@@ -405,6 +500,40 @@ class PreferenceSession:
             changed=changed,
         )
 
+    def record_nav_offset(self, location: str) -> None:
+        """Finalize a nav-offset dim after its navigation executed, reading the
+        (possibly teleop-adjusted, accumulated) total offset back from the
+        navigate BT YAML.
+
+        Unlike record_color, a location can be navigated to several times in
+        one meal, so an already-finalized dim is RE-finalized whenever the
+        total changed again -- the latest accumulated total is the ground
+        truth for this meal."""
+        field = OFFSET_FIELD_BY_LOCATION.get(location)
+        if field is None:
+            return
+
+        observed = self._read_nav_offset_seed(field)
+        with self._lock:
+            previous = self.bundle.get(field)
+        changed = previous is not None and not nav_offsets_equal(previous, observed)
+        if field in self.finalized and not changed:
+            return
+
+        self._finalize(field, observed, changed=changed)
+        self.bundle[field] = observed
+        if changed:
+            self._repredict_open()
+            self._apply_non_planning()
+
+        self._log(
+            "preference_nav_offset_recorded",
+            location=location,
+            field=field,
+            offset=format_nav_offset(observed),
+            changed=changed,
+        )
+
     # ------------------------------------------------------------------ #
     # Settings overlay: view + edit already-set preferences
     # ------------------------------------------------------------------ #
@@ -420,8 +549,9 @@ class PreferenceSession:
             for field in PREF_FIELDS:  # stable display order
                 # Color dims use the live-camera picker; text dims (e.g.
                 # bite_ordering) have no option list to render as chips and are
-                # only editable at their ask() step -- exclude both here.
-                if field not in self.finalized or PREF_KIND.get(field) in ("color", "text"):
+                # only editable at their ask() step; nav-offset dims are
+                # corrected physically via teleop -- exclude all three here.
+                if field not in self.finalized or PREF_KIND.get(field) in ("color", "text", "nav_offset"):
                     continue
                 out.append({
                     "field": field,
@@ -443,7 +573,7 @@ class PreferenceSession:
         edit was ignored (color dim, locked, or not a valid option). Called from the
         WebInterface apply-worker thread; the slow LLM re-prediction runs outside the
         session lock."""
-        if PREF_KIND.get(field) in ("color", "text"):
+        if PREF_KIND.get(field) in ("color", "text", "nav_offset"):
             return False
         with self._lock:
             if field in self._locked:
@@ -533,6 +663,7 @@ class PreferenceSession:
         self.corrected = dict(state["corrected"])
         self._apply_food_items()
         self._write_open_colors_to_bt()
+        self._write_open_nav_offsets_to_bt()
         self._apply_non_planning()
 
     # ------------------------------------------------------------------ #
@@ -543,6 +674,8 @@ class PreferenceSession:
             return
         if field in _COLOR_FIELD_SET:
             value = parse_color(value)
+        elif field in _NAV_OFFSET_FIELD_SET:
+            value = parse_nav_offset(value)
         with self._lock:
             self.bundle[field] = value
             self.finalized.add(field)
@@ -564,7 +697,12 @@ class PreferenceSession:
         out: Dict[str, Any] = {}
         for f in fields:
             v = self.bundle.get(f)
-            out[f] = format_color(v) if f in _COLOR_FIELD_SET and isinstance(v, dict) else v
+            if f in _COLOR_FIELD_SET and isinstance(v, dict):
+                out[f] = format_color(v)
+            elif f in _NAV_OFFSET_FIELD_SET and isinstance(v, dict):
+                out[f] = format_nav_offset(v)
+            else:
+                out[f] = v
         return out
 
     def _log(self, category: str, **fields: Any) -> None:

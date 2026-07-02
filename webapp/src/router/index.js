@@ -56,6 +56,11 @@ const routes = [
     component: () => import('../views/wipe_confirm_transfer.vue')
   },
   {
+    path: '/plate_release_confirm',
+    name: 'plate_release_confirm',
+    component: () => import('../views/plate_release_confirm.vue')
+  },
+  {
     path: '/gesture_test',
     name: 'gesture_test',
     component: () => import('../views/gesture_test.vue')
@@ -134,6 +139,11 @@ const routes = [
     path: '/idle_takeover',
     name: 'idle_takeover',
     component: () => import('../views/idle_takeover.vue')
+  },
+  {
+    path: '/nav_adjust_confirm',
+    name: 'nav_adjust_confirm',
+    component: () => import('../views/nav_adjust_confirm.vue')
   }
 ]
 

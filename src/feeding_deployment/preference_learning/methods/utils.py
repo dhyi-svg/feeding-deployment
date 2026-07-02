@@ -7,17 +7,23 @@ import feeding_deployment.preference_learning.config as root_config  # type: ign
 from feeding_deployment.preference_learning.config.preference_bundle import (
     PREFERENCE_BUNDLE as _PREF_DIMS,
     COLOR_FIELDS,
+    NAV_OFFSET_FIELDS,
     format_color,
+    format_nav_offset,
 )
 PREF_FIELDS: List[str] = [name for (name, _, _) in root_config.PREFERENCE_BUNDLE]
 _COLOR_FIELD_SET = set(COLOR_FIELDS)
+_NAV_OFFSET_FIELD_SET = set(NAV_OFFSET_FIELDS)
 
 
 def _format_pref_value(field: str, value: Any) -> str:
     """Stringify a bundle value for episode text. Color dims (dict HSV+range)
-    get a stable compact encoding; everything else is str()."""
+    and nav-offset dims (dict dx/dy/dyaw) get a stable compact encoding;
+    everything else is str()."""
     if field in _COLOR_FIELD_SET:
         return format_color(value if isinstance(value, dict) else {})
+    if field in _NAV_OFFSET_FIELD_SET:
+        return format_nav_offset(value if isinstance(value, dict) else {})
     return str(value)
 
 def _retry_on_rate_limit(fn, max_retries: int = 5, base_wait: float = 60.0):

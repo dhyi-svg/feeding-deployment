@@ -638,6 +638,46 @@ class WebInterface:
             )
         )
 
+    def get_plate_release_confirmation(self, location: str) -> None:
+        """Block until the user confirms it is safe to release the plate.
+
+        ``location`` is one of "microwave", "table", "sink"; the frontend
+        routeMap turns it into a query param that selects the page copy.
+        A takeover while blocked raises WebInterfaceTakeoverInterrupt from
+        get_required_web_interface_message (handled by the HLA layer).
+        """
+        self.current_page = "plate_release_confirm"
+
+        # Drop stale messages so an old confirm (e.g. from the microwave
+        # release earlier in the same meal) can't satisfy this wait instantly.
+        self.clear_received_messages()
+
+        # The jump doubles as the location payload: the currently-mounted page
+        # does the routing, so a fresh page would never see extra keys on the
+        # jump message itself. Resend until confirmed -- /robot_to_webapp is
+        # not latched and a drop here would deadlock the robot mid-hold.
+        jump_msg = {"state": "plate_release_confirm", "status": location}
+        self._send_message(jump_msg)
+
+        msg_dict = self.get_required_web_interface_message(
+            lambda m: (
+                m.get("state") == "plate_release_confirm"
+                and m.get("status") == "confirm"
+            ),
+            resend=lambda: self._send_message(jump_msg),
+            resend_interval=2.0,
+        )
+        if msg_dict is None:
+            # The webapp bounced to task selection. The plate is already
+            # resting at its placement pose, so releasing is the safe way out
+            # (better than holding forever with the arm inside the microwave).
+            print("WARNING: plate release confirmation interrupted by task "
+                  "selection jump; releasing the plate anyway.")
+
+        # Move the iPad to the generic 'robot executing' page while the skill
+        # finishes its retreat motions (also keeps current_page truthful).
+        self.switch_to_explanation_page()
+
     #### Detection Confirmation Page ####
 
     def get_detection_confirmation(self, detection_type: str, vis_image=None) -> bool:
@@ -851,6 +891,53 @@ class WebInterface:
             "setting": msg["setting"],
             "time_of_day": msg["time_of_day"],
         }
+
+    #### Navigation Position Adjustment ####
+
+    def get_nav_position_adjust_choice(self, location: str, autocontinue_seconds: float) -> str:
+        """Post-arrival prompt: ask whether the robot's parked position at
+        ``location`` is OK or the user wants to fine-adjust it via teleop.
+
+        Returns "ok" or "adjust". The page auto-answers "ok" after
+        ``autocontinue_seconds`` so an unattended navigation never stalls.
+        Mirrors the preference_context ready-handshake (the jump topic is not
+        latched, so the jump is re-sent until the page mounts).
+        """
+        self.current_page = "nav_adjust"
+        self.clear_received_messages()
+        jump_msg = {
+            "state": "nav_adjust",
+            "status": "jump",
+            "location": str(location),
+            "autocontinue_seconds": float(autocontinue_seconds),
+        }
+        self._send_message(jump_msg)
+        self.get_required_web_interface_message(
+            lambda m: (
+                m.get("state") == "nav_adjust"
+                and m.get("status") == "ready"
+            ),
+            resend=lambda: self._send_message(jump_msg),
+        )
+        # The page's own subscription may never see the (routing) jump -- the
+        # previous page consumed it -- so send the location/countdown data
+        # explicitly after the ready handshake (mirrors bite_selection's
+        # ready_for_initial_data -> data flow).
+        self._send_message({
+            "state": "nav_adjust",
+            "status": "data",
+            "location": str(location),
+            "autocontinue_seconds": float(autocontinue_seconds),
+        })
+        msg = self.get_required_web_interface_message(
+            lambda m: (
+                m.get("state") == "nav_adjust"
+                and m.get("status") in ("ok", "adjust")
+            )
+        )
+        # get_required_web_interface_message can return None on a
+        # task-selection jump; treat that as "position OK" (safe no-op).
+        return "ok" if msg is None else msg["status"]
 
     #### Preference Correction Pages ####
 

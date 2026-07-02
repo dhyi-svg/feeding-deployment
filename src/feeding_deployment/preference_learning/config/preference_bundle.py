@@ -11,6 +11,10 @@ class PreferenceDim:
     # "color":       value is a continuous HSV color + range (LLM emits
     #                {"h","s","v","range"}); `options` is empty and the dim is
     #                seeded from / validated against the per-user BT YAML color.
+    # "nav_offset":  value is a continuous goal-pose correction (LLM emits
+    #                {"dx","dy","dyaw"}); `options` is empty and the dim is
+    #                seeded from / validated against the PositionOffset value in
+    #                the per-user navigate BT YAML.
     kind: str = "categorical"
 
 PREFERENCE_BUNDLE: List[PreferenceDim] = [
@@ -153,6 +157,47 @@ PREFERENCE_BUNDLE: List[PreferenceDim] = [
         kind="color",
         description="HSV color of the plate handle used for attachment detection when picking the plate up from the table. This is the same physical plate handle as plate_color_fridge and plate_color_microwave, but table lighting may shift its apparent color. Predict the handle's HSV color and a tolerance range; default to the provided seed value when there is no evidence to change it."
     ),
+    # --- Navigation-offset dimensions (kind="nav_offset") --------------------
+    # Offsets arise between the mapped named locations and where the robot
+    # actually parks (and where the user actually wants it). After autonomous
+    # navigation to a destination the user may teleoperate the base to
+    # fine-adjust its position; the measured adjustment accumulates into a
+    # per-location TOTAL offset {"dx","dy","dyaw"} expressed in the stored goal
+    # pose's local frame (dx meters forward, dy meters left, dyaw radians
+    # counter-clockwise). The next navigation to that location composes the
+    # offset onto the nominal goal. Predictions are seeded from the current
+    # PositionOffset saved in the per-user navigate BT YAML (zero on day 1) and
+    # the user corrects them physically, not through a form. Unlike the plate
+    # colors, the four locations are independent: a correction at one location
+    # is only weak evidence for the others.
+    PreferenceDim(
+        field="nav_offset_table",
+        label="Navigation offset (table)",
+        options=[],
+        kind="nav_offset",
+        description="Learned correction to the robot's parking pose when it navigates to the table, expressed in the stored goal pose's local frame: dx (meters, forward), dy (meters, left), dyaw (radians, counter-clockwise). After autonomous navigation the user may teleoperate the base to fine-adjust its position; the measured adjustment accumulates into this total offset, and the next navigation to the table applies it to the goal. Each location has its own independent offset. Predict the current total offset; default to the provided seed value (the accumulated offset so far) unless memory or corrections give clear evidence to change it."
+    ),
+    PreferenceDim(
+        field="nav_offset_microwave",
+        label="Navigation offset (microwave)",
+        options=[],
+        kind="nav_offset",
+        description="Learned correction to the robot's parking pose when it navigates to the microwave, expressed in the stored goal pose's local frame: dx (meters, forward), dy (meters, left), dyaw (radians, counter-clockwise). After autonomous navigation the user may teleoperate the base to fine-adjust its position; the measured adjustment accumulates into this total offset, and the next navigation to the microwave applies it to the goal. Each location has its own independent offset. Predict the current total offset; default to the provided seed value (the accumulated offset so far) unless memory or corrections give clear evidence to change it."
+    ),
+    PreferenceDim(
+        field="nav_offset_sink",
+        label="Navigation offset (sink)",
+        options=[],
+        kind="nav_offset",
+        description="Learned correction to the robot's parking pose when it navigates to the sink, expressed in the stored goal pose's local frame: dx (meters, forward), dy (meters, left), dyaw (radians, counter-clockwise). After autonomous navigation the user may teleoperate the base to fine-adjust its position; the measured adjustment accumulates into this total offset, and the next navigation to the sink applies it to the goal. Each location has its own independent offset. Predict the current total offset; default to the provided seed value (the accumulated offset so far) unless memory or corrections give clear evidence to change it."
+    ),
+    PreferenceDim(
+        field="nav_offset_fridge",
+        label="Navigation offset (fridge)",
+        options=[],
+        kind="nav_offset",
+        description="Learned correction to the robot's parking pose when it navigates to the fridge, expressed in the stored goal pose's local frame: dx (meters, forward), dy (meters, left), dyaw (radians, counter-clockwise). After autonomous navigation the user may teleoperate the base to fine-adjust its position; the measured adjustment accumulates into this total offset, and the next navigation to the fridge applies it to the goal. Each location has its own independent offset. Predict the current total offset; default to the provided seed value (the accumulated offset so far) unless memory or corrections give clear evidence to change it."
+    ),
 ]
 
 # ---------------------------------------------------------------------------
@@ -251,3 +296,82 @@ def color_from_bt(handle_color, color_range) -> dict:
     if len(hc) < 3:
         hc = (hc + [0, 0, 0])[:3]
     return parse_color({"h": hc[0], "s": hc[1], "v": hc[2], "range": color_range})
+
+
+# ---------------------------------------------------------------------------
+# Navigation-offset-dimension helpers
+#
+# A nav offset value is the canonical dict {"dx": float, "dy": float,
+# "dyaw": float} (meters, meters, radians; expressed in the goal pose's local
+# frame, each clipped to +/- NAV_OFFSET_BOUNDS). This is what the LLM emits for
+# kind="nav_offset" dims and what flows through the bundle, episode text, and
+# the per-user navigate BT YAML (PositionOffset=[dx, dy, dyaw]). The bounds
+# must match the PositionOffset Box space in the navigate_to_*.yaml behavior
+# trees and NavigateHLA's clamp.
+# ---------------------------------------------------------------------------
+
+NAV_OFFSET_FIELDS: List[str] = [dim.field for dim in PREFERENCE_BUNDLE if dim.kind == "nav_offset"]
+
+DEFAULT_NAV_OFFSET: dict = {"dx": 0.0, "dy": 0.0, "dyaw": 0.0}
+
+NAV_OFFSET_BOUNDS: dict = {"dx": 0.5, "dy": 0.5, "dyaw": 0.7853981633974483}  # +/- 0.5 m, +/- 45 deg
+
+# navigation location <-> offset field (location names match navigate_to_<loc>.yaml).
+OFFSET_FIELD_BY_LOCATION: dict = {
+    "table": "nav_offset_table",
+    "microwave": "nav_offset_microwave",
+    "sink": "nav_offset_sink",
+    "fridge": "nav_offset_fridge",
+}
+
+
+def parse_nav_offset(obj, seed: Optional[dict] = None) -> dict:
+    """Coerce an LLM/JSON value into a canonical, clipped nav-offset dict.
+
+    Accepts a dict with any of dx/dy/dyaw, or a string like
+    "dx=0.050,dy=-0.020,dyaw=0.030". Missing/invalid components fall back to
+    ``seed`` (or DEFAULT_NAV_OFFSET). Always returns a fully-populated, clipped
+    dict.
+    """
+    base = dict(seed) if seed else dict(DEFAULT_NAV_OFFSET)
+
+    parsed: dict = {}
+    if isinstance(obj, dict):
+        parsed = obj
+    elif isinstance(obj, str):
+        for part in obj.replace(";", ",").split(","):
+            if "=" in part:
+                k, _, v = part.partition("=")
+                parsed[k.strip().lower()] = v.strip()
+
+    return {
+        k: _clip_float(parsed.get(k, base[k]), -NAV_OFFSET_BOUNDS[k], NAV_OFFSET_BOUNDS[k], float(base[k]))
+        for k in ("dx", "dy", "dyaw")
+    }
+
+
+def format_nav_offset(o: dict) -> str:
+    """Stable compact string for episode text / logs: ``dx=0.050,dy=-0.020,dyaw=0.030``."""
+    o = parse_nav_offset(o)
+    return f"dx={o['dx']:.3f},dy={o['dy']:.3f},dyaw={o['dyaw']:.3f}"
+
+
+def nav_offset_to_bt(o: dict) -> list:
+    """Canonical nav-offset dict -> PositionOffset list [dx, dy, dyaw]."""
+    o = parse_nav_offset(o)
+    return [o["dx"], o["dy"], o["dyaw"]]
+
+
+def nav_offset_from_bt(value) -> dict:
+    """PositionOffset [dx, dy, dyaw] from the BT YAML -> canonical offset dict."""
+    v = list(value) if value is not None else []
+    v = (v + [0.0, 0.0, 0.0])[:3]
+    return parse_nav_offset({"dx": v[0], "dy": v[1], "dyaw": v[2]})
+
+
+def nav_offsets_equal(a, b, tol: float = 1e-6) -> bool:
+    """Float-tolerant equality for change detection. Colors compare with exact
+    ``!=`` on ints; offsets are floats round-tripped through YAML, so exact
+    comparison would produce spurious 'changed' signals."""
+    a, b = parse_nav_offset(a), parse_nav_offset(b)
+    return all(abs(a[k] - b[k]) <= tol for k in ("dx", "dy", "dyaw"))

@@ -142,6 +142,7 @@ class HighLevelAction(abc.ABC):
         gesture_detectors_dir: Path,
         register_gesture_detector=None,
         load_synthesized_gestures=None,
+        get_autocontinue_seconds=None,
     ) -> None:
         self.sim = sim
         self.robot_interface = robot_interface
@@ -158,6 +159,10 @@ class HighLevelAction(abc.ABC):
         self.gesture_detectors_dir = gesture_detectors_dir
         self.register_gesture_detector = register_gesture_detector
         self.load_synthesized_gestures = load_synthesized_gestures
+        # Zero-arg callable returning the current autocontinue timeout in
+        # seconds (wired by run.py to the preference session's
+        # wait_before_autocontinue_seconds); None -> HLA-specific fallback.
+        self.get_autocontinue_seconds = get_autocontinue_seconds
         # NOTE: assuming 7-dof and that first 7 entries are arm joints (not gripper).
         self.arm_joint_lower_limits = self.sim.robot.joint_lower_limits[:7]
         self.arm_joint_upper_limits = self.sim.robot.joint_upper_limits[:7]
@@ -433,6 +438,17 @@ class HighLevelAction(abc.ABC):
             self.sim.robot.close_fingers()
         else:
             self.execute_robot_command(CloseGripperCommand())
+
+    def confirm_plate_release(self, location: str) -> None:
+        """Block until the user confirms plate release on the webapp; no-op in sim.
+
+        Deliberately no try/except: a WebInterfaceTakeoverInterrupt raised while
+        blocked must propagate to execute_action, which converts it into the
+        TeleopTakeoverException the executive already handles.
+        """
+        if self.web_interface is None:
+            return
+        self.web_interface.get_plate_release_confirmation(location)
 
     def reset_wrist(self) -> None:
         if self.wrist_interface is not None:

@@ -1,0 +1,193 @@
+<template>
+  <div class="page">
+    <div class="tb">
+      <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
+      <div>
+        <div class="tb-n">{{ username }}</div>
+        <div class="tb-s">Robot arrived{{ location ? ' at the ' + location : '' }}</div>
+      </div>
+    </div>
+
+    <div class="bd">
+      <div class="confirm-body">
+        <div class="cf-left">
+          <strong>Is the robot parked where you want it?</strong>
+          <p>If the position looks right, continue.<br><br>If not, choose adjust and drive the robot to exactly where you want it — it will remember the correction for next time.</p>
+          <p v-if="!userInteracted && countdown !== null" class="cdown">Auto-confirming position in <span>{{ countdown }}s</span></p>
+        </div>
+        <div class="cf-right">
+          <button class="btn lg amber w100" @click="handleOk">Position OK</button>
+          <button class="btn lg ghost w100" @click="handleAdjust">Adjust Position</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+import ROSLIB from 'roslib'
+import routeMap from '@/router/routeMap';
+import { ROS_URL, USER} from '@/config/parameterConfig';
+export default {
+  data () {
+    return {
+      ros: null,
+      username: USER,
+      listener: null,
+      publisher: null,
+      location: '',
+      countdown: null,
+      countdownInterval: null,
+      userInteracted: false,
+    }
+  },
+  mounted () {
+    this.ros = new ROSLIB.Ros({ url: ROS_URL })
+    this.initSubscriber()
+    this.initPublisher()
+    // Tell the backend we've mounted/subscribed so it can stop re-sending the
+    // (non-latched) jump. Location + autocontinue arrive via the jump message.
+    this.publishStatus('ready')
+  },
+  beforeUnmount () {
+    this.stopCountdown()
+  },
+  beforeRouteLeave (to, from, next) {
+    this.stopCountdown()
+
+    if (this.listener) {
+      this.listener.unsubscribe();
+      this.listener = null;
+    }
+
+    if (this.publisher) {
+      this.publisher.unadvertise();
+      this.publisher = null;
+    }
+
+    next();
+  },
+  methods: {
+    handleRosMessage(message) {
+      try {
+        const parsedMessage = JSON.parse(message.data);
+
+        // The backend re-sends the jump until it sees our ready, then sends a
+        // 'data' message (the first jump is consumed by the page that routed
+        // here, so this page may only ever see the data message). Both carry
+        // the location and the autocontinue duration.
+        if (parsedMessage.state === 'nav_adjust' && (parsedMessage.status === 'jump' || parsedMessage.status === 'data')) {
+          if (parsedMessage.status === 'jump') {
+            this.publishStatus('ready')
+          }
+          if (parsedMessage.location) {
+            this.location = parsedMessage.location
+          }
+          if (Number.isFinite(parsedMessage.autocontinue_seconds) && this.countdownInterval === null && !this.userInteracted) {
+            this.startCountdown(Math.round(parsedMessage.autocontinue_seconds))
+          }
+          return
+        }
+
+        const route = routeMap[parsedMessage.state]?.[parsedMessage.status];
+        if (route) {
+          if (typeof route === 'string') {
+            this.$router.push(route);
+          } else if (typeof route === 'object') {
+            this.$router.push(route);
+          }
+        }
+
+      } catch (error) {
+      }
+    },
+    initPublisher() {
+      this.publisher = new ROSLIB.Topic({
+        ros: this.ros,
+        name: '/webapp_to_robot',
+        messageType: 'std_msgs/String'
+      })
+    },
+    publishStatus(status) {
+      if (!this.publisher) {
+        return
+      }
+      const message = new ROSLIB.Message({
+        data: JSON.stringify({
+          state: 'nav_adjust',
+          status: status
+        })
+      })
+      this.publisher.publish(message);
+    },
+    initSubscriber() {
+      this.listener = new ROSLIB.Topic({
+        ros: this.ros,
+        name: '/robot_to_webapp',
+        messageType: 'std_msgs/String'
+      })
+
+      this.listener.subscribe((message) => {
+        this.handleRosMessage(message);
+      });
+    },
+    startCountdown(seconds) {
+      this.countdown = seconds
+      this.countdownInterval = setInterval(() => {
+        if (this.countdown > 0) {
+          this.countdown -= 1;
+        } else {
+          this.stopCountdown()
+          // Unattended: default to the safe no-op.
+          this.handleOk()
+        }
+      }, 1000);
+    },
+    stopCountdown() {
+      if (this.countdownInterval) {
+        clearInterval(this.countdownInterval);
+        this.countdownInterval = null;
+      }
+    },
+    handleOk() {
+      this.userInteracted = true
+      this.stopCountdown()
+      this.publishStatus('ok');
+      this.$router.push('/robot_executing');
+    },
+    handleAdjust() {
+      this.userInteracted = true
+      this.stopCountdown()
+      this.publishStatus('adjust');
+      // Stay on this page: the backend routes us to the navigation teleop
+      // screen (navigation_teleop / recover) via the routeMap handler above.
+    },
+  }
+}
+</script>
+
+<style scoped>
+.confirm-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3vw;
+  align-items: center;
+  flex: 1;
+}
+.cf-left strong {
+  display: block;
+  font: normal 4vh/1.3 Georgia, serif;
+  color: var(--t);
+  margin-bottom: 1.5vh;
+}
+.cf-left p {
+  font-size: 2.4vh;
+  color: var(--tm);
+  line-height: 1.6;
+}
+.cf-right {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5vh;
+}
+</style>
