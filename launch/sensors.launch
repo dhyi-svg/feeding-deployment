@@ -94,6 +94,10 @@
         output="screen">
     <param name="input_odom_topic" value="/$(arg camera_name)/zed_node/odom"/>
     <param name="output_odom_topic" value="/move_base/odom_feedback"/>
+    <!-- Velocity differentiation window (s). Must stay >= a few ZED frame
+         periods: per-frame differencing at 60 Hz amplifies pose jitter into
+         phantom velocity spikes that destabilize TEB near obstacles. -->
+    <param name="vel_diff_window" value="0.08"/>
   </node>
 
   <!-- ===== Arm-specific TFs (from robot.launch, with arm_ prefix) ===== -->

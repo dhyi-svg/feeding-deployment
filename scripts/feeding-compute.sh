@@ -69,6 +69,7 @@ SAFETY_DIR="$HOME/deployment_ws/src/feeding-deployment/src/feeding_deployment/sa
 LOGGER_LOG_DIR="$INTEGRATION_DIR/log/system_logs"   # fixed (tmux session isn't tied to a run user)
 LOGGER_CYCLE="${LOGGER_CYCLE:-10800}"     # 3 h per chunk / rolling window
 LOGGER_KEEP="${LOGGER_KEEP:-2}"           # sensor chunks to retain (~6 h on disk)
+NAVLOG_KEEP="${NAVLOG_KEEP:-10}"          # nav diag run dirs to retain
 
 # ----- session logging: per-run bundle + tmux pane capture ------------------ #
 # Each build stamps a bundle dir under system_logs and points 'current_session'
@@ -86,6 +87,11 @@ CMD_HEALTH="python $INTEGRATION_DIR/compute_health_monitor.py --no-kill --window
 # Distinct 'sensorlog_' prefix so the prune can NEVER match the existing
 # 'sensor_diag_*' analysis runs (or anything else) in the log dir.
 CMD_SENSORLOG="until rostopic list >/dev/null 2>&1; do sleep 3; done; while true; do python $SAFETY_DIR/sensor_diag_logger.py --duration $LOGGER_CYCLE --outdir $LOGGER_LOG_DIR/sensorlog_\$(date +%Y%m%d_%H%M%S); ls -dt $LOGGER_LOG_DIR/sensorlog_* 2>/dev/null | tail -n +$((LOGGER_KEEP+1)) | xargs -r rm -rf; done"
+# Nav diagnostics (scripts/nav_diag_logger.py): one navlog_<stamp> dir per
+# (re)start. The script itself waits for roscore and retries its params
+# snapshot until move_base/ZED are up, so pre-bringup start order is safe;
+# the rostopic gate just keeps the pane quiet before roscore exists.
+CMD_NAVLOG="while true; do until rostopic list >/dev/null 2>&1; do sleep 3; done; python $HOME/deployment_ws/src/feeding-deployment/scripts/nav_diag_logger.py; echo 'nav_diag_logger exited; restarting in 5s'; ls -dt $LOGGER_LOG_DIR/navlog_* 2>/dev/null | tail -n +$((NAVLOG_KEEP+1)) | xargs -r rm -rf; sleep 5; done"
 
 # Attach to $SESSION, or switch to it if we're already inside another tmux client
 # (plain 'attach' refuses to nest).
@@ -105,7 +111,9 @@ build_logger_session() {
     return 0
   fi
   tmux new-session -d -s "$LOGGER_SESSION" -n "$LOGGER_SESSION"
-  tmux split-window -v -t "$LOGGER_SESSION"          # top + bottom
+  tmux split-window -v -t "$LOGGER_SESSION"          # 2 stacked
+  tmux split-window -v -t "$LOGGER_SESSION"          # 3 stacked
+  tmux select-layout -t "$LOGGER_SESSION" even-vertical
   tmux set-option -w -t "$LOGGER_SESSION" pane-border-status top
   tmux set-option -w -t "$LOGGER_SESSION" pane-border-format ' #{pane_title} '
   local lpanes
@@ -113,9 +121,11 @@ build_logger_session() {
       -F '#{pane_top} #{pane_id}' | sort -n -k1,1 | awk '{ print $2 }')
   tmux select-pane -t "${lpanes[0]}" -T 'health_monitor (3h rolling)'
   tmux select-pane -t "${lpanes[1]}" -T 'sensor_diag (3h rolling)'
+  tmux select-pane -t "${lpanes[2]}" -T 'nav_diag (per-run navlog_*)'
   tmux send-keys -t "${lpanes[0]}" "$CMD_HEALTH" Enter
   tmux send-keys -t "${lpanes[1]}" "$CMD_SENSORLOG" Enter
-  echo "Built tmux session '$LOGGER_SESSION' (health top, sensors bottom; ${LOGGER_CYCLE}s rolling)."
+  tmux send-keys -t "${lpanes[2]}" "$CMD_NAVLOG" Enter
+  echo "Built tmux session '$LOGGER_SESSION' (health / sensors / nav_diag; ${LOGGER_CYCLE}s rolling)."
 }
 
 # ----- session-logging helpers ---------------------------------------------- #
@@ -247,6 +257,8 @@ do_collect() {
   cp -f "$SESS_ROOT/health_monitor.log"              "$cdir/"   2>/dev/null || true
   local slog; slog="$(ls -dt "$SESS_ROOT"/sensorlog_* 2>/dev/null | head -1)"
   [[ -n "$slog" ]] && cp -a "$slog" "$cdir/" 2>/dev/null || true
+  local nlog; nlog="$(ls -dt "$SESS_ROOT"/navlog_* 2>/dev/null | head -1)"
+  [[ -n "$nlog" ]] && cp -a "$nlog" "$cdir/" 2>/dev/null || true
   snapshot_ros_logs "$HOME/.ros/log/latest" "$cdir/ros"
 
   # --- NUC side: resolve its bundle, prep (gzip ROS + meta) remotely, pull once ---

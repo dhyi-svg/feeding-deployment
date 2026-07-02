@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import math
+from collections import deque
 
 import rospy
 from nav_msgs.msg import Odometry
@@ -21,68 +22,59 @@ class OdomDifferentiator:
 		self.input_topic = rospy.get_param("~input_odom_topic", "/zed_mini/zed_node/odom")
 		self.output_topic = rospy.get_param("~output_odom_topic", "/move_base/odom_feedback")
 
+		# Differentiate over a fixed time window, not consecutive frames:
+		# velocity noise = pose jitter / dt, and dt per frame shrank from
+		# 65 ms to ~19 ms when the ZED went 15 -> 60 Hz (spikes reached
+		# 0.12 m/s on a stationary robot, destabilizing TEB's feasibility
+		# check). The window restores the old noise floor at full rate.
+		self.diff_window = rospy.get_param("~vel_diff_window", 0.08)
+
 		self.pub = rospy.Publisher(self.output_topic, Odometry, queue_size=20)
 		self.sub = rospy.Subscriber(self.input_topic, Odometry, self.cb, queue_size=50)
 
-		self.prev_msg = None
-		self.prev_stamp = None
-		self.prev_yaw = None
+		self.hist = deque()
 
-		rospy.loginfo("zed_pose_to_odom_feedback input=%s output=%s", self.input_topic, self.output_topic)
+		rospy.loginfo("zed_pose_to_odom_feedback input=%s output=%s vel_diff_window=%.3fs",
+			self.input_topic, self.output_topic, self.diff_window)
 
 	def cb(self, msg):
 		stamp = msg.header.stamp if msg.header.stamp != rospy.Time() else rospy.Time.now()
 		yaw = yaw_from_quat(msg.pose.pose.orientation)
 
-		if self.prev_msg is None:
-			self.prev_msg = msg
-			self.prev_stamp = stamp
-			self.prev_yaw = yaw
-
-			out = Odometry()
-			out.header = msg.header
-			out.child_frame_id = msg.child_frame_id
-			out.pose = msg.pose
-			self.pub.publish(out)
+		if self.hist and (stamp - self.hist[-1][0]).to_sec() <= 0.0:
 			return
+		self.hist.append((stamp, msg.pose.pose.position, yaw))
 
-		dt = (stamp - self.prev_stamp).to_sec()
-		if dt <= 0.0:
-			return
+		# Diff base = newest sample at least diff_window old, so dt spans
+		# [diff_window, diff_window + one frame period).
+		while len(self.hist) >= 2 and (stamp - self.hist[1][0]).to_sec() >= self.diff_window:
+			self.hist.popleft()
 
-		curr_p = msg.pose.pose.position
-		prev_p = self.prev_msg.pose.pose.position
-
-		dx = curr_p.x - prev_p.x
-		dy = curr_p.y - prev_p.y
-		dz = curr_p.z - prev_p.z
-		dyaw = angle_diff(yaw, self.prev_yaw)
-
-		vx_odom = dx / dt
-		vy_odom = dy / dt
-		vz_odom = dz / dt
-		wz = dyaw / dt
-
-		# Put translational velocity in base frame.
-		c = math.cos(yaw)
-		s = math.sin(yaw)
-		vx = c * vx_odom + s * vy_odom
-		vy = -s * vx_odom + c * vy_odom
+		base_stamp, base_p, base_yaw = self.hist[0]
+		dt = (stamp - base_stamp).to_sec()
 
 		out = Odometry()
 		out.header = msg.header
 		out.child_frame_id = msg.child_frame_id
 		out.pose = msg.pose
-		out.twist.twist.linear.x = vx
-		out.twist.twist.linear.y = vy
-		out.twist.twist.linear.z = vz_odom
-		out.twist.twist.angular.z = wz
+
+		if dt > 0.0:
+			curr_p = msg.pose.pose.position
+
+			vx_odom = (curr_p.x - base_p.x) / dt
+			vy_odom = (curr_p.y - base_p.y) / dt
+			vz_odom = (curr_p.z - base_p.z) / dt
+			wz = angle_diff(yaw, base_yaw) / dt
+
+			# Put translational velocity in base frame.
+			c = math.cos(yaw)
+			s = math.sin(yaw)
+			out.twist.twist.linear.x = c * vx_odom + s * vy_odom
+			out.twist.twist.linear.y = -s * vx_odom + c * vy_odom
+			out.twist.twist.linear.z = vz_odom
+			out.twist.twist.angular.z = wz
 
 		self.pub.publish(out)
-
-		self.prev_msg = msg
-		self.prev_stamp = stamp
-		self.prev_yaw = yaw
 
 
 def main():

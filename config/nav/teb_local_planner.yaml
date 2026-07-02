@@ -48,7 +48,9 @@ TebLocalPlannerROS:
   # Obstacles
   # =====================================================================
   # Hard minimum distance from any obstacle to robot footprint edge.
-  # 0.05 m means TEB will plan trajectories that come within 5 cm of walls.
+  # Must be >= local costmap resolution (0.05): below one cell, the optimizer
+  # emits trajectories that graze cells the feasibility check calls collision,
+  # causing repeated "trajectory is not feasible. Resetting planner." stalls.
   min_obstacle_dist: 0.01
 
   # Soft cushion. Inside this distance, obstacle cost rises smoothly.

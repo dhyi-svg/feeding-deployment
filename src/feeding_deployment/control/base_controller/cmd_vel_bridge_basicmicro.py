@@ -102,6 +102,11 @@ class CmdVelBridgeBasicmicro:
         # ---- ROS wiring ----
         self.sub = rospy.Subscriber(self.cmd_vel_topic, Twist, self.cb, queue_size=10)
 
+        # Diagnostics echo of the effectively-applied command (after the
+        # stiction floor and clamp), converted back to m/s / rad/s so it can
+        # be overlaid against the incoming /cmd_vel.
+        self.applied_pub = rospy.Publisher("~applied", Twist, queue_size=10)
+
         rospy.loginfo("cmd_vel bridge running. Waiting for %s...", self.cmd_vel_topic)
 
     @staticmethod
@@ -153,6 +158,13 @@ class CmdVelBridgeBasicmicro:
 
         right = self._clamp(right, self.max_speed_units)
         left = self._clamp(left, self.max_speed_units)
+
+        # Echo applied command (pre-wiring-mapping, in the /cmd_vel convention).
+        applied = Twist()
+        applied.linear.x = (right + left) / 2.0 / self.linear_scale
+        w_applied = (right - left) / 2.0 / self.angular_scale
+        applied.angular.z = -w_applied if self.flip_angular else w_applied
+        self.applied_pub.publish(applied)
 
         right, left = self._apply_output_mapping(right, left)
 
