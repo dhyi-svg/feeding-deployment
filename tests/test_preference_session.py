@@ -26,6 +26,7 @@ from feeding_deployment.preference_learning.config.preference_bundle import (
     COLOR_FIELDS,
     color_to_bt,
     parse_color,
+    parse_nav_offset,
 )
 from feeding_deployment.preference_learning.methods.prediction_model import (
     PREF_KIND,
@@ -39,19 +40,26 @@ CTX = {"meal": "eggs", "setting": "Personal", "time_of_day": "morning"}
 
 class FakeModel:
     """Deterministic stand-in for PredictionModel. Predicts the first option for
-    categorical dims and the seed for color dims; corrected values are pinned.
-    Records predict/update calls for assertions."""
+    categorical dims and the seed for color / nav-offset dims; corrected values
+    are pinned. Records predict/update calls for assertions."""
 
     def __init__(self):
         self.predict_calls = []
         self.update_calls = []
 
-    def predict_bundle(self, context, corrected, color_seeds=None):
-        self.predict_calls.append({"corrected": dict(corrected), "color_seeds": dict(color_seeds or {})})
+    def predict_bundle(self, context, corrected, confirmed=None, color_seeds=None, nav_offset_seeds=None):
+        self.predict_calls.append({
+            "corrected": dict(corrected),
+            "confirmed": dict(confirmed or {}),
+            "color_seeds": dict(color_seeds or {}),
+            "nav_offset_seeds": dict(nav_offset_seeds or {}),
+        })
         out = {}
         for f in PREF_FIELDS:
             if PREF_KIND.get(f) == "color":
                 out[f] = parse_color((color_seeds or {}).get(f))
+            elif PREF_KIND.get(f) == "nav_offset":
+                out[f] = parse_nav_offset((nav_offset_seeds or {}).get(f))
             elif PREF_KIND.get(f) == "text":
                 out[f] = f"predicted {f}"
             else:
@@ -87,10 +95,33 @@ class FakeWeb:
         self.finished = True
 
 
+# Only the YAMLs the session reads or seeds from: the color / nav-offset
+# write-back targets plus the categorical-dim targets. Copying — and rewriting
+# on every _apply_non_planning — all 31 factory trees made this suite take
+# minutes; files absent from the fixture only produce (unasserted) warnings
+# from apply_bundle_to_behavior_trees.
+_FIXTURE_YAMLS = [
+    "acquire_bite.yaml",
+    "navigate_to_fridge.yaml",
+    "navigate_to_microwave.yaml",
+    "navigate_to_sink.yaml",
+    "navigate_to_table.yaml",
+    "pick_plate_from_fridge.yaml",
+    "pick_plate_from_microwave.yaml",
+    "pick_plate_from_table.yaml",
+    "press_microwave_button.yaml",
+    "transfer_drink.yaml",
+    "transfer_utensil.yaml",
+    "transfer_wipe.yaml",
+]
+
+
 @pytest.fixture()
 def bt_dir(tmp_path: Path) -> Path:
     dest = tmp_path / "behavior_trees"
-    shutil.copytree(BT_SOURCE, dest)
+    dest.mkdir()
+    for name in _FIXTURE_YAMLS:
+        shutil.copy(BT_SOURCE / name, dest / name)
     return dest
 
 
@@ -145,6 +176,24 @@ def test_ask_correction_repredicts_and_pins(bt_dir):
     # ... and the correction is pinned in that reprediction.
     assert model.predict_calls[-1]["corrected"].get("robot_speed") == "fast"
     assert web.finished
+
+
+def test_repredict_receives_confirmed_and_corrected_split(bt_dir):
+    # robot_speed is confirmed (accepted as predicted), skewering_axis is
+    # corrected. The reprediction triggered by the correction must receive the
+    # true correction under ``corrected`` and the passive accept under
+    # ``confirmed`` — both pinned, but distinguishable in the prompt.
+    model = FakeModel()
+    other = PREF_OPTIONS["skewering_axis"][1]
+    web = FakeWeb({"skewering_axis": other})
+    s = PreferenceSession(model, bt_dir, CTX, web_interface=web)
+    s.start()
+    s.ask(["robot_speed", "skewering_axis"])
+
+    last = model.predict_calls[-1]
+    assert last["corrected"] == {"skewering_axis": other}
+    assert last["confirmed"].get("robot_speed") == PREF_OPTIONS["robot_speed"][0]
+    assert "skewering_axis" not in last["confirmed"]
 
 
 def test_wait_pref_drives_autocontinue(bt_dir):
@@ -271,11 +320,20 @@ def test_transfer_mode_edit_defers_reinit_until_flush(bt_dir):
 
 def test_settings_view_and_edit_are_thread_safe(bt_dir):
     """A reader thread iterating settings_view() concurrently with edits must never
-    raise (e.g. 'dict changed size during iteration')."""
+    raise (e.g. 'dict changed size during iteration').
+
+    The YAML actuation is stubbed out: this test targets the in-memory
+    bookkeeping races (file atomicity has its own dedicated test below), and
+    200 edits x ~30 YAML rewrites each made it take minutes."""
     import threading
 
     s = PreferenceSession(FakeModel(), bt_dir, CTX, web_interface=FakeWeb())
     s.start()
+    s._apply_non_planning = lambda *a, **k: []
+    s._write_open_colors_to_bt = lambda: None
+    s._write_open_nav_offsets_to_bt = lambda: None
+    s._color_seeds = lambda: {}
+    s._nav_offset_seeds = lambda: {}
     cat = [d for d in PREF_FIELDS if PREF_KIND.get(d) != "color"][:6]
     s.ask(cat)
 

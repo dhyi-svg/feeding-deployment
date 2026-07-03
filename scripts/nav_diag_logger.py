@@ -172,7 +172,8 @@ class NavDiagLogger:
         except Exception:
             snap["_meta"]["git_sha"] = "unknown"
         complete = True
-        for ns in ("/move_base", "/zed_mini/zed_node", "/cmd_vel_bridge_basicmicro"):
+        for ns in ("/move_base", "/zed_mini/zed_node", "/cmd_vel_bridge_basicmicro",
+                   "/zed_pose_to_odom_feedback"):
             try:
                 snap[ns] = rospy.get_param(ns)
             except Exception:
@@ -440,7 +441,9 @@ class NavDiagLogger:
     # ---- goals: duration, outcome, terminal + settled residual ---------------
     def _residual(self, gx, gy, gyaw):
         try:
-            tr = self.buf.lookup_transform("map", "base_link", rospy.Time(0))
+            # vention_base_link = move_base's robot_base_frame; residuals vs
+            # base_link carry the ~0.3 m lever arm between the two frames.
+            tr = self.buf.lookup_transform("map", "vention_base_link", rospy.Time(0))
             t = tr.transform.translation
             return (math.hypot(t.x - gx, t.y - gy),
                     abs(angle_diff(yaw_from_quat(tr.transform.rotation), gyaw)))

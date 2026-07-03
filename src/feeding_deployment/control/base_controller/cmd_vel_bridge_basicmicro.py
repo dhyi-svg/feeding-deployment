@@ -36,6 +36,7 @@ import traceback
 
 import rospy
 from geometry_msgs.msg import Twist
+from std_msgs.msg import Bool
 
 def add_ros_vention_src_to_path():
     try:
@@ -99,8 +100,22 @@ class CmdVelBridgeBasicmicro:
         # NOTE: the lost-command stop lives on the NUC (BaseInterface), not here.
         # This node only translates /cmd_vel into set_speeds RPC calls.
 
+        # ---- Safety hold (ZED-divergence interlock) ----
+        # zed_health_monitor asserts /nav_safety_hold when ZED tracking diverges
+        # (odom becomes garbage). While held, we command zero regardless of
+        # /cmd_vel, so the base stops until the ZED recovers. Gating here -- the
+        # single point to the motors -- guarantees the stop for both nav and
+        # teleop. Fail-safe: once we've ever heard the monitor, a stale flag
+        # (monitor died) also holds; if the monitor was never launched, we never
+        # hold (backward compatible).
+        self.hold_topic = rospy.get_param("~safety_hold_topic", "/nav_safety_hold")
+        self.hold_stale_s = float(rospy.get_param("~safety_hold_stale_s", 1.0))
+        self.safety_hold = False
+        self.hold_last_msg = None
+
         # ---- ROS wiring ----
         self.sub = rospy.Subscriber(self.cmd_vel_topic, Twist, self.cb, queue_size=10)
+        self.hold_sub = rospy.Subscriber(self.hold_topic, Bool, self.cb_hold, queue_size=5)
 
         # Diagnostics echo of the effectively-applied command (after the
         # stiction floor and clamp), converted back to m/s / rad/s so it can
@@ -126,7 +141,31 @@ class CmdVelBridgeBasicmicro:
             left = -left
         return right, left
 
+    def cb_hold(self, msg: Bool):
+        self.safety_hold = bool(msg.data)
+        self.hold_last_msg = rospy.Time.now()
+
+    def _held(self) -> bool:
+        """True if the ZED-divergence interlock says stop. Fail-safe: if we have
+        ever heard the monitor but its flag is stale, hold. Never heard it -> no
+        hold (backward compatible with setups that don't launch the monitor)."""
+        if self.hold_last_msg is None:
+            return False
+        if self.safety_hold:
+            return True
+        return (rospy.Time.now() - self.hold_last_msg).to_sec() > self.hold_stale_s
+
     def cb(self, msg: Twist):
+        # Safety interlock: ZED tracking diverged -> command zero, ignore /cmd_vel.
+        if self._held():
+            try:
+                self.base.set_speeds(0, 0)
+            except Exception:
+                rospy.logerr("Motor command failed (safety hold):\n%s", traceback.format_exc())
+            rospy.logwarn_throttle(2.0, "cmd_vel bridge: safety HOLD active "
+                                   "(ZED tracking) -- commanding zero")
+            return
+
         v = float(msg.linear.x)
         w = float(msg.angular.z)
 

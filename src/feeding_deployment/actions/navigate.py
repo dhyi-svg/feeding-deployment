@@ -15,7 +15,7 @@ try:
     from actionlib_msgs.msg import GoalStatus
     from geometry_msgs.msg import Twist
     from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
-    from std_msgs.msg import Empty
+    from std_msgs.msg import Bool, Empty
 
     ROS_NAV_IMPORTED = True
 except ModuleNotFoundError:
@@ -274,7 +274,35 @@ class NavigateHLA(HighLevelAction):
         self._takeover_pub = rospy.Publisher(
             "/shared_autonomy/takeover", Empty, queue_size=1
         )
+        # ZED-divergence safety hold (zed_health_monitor -> /nav_safety_hold). The
+        # cmd_vel bridge stops the wheels while held; here at the nav level we PAUSE
+        # (don't count a hold as a localization failure) and, if move_base aborts
+        # during a hold, re-send the goal once the ZED recovers -- so a divergence
+        # becomes "stop, wait, resume" instead of a failed leg / human recovery.
+        self._safety_hold = False
+        self._last_hold_time = None
+        rospy.Subscriber(
+            "/nav_safety_hold", Bool, self._on_safety_hold, queue_size=5
+        )
         self._teleop_subs_ready = True
+
+    def _on_safety_hold(self, msg: "Bool") -> None:
+        self._safety_hold = bool(msg.data)
+        if self._safety_hold:
+            self._last_hold_time = rospy.Time.now()
+
+    def _wait_while_safety_hold(self) -> None:
+        """Block while the ZED-divergence hold is asserted (robot already stopped
+        at the motor level). Returns when the ZED recovers or on ROS shutdown."""
+        if not self._safety_hold:
+            return
+        print("[nav] ZED-divergence hold active -- pausing, waiting for the ZED to "
+              "recover before resuming navigation...")
+        rate = rospy.Rate(5.0)
+        while self._safety_hold and not rospy.is_shutdown():
+            rate.sleep()
+        if not rospy.is_shutdown():
+            print("[nav] ZED recovered -- resuming navigation.")
 
     def _on_teleop_takeover(self, _msg: "Empty") -> None:
         self._teleop_active = True
@@ -390,12 +418,20 @@ class NavigateHLA(HighLevelAction):
         """
         poll_s = 0.2
         stall_s = 0.0
+        held_during_goal = False
         while True:
             if client.wait_for_result(rospy.Duration(poll_s)):
                 break  # move_base/manager reached a terminal state
             if rospy.is_shutdown():
                 client.cancel_goal()
                 raise RuntimeError("ROS shutdown during navigation")
+            if self._safety_hold:
+                # ZED diverged: the base is stopped at the motor level and its
+                # pose is garbage. Pause the failure watchdog -- this is an
+                # intentional hold, not a lost-localization failure.
+                held_during_goal = True
+                stall_s = 0.0
+                continue
             if self._teleop_active or self._localization_fresh():
                 stall_s = 0.0  # human driving, or localization healthy -> reset
                 continue
@@ -412,6 +448,14 @@ class NavigateHLA(HighLevelAction):
         state = client.get_state()
         if state == GoalStatus.SUCCEEDED:
             return "succeeded"
+        # If move_base aborted because of / during a ZED-divergence hold (its
+        # recovery behaviors fail while the wheels are held, so it eventually
+        # gives up), don't treat it as a real failure -> the caller waits out the
+        # hold and re-sends the same goal so navigation auto-resumes.
+        if self._safety_hold or held_during_goal:
+            print(f"[nav] move_base ended (state={state}) during a ZED-divergence "
+                  f"hold for {location_name}; will resume when the ZED recovers.")
+            return "held"
         print(f"[nav] move_base failed for {location_name}. Action state code={state}")
         return "failed"
 
@@ -456,6 +500,11 @@ class NavigateHLA(HighLevelAction):
 
         attempts = 0
         recovering = False
+        held_resumes = 0
+        # Re-send the goal after a ZED-divergence hold this many times before
+        # falling through to human recovery -- guards against a persistent ZED
+        # fault masquerading as a transient hold.
+        max_held_resumes = 8
         # Whether THIS leg ended up needing the failure-recovery teleop. The
         # post-arrival adjustment step skips (and does not log) recovery-rescued
         # navigations -- a recovery park is "get past the failure", not a
@@ -486,6 +535,18 @@ class NavigateHLA(HighLevelAction):
                 self._last_leg_used_recovery = attempts > 0
                 print(f"Reached {location_name}.")
                 return
+
+            # ZED-divergence hold: not a real failure. Wait for the ZED to
+            # recover, then re-send the SAME goal so autonomy resumes -- without
+            # spending a human-recovery attempt.
+            if outcome == "held" and held_resumes < max_held_resumes:
+                held_resumes += 1
+                self._wait_while_safety_hold()
+                if rospy.is_shutdown():
+                    raise RuntimeError("ROS shutdown during ZED-divergence hold")
+                print(f"[nav] resuming {location_name} after ZED recovery "
+                      f"(resume {held_resumes}/{max_held_resumes}).")
+                continue
 
             if self.web_interface is None or attempts >= self._MAX_RECOVERY_ATTEMPTS:
                 raise RuntimeError(

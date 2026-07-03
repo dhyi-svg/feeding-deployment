@@ -23,7 +23,10 @@ from feeding_deployment.preference_learning.config.preference_bundle import (
     format_nav_offset,
 )
 from feeding_deployment.preference_learning.methods.episodic_memory import EpisodicMemoryModel
-from feeding_deployment.preference_learning.methods.long_term_memory import LongTermMemoryModel
+from feeding_deployment.preference_learning.methods.long_term_memory import (
+    LongTermMemoryModel,
+    _extract_json_object,
+)
 from feeding_deployment.preference_learning.methods.prompts.bundle_prediction import (
     get_bundle_prediction_prompt,
 )
@@ -229,6 +232,12 @@ class PredictionModel:
         self.working_memory_calls_dir = self.logs_dir / user / "prediction_model_llm_calls"
         self.working_memory_calls_dir.mkdir(parents=True, exist_ok=True)
 
+        # Per-open-dim reasons from the most recent predict_bundle call (the
+        # LLM's "explanations" object); {} when absent/malformed. The leading
+        # "latent_inference" sentence(s) ride along in last_latent_inference.
+        self.last_explanations: Dict[str, str] = {}
+        self.last_latent_inference: str = ""
+
     @staticmethod
     def _scan_day_files(dir_path: Path, current_day: int):
         """Yield ``(day, path)`` for ``day_*.json`` files with day < current_day,
@@ -357,11 +366,18 @@ class PredictionModel:
         self,
         context: Dict[str, Any],
         corrected: Dict[str, Any],
+        confirmed: Optional[Dict[str, Any]] = None,
         color_seeds: Optional[Dict[str, Any]] = None,
         nav_offset_seeds: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Returns predicted_bundle.
+
+        ``corrected`` holds the dims the user actively CHANGED this meal;
+        ``confirmed`` holds the dims the user accepted as-predicted. Both are
+        pinned (never flipped in the output) but are rendered as separate
+        prompt blocks — a correction is evidence about the meal's latent
+        factors, a confirmation merely says the prediction was acceptable.
 
         ``color_seeds`` maps each plate_color_* field to its current saved color
         (canonical dict / BT YAML value). Color predictions are seeded with these
@@ -373,9 +389,13 @@ class PredictionModel:
         """
         color_seeds = color_seeds or {}
         nav_offset_seeds = nav_offset_seeds or {}
+        confirmed = confirmed or {}
+        # All finalized dims; a dim in both maps takes the corrected value.
+        pinned = {**confirmed, **corrected}
 
         episodic_memory = ""
         if self.episodic_memory_model:
+            # Retrieval keys off the informative signal: true corrections only.
             episodic_memory = self.episodic_memory_model.retrieve(context, corrected)
 
         long_term_memory = ""
@@ -385,6 +405,7 @@ class PredictionModel:
         # Prompt blocks
         options_block = _build_options_block(color_seeds, nav_offset_seeds)
         corrected_block = _format_corrected_block(corrected)
+        confirmed_block = _format_corrected_block(confirmed)
         meal_contents_block = _build_meal_contents_block(str(context.get("meal", "")))
 
         prompt = get_bundle_prediction_prompt(
@@ -393,6 +414,7 @@ class PredictionModel:
             retrieved_block=episodic_memory,
             context=context,
             corrected_block=corrected_block,
+            confirmed_block=confirmed_block,
             options_block=options_block,
             meal_contents=meal_contents_block,
             physical_profile_description=self.physical_profile_description,
@@ -408,11 +430,23 @@ class PredictionModel:
                 ],
             )
 
+        def _parse_response(resp) -> Optional[Dict[str, Any]]:
+            raw = ("".join(b.text for b in resp.content if b.type == "text")).strip()
+            raw = _strip_code_fences(raw)
+            # Tolerate prose around the object via balanced-brace extraction.
+            return _safe_json_load(raw) or _safe_json_load(_extract_json_object(raw))
+
         resp = self._retry(_call)
-        raw = ("".join(b.text for b in resp.content if b.type == "text")).strip()
-        raw = _strip_code_fences(raw)
-        data = _safe_json_load(raw) or {}
-            
+        data = _parse_response(resp)
+        if data is None:
+            # Malformed JSON is usually transient -- one fresh attempt before
+            # falling back to seeds/pinned/defaults (which silently discards
+            # the model's actual prediction).
+            print("Warning: bundle prediction was not valid JSON; retrying once ...", flush=True)
+            resp = self._retry(_call)
+            data = _parse_response(resp)
+        data = data or {}
+
         if self.working_memory_calls_dir:
             log_file = self.working_memory_calls_dir / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
             if data:
@@ -420,10 +454,17 @@ class PredictionModel:
             else:
                 log_file.write_text(f"===PROMPT===\n{prompt}\n\n===RESPONSE===\nFailed to parse response as JSON. Raw response:\n{resp}", encoding="utf-8")
 
+        # Per-open-dim reasons + the leading latent-factor inference; extra
+        # response keys, not preference fields (the validation loop below only
+        # reads PREF_FIELDS).
+        expl = data.get("explanations")
+        self.last_explanations = dict(expl) if isinstance(expl, dict) else {}
+        self.last_latent_inference = str(data.get("latent_inference") or "")
+
         # Validate each field; categorical -> allowed option (fallback to
-        # corrected/default), color -> parsed HSV (fallback to seed), nav
+        # pinned/default), color -> parsed HSV (fallback to seed), nav
         # offset -> parsed dx/dy/dyaw (fallback to seed), text -> free string
-        # (fallback to corrected/per-field default, never empty).
+        # (fallback to pinned/per-field default, never empty).
         out: Dict[str, Any] = {}
         for field in PREF_FIELDS:
             if PREF_KIND.get(field) == "color":
@@ -434,18 +475,19 @@ class PredictionModel:
                 out[field] = parse_nav_offset(data.get(field), seed=seed)
             elif PREF_KIND.get(field) == "text":
                 val = str(data.get(field, "")).strip()
-                out[field] = val or corrected.get(field) or _TEXT_DEFAULTS.get(field, "")
+                out[field] = val or pinned.get(field) or _TEXT_DEFAULTS.get(field, "")
             else:
                 val = str(data.get(field, "")).strip()
                 if val in PREF_OPTIONS[field]:
                     out[field] = val
                 else:
-                    out[field] = corrected.get(field, PREF_OPTIONS[field][0])
+                    out[field] = pinned.get(field, PREF_OPTIONS[field][0])
 
-        out = _apply_hard_rules(out, meal=str(context.get("meal", "")), corrected=corrected)
+        out = _apply_hard_rules(out, meal=str(context.get("meal", "")), corrected=pinned)
 
-        # Corrected always overrides (canonicalize color/offset corrections).
-        for k, v in corrected.items():
+        # Pinned (confirmed + corrected) always overrides (canonicalize
+        # color/offset values).
+        for k, v in pinned.items():
             if k in _COLOR_FIELD_SET:
                 out[k] = parse_color(v, seed=parse_color(color_seeds.get(k), seed=DEFAULT_COLOR))
             elif k in _NAV_OFFSET_FIELD_SET:

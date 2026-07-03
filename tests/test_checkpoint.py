@@ -20,7 +20,7 @@ from feeding_deployment.integration.checkpoint import (
     CheckpointStore,
     FEEDING_PICKUP_CHECKPOINTS,
     LAST_STATE,
-    PREF_SNAPSHOT,
+    PREF_SNAPSHOT_FILE,
 )
 
 
@@ -129,8 +129,10 @@ def test_pref_snapshot_roundtrip_and_clear(tmp_path: Path):
     snap = {"context": {"meal": "x"}, "bundle": {"transfer_mode": "fork"},
             "finalized": {"transfer_mode"}, "corrected": {"transfer_mode": "fork"}}
     s.save_pref(snap)
-    assert (tmp_path / f"{PREF_SNAPSHOT}.p").exists()
-    assert s.load_pref() == snap
+    assert (tmp_path / PREF_SNAPSHOT_FILE).exists()  # human-editable JSON
+    # JSON snapshot: the ``finalized`` set is serialized as a sorted list
+    # (PreferenceSession.resume_from_state re-coerces it to a set).
+    assert s.load_pref() == {**snap, "finalized": ["transfer_mode"]}
 
     # Overwrites in place (latest correction wins).
     snap2 = {**snap, "corrected": {"transfer_mode": "spoon"}}

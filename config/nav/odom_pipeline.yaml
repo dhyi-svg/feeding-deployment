@@ -1,0 +1,34 @@
+# Odom pipeline ablation switches — read by zed_pose_to_odom_feedback.py.
+#
+# Each flag toggles ONE stage of the ZED-odom processing node. Setting a flag
+# false reproduces the original pre-change behavior for that stage, so you can
+# A/B any combination. Edit, then relaunch sensors (the node reads these at
+# startup). The active values are captured per run in the navlog
+# (params_snapshot.json) so each recording is self-labeling.
+#
+# Clean-ablation note: the node ALWAYS republishes odom_sanitized (Cartographer
+# taps it) and odom_feedback (TEB taps it); these flags change only the math
+# inside, not the wiring. With enable_sanitizer=false the sanitized topic simply
+# carries the raw pose unchanged (Cartographer then sees original data, via one
+# extra ~ms node hop that is held constant across all conditions).
+
+# --- STAGE 1: pose sanitizer -------------------------------------------------
+# Gate single-frame ZED VIO teleports on the pose that feeds Cartographer.
+#   true  = drop physically-impossible jumps, hold last good pose
+#   false = pass raw ZED pose through unchanged (ORIGINAL behavior)
+enable_sanitizer: false
+
+# --- STAGE 2: windowed velocity differentiation ------------------------------
+# How the odom_feedback twist (for move_base/TEB) is computed from the pose.
+#   true  = difference the pose over vel_diff_window seconds (low velocity noise)
+#   false = difference consecutive frames (ORIGINAL behavior)
+enable_windowed_diff: false
+
+# --- sanitizer tunables (used only when enable_sanitizer: true) --------------
+max_lin_vel: 0.5        # m/s  — pose jumps implying faster than this are dropped
+max_ang_vel: 1.5        # rad/s
+jump_accept_frames: 5   # consistent raw frames before adopting a sustained shift
+                        #   (a genuine ZED relocalization) instead of rejecting
+
+# --- differentiation tunable (used only when enable_windowed_diff: true) -----
+vel_diff_window: 0.08   # s  — diff span; keep >= a few ZED frame periods

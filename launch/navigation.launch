@@ -48,4 +48,20 @@
          slow commands still move without flattening arcs. 0 disables. -->
     <param name="min_move_units" value="250"/>
   </node>
+
+  <!-- ZED-divergence safety interlock: asserts /nav_safety_hold when the ZED VIO
+       diverges (tracking status != OK, or odom implies impossible velocity). The
+       cmd_vel bridge above commands zero while held, so the base stops until the
+       ZED recovers. Disable with NO_ZED_INTERLOCK:=1. -->
+  <node unless="$(optenv NO_ZED_INTERLOCK 0)"
+        pkg="feeding_deployment"
+        type="zed_health_monitor.py"
+        name="zed_health_monitor"
+        output="screen">
+    <param name="odom_topic" value="/zed_mini/zed_node/odom"/>
+    <param name="hold_topic" value="/nav_safety_hold"/>
+    <param name="max_lin_vel" value="0.5"/>
+    <param name="max_ang_vel" value="1.5"/>
+    <param name="recovery_stable_s" value="2.0"/>
+  </node>
 </launch>

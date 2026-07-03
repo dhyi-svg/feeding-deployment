@@ -13,7 +13,10 @@
               -load_frozen_state $(arg load_frozen_state)">
     <remap from="scan_2" to="/lidar_l/scan"/>
     <remap from="scan_1" to="/lidar_r/scan"/>
-    <remap from="odom" to="/zed_mini/zed_node/odom"/>
+    <!-- Sanitized odom (zed_pose_to_odom_feedback.py drops single-frame VIO
+         teleports). Was /zed_mini/zed_node/odom; a raw teleport frame corrupted
+         the extrapolator for 86 s (navlog_20260702_141316). -->
+    <remap from="odom" to="/zed_mini/zed_node/odom_sanitized"/>
   </node>
 
   <!-- Publish occupancy grid as /map. -->

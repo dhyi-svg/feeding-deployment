@@ -30,6 +30,7 @@ def get_bundle_prediction_prompt(
     corrected_block: str,
     options_block: str,
     meal_contents: str = "(not provided)",
+    confirmed_block: str = "(none)",
     *,
     physical_profile_description: str | None = None,
 ) -> str:
@@ -56,6 +57,7 @@ def get_bundle_prediction_prompt(
         setting=context.get("setting"),
         time_of_day=context.get("time_of_day"),
         meal_contents=meal_contents,
+        confirmed_block=confirmed_block,
         corrected_block=corrected_block,
         options_block=options_block,
         pref_fields_csv=", ".join(_PREF_FIELDS),

@@ -84,6 +84,44 @@ _NAV_OFFSET_FIELD_SET = set(NAV_OFFSET_FIELDS)
 # wait_before_autocontinue_seconds preference has been finalized.
 _DEFAULT_AUTOCONTINUE_SECONDS = 10.0
 
+# ---------------------------------------------------------------------------
+# Staged ask schedule + deployment defaults, shared by run.py and the terminal
+# emulator (emulate_preference_pipeline.py) so the staged flow has a single
+# source of truth.
+# ---------------------------------------------------------------------------
+
+# Used for preference prediction when --physical_profile_file is not passed.
+DEFAULT_PHYSICAL_PROFILE = (
+    "This user has moderate voluntary control of their arms and is able to press "
+    "physical buttons. They can lean forward to reach food during outside-mouth "
+    "transfers. They have good neck and head control and can open their mouth wide "
+    "and perform head gestures. They interact with the web interface on their "
+    "personal device using their arms."
+)
+
+# Preference dimensions asked at the start of the meal (before fetching the
+# plate). The finalized wait drives the autocontinue of later correction pages.
+INITIAL_PREF_DIMS = ["robot_speed", "wait_before_autocontinue_seconds"]
+
+# Preference dimensions asked at the table, just before feeding begins.
+TABLE_PREF_DIMS = [
+    "skewering_axis",
+    "web_interface_confirmation",
+    "bite_dipping_preference",
+    "bite_ordering",
+    "transfer_mode",
+    "outside_mouth_distance",
+    "convey_robot_ready_for_initiating_transfer",
+    "convey_robot_ready_for_completing_transfer",
+    "detect_user_ready_for_initiating_transfer_feeding",
+    "detect_user_ready_for_initiating_transfer_drinking",
+    "detect_user_ready_for_initiating_transfer_wiping",
+    "detect_user_completed_transfer_feeding",
+    "detect_user_completed_transfer_drinking",
+    "detect_user_completed_transfer_wiping",
+    "retract_between_bites",
+]
+
 
 def _pickup_yaml_name(location: str) -> str:
     return f"pick_plate_from_{location}.yaml"
@@ -155,6 +193,10 @@ class PreferenceSession:
         self.finalized: set[str] = set()
         # Dims the user actively CHANGED (learning signal); subset of finalized.
         self.corrected: Dict[str, Any] = {}
+        # Per-open-dim reasons + latent-factor inference from the most recent
+        # (re)prediction.
+        self.last_explanations: Dict[str, str] = {}
+        self.last_latent_inference: str = ""
 
         # Guards the in-memory bundle/finalized/corrected against the settings-edit
         # path (a separate WebInterface worker thread calling settings_view()/edit())
@@ -282,21 +324,41 @@ class PreferenceSession:
     # ------------------------------------------------------------------ #
     # Prediction
     # ------------------------------------------------------------------ #
-    def _overrides(self) -> Dict[str, Any]:
-        """Finalized values, pinned during (re)prediction so they never flip."""
+    def _pinned_split(self) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        """Finalized values split into (corrected, confirmed), both pinned during
+        (re)prediction so they never flip. Corrected = dims the user actively
+        changed this meal; confirmed = dims they accepted as-predicted."""
         with self._lock:
-            return {f: self.bundle[f] for f in self.finalized if f in self.bundle}
+            corrected = {
+                f: self.bundle[f]
+                for f in self.finalized
+                if f in self.corrected and f in self.bundle
+            }
+            confirmed = {
+                f: self.bundle[f]
+                for f in self.finalized
+                if f not in self.corrected and f in self.bundle
+            }
+        return corrected, confirmed
 
     def _predict(self) -> Dict[str, Any]:
         # predict_bundle may call an LLM (slow). Callers must NOT hold self._lock
         # across this (see _repredict_open) so the settings worker / execution
         # thread are never blocked on the network.
-        return self._model.predict_bundle(
+        corrected, confirmed = self._pinned_split()
+        pred = self._model.predict_bundle(
             self.context,
-            self._overrides(),
+            corrected,
+            confirmed=confirmed,
             color_seeds=self._color_seeds(),
             nav_offset_seeds=self._nav_offset_seeds(),
         )
+        # Per-open-dim reasons + latent-factor inference from this prediction
+        # (logged at start(); shown by the terminal emulator). Best-effort:
+        # absent on models without them.
+        self.last_explanations = dict(getattr(self._model, "last_explanations", {}) or {})
+        self.last_latent_inference = str(getattr(self._model, "last_latent_inference", "") or "")
+        return pred
 
     def _repredict_open(self) -> None:
         """Refresh predictions for all still-open dims (finalized dims pinned)."""
@@ -390,6 +452,7 @@ class PreferenceSession:
             "preference_predicted",
             stage="start",
             predicted_bundle=self._loggable_bundle(),
+            explanations=dict(self.last_explanations),
         )
 
     @property

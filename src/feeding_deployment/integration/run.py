@@ -122,7 +122,12 @@ from feeding_deployment.transparency.query_llm import TransparencyQuery
 from feeding_deployment.integration.preference_context import build_preference_context
 from feeding_deployment.integration.checkpoint import CheckpointStore
 from feeding_deployment.integration.data_logger import DataLogger
-from feeding_deployment.integration.preference_session import PreferenceSession
+from feeding_deployment.integration.preference_session import (
+    DEFAULT_PHYSICAL_PROFILE,
+    INITIAL_PREF_DIMS as _INITIAL_PREF_DIMS,
+    PreferenceSession,
+    TABLE_PREF_DIMS as _TABLE_PREF_DIMS,
+)
 from feeding_deployment.preference_learning.methods.prediction_model import PredictionModel, PREF_OPTIONS
 from feeding_deployment.preference_learning.config.physical_capabilities import (
     PHYSICAL_CAPABILITY_PROFILES,
@@ -140,37 +145,9 @@ class FatalSkillFailure(Exception):
     """
 
 
-# Used for preference prediction when --physical_profile_file is not passed.
-DEFAULT_PHYSICAL_PROFILE = (
-    "This user has moderate voluntary control of their arms and is able to press "
-    "physical buttons. They can lean forward to reach food during outside-mouth "
-    "transfers. They have good neck and head control and can open their mouth wide "
-    "and perform head gestures. They interact with the web interface on their "
-    "personal device using their arms."
-)
-
-# Preference dimensions asked at the start of the meal (before fetching the
-# plate). The finalized wait drives the autocontinue of later correction pages.
-_INITIAL_PREF_DIMS = ["robot_speed", "wait_before_autocontinue_seconds"]
-
-# Preference dimensions asked at the table, just before feeding begins.
-_TABLE_PREF_DIMS = [
-    "skewering_axis",
-    "web_interface_confirmation",
-    "bite_dipping_preference",
-    "bite_ordering",
-    "transfer_mode",
-    "outside_mouth_distance",
-    "convey_robot_ready_for_initiating_transfer",
-    "convey_robot_ready_for_completing_transfer",
-    "detect_user_ready_for_initiating_transfer_feeding",
-    "detect_user_ready_for_initiating_transfer_drinking",
-    "detect_user_ready_for_initiating_transfer_wiping",
-    "detect_user_completed_transfer_feeding",
-    "detect_user_completed_transfer_drinking",
-    "detect_user_completed_transfer_wiping",
-    "retract_between_bites",
-]
+# DEFAULT_PHYSICAL_PROFILE, _INITIAL_PREF_DIMS and _TABLE_PREF_DIMS now live in
+# preference_session.py (shared with emulate_preference_pipeline.py) and are
+# imported above.
 
 # All the high level actions we want to consider.
 HLAS = {

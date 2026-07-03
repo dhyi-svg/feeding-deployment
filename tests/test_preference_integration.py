@@ -39,6 +39,8 @@ from feeding_deployment.preference_learning.methods.utils import PREF_FIELDS
 from feeding_deployment.preference_learning.config.preference_bundle import (
     COLOR_FIELDS,
     DEFAULT_COLOR,
+    DEFAULT_NAV_OFFSET,
+    NAV_OFFSET_BOUNDS,
 )
 
 _PM_MODULE = "feeding_deployment.preference_learning.methods.prediction_model"
@@ -46,9 +48,14 @@ _PM_MODULE = "feeding_deployment.preference_learning.methods.prediction_model"
 
 def _assert_valid_value(field, value):
     """Categorical fields must be an allowed option; color fields must be a
-    canonical HSV dict; text fields must be a non-empty string."""
+    canonical HSV dict; nav-offset fields must be a canonical, in-bounds
+    dx/dy/dyaw dict; text fields must be a non-empty string."""
     if PREF_KIND.get(field) == "color":
         assert isinstance(value, dict) and {"h", "s", "v", "range"} <= set(value)
+    elif PREF_KIND.get(field) == "nav_offset":
+        assert isinstance(value, dict) and {"dx", "dy", "dyaw"} <= set(value)
+        for k in ("dx", "dy", "dyaw"):
+            assert abs(value[k]) <= NAV_OFFSET_BOUNDS[k] + 1e-9, f"{field}.{k} out of bounds"
     elif PREF_KIND.get(field) == "text":
         assert isinstance(value, str) and value.strip(), f"{field} must be a non-empty string"
     else:
@@ -197,12 +204,14 @@ def _mock_anthropic():
 
 def _default_bundle() -> dict:
     """A valid full bundle: first option for categorical dims, an HSV object for
-    color dims, a free-text string for text dims (matches the LLM output shape
-    predict_bundle expects)."""
+    color dims, a dx/dy/dyaw object for nav-offset dims, a free-text string for
+    text dims (matches the LLM output shape predict_bundle expects)."""
     bundle = {}
     for field in PREF_FIELDS:
         if PREF_KIND.get(field) == "color":
             bundle[field] = dict(DEFAULT_COLOR)
+        elif PREF_KIND.get(field) == "nav_offset":
+            bundle[field] = dict(DEFAULT_NAV_OFFSET)
         elif PREF_KIND.get(field) == "text":
             bundle[field] = f"predicted {field}"
         else:
@@ -296,6 +305,84 @@ class TestPredictionModelPredictBundle:
         ctx = {"meal": MEALS[0], "setting": SETTINGS[0], "time_of_day": TIMES_OF_DAY[0]}
         result = model.predict_bundle(ctx, {override_field: override_val})
         assert result[override_field] == override_val
+
+    @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
+    @patch(f"{_PM_MODULE}.OpenAI")
+    def test_confirmed_and_corrected_blocks_and_pinning(self, mock_openai_cls, _key, _mock_anthropic, tmp_path):
+        bundle = _default_bundle()
+        _mock_anthropic.messages.create.return_value = _fake_anthropic_response(bundle)
+
+        from feeding_deployment.preference_learning.methods.prediction_model import (
+            PredictionModel,
+        )
+
+        model = PredictionModel(
+            user="test_user",
+            physical_profile_label="test_label",
+            logs_dir=tmp_path / "pref",
+            physical_profile_description="Test.",
+            use_long_term_memory=False,
+            use_episodic_memory=False,
+        )
+
+        corr_field, conf_field = "robot_speed", "microwave_time"
+        corr_val = PREF_OPTIONS[corr_field][-1]
+        conf_val = PREF_OPTIONS[conf_field][-1]  # differs from the LLM's first-option bundle
+
+        ctx = {"meal": MEALS[0], "setting": SETTINGS[0], "time_of_day": TIMES_OF_DAY[0]}
+        result = model.predict_bundle(
+            ctx, {corr_field: corr_val}, confirmed={conf_field: conf_val}
+        )
+
+        # Both pinned: neither flips back to the LLM's value.
+        assert result[corr_field] == corr_val
+        assert result[conf_field] == conf_val
+
+        # Rendered in the right prompt blocks.
+        prompt = _mock_anthropic.messages.create.call_args.kwargs["messages"][0]["content"]
+        assert "Dimensions the user CONFIRMED this meal" in prompt
+        assert "Dimensions the user CORRECTED this meal" in prompt
+        confirmed_sec = prompt.split("Dimensions the user CONFIRMED this meal", 1)[1]
+        confirmed_sec, corrected_sec = confirmed_sec.split(
+            "Dimensions the user CORRECTED this meal", 1
+        )
+        assert f"{conf_field}={conf_val}" in confirmed_sec
+        assert f"{corr_field}={corr_val}" not in confirmed_sec
+        assert f"{corr_field}={corr_val}" in corrected_sec
+
+    @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
+    @patch(f"{_PM_MODULE}.OpenAI")
+    def test_explanations_parsed_and_isolated(self, mock_openai_cls, _key, _mock_anthropic, tmp_path):
+        from feeding_deployment.preference_learning.methods.prediction_model import (
+            PredictionModel,
+        )
+
+        model = PredictionModel(
+            user="test_user",
+            physical_profile_label="test_label",
+            logs_dir=tmp_path / "pref",
+            physical_profile_description="Test.",
+            use_long_term_memory=False,
+            use_episodic_memory=False,
+        )
+        ctx = {"meal": MEALS[0], "setting": SETTINGS[0], "time_of_day": TIMES_OF_DAY[0]}
+
+        # Response WITH explanations: parsed onto the model, not into the bundle.
+        bundle = _default_bundle()
+        bundle["explanations"] = {"robot_speed": "matches the user's usual morning pace"}
+        _mock_anthropic.messages.create.return_value = _fake_anthropic_response(bundle)
+        result = model.predict_bundle(ctx, {})
+        assert set(result.keys()) == set(PREF_FIELDS)  # extra key never leaks into the bundle
+        assert model.last_explanations == {
+            "robot_speed": "matches the user's usual morning pace"
+        }
+
+        # Response WITHOUT explanations (or malformed): resets to {}.
+        bundle2 = _default_bundle()
+        bundle2["explanations"] = "not a dict"
+        _mock_anthropic.messages.create.return_value = _fake_anthropic_response(bundle2)
+        model.predict_bundle(ctx, {})
+        assert model.last_explanations == {}
 
     @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
     @patch(f"{_PM_MODULE}.OpenAI")
@@ -435,10 +522,10 @@ class TestPrefOptionsConsistency:
         assert set(PREF_FIELDS) == set(PREF_OPTIONS.keys())
 
     def test_every_categorical_field_has_at_least_two_options(self):
-        # Color dims are continuous and text dims are free-form (no option list);
-        # only categorical dims must offer a real choice.
+        # Color/nav-offset dims are continuous and text dims are free-form (no
+        # option list); only categorical dims must offer a real choice.
         for field, opts in PREF_OPTIONS.items():
-            if PREF_KIND.get(field) in ("color", "text"):
+            if PREF_KIND.get(field) in ("color", "nav_offset", "text"):
                 assert opts == []
                 continue
             assert len(opts) >= 2, f"{field} has fewer than 2 options"
