@@ -135,6 +135,10 @@ def _emulate_pickup_color(session: PreferenceSession, bt_dir: Path, location: st
     """Emulate the plate pickup at ``location``: show the detection color the
     session wrote into the pickup BT YAML, optionally take a user correction
     (as the on-robot color picker would), write it back, and record the dim."""
+    # Pre-skill join, mirroring run.py: pick_plate_* consumes predictions, so
+    # settle any in-flight background reprediction before this "BT" reads its
+    # YAML (and before the user's correction can race the worker's writes).
+    session.wait_for_reprediction()
     bt_path = bt_dir / _pickup_yaml_name(location)
     current = color_from_bt(
         _read_param(bt_path, "HandleColor"), _read_param(bt_path, "ColorRange")
@@ -171,6 +175,8 @@ def _emulate_navigation(session: PreferenceSession, bt_dir: Path, location: str)
     the goal, optionally take a teleop adjustment (composed onto the total in
     the arrived pose's local frame, as on-robot), write it back, and record the
     dim."""
+    # Pre-skill join, mirroring run.py (navigate_to_* consumes predictions).
+    session.wait_for_reprediction()
     bt_path = bt_dir / _nav_yaml_name(location)
     prev = nav_offset_from_bt(_read_param(bt_path, "PositionOffset"))
     print(f"\n=== [skill] navigate_to_{location} (emulated) ===")
@@ -213,6 +219,9 @@ def _emulate_navigation(session: PreferenceSession, bt_dir: Path, location: str)
 def _print_explanations(session: PreferenceSession) -> None:
     """Compact dump of the model's per-open-dim reasons from the most recent
     (re)prediction, so the stress tester can judge the reasoning live."""
+    # Corrections repredict in the background; settle the worker so the
+    # printed reasoning reflects the corrections just made.
+    session.wait_for_reprediction()
     latent = getattr(session, "last_latent_inference", "") or ""
     expl = getattr(session, "last_explanations", None) or {}
     if latent:

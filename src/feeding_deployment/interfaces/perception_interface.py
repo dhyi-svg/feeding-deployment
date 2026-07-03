@@ -1016,7 +1016,7 @@ class PerceptionInterface:
         if handle_type == "microwave":
             offset[:3, 3] = np.array([0, 0.009, -0.01])
         elif handle_type == "bottom textured fridge door":
-            offset[:3, 3] = np.array([0, -0.012, 0.0])
+            offset[:3, 3] = np.array([0, -0.012, -0.015])
         elif handle_type == "table":
             offset[:3, 3] = np.array([0, -0.008, -0.015])
         else:
@@ -1026,7 +1026,7 @@ class PerceptionInterface:
         if handle_type == "microwave":
             offset[:3, 3] = np.array([0, 0.009, -0.11])
         elif handle_type == "bottom textured fridge door":
-            offset[:3, 3] = np.array([0, -0.012, -0.10])
+            offset[:3, 3] = np.array([0, -0.012, -0.115])
         elif handle_type == "table":
             offset[:3, 3] = np.array([0, -0.008, -0.115])
         else:

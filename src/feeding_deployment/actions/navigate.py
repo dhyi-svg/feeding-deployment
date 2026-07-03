@@ -990,8 +990,13 @@ class NavigateHLA(HighLevelAction):
         corrections by construction and does not double-count nav noise the
         user just drove out. Best-effort throughout: a failure here must never
         break the navigation that already succeeded.
+
+        Deliberately NOT gated on no_waits: on-robot runs pass --no_waits (to
+        use the NullSimulator instead of PyBullet), and the adjustment prompt
+        is a real-robot interaction that must still fire there. Only a missing
+        web interface skips it.
         """
-        if self.no_waits or self.web_interface is None:
+        if self.web_interface is None:
             return
         if location_name not in self._VALID_TARGETS:
             return

@@ -127,6 +127,7 @@ from feeding_deployment.integration.preference_session import (
     INITIAL_PREF_DIMS as _INITIAL_PREF_DIMS,
     PreferenceSession,
     TABLE_PREF_DIMS as _TABLE_PREF_DIMS,
+    bt_consumes_predictions,
 )
 from feeding_deployment.preference_learning.methods.prediction_model import PredictionModel, PREF_OPTIONS
 from feeding_deployment.preference_learning.config.physical_capabilities import (
@@ -1054,6 +1055,16 @@ class _Runner:
                     "robot_paused", raise_on_takeover=False
                 )
             if self._pref_session is not None:
+                # Corrections repredict in the BACKGROUND (the robot keeps
+                # moving); join here only before skills whose BT reads
+                # prediction-produced parameters (pickup colors, nav offsets,
+                # feeding dims) so they never execute on half-updated YAMLs.
+                # The join runs after the settings stall (edits made while the
+                # panel was open have scheduled their reprediction by now) and
+                # before the flush (so the deferred transfer re-init uses the
+                # final repredicted bundle).
+                if bt_consumes_predictions(skill_plan_names[i]):
+                    self._pref_session.wait_for_reprediction()
                 self._pref_session.flush_pending_inmemory()
 
             # Execute the high-level plan in simulation. On a mid-skill takeover

@@ -291,29 +291,55 @@ for both release logging and the memory day). `--pref_mode` defaults to `interfa
    5. `ask(_TABLE_PREF_DIMS)` — the 15 remaining categorical/text dims, one page each.
 7. **Feeding loop** — task selection (bite / sip / wipe / gestures / transparency /
    adaptability / teleop). Transfer skills consume the interaction dims (§6). Before each
-   HLA, the executive stalls while the settings overlay is open and flushes any deferred
-   transfer re-init (`run.py:1075-1080`).
+   HLA, the executive stalls while the settings overlay is open, joins the background
+   reprediction if the skill's BT consumes predictions (`bt_consumes_predictions`), and
+   flushes any deferred transfer re-init (run.py before-skill block).
 8. **Finish** — "finish feeding" plans `PickPlateFromTable` (table color correction) then
    `PlacePlateInSink`; afterwards `finalize_meal(day)` performs the single memory update
    (any never-asked dims are finalized at their predicted values as implicit confirms) and
    the settings accessor is cleared (`run.py:869-874`, `_finalize_preference_session`).
 
-**Correction semantics inside `ask()`** (`preference_session.py:401-458`): each dim is
+**Correction semantics inside `ask()`** (`preference_session.ask`): each dim is
 shown with its prediction highlighted; the page auto-confirms the prediction when the
 countdown expires without interaction (`webapp/src/views/preference_correction.vue` — user
 interaction cancels the countdown; the predicted value is prepended to the options if
-missing). A returned value ≠ prediction is a correction: it is finalized, recorded in
-`corrected`, and `_repredict_open()` refreshes every still-open dim (finalized dims are
-pinned via the `corrected` argument of `predict_bundle`) and re-writes open color/nav
-predictions to the YAMLs. A `bite_ordering` correction is first cleaned for
-grammar/grounding by FLAIR's meal parser (raw text kept on any failure).
+missing). A returned value ≠ prediction is a correction: it is finalized synchronously,
+recorded in `corrected`, and a **background reprediction** of every still-open dim is
+scheduled (finalized dims are pinned via the `corrected`/`confirmed` arguments of
+`predict_bundle`); the pass also re-writes open color/nav predictions to the YAMLs.
+`ask()` joins the worker before showing each step, so a mid-batch correction still waits
+for its reprediction (the page must show values conditioned on it) while the batch-final
+correction's LLM call overlaps the following robot motion. A `bite_ordering` correction is
+first cleaned for grammar/grounding by FLAIR's meal parser (raw text kept on any failure).
 
 **Settings overlay** (`web_interface.py:337-417`, `preference_session.settings_view/edit`):
 a latched topic publishes the finalized categorical dims (colors/text/nav excluded; locked
-dims non-editable). Edits arrive on a dedicated worker thread, are treated as corrections
-(finalize + repredict + re-apply), and a `transfer_mode` edit defers the transfer-object
-reconstruction to the main thread (`flush_pending_inmemory`) so it never swaps under an
-in-flight motion. The executive and the ask pages stall while the panel is open.
+dims non-editable). Edits arrive on a dedicated worker thread and are treated as
+corrections: the edited value is finalized and applied to the BTs **synchronously** (fast,
+no LLM — the next skill sees it even before any reprediction lands), a background
+reprediction of the open dims is scheduled, and a `transfer_mode` edit defers the
+transfer-object reconstruction to the main thread (`flush_pending_inmemory`) so it never
+swaps under an in-flight motion. The executive and the ask pages stall while the panel is
+open.
+
+**Threading model** (`preference_session.py` module docstring): all correction-triggered
+repredictions run on a single **coalescing daemon worker** — at most one LLM call in
+flight; triggers arriving mid-pass mark the state dirty and get exactly one follow-up pass
+carrying the newest corrections (`_schedule_repredict`/`_repredict_worker`). Consumers
+join via `wait_for_reprediction()`: `ask()` before each step, `record_color`/
+`record_nav_offset` on entry (the observed-vs-predicted comparison runs against the
+settled prediction), `finalize_meal` on entry, and run.py before every skill whose BT
+reads prediction-produced parameters (`bt_consumes_predictions`: `pick_plate_from_*`,
+`navigate_to_*`, `transfer_*`, `acquire_bite` — run.py's before-skill order is
+settings-closed stall → join → `flush_pending_inmemory`). All BT-YAML writers serialize
+on a dedicated mutex acquired *before* the session lock. Two guards close the write-back
+races: **external writes win** — the worker skips any color/nav field whose YAML changed
+(vs. the seeds its prediction was computed from) while the LLM call was in flight, so a
+picker/teleop write-back is never clobbered by a stale prediction — and `record_*`
+re-assert the observed YAML value after finalizing. A failed background pass is swallowed
+(previous predictions stay applied; joiners never wedge). `capture_state` deliberately
+does **not** join — a crash between a correction and the worker finishing resumes with
+the pre-repredict open predictions, which is safe (merely re-correctable).
 
 **Crash/resume**: every locked correction immediately overwrites
 `saved_states/pref_session.json` (`_finalize` → `on_change` → `CheckpointStore.save_pref`);
@@ -382,9 +408,11 @@ interactions into the same finalize/repredict/learn cycle as a button press.
   approved* (`perception_interface.py:815-1013`).
 - A changed color/range is written back into the YAML by the skill
   (`pick_plate.py:95-98`), and after the HLA completes the executive calls
-  `record_color(location)` (`run.py:1128-1138`): the session reads the YAML back, finalizes
-  the dim, and — if it changed — repredicts the open dims so the correction propagates to
-  the other two pickup colors (same physical handle).
+  `record_color(location)`: the session joins any in-flight background reprediction, reads
+  the YAML back, finalizes the dim, and — if it changed — schedules a background
+  reprediction so the correction propagates to the other two pickup colors (same physical
+  handle) while the robot keeps moving; the next prediction-consuming skill joins before
+  its BT loads.
 
 ### 6.2 Navigation offsets
 
@@ -713,12 +741,14 @@ broken), **C** = corner case / sharp edge (works as coded, but surprising or fra
   reader could in principle observe a partially-written pickup/navigate YAML during a
   write-back. Low likelihood (write-backs happen on the executive thread during a skill,
   when the settings overlay stall usually holds), but the asymmetry is real.
-- **C13 — `ask()` reads the live bundle without the session lock**
-  (`preference_session.py:426-447`): a concurrent settings edit's reprediction can update
-  an open dim between the page being shown and the response being compared, so `changed`
-  is computed against a stale `predicted`. Benign consequences (worst case: a
-  confirmation is recorded as a correction or vice versa for that dim), but it is the one
-  known hole in the otherwise careful locking scheme.
+- **C13 — the ask-page display window is not locked.** `ask()` joins the background
+  worker before showing each step, so the displayed prediction is always settled — but a
+  settings edit made *while the page is on screen* can trigger a reprediction that moves
+  the still-open dim being displayed before the user answers, so `changed` is computed
+  against the (now stale) value that was shown. Benign consequences (worst case: a
+  confirmation is recorded as a correction or vice versa for that dim), and inherent to
+  showing a live-updating quantity to a human; the alternative — locking open dims while
+  a page is up — would defeat edit-driven propagation.
 - **C14 — Deployment day-1 first-ask cold start.** The very first `ask()` happens before
   any memory exists; the correction-page autocontinue is 10 s
   (`_DEFAULT_AUTOCONTINUE_SECONDS`) until `wait_before_autocontinue_seconds` itself is

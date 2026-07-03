@@ -189,6 +189,9 @@ def test_repredict_receives_confirmed_and_corrected_split(bt_dir):
     s = PreferenceSession(model, bt_dir, CTX, web_interface=web)
     s.start()
     s.ask(["robot_speed", "skewering_axis"])
+    # The correction hit the LAST dim of the batch, so its reprediction runs in
+    # the background -- settle it before asserting.
+    assert s.wait_for_reprediction(5.0)
 
     last = model.predict_calls[-1]
     assert last["corrected"] == {"skewering_axis": other}
@@ -217,6 +220,7 @@ def test_record_color_correction_finalizes_and_propagates(bt_dir):
     assert "plate_color_fridge" in s.finalized
     assert "plate_color_fridge" in s.corrected
     assert s.bundle["plate_color_fridge"] == {"h": 10, "s": 20, "v": 30, "range": 0.2}
+    assert s.wait_for_reprediction(5.0)  # propagation runs in the background
     assert len(model.predict_calls) > n_before  # propagated reprediction
 
 
@@ -314,6 +318,9 @@ def test_transfer_mode_edit_defers_reinit_until_flush(bt_dir):
     other = next(o for o in PREF_OPTIONS["transfer_mode"] if o != before)
     assert s.edit("transfer_mode", other) is True
     assert s._pending_transfer_reinit is True  # deferred, not applied on the worker
+    # Settle the background reprediction first: its apply re-arms the pending
+    # flag, exactly as run.py's join-then-flush ordering settles it.
+    assert s.wait_for_reprediction(5.0)
     s.flush_pending_inmemory()  # main-thread safe boundary
     assert s._pending_transfer_reinit is False
 
@@ -357,6 +364,7 @@ def test_settings_view_and_edit_are_thread_safe(bt_dir):
     finally:
         stop.set()
         t.join()
+    assert s.wait_for_reprediction(5.0)  # drain the coalesced background worker
     assert not errors
 
 
@@ -418,8 +426,15 @@ def test_capture_resume_roundtrip(bt_dir):
     s = PreferenceSession(model, bt_dir, CTX, web_interface=web)
     s.start()
     s.ask(["robot_speed"])
+    # Join before simulating the pickup's color write-back: mirrors run.py's
+    # pre-skill barrier (pick_plate_* consumes predictions), without which the
+    # in-flight robot_speed repredict could interleave with this raw write.
+    assert s.wait_for_reprediction(5.0)
     _set_yaml_color(bt_dir, "fridge", {"h": 10, "s": 20, "v": 30, "range": 0.2})
     s.record_color("fridge")
+    # Settle the background propagation so the snapshot and the live bundle
+    # compare against the same settled state.
+    assert s.wait_for_reprediction(5.0)
 
     snapshot = s.capture_state()
     assert snapshot["corrected"]["robot_speed"] == "fast"
@@ -508,6 +523,91 @@ def test_resume_does_not_reask_finalized_color(bt_dir):
     s2.record_color("fridge")  # already finalized -> early return
     assert len(model2.predict_calls) == n_before  # no reprediction
     assert "plate_color_fridge" in s2.finalized
+
+
+def test_repredict_runs_in_background_and_join_waits(bt_dir):
+    """A correction must return immediately (LLM off the critical path) while
+    wait_for_reprediction blocks until the repredicted values are applied."""
+    import threading
+    import time
+
+    release = threading.Event()
+
+    class SlowModel(FakeModel):
+        def predict_bundle(self, *args, **kwargs):
+            if self.predict_calls:  # block repredictions only, not start()
+                assert release.wait(5.0), "test gate never released"
+            return super().predict_bundle(*args, **kwargs)
+
+    model = SlowModel()
+    s = PreferenceSession(model, bt_dir, CTX)
+    s.start()
+
+    _set_yaml_color(bt_dir, "fridge", {"h": 10, "s": 20, "v": 30, "range": 0.2})
+    t0 = time.monotonic()
+    s.record_color("fridge")
+    assert time.monotonic() - t0 < 1.0, "record_color must not block on the LLM"
+    # The correction itself is locked synchronously even while the LLM runs.
+    assert "plate_color_fridge" in s.corrected
+    assert not s.wait_for_reprediction(timeout=0.05)  # still in flight
+
+    release.set()
+    assert s.wait_for_reprediction(5.0)
+    assert len(model.predict_calls) >= 2  # start + background repredict
+
+
+def test_repredict_triggers_coalesce(bt_dir):
+    """Settings edits arriving while a repredict is in flight coalesce into ONE
+    extra pass carrying the newest corrections -- never one LLM call per edit.
+    (edit() is the burst source: unlike ask()/record_*, it does not join on
+    entry, mirroring the settings apply-worker thread.)"""
+    import threading
+
+    release = threading.Event()
+    started = threading.Event()
+
+    class SlowModel(FakeModel):
+        def predict_bundle(self, *args, **kwargs):
+            if self.predict_calls:  # gate repredictions only, not start()
+                started.set()
+                assert release.wait(5.0)
+            return super().predict_bundle(*args, **kwargs)
+
+    model = SlowModel()
+    s = PreferenceSession(model, bt_dir, CTX, web_interface=FakeWeb())
+    s.start()
+    # Confirm (not correct) three dims so they are finalized and editable
+    # without triggering any repredict yet.
+    s.ask(["robot_speed", "skewering_axis", "web_interface_confirmation"])
+    assert len(model.predict_calls) == 1  # start() only
+
+    # First edit starts the worker; wait until its pass is provably inside the
+    # (gated) LLM call, then land two more edits mid-flight: they coalesce into
+    # a single follow-up pass.
+    assert s.edit("robot_speed", PREF_OPTIONS["robot_speed"][1]) is True
+    assert started.wait(5.0), "worker never reached the gated LLM call"
+    assert s.edit("skewering_axis", PREF_OPTIONS["skewering_axis"][1]) is True
+    assert s.edit("web_interface_confirmation", PREF_OPTIONS["web_interface_confirmation"][1]) is True
+
+    release.set()
+    assert s.wait_for_reprediction(5.0)
+    # start (1) + gated first pass (1) + one coalesced pass (1) = 3.
+    assert len(model.predict_calls) == 3
+    # The final pass was pinned with every edit made.
+    assert set(model.predict_calls[-1]["corrected"]) >= {
+        "robot_speed", "skewering_axis", "web_interface_confirmation",
+    }
+
+
+def test_bt_consumes_predictions_predicate():
+    from feeding_deployment.integration.preference_session import bt_consumes_predictions
+
+    for name in ("pick_plate_from_fridge", "navigate_to_table", "transfer_utensil",
+                 "transfer_drink", "acquire_bite"):
+        assert bt_consumes_predictions(name), name
+    for name in ("place_plate_on_holder", "open_fridge", "close_microwave",
+                 "press_microwave_button", "gaze_at_table", "place_plate_in_sink"):
+        assert not bt_consumes_predictions(name), name
 
 
 def test_repredictions_do_not_write_memory(bt_dir):

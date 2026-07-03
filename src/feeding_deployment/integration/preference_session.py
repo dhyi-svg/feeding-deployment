@@ -25,6 +25,16 @@ bundle and drives the *staged* flow described in the design:
 
 Reprediction only ever *reads* (``predict_bundle``); memory is written exactly
 once, in ``finalize_meal``.
+
+Threading: repredictions triggered by corrections run on a single coalescing
+BACKGROUND worker so the robot is not stationary during the LLM call. Every
+consumer of predictions joins first -- ``ask()`` before showing each step,
+``record_color``/``record_nav_offset`` on entry, ``finalize_meal`` on entry,
+and run.py via ``wait_for_reprediction()`` before executing any skill whose
+behavior tree reads prediction-produced parameters (see
+``bt_consumes_predictions``). All BT-YAML writers serialize on a dedicated
+mutex (acquired BEFORE the session lock, always in that order) so concurrent
+appliers can never interleave lost-update file writes.
 """
 
 from __future__ import annotations
@@ -102,6 +112,26 @@ DEFAULT_PHYSICAL_PROFILE = (
 # Preference dimensions asked at the start of the meal (before fetching the
 # plate). The finalized wait drives the autocontinue of later correction pages.
 INITIAL_PREF_DIMS = ["robot_speed", "wait_before_autocontinue_seconds"]
+
+# Behavior trees whose parameters come from (re)prediction: plate pickups read
+# HandleColor/ColorRange, navigations read PositionOffset, and the feeding
+# skills read the table dims. run.py joins the background reprediction before
+# executing these; every other skill only reads dims that are finalized before
+# it can run (Speed from the initial ask, MicrowaveDuration from the locked
+# microwave ask), which repredictions never touch.
+_PREDICTION_CONSUMING_BT_PREFIXES = (
+    "pick_plate_from_",
+    "navigate_to_",
+    "transfer_",
+    "acquire_bite",
+)
+
+
+def bt_consumes_predictions(bt_name: str) -> bool:
+    """True if the skill's behavior tree reads parameters that a pending
+    background reprediction may still be about to (re)write."""
+    return str(bt_name).startswith(_PREDICTION_CONSUMING_BT_PREFIXES)
+
 
 # Preference dimensions asked at the table, just before feeding begins.
 TABLE_PREF_DIMS = [
@@ -209,10 +239,28 @@ class PreferenceSession:
         # microwave_time once apply_microwave routes the planner). settings_view()
         # marks these editable=False and edit() ignores them.
         self._locked: set[str] = set()
-        # Set by a settings edit that changed transfer_mode; the transfer-object
-        # re-init (apply_transfer_mode) is deferred to flush_pending_inmemory() on
+        # Set by a settings edit that changed transfer_mode (and by every
+        # background reprediction apply); the transfer-object re-init
+        # (apply_transfer_mode) is deferred to flush_pending_inmemory() on
         # the main thread so it never swaps the transfer under an in-flight motion.
         self._pending_transfer_reinit = False
+
+        # Serializes every BT-YAML writing section (_apply_non_planning and the
+        # open-color/nav writers) across the main thread, the settings
+        # apply-worker, and the background repredict worker. apply_bundle...
+        # does load->modify->atomic-replace per file, so two concurrent appliers
+        # could otherwise lose each other's parameter updates (each replaces the
+        # whole file from its own stale load). LOCK ORDER: this mutex is always
+        # acquired BEFORE self._lock, never the other way around.
+        self._bt_write_mutex = threading.Lock()
+
+        # Background reprediction: one coalescing worker at a time. A trigger
+        # while the worker is running sets ``dirty`` and the worker loops once
+        # more (the in-flight prediction was computed without the newest
+        # correction; pinning keeps it safe, the extra pass makes it fresh).
+        self._repredict_cv = threading.Condition()
+        self._repredict_running = False
+        self._repredict_dirty = False
 
     # ------------------------------------------------------------------ #
     # Color seeds / BT YAML I/O
@@ -341,17 +389,23 @@ class PreferenceSession:
             }
         return corrected, confirmed
 
-    def _predict(self) -> Dict[str, Any]:
+    def _predict(
+        self,
+        color_seeds: Optional[Dict[str, Any]] = None,
+        nav_offset_seeds: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         # predict_bundle may call an LLM (slow). Callers must NOT hold self._lock
         # across this (see _repredict_open) so the settings worker / execution
-        # thread are never blocked on the network.
+        # thread are never blocked on the network. Callers may pass pre-captured
+        # seeds so they can later detect external YAML writes that landed while
+        # the LLM call was in flight.
         corrected, confirmed = self._pinned_split()
         pred = self._model.predict_bundle(
             self.context,
             corrected,
             confirmed=confirmed,
-            color_seeds=self._color_seeds(),
-            nav_offset_seeds=self._nav_offset_seeds(),
+            color_seeds=color_seeds if color_seeds is not None else self._color_seeds(),
+            nav_offset_seeds=nav_offset_seeds if nav_offset_seeds is not None else self._nav_offset_seeds(),
         )
         # Per-open-dim reasons + latent-factor inference from this prediction
         # (logged at start(); shown by the terminal emulator). Best-effort:
@@ -361,16 +415,111 @@ class PreferenceSession:
         return pred
 
     def _repredict_open(self) -> None:
-        """Refresh predictions for all still-open dims (finalized dims pinned)."""
-        pred = self._predict()  # LLM call OUTSIDE the lock
-        with self._lock:
-            for field in PREF_FIELDS:
-                if field in self.finalized:
-                    continue
-                if field in pred:
-                    self.bundle[field] = pred[field]
-            self._write_open_colors_to_bt()
-            self._write_open_nav_offsets_to_bt()
+        """Refresh predictions for all still-open dims (finalized dims pinned).
+
+        Runs on the background repredict worker (normal path) or on whatever
+        thread calls it directly; the LLM call happens with NO locks held, the
+        bundle/YAML update takes the BT-write mutex before the session lock.
+
+        External writes win: a color/nav value someone else wrote to the YAML
+        while the LLM call was in flight (the pickup color picker, the
+        post-arrival teleop write-back) is FRESHER than this prediction --
+        detect it by comparing the YAML against the seed this prediction was
+        computed from, and leave both the YAML and the bundle value alone (the
+        following record_* finalizes the external value and repredicts again)."""
+        color_seeds = self._color_seeds()
+        nav_offset_seeds = self._nav_offset_seeds()
+        pred = self._predict(color_seeds, nav_offset_seeds)  # LLM OUTSIDE all locks
+        with self._bt_write_mutex:
+            with self._lock:
+                stale: set[str] = set()
+                for field in COLOR_FIELDS:
+                    if field not in self.finalized and self._read_color_seed(field) != color_seeds[field]:
+                        stale.add(field)
+                for field in NAV_OFFSET_FIELDS:
+                    if field not in self.finalized and not nav_offsets_equal(
+                        self._read_nav_offset_seed(field), nav_offset_seeds[field]
+                    ):
+                        stale.add(field)
+                if stale:
+                    print(
+                        "[preference-session] external write landed during "
+                        f"reprediction; keeping it for: {sorted(stale)}"
+                    )
+                for field in PREF_FIELDS:
+                    if field in self.finalized or field in stale:
+                        continue
+                    if field in pred:
+                        self.bundle[field] = pred[field]
+                for field in COLOR_FIELDS:
+                    if field in self.finalized or field in stale:
+                        continue
+                    color = self.bundle.get(field)
+                    if isinstance(color, dict):
+                        self._write_color_to_bt(field, color)
+                for field in NAV_OFFSET_FIELDS:
+                    if field in self.finalized or field in stale:
+                        continue
+                    offset = self.bundle.get(field)
+                    if isinstance(offset, dict):
+                        self._write_nav_offset_to_bt(field, offset)
+
+    # ------------------------------------------------------------------ #
+    # Background reprediction worker
+    # ------------------------------------------------------------------ #
+    def _schedule_repredict(self) -> None:
+        """Queue a background reprediction (repredict open dims + re-apply).
+
+        Coalescing: at most one worker runs at a time; a trigger while one is
+        in flight marks the state dirty and the worker runs one more pass with
+        the newest corrections before exiting. Callers return immediately --
+        consumers synchronize via ``wait_for_reprediction``."""
+        with self._repredict_cv:
+            self._repredict_dirty = True
+            if not self._repredict_running:
+                self._repredict_running = True
+                threading.Thread(
+                    target=self._repredict_worker,
+                    name="pref-repredict",
+                    daemon=True,
+                ).start()
+
+    def _repredict_worker(self) -> None:
+        while True:
+            with self._repredict_cv:
+                if not self._repredict_dirty:
+                    self._repredict_running = False
+                    self._repredict_cv.notify_all()
+                    return
+                self._repredict_dirty = False
+            try:
+                self._repredict_open()
+                # Apply repredicted categorical values to the BTs + FLAIR. The
+                # transfer-object reconstruction must happen on the MAIN thread
+                # (never under an in-flight motion), so defer it exactly like
+                # the settings-edit path does: flush_pending_inmemory() runs it
+                # at the next skill boundary.
+                self._apply_non_planning(reinit_transfer=False)
+                with self._lock:
+                    self._pending_transfer_reinit = True
+            except Exception as e:  # a failed repredict must never wedge joiners
+                # Previous predictions stay applied; the next correction (or
+                # this loop's dirty pass) retries with a fresh LLM call.
+                print(f"[preference-session] background reprediction failed: {e}")
+
+    def wait_for_reprediction(self, timeout: Optional[float] = None) -> bool:
+        """Block until no background reprediction is running or queued.
+
+        The join barrier for every prediction consumer: ask() steps, the
+        record_* entry points, finalize_meal, the terminal emulator's
+        explanation printer, and run.py before prediction-consuming skills.
+        Returns False only if ``timeout`` expired first. Callers must not hold
+        the session lock or the BT-write mutex."""
+        with self._repredict_cv:
+            return self._repredict_cv.wait_for(
+                lambda: not self._repredict_running and not self._repredict_dirty,
+                timeout,
+            )
 
     # ------------------------------------------------------------------ #
     # Apply
@@ -381,16 +530,18 @@ class PreferenceSession:
         applied separately via apply_microwave).
 
         ``reinit_transfer=False`` skips the transfer-object reconstruction
-        (apply_transfer_mode); the settings-edit worker passes this and defers that
-        reconstruction to flush_pending_inmemory() on the main thread so the transfer
-        object is never swapped under an in-flight transfer motion."""
-        bundle = self._categorical_bundle()  # single consistent snapshot
-        warnings = apply_bundle_to_behavior_trees(bundle, self._bt_dir)
-        if reinit_transfer and self._scene is not None:
-            apply_transfer_mode(bundle, self._scene, self._hla_map)
-        apply_dip_preference(bundle, self._flair)
-        apply_bite_ordering(bundle, self._flair)
-        return warnings
+        (apply_transfer_mode); the settings-edit worker and the background
+        repredict worker pass this and defer that reconstruction to
+        flush_pending_inmemory() on the main thread so the transfer object is
+        never swapped under an in-flight transfer motion."""
+        with self._bt_write_mutex:
+            bundle = self._categorical_bundle()  # single consistent snapshot
+            warnings = apply_bundle_to_behavior_trees(bundle, self._bt_dir)
+            if reinit_transfer and self._scene is not None:
+                apply_transfer_mode(bundle, self._scene, self._hla_map)
+            apply_dip_preference(bundle, self._flair)
+            apply_bite_ordering(bundle, self._flair)
+            return warnings
 
     def _categorical_bundle(self) -> Dict[str, str]:
         """Bundle restricted to categorical (string) fields, for the apply_*
@@ -440,14 +591,34 @@ class PreferenceSession:
 
     def start(self) -> None:
         """Predict the full bundle, seed/write colors + nav offsets, apply
-        non-planning dims."""
+        non-planning dims. Synchronous: nothing can overlap the very first
+        prediction, and the initial ask needs it."""
         self._apply_food_items()
-        self.bundle = self._predict()
-        self._write_open_colors_to_bt()
-        self._write_open_nav_offsets_to_bt()
+        with self._lock:
+            finalized_before = set(self.finalized)
+        pred = self._predict()
+        with self._bt_write_mutex:
+            with self._lock:
+                # Merge rather than replace: a settings edit racing start()'s
+                # LLM call may have finalized a dim already -- never clobber a
+                # finalized value with the (pre-edit) prediction.
+                for field in PREF_FIELDS:
+                    if field in self.finalized:
+                        continue
+                    if field in pred:
+                        self.bundle[field] = pred[field]
+                self._write_open_colors_to_bt()
+                self._write_open_nav_offsets_to_bt()
+                finalized_during = self.finalized - finalized_before
         warnings = self._apply_non_planning()
         for w in warnings:
             print(f"[preference-apply] WARNING: {w}")
+        if finalized_during:
+            # A settings edit landed while the initial LLM call was in flight.
+            # Its own scheduled repredict pass may already have finished, in
+            # which case the merge above just overwrote the open dims with
+            # predictions NOT conditioned on that edit -- run one more pass.
+            self._schedule_repredict()
         self._log(
             "preference_predicted",
             stage="start",
@@ -478,6 +649,7 @@ class PreferenceSession:
 
         # No web interface (e.g. unit tests): treat every prediction as confirmed.
         if self._web is None or not hasattr(self._web, "send_preference_step"):
+            self.wait_for_reprediction()
             for field in dims:
                 self._finalize(field, self.bundle.get(field), changed=False)
             self._apply_non_planning()
@@ -487,6 +659,13 @@ class PreferenceSession:
         self._web.start_preference_correction(total, self.wait_seconds)
         try:
             for step, field in enumerate(dims):
+                # Join any in-flight background reprediction before reading the
+                # prediction for this step, so the page always shows values
+                # conditioned on every correction made so far (a mid-batch
+                # correction therefore waits here, exactly like the old
+                # synchronous flow; the LAST correction of a batch overlaps the
+                # following robot motion instead).
+                self.wait_for_reprediction()
                 predicted = self.bundle.get(field)
                 user_value = self._web.send_preference_step(
                     field=field,
@@ -506,9 +685,9 @@ class PreferenceSession:
                 changed = user_value != predicted
                 self._finalize(field, user_value, changed=changed)
                 if changed:
-                    # Reflect the correction immediately and refresh open dims.
-                    self.bundle[field] = user_value
-                    self._repredict_open()
+                    # The correction itself is locked synchronously (above);
+                    # refreshing the open dims happens in the background.
+                    self._schedule_repredict()
         finally:
             self._web.finish_preference_correction()
 
@@ -545,15 +724,28 @@ class PreferenceSession:
         if field is None or field in self.finalized:
             return
 
+        # Settle any in-flight reprediction first so the observed-vs-predicted
+        # comparison runs against the final prediction the pickup actually used
+        # (same semantics as the old synchronous flow; by pickup time a prior
+        # repredict has long finished, so this join is normally instant).
+        self.wait_for_reprediction()
+
         observed = self._read_color_seed(field)
         predicted = self.bundle.get(field)
         changed = parse_color(predicted) != observed if predicted is not None else False
 
         self._finalize(field, observed, changed=changed)
-        self.bundle[field] = observed
+        # An edit-triggered worker pass scheduled between our entry join and
+        # the finalize above may have overwritten this (then-still-open) YAML
+        # value with its prediction; re-assert the observed ground truth. A
+        # no-op in the normal case, and any pass starting from here on skips
+        # the field (finalized).
+        with self._bt_write_mutex:
+            self._write_color_to_bt(field, observed)
         if changed:
-            self._repredict_open()
-            self._apply_non_planning()
+            # Propagation to the other open color dims happens in the
+            # background; the next pickup joins before reading its YAML.
+            self._schedule_repredict()
 
         self._log(
             "preference_color_recorded",
@@ -576,6 +768,10 @@ class PreferenceSession:
         if field is None:
             return
 
+        # Same join-first rationale as record_color: compare against the
+        # settled prediction the navigation actually drove with.
+        self.wait_for_reprediction()
+
         observed = self._read_nav_offset_seed(field)
         with self._lock:
             previous = self.bundle.get(field)
@@ -584,10 +780,12 @@ class PreferenceSession:
             return
 
         self._finalize(field, observed, changed=changed)
-        self.bundle[field] = observed
+        # Same rationale as record_color: undo a mid-window worker overwrite
+        # of this YAML value (no-op in the normal case).
+        with self._bt_write_mutex:
+            self._write_nav_offset_to_bt(field, observed)
         if changed:
-            self._repredict_open()
-            self._apply_non_planning()
+            self._schedule_repredict()
 
         self._log(
             "preference_nav_offset_recorded",
@@ -648,13 +846,17 @@ class PreferenceSession:
         # _finalize takes the lock itself (and persists via on_change).
         self._finalize(field, value, changed=changed)
         if changed:
-            self._repredict_open()  # LLM outside lock
-            # Apply to BTs + dip now; defer the transfer-object reconstruction so it
-            # never swaps under an in-flight transfer (flush_pending_inmemory).
+            # Apply the edited value to the BTs + dip immediately (fast, no
+            # LLM) so the next skill sees it even before the reprediction
+            # lands; defer the transfer-object reconstruction so it never
+            # swaps under an in-flight transfer (flush_pending_inmemory).
             self._apply_non_planning(reinit_transfer=False)
             if field == "transfer_mode":
                 with self._lock:
                     self._pending_transfer_reinit = True
+            # Re-propagate the still-open dims in the background; consumers
+            # (ask steps, prediction-consuming skills) join before reading.
+            self._schedule_repredict()
         self._log("preference_settings_edit", field=field, value=value, changed=changed)
         return True
 
@@ -674,6 +876,9 @@ class PreferenceSession:
 
         Any dims never explicitly asked/recorded are finalized now at their
         predicted value (a confirmation = the prediction was right)."""
+        # The ground truth must include the final repredicted values for the
+        # never-asked open dims -- settle the background worker first.
+        self.wait_for_reprediction()
         for field in PREF_FIELDS:
             if field not in self.finalized and field in self.bundle:
                 self._finalize(field, self.bundle[field], changed=False)
@@ -704,7 +909,12 @@ class PreferenceSession:
         -- the prediction model is rebuilt separately on resume (it owns LLM /
         memory / disk handles), and color *values* already persist in the pickup
         BT YAMLs. Sufficient to (a) avoid re-asking, and (b) keep the end-of-meal
-        learning update honest."""
+        learning update honest.
+
+        Deliberately does NOT join the background reprediction (run.py snapshots
+        right after record_* schedules one; joining here would reintroduce the
+        post-pickup stall). A crash in that window resumes with the pre-repredict
+        open predictions -- safe, merely re-correctable."""
         with self._lock:
             return {
                 "context": dict(self.context),
@@ -725,8 +935,10 @@ class PreferenceSession:
         self.finalized = set(state["finalized"])
         self.corrected = dict(state["corrected"])
         self._apply_food_items()
-        self._write_open_colors_to_bt()
-        self._write_open_nav_offsets_to_bt()
+        with self._bt_write_mutex:
+            with self._lock:
+                self._write_open_colors_to_bt()
+                self._write_open_nav_offsets_to_bt()
         self._apply_non_planning()
 
     # ------------------------------------------------------------------ #
