@@ -9,4 +9,11 @@ parameters:
       elements: ["low", "medium", "high"]
     is_user_editable: True
     value: "medium"
+  - name: "AskForManipulationConfirmation"
+    description: "Manipulation confirmation page mode (detection confirm / plate release): 0 = skip, 1 = show with autocontinue, 2 = wait for the user."
+    space:
+      type: Enum
+      elements: [0, 1, 2]
+    is_user_editable: True
+    value: 2
 fn: !hla open_fridge

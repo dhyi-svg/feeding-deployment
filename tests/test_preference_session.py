@@ -102,13 +102,19 @@ class FakeWeb:
 # from apply_bundle_to_behavior_trees.
 _FIXTURE_YAMLS = [
     "acquire_bite.yaml",
+    "gaze_at_table.yaml",
     "navigate_to_fridge.yaml",
     "navigate_to_microwave.yaml",
     "navigate_to_sink.yaml",
     "navigate_to_table.yaml",
+    "open_fridge.yaml",
+    "open_microwave.yaml",
     "pick_plate_from_fridge.yaml",
     "pick_plate_from_microwave.yaml",
     "pick_plate_from_table.yaml",
+    "place_plate_in_microwave.yaml",
+    "place_plate_in_sink.yaml",
+    "place_plate_on_table.yaml",
     "press_microwave_button.yaml",
     "transfer_drink.yaml",
     "transfer_utensil.yaml",
@@ -578,7 +584,7 @@ def test_repredict_triggers_coalesce(bt_dir):
     s.start()
     # Confirm (not correct) three dims so they are finalized and editable
     # without triggering any repredict yet.
-    s.ask(["robot_speed", "skewering_axis", "web_interface_confirmation"])
+    s.ask(["robot_speed", "skewering_axis", "confirm_feeding_pickup"])
     assert len(model.predict_calls) == 1  # start() only
 
     # First edit starts the worker; wait until its pass is provably inside the
@@ -587,7 +593,7 @@ def test_repredict_triggers_coalesce(bt_dir):
     assert s.edit("robot_speed", PREF_OPTIONS["robot_speed"][1]) is True
     assert started.wait(5.0), "worker never reached the gated LLM call"
     assert s.edit("skewering_axis", PREF_OPTIONS["skewering_axis"][1]) is True
-    assert s.edit("web_interface_confirmation", PREF_OPTIONS["web_interface_confirmation"][1]) is True
+    assert s.edit("confirm_feeding_pickup", PREF_OPTIONS["confirm_feeding_pickup"][1]) is True
 
     release.set()
     assert s.wait_for_reprediction(5.0)
@@ -595,7 +601,7 @@ def test_repredict_triggers_coalesce(bt_dir):
     assert len(model.predict_calls) == 3
     # The final pass was pinned with every edit made.
     assert set(model.predict_calls[-1]["corrected"]) >= {
-        "robot_speed", "skewering_axis", "web_interface_confirmation",
+        "robot_speed", "skewering_axis", "confirm_feeding_pickup",
     }
 
 
@@ -622,3 +628,25 @@ def test_repredictions_do_not_write_memory(bt_dir):
     assert model.update_calls == []
     s.finalize_meal(day=1)
     assert len(model.update_calls) == 1
+
+
+def test_confirmation_dims_shape_and_staging():
+    # The three per-family confirmation-mode dims share one option vocabulary;
+    # the mode dims are asked in the initial batch BEFORE the wait pref (the
+    # user learns what "autocontinue" refers to before choosing its duration),
+    # and the feeding dim replaced web_interface_confirmation at the table.
+    from feeding_deployment.integration.preference_session import (
+        INITIAL_PREF_DIMS, TABLE_PREF_DIMS,
+    )
+
+    assert INITIAL_PREF_DIMS == [
+        "robot_speed",
+        "confirm_navigation_arrival",
+        "confirm_manipulation",
+        "wait_before_autocontinue_seconds",
+    ]
+    assert "confirm_feeding_pickup" in TABLE_PREF_DIMS
+    assert "web_interface_confirmation" not in PREF_FIELDS
+    assert len(PREF_FIELDS) == 27
+    for f in ("confirm_feeding_pickup", "confirm_navigation_arrival", "confirm_manipulation"):
+        assert PREF_OPTIONS[f] == ["no", "yes (with auto-continue countdown)", "yes (without any auto-continue)"]

@@ -28,7 +28,14 @@ from feeding_deployment.preference_learning.config.preference_bundle import (
 
 _SPEED_MAP = {"slow": "low", "medium": "medium", "fast": "high"}
 
-_CONFIRMATION_MAP = {"yes": 1, "no": 0}
+# Confirmation-page mode shared by the three confirm_* dims: 0 = skip the page,
+# 1 = show it but proceed automatically after the auto-continue wait, 2 = block
+# until the user answers.
+_CONFIRM_MODE_MAP = {
+    "no": 0,
+    "yes (with auto-continue countdown)": 1,
+    "yes (without any auto-continue)": 2,
+}
 
 _RETRACT_MAP = {"yes": 1, "no": 0}
 
@@ -145,10 +152,30 @@ _BT_MAPPING: list[tuple[str, list[str], str, dict | Any]] = [
     # Speed — all 29 YAMLs
     ("robot_speed", _ALL_BT_YAMLS, "Speed", _SPEED_MAP),
 
-    # Web-interface confirmation
-    ("web_interface_confirmation", ["acquire_bite.yaml"], "TransferAskForConfirmation", _CONFIRMATION_MAP),
-    ("web_interface_confirmation", ["transfer_drink.yaml", "transfer_wipe.yaml"],
-     "AskForConfirmationInitiatingTransferSequence", _CONFIRMATION_MAP),
+    # Feeding pickup confirmation (bite / drink / wipe verification pages)
+    ("confirm_feeding_pickup", ["acquire_bite.yaml"], "TransferAskForConfirmation", _CONFIRM_MODE_MAP),
+    ("confirm_feeding_pickup", ["transfer_drink.yaml", "transfer_wipe.yaml"],
+     "AskForConfirmationInitiatingTransferSequence", _CONFIRM_MODE_MAP),
+
+    # Navigation arrival confirmation (post-arrival position check/adjust page)
+    ("confirm_navigation_arrival",
+     ["navigate_to_fridge.yaml", "navigate_to_microwave.yaml",
+      "navigate_to_sink.yaml", "navigate_to_table.yaml"],
+     "AskForArrivalConfirmation", _CONFIRM_MODE_MAP),
+
+    # Manipulation confirmation (detection confirms at pickups / door handles /
+    # microwave button / table+sink placement + plate-release confirms).
+    # pick_plate_from_holder is excluded: the holder pose is known, no
+    # detection page is shown there. The table-placement detection page fires
+    # in gaze_at_table (not place_plate_on_table), hence its YAML here too;
+    # door closing uses cached poses (no page), so close_* are excluded.
+    ("confirm_manipulation",
+     ["pick_plate_from_fridge.yaml", "pick_plate_from_microwave.yaml",
+      "pick_plate_from_table.yaml", "place_plate_in_microwave.yaml",
+      "place_plate_on_table.yaml", "place_plate_in_sink.yaml",
+      "press_microwave_button.yaml", "gaze_at_table.yaml",
+      "open_fridge.yaml", "open_microwave.yaml"],
+     "AskForManipulationConfirmation", _CONFIRM_MODE_MAP),
 
     # Autocontinue wait time
     ("wait_before_autocontinue_seconds",
@@ -266,6 +293,63 @@ def _set_param_value(bt_data: dict, param_name: str, new_value: Any) -> bool:
     return False
 
 
+# Canonical blocks for the confirmation-mode BT parameters. Used by
+# _upsert_confirm_param to migrate pre-existing per-user BT trees on the first
+# apply: (a) a tree that predates the parameter gets it APPENDED — safe only
+# because the factory YAMLs and the skill function signatures also put these
+# parameters LAST (positional binding), and the skills default the argument
+# when an old YAML doesn't pass it; (b) a tree whose feeding confirmation
+# params still carry the legacy Enum [0, 1] space gets it widened to [0, 1, 2]
+# so mode 2 passes space.contains() at execution.
+_CONFIRM_MODE_SPACE = {"type": "Enum", "elements": [0, 1, 2]}
+
+_CONFIRM_PARAM_BLOCKS: dict[str, dict] = {
+    "TransferAskForConfirmation": {
+        "name": "TransferAskForConfirmation",
+        "description": "Bite pickup confirmation page mode: 0 = skip, 1 = show with autocontinue, 2 = wait for the user.",
+        "space": dict(_CONFIRM_MODE_SPACE),
+        "is_user_editable": True,
+        "value": 2,
+    },
+    "AskForConfirmationInitiatingTransferSequence": {
+        "name": "AskForConfirmationInitiatingTransferSequence",
+        "description": "Drink/wipe pickup confirmation page mode: 0 = skip, 1 = show with autocontinue, 2 = wait for the user.",
+        "space": dict(_CONFIRM_MODE_SPACE),
+        "is_user_editable": True,
+        "value": 2,
+    },
+    "AskForArrivalConfirmation": {
+        "name": "AskForArrivalConfirmation",
+        "description": "Post-arrival position check/adjust page mode: 0 = skip, 1 = show with autocontinue, 2 = wait for the user.",
+        "space": dict(_CONFIRM_MODE_SPACE),
+        "is_user_editable": True,
+        "value": 1,
+    },
+    "AskForManipulationConfirmation": {
+        "name": "AskForManipulationConfirmation",
+        "description": "Manipulation confirmation page mode (detection confirm / plate release): 0 = skip, 1 = show with autocontinue, 2 = wait for the user.",
+        "space": dict(_CONFIRM_MODE_SPACE),
+        "is_user_editable": True,
+        "value": 2,
+    },
+}
+
+
+def _upsert_confirm_param(bt_data: dict, param_name: str, new_value: Any) -> None:
+    """Set a confirmation-mode parameter, migrating the YAML if needed (see
+    _CONFIRM_PARAM_BLOCKS). Always leaves the param present with the [0,1,2]
+    space and the given value."""
+    for param in bt_data.get("parameters", []):
+        if param["name"] == param_name:
+            param["value"] = new_value
+            param["space"] = dict(_CONFIRM_MODE_SPACE)
+            return
+    block = dict(_CONFIRM_PARAM_BLOCKS[param_name])
+    block["space"] = dict(_CONFIRM_MODE_SPACE)
+    block["value"] = new_value
+    bt_data.setdefault("parameters", []).append(block)
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -311,7 +395,12 @@ def apply_bundle_to_behavior_trees(
                 continue
             if fname not in loaded:
                 loaded[fname] = _load_yaml(fpath)
-            if _set_param_value(loaded[fname], bt_param, bt_val):
+            if bt_param in _CONFIRM_PARAM_BLOCKS:
+                # Confirmation-mode params upsert + space-migrate (older
+                # per-user trees lack them or carry the legacy [0,1] space).
+                _upsert_confirm_param(loaded[fname], bt_param, bt_val)
+                dirty.add(fname)
+            elif _set_param_value(loaded[fname], bt_param, bt_val):
                 dirty.add(fname)
             else:
                 warnings.append(

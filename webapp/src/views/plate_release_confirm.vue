@@ -11,6 +11,7 @@
     <div class="bd">
       <div class="simple-confirm">
         <p>The robot is holding the plate {{ locationText }}.<br>Press 'Continue' when you're ready for it to let go.</p>
+        <p v-if="!userInteracted && countdown !== null" class="cdown">Auto-continuing in <span>{{ countdown }}s</span></p>
         <button class="btn lg amber" style="min-width:24vw" @click="handleButtonClick">Continue</button>
       </div>
     </div>
@@ -36,6 +37,9 @@ export default {
       location: '',
       listener: null,
       publisher: null,
+      countdown: null,
+      countdownInterval: null,
+      userInteracted: false,
     }
   },
   computed: {
@@ -50,6 +54,7 @@ export default {
     this.initPublisher()
   },
   beforeRouteLeave (to, from, next) {
+    this.stopCountdown()
     if (this.listener) {
       this.listener.unsubscribe();
       this.listener = null;
@@ -79,6 +84,21 @@ export default {
 
       try {
         const parsedMessage = JSON.parse(message.data);
+
+        // The backend re-sends the plate_release_confirm jump (status = the
+        // location) until answered; use it to pick up the countdown and the
+        // location, and don't re-route on our own resends
+        // (autocontinue_seconds <= 0 means wait for the user).
+        if (parsedMessage.state === 'plate_release_confirm') {
+          if (!this.location && typeof parsedMessage.status === 'string') {
+            this.location = parsedMessage.status
+          }
+          if (Number.isFinite(parsedMessage.autocontinue_seconds) && parsedMessage.autocontinue_seconds > 0 && this.countdownInterval === null && !this.userInteracted) {
+            this.startCountdown(Math.round(parsedMessage.autocontinue_seconds))
+          }
+          return
+        }
+
         const route = routeMap[parsedMessage.state]?.[parsedMessage.status];
         if (route) {
           if (typeof route === 'string') {
@@ -91,7 +111,27 @@ export default {
       } catch (error) {
       }
     },
+    startCountdown(seconds) {
+      this.countdown = seconds
+      this.countdownInterval = setInterval(() => {
+        if (this.countdown > 0) {
+          this.countdown -= 1;
+        } else {
+          this.stopCountdown()
+          // Unattended: confirm and let the robot release the plate.
+          this.handleButtonClick()
+        }
+      }, 1000);
+    },
+    stopCountdown() {
+      if (this.countdownInterval) {
+        clearInterval(this.countdownInterval);
+        this.countdownInterval = null;
+      }
+    },
     handleButtonClick() {
+      this.userInteracted = true
+      this.stopCountdown()
       this.publishMessage();
       this.$router.push('/robot_executing');
     },

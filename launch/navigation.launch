@@ -52,8 +52,13 @@
   <!-- ZED-divergence safety interlock: asserts /nav_safety_hold when the ZED VIO
        diverges (tracking status != OK, or odom implies impossible velocity). The
        cmd_vel bridge above commands zero while held, so the base stops until the
-       ZED recovers. Disable with NO_ZED_INTERLOCK:=1. -->
-  <node unless="$(optenv NO_ZED_INTERLOCK 0)"
+       ZED recovers.
+       Ablation: zed_interlock:=false disables the whole chain: the monitor is
+       not launched, so the bridge never gates and the manager never pauses
+       (both are no-ops without /nav_safety_hold messages). The legacy
+       NO_ZED_INTERLOCK=1 env var still works as the default. -->
+  <arg name="zed_interlock" default="$(eval optenv('NO_ZED_INTERLOCK', '0') != '1')"/>
+  <node if="$(arg zed_interlock)"
         pkg="feeding_deployment"
         type="zed_health_monitor.py"
         name="zed_health_monitor"

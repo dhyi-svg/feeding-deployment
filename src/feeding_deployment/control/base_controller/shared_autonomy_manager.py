@@ -29,6 +29,13 @@ real move_base and relays the outcome, with one twist:
     skill, where there is no navigation goal to "complete"). Report ABORTED, not
     SUCCEEDED -- there is no goal-reached to claim. (If no goal is active, the
     flag is simply cleared when the next goal starts.)
+  * On /nav_safety_hold (ZED-divergence interlock) while AUTONOMOUS: the cmd_vel
+    bridge is zeroing the motors, but move_base doesn't know -- TEB keeps
+    optimizing against a robot that is secretly frozen, trips its oscillation
+    detector, and resets. So PAUSE: cancel the move_base goal and wait. When the
+    hold releases, re-send the original goal (same replan-from-current-pose
+    mechanism as resume). Holds during TELEOP need no handling here: the goal is
+    already cancelled and the bridge stops the human's commands on its own.
 
 This is why the manager exists: an action client only believes the terminal
 status from the server it is connected to, so when a human (not move_base)
@@ -42,7 +49,7 @@ import actionlib
 import rospy
 from actionlib_msgs.msg import GoalStatus
 from move_base_msgs.msg import MoveBaseAction, MoveBaseResult
-from std_msgs.msg import Empty
+from std_msgs.msg import Bool, Empty
 
 # State labels
 AUTONOMOUS = "AUTONOMOUS"
@@ -71,6 +78,9 @@ class SharedAutonomyManager:
         self.cancel_topic = rospy.get_param(
             "~cancel_topic", "/shared_autonomy/cancel"
         )
+        self.safety_hold_topic = rospy.get_param(
+            "~safety_hold_topic", "/nav_safety_hold"
+        )
         self.loop_hz = float(rospy.get_param("~loop_hz", 20.0))
         self.move_base_wait_s = float(rospy.get_param("~move_base_wait_s", 30.0))
 
@@ -80,6 +90,9 @@ class SharedAutonomyManager:
         self._done_req = False
         self._resume_req = False
         self._cancel_req = False
+
+        # Level (not edge): mirrors the latched /nav_safety_hold Bool.
+        self._hold = False
 
         # Client to the real move_base.
         self.mb_client = actionlib.SimpleActionClient(
@@ -99,6 +112,7 @@ class SharedAutonomyManager:
         rospy.Subscriber(self.done_topic, Empty, self._on_done, queue_size=1)
         rospy.Subscriber(self.resume_topic, Empty, self._on_resume, queue_size=1)
         rospy.Subscriber(self.cancel_topic, Empty, self._on_cancel, queue_size=1)
+        rospy.Subscriber(self.safety_hold_topic, Bool, self._on_hold, queue_size=1)
 
         # Our own action server. auto_start=False so we can start() after setup.
         self.server = actionlib.SimpleActionServer(
@@ -133,6 +147,9 @@ class SharedAutonomyManager:
         with self._lock:
             self._cancel_req = True
 
+    def _on_hold(self, msg: Bool) -> None:
+        self._hold = bool(msg.data)
+
     def _consume_flags(self):
         with self._lock:
             takeover, done, resume, cancel = (
@@ -154,6 +171,9 @@ class SharedAutonomyManager:
         # Clear any stale intents from before this goal started.
         self._consume_flags()
         state = AUTONOMOUS
+        # True while we have cancelled move_base because of a safety hold and
+        # are waiting for the hold to release. Only meaningful in AUTONOMOUS.
+        paused = False
 
         rospy.loginfo("shared_autonomy_manager: new goal -> forwarding to move_base.")
         self.mb_client.send_goal(goal)
@@ -177,6 +197,7 @@ class SharedAutonomyManager:
 
             if takeover and state == AUTONOMOUS:
                 state = TELEOP
+                paused = False
                 self.mb_client.cancel_goal()
                 rospy.loginfo(
                     "shared_autonomy_manager: TAKEOVER -> move_base cancelled, "
@@ -220,6 +241,31 @@ class SharedAutonomyManager:
                 )
 
             if state == AUTONOMOUS:
+                # Safety hold (ZED-divergence interlock): the bridge is zeroing
+                # the motors, so cancel the move_base goal rather than let TEB
+                # optimize against a frozen robot (oscillation false-positives,
+                # timediff<=0 resets). Re-send when the hold releases -- same
+                # replan-from-current-pose mechanism as resume.
+                if self._hold and not paused:
+                    paused = True
+                    self.mb_client.cancel_goal()
+                    rospy.logwarn(
+                        "shared_autonomy_manager: safety HOLD -> goal paused "
+                        "(move_base cancelled); will re-send on recovery."
+                    )
+                elif not self._hold and paused:
+                    paused = False
+                    goal.target_pose.header.stamp = rospy.Time.now()
+                    self.mb_client.send_goal(goal)
+                    seen_active = False
+                    rospy.loginfo(
+                        "shared_autonomy_manager: HOLD released -> goal re-sent, "
+                        "autonomy resuming from current pose."
+                    )
+                if paused:
+                    rate.sleep()
+                    continue
+
                 mb_state = self.mb_client.get_state()
                 if mb_state == GoalStatus.ACTIVE:
                     seen_active = True

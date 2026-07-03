@@ -66,7 +66,9 @@ class ZedHealthMonitor:
         self.last_status_stamp = None
         self.prev_odom = None          # (stamp, pos, yaw)
         self.last_bad_time = None      # last time anything looked wrong
+        self.bad_reason = "unknown"    # WHICH check tripped, for the HOLD log line
         self.held = False
+        self.held_since = None
 
         rospy.Subscriber(self.odom_topic, Odometry, self.cb_odom, queue_size=50)
         if _HAVE_STATUS:
@@ -88,10 +90,16 @@ class ZedHealthMonitor:
                       self.max_ang, self.recovery_stable_s, _HAVE_STATUS)
 
     def cb_status(self, msg):
-        self.status_ok = (msg.status == OK)
+        # Hold only on the configured bad statuses (SEARCHING/OFF by default) --
+        # not on every non-OK value; FPS_TOO_LOW etc. are deliberately excluded
+        # (see ~bad_statuses above). Was `!= OK`, which contradicted that.
+        self.status_ok = msg.status not in self.bad_statuses
         self.last_status_stamp = rospy.Time.now()
         if not self.status_ok:
             self.last_bad_time = rospy.Time.now()
+            self.bad_reason = (
+                f"tracking status={msg.status} (SEARCHING=0, OFF=2)"
+            )
 
     def cb_odom(self, msg):
         stamp = msg.header.stamp if msg.header.stamp != rospy.Time() else rospy.Time.now()
@@ -102,12 +110,21 @@ class ZedHealthMonitor:
             dt = (stamp - pt).to_sec()
             if dt > self.odom_gap_s:
                 self.last_bad_time = rospy.Time.now()
+                self.bad_reason = (
+                    f"odom stamp gap {dt:.2f}s (limit {self.odom_gap_s:.2f}s)"
+                    " -- SDK/driver stall signature"
+                )
             elif dt > 0.0:
                 dist = math.sqrt((pos.x - pp.x) ** 2 + (pos.y - pp.y) ** 2 +
                                  (pos.z - pp.z) ** 2)
                 dyaw = abs(angle_diff(yaw, pyaw))
                 if dist / dt > self.max_lin or dyaw / dt > self.max_ang:
                     self.last_bad_time = rospy.Time.now()
+                    self.bad_reason = (
+                        f"implied jump {dist / dt:.2f} m/s / {dyaw / dt:.2f} rad/s"
+                        f" (gates {self.max_lin:.2f}/{self.max_ang:.2f})"
+                        " -- VIO jump signature"
+                    )
         self.prev_odom = (stamp, pos, yaw)
 
     def tick(self, _):
@@ -120,11 +137,14 @@ class ZedHealthMonitor:
 
         if should_hold and not self.held:
             self.held = True
-            rospy.logwarn("zed_health_monitor: HOLD asserted (ZED tracking "
-                          "unhealthy) -- stopping base until recovery")
+            self.held_since = now
+            rospy.logwarn("zed_health_monitor: HOLD asserted [%s] -- stopping "
+                          "base until recovery", self.bad_reason)
         elif not should_hold and self.held:
             self.held = False
-            rospy.logwarn("zed_health_monitor: HOLD released -- ZED recovered")
+            dur = (now - self.held_since).to_sec() if self.held_since else -1.0
+            rospy.logwarn("zed_health_monitor: HOLD released after %.1fs -- "
+                          "ZED recovered (was: %s)", dur, self.bad_reason)
         self.pub.publish(Bool(data=self.held))
 
 

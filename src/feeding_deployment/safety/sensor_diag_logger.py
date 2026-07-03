@@ -38,6 +38,9 @@ Outputs (one timestamped dir per run, default under integration/log/):
   * events.log       -- dropouts + KERNEL usb lines + USB_TOPO connect/
                         disconnect/re-enum (port + controller labeled) + SKILL
                         transitions, in wall-clock order so you can read the story
+  * incidents/*.txt  -- on each ZED dropout: the Stereolabs devices' sysfs
+                        power/autosuspend state, lsusb tree, kernel tail --
+                        captured within ~100ms of the stall being detected
   * run_meta.json    -- start/end, args, per-topic totals, output index
 
 Usage (let it run, Ctrl+C stops early and still writes the summary):
@@ -103,10 +106,11 @@ KERNEL_RE = re.compile(
 class TopicMonitor:
     """Tracks rate and gaps for one topic. Callback-thread safe."""
 
-    def __init__(self, name, event_log, drop_gap):
+    def __init__(self, name, event_log, drop_gap, snapshotter=None):
         self.name = name
         self._event_log = event_log
         self._drop_gap = drop_gap       # per-sensor dropout threshold (seconds)
+        self._snapshotter = snapshotter  # incident snapshot on dropout (ZED streams)
         self._lock = threading.Lock()
         self.total = 0
         self._window_count = 0          # messages since last sample()
@@ -151,6 +155,9 @@ class TopicMonitor:
                         f"DROPOUT {self.name:8s} arrival_gap={gap:6.3f}s "
                         f"stamp_gap={stamp_gap:6.3f}s ({cls})"
                     )
+                    if self._snapshotter is not None:
+                        self._snapshotter.trigger(
+                            self.name, f"arrival_gap={gap:.3f}s ({cls})")
             if stamp is not None:
                 if self._last_stamp is not None:
                     sg = stamp - self._last_stamp
@@ -479,6 +486,87 @@ def watch_usb_topology(watcher, stop_evt, interval):
         stop_evt.wait(interval)
 
 
+# ---------------------------------------------------------------------------
+# Incident snapshots: a ZED stall is rare and over in seconds, so capture the
+# USB state THE MOMENT a ZED dropout fires -- the sysfs power/autosuspend state
+# of the Stereolabs devices (the prime suspect for silent SDK grab hangs; no
+# kernel line is logged when a device merely autosuspends), the lsusb tree, and
+# the last kernel lines. One file per incident under incidents/, referenced
+# from events.log. Rate-limited, and runs in its own thread so the subscriber
+# callback that detected the gap is never blocked.
+# ---------------------------------------------------------------------------
+ZED_VID = "2b03"
+
+
+class IncidentSnapshotter:
+    def __init__(self, outdir, event_log, min_period_s=10.0):
+        self._dir = Path(outdir) / "incidents"
+        self._log = event_log
+        self._min_period = min_period_s
+        self._last = 0.0
+        self._lock = threading.Lock()
+        self.count = 0
+
+    def trigger(self, stream, reason):
+        with self._lock:
+            now = time.time()
+            if now - self._last < self._min_period:
+                return
+            self._last = now
+        threading.Thread(target=self._capture, args=(stream, reason),
+                         daemon=True).start()
+
+    @staticmethod
+    def _zed_power_states():
+        lines = []
+        try:
+            names = os.listdir(SYS_USB)
+        except OSError:
+            return ["(sysfs unavailable)"]
+        for n in sorted(names):
+            if ":" in n or _rd(f"{SYS_USB}/{n}/idVendor") != ZED_VID:
+                continue
+            base = f"{SYS_USB}/{n}"
+            lines.append(
+                f"{n}  {_rd(base + '/idVendor')}:{_rd(base + '/idProduct')}"
+                f"  ({_rd(base + '/product') or '?'})"
+                f"  devnum={_rd(base + '/devnum')}"
+                f"  speed={_rd(base + '/speed')}M"
+                f"  power/control={_rd(base + '/power/control')}"
+                f"  runtime_status={_rd(base + '/power/runtime_status')}"
+                f"  autosuspend_delay_ms={_rd(base + '/power/autosuspend_delay_ms')}"
+            )
+        return lines or ["(no Stereolabs %s device on the bus -- ZED enumerated "
+                         "away entirely?)" % ZED_VID]
+
+    def _capture(self, stream, reason):
+        ts = datetime.now()
+        sections = [f"# incident snapshot: {stream} {reason}",
+                    f"# taken {ts.isoformat()} (snapshot lag <~100ms after detection)",
+                    "", "===== ZED (Stereolabs) sysfs power state ====="]
+        sections += self._zed_power_states()
+        for title, cmd in (
+            ("lsusb -t", ["lsusb", "-t"]),
+            ("kernel tail", ["journalctl", "-k", "-n", "40", "--no-pager",
+                             "-o", "short-iso"]),
+        ):
+            sections += ["", f"===== {title} ====="]
+            try:
+                sections.append(subprocess.check_output(
+                    cmd, text=True, stderr=subprocess.DEVNULL,
+                    timeout=5.0).rstrip())
+            except Exception as e:
+                sections.append(f"(failed: {e})")
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+            path = self._dir / f"{ts.strftime('%H%M%S')}_{stream}.txt"
+            path.write_text("\n".join(sections) + "\n")
+            self.count += 1
+            self._log.write(f"SNAPSHOT {stream} -> incidents/{path.name} ({reason})")
+        except Exception as e:
+            self._log.write(f"SNAPSHOT {stream} FAILED: {e}")
+
+
 class SkillTracker:
     """Logs the currently-executing skill whenever it changes.
 
@@ -577,12 +665,18 @@ def main():
 
     rospy.init_node("sensor_diag_logger", anonymous=True, disable_signals=True)
 
+    # Incident snapshots for ZED dropouts only: the lidars' failure modes are
+    # already understood (hub/serial), and the ZED's are the silent SDK stalls
+    # we're hunting. Rate-limited inside the snapshotter.
+    snapshotter = IncidentSnapshotter(outdir, event_log)
+
     # Build a monitor per stream (with its own dropout threshold) and subscribe.
     monitors = []          # list of (key, TopicMonitor, topic, drop_gap)
     for key, default_topic, msg_type, queue, nominal_hz, _desc in STREAMS:
         topic = topic_overrides.get(key, default_topic)
         drop_gap = max(DROPOUT_FLOOR_S, DROPOUT_PERIODS / nominal_hz)
-        mon = TopicMonitor(key, event_log, drop_gap)
+        mon = TopicMonitor(key, event_log, drop_gap,
+                           snapshotter=snapshotter if key.startswith("zed") else None)
         rospy.Subscriber(topic, msg_type, mon.on_msg, queue_size=queue)
         monitors.append((key, mon, topic, drop_gap))
 
@@ -661,6 +755,7 @@ def main():
         },
         "usb_event_lines": event_log.lines,
         "usb_topology_changes": usb_watcher.changes,
+        "incident_snapshots": snapshotter.count,
         "gpu_proc_rows": (gpu_sampler.rows if gpu_sampler else 0),
         "gpu_proc_labels": (sorted(gpu_sampler.labels_seen) if gpu_sampler else []),
         "skill_changes": skill_tracker.changes,
@@ -707,6 +802,9 @@ def main():
               "the shared PCH controller (the known residual risk of this layout).")
     print(f"  usb topology changes: {usb_watcher.changes} "
           f"(see USB_TOPO lines in events.log + usb_topology.txt)")
+    if snapshotter.count:
+        print(f"  incident snapshots: {snapshotter.count} (see incidents/ -- ZED "
+              f"sysfs power state + lsusb + kernel tail at each stall)")
     if gpu_sampler:
         print(f"  per-process GPU: gpu_procs.csv ({gpu_sampler.rows} rows; "
               f"labels seen: {sorted(gpu_sampler.labels_seen)})")

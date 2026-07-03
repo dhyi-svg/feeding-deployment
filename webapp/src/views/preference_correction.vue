@@ -29,6 +29,7 @@
         <div class="pref-body">
           <div class="pref-q">
             <h1 class="pq">{{ current.label }}</h1>
+            <p v-if="current.description" class="pref-sub">{{ current.description }}</p>
             <p v-if="current.kind !== 'text'" class="pred">Predicted: <strong>{{ current.predicted }}</strong></p>
             <p class="pref-help">Change it if this doesn't match what you'd like — the robot learns from each correction.</p>
           </div>
@@ -243,7 +244,7 @@ export default {
         : DEFAULT_AUTOCONTINUE_SECONDS
 
       const kind = message.kind || 'categorical'
-      this.current = { field, label: message.label || this.formatLabel(field), predicted, options: rawOptions, kind }
+      this.current = { field, label: message.label || this.formatLabel(field), description: message.description || '', predicted, options: rawOptions, kind }
       this.selected = predicted
       this.userInteracted = false
       this.isSubmitting = false
@@ -366,6 +367,13 @@ export default {
 </script>
 
 <style scoped>
+.pref-sub {
+  font-size: 2.4vh;
+  color: var(--tm);
+  line-height: 1.5;
+  margin-top: 1vh;
+}
+
 .pred {
   font-size: 2.3vh;
   color: var(--tm);

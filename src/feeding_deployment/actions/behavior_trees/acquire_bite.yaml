@@ -41,10 +41,10 @@ parameters:
     is_user_editable: True
     value: 10.0
   - name: "TransferAskForConfirmation"
-    description: "Ask for confirmation on the web app (web interface) before initiating the transfer sequence for a bite."
+    description: "Bite pickup confirmation page mode: 0 = skip, 1 = show with autocontinue, 2 = wait for the user."
     space:
       type: "Enum"
-      elements: [0, 1]
+      elements: [0, 1, 2]
     is_user_editable: True
-    value: 1
+    value: 2
 fn: !hla acquire_bite

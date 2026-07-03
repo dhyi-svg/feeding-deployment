@@ -343,8 +343,14 @@ class TransferToolHLA(HighLevelAction):
 
         if self.web_interface is not None:
             self.web_interface.set_drink_autocontinue_timeout(drink_autocontinue_time)
+            # ask_confirmation (AskForConfirmationInitiatingTransferSequence,
+            # from confirm_feeding_pickup): 0 = skip, 1 = autocontinue, 2 = wait.
             if ask_confirmation:
-                self.web_interface.get_drink_transfer_confirmation()
+                autocontinue_s = (
+                    self._confirm_autocontinue_seconds()
+                    if int(ask_confirmation) == 1 else 0.0
+                )
+                self.web_interface.get_drink_transfer_confirmation(autocontinue_s)
 
         self.move_to_joint_positions(self.sim.scene_description.before_transfer_pos)
 
@@ -364,8 +370,13 @@ class TransferToolHLA(HighLevelAction):
         
         self.move_to_joint_positions(self.sim.scene_description.before_transfer_pos)
 
+        # ask_confirmation semantics as in transfer_drink above.
         if self.web_interface is not None and ask_confirmation:
-            self.web_interface.get_wipe_transfer_confirmation()
+            autocontinue_s = (
+                self._confirm_autocontinue_seconds()
+                if int(ask_confirmation) == 1 else 0.0
+            )
+            self.web_interface.get_wipe_transfer_confirmation(autocontinue_s)
 
         self.set_tool("wipe")
         self.execute_transfer(*remaining_args, maintain_position_at_goal=True, **kwargs)

@@ -83,7 +83,9 @@ export default {
           if (parsedMessage.location) {
             this.location = parsedMessage.location
           }
-          if (Number.isFinite(parsedMessage.autocontinue_seconds) && this.countdownInterval === null && !this.userInteracted) {
+          // autocontinue_seconds <= 0 means "wait for the user" (the
+          // confirm_navigation_arrival preference is 'yes (wait for me)').
+          if (Number.isFinite(parsedMessage.autocontinue_seconds) && parsedMessage.autocontinue_seconds > 0 && this.countdownInterval === null && !this.userInteracted) {
             this.startCountdown(Math.round(parsedMessage.autocontinue_seconds))
           }
           return

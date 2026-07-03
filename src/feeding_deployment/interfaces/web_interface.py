@@ -31,8 +31,12 @@ try:
         PREFERENCE_BUNDLE as _PREF_BUNDLE_DIMS,
     )
     _PREF_LABELS = {dim.field: dim.label for dim in _PREF_BUNDLE_DIMS}
+    _PREF_SHORT_DESCRIPTIONS = {
+        dim.field: dim.short_description for dim in _PREF_BUNDLE_DIMS
+    }
 except Exception:
     _PREF_LABELS = {}
+    _PREF_SHORT_DESCRIPTIONS = {}
 
 class WebInterfaceTakeoverInterrupt(Exception):
     """Raised out of a blocking web-interface wait when a mid-skill takeover is
@@ -588,18 +592,27 @@ class WebInterface:
             return "autonomous", bite_msg_dict["data"], dip_msg_dict["status"]
 
 
-    def get_successful_food_acquisition_confirmation(self) -> None:
+    def get_successful_food_acquisition_confirmation(self, autocontinue_seconds: float = 0.0) -> None:
 
         self.current_page = "meal_assistance"
 
-        # Jump to bite confirm transfer page
-        self._send_message({"state": "bite_confirm_transfer", "status": "jump"})
+        # Jump to bite confirm transfer page. autocontinue_seconds > 0 makes the
+        # page count down and auto-send "confirm" on expiry (confirm_feeding_pickup
+        # = "yes (with auto-continue countdown)"); <= 0 means wait for the user. The jump is
+        # re-sent until answered: the routing jump is consumed by the PREVIOUS
+        # page, so the freshly-mounted page learns its countdown from the first
+        # resend it sees (also heals a dropped jump on the non-latched topic).
+        jump_msg = {"state": "bite_confirm_transfer", "status": "jump",
+                    "autocontinue_seconds": float(autocontinue_seconds)}
+        self._send_message(jump_msg)
 
         # Wait until the user confirms that the food has been acquired
         msg_dict = self.get_required_web_interface_message(
             lambda msg_dict: (
                 (msg_dict["state"] == "bite_confirm_transfer")
-            )
+            ),
+            resend=lambda: self._send_message(jump_msg),
+            resend_interval=2.0,
         )
 
         if msg_dict["status"] == "confirm":
@@ -609,42 +622,55 @@ class WebInterface:
         else:
             print("Unsupported message received from the web interface: ", msg_dict)
 
-    def get_drink_transfer_confirmation(self) -> None:
+    def get_drink_transfer_confirmation(self, autocontinue_seconds: float = 0.0) -> None:
 
         self.current_page = "meal_assistance"
 
-        # Jump to drink confirm transfer page
-        self._send_message({"state": "drink_confirm_transfer", "status": "jump"})
+        # Jump to drink confirm transfer page (autocontinue_seconds + resend
+        # semantics as in get_successful_food_acquisition_confirmation).
+        jump_msg = {"state": "drink_confirm_transfer", "status": "jump",
+                    "autocontinue_seconds": float(autocontinue_seconds)}
+        self._send_message(jump_msg)
 
         # Wait until the user confirms that the drink has been transferred
         self.get_required_web_interface_message(
             lambda msg_dict: (
                 (msg_dict["state"] == "drink_confirm_transfer" and msg_dict["status"] == "confirm")
-            )
+            ),
+            resend=lambda: self._send_message(jump_msg),
+            resend_interval=2.0,
         )
 
-    def get_wipe_transfer_confirmation(self) -> None:
+    def get_wipe_transfer_confirmation(self, autocontinue_seconds: float = 0.0) -> None:
 
         self.current_page = "meal_assistance"
 
-        # Jump to wipe confirm transfer page
+        # Jump to wipe confirm transfer page (autocontinue_seconds + resend
+        # semantics as in get_successful_food_acquisition_confirmation).
         print("Jumping to wipe confirm transfer page")
-        self._send_message({"state": "wipe_confirm_transfer", "status": "jump"})
+        jump_msg = {"state": "wipe_confirm_transfer", "status": "jump",
+                    "autocontinue_seconds": float(autocontinue_seconds)}
+        self._send_message(jump_msg)
 
         # Wait until the user confirms that the wipe has been transferred
         self.get_required_web_interface_message(
             lambda msg_dict: (
                 (msg_dict["state"] == "wipe_confirm_transfer" and msg_dict["status"] == "confirm")
-            )
+            ),
+            resend=lambda: self._send_message(jump_msg),
+            resend_interval=2.0,
         )
 
-    def get_plate_release_confirmation(self, location: str) -> None:
+    def get_plate_release_confirmation(self, location: str, autocontinue_seconds: float = 0.0) -> None:
         """Block until the user confirms it is safe to release the plate.
 
         ``location`` is one of "microwave", "table", "sink"; the frontend
         routeMap turns it into a query param that selects the page copy.
         A takeover while blocked raises WebInterfaceTakeoverInterrupt from
         get_required_web_interface_message (handled by the HLA layer).
+        ``autocontinue_seconds`` > 0 makes the page count down and auto-send
+        "confirm" on expiry (confirm_manipulation = "yes (with auto-continue countdown)");
+        <= 0 keeps today's wait-for-the-user behavior.
         """
         self.current_page = "plate_release_confirm"
 
@@ -655,8 +681,11 @@ class WebInterface:
         # The jump doubles as the location payload: the currently-mounted page
         # does the routing, so a fresh page would never see extra keys on the
         # jump message itself. Resend until confirmed -- /robot_to_webapp is
-        # not latched and a drop here would deadlock the robot mid-hold.
-        jump_msg = {"state": "plate_release_confirm", "status": location}
+        # not latched and a drop here would deadlock the robot mid-hold. The
+        # freshly-routed page picks up autocontinue_seconds from the first
+        # resend it sees after mounting (<= 2 s).
+        jump_msg = {"state": "plate_release_confirm", "status": location,
+                    "autocontinue_seconds": float(autocontinue_seconds)}
         self._send_message(jump_msg)
 
         msg_dict = self.get_required_web_interface_message(
@@ -680,14 +709,17 @@ class WebInterface:
 
     #### Detection Confirmation Page ####
 
-    def get_detection_confirmation(self, detection_type: str, vis_image=None) -> bool:
+    def get_detection_confirmation(self, detection_type: str, vis_image=None,
+                                   autocontinue_seconds: float = 0.0) -> bool:
         """Show a detection visualization on the web app and ask the user to confirm.
 
         This drives the generic detection-confirmation page. ``detection_type``
         selects which copy is shown to the user (e.g. ``"handle"``, ``"button"``,
         ``"plate"``) and the visualization image (if any) is sent to the web app.
         Returns True if the user confirms the detection looks correct, and False
-        if the perception should be re-run.
+        if the perception should be re-run. ``autocontinue_seconds`` > 0 makes
+        the page count down and auto-confirm on expiry (confirm_manipulation =
+        "yes (with auto-continue countdown)"); <= 0 waits for the user.
         """
         self.current_page = "detection_confirm"
 
@@ -699,7 +731,8 @@ class WebInterface:
         # image. The "info" status is not in the frontend routeMap, so it only
         # updates the page's copy without triggering a re-navigation.
         time.sleep(0.5)
-        self._send_message({"state": "detection_confirm", "status": "info", "detection_type": detection_type})
+        self._send_message({"state": "detection_confirm", "status": "info", "detection_type": detection_type,
+                            "autocontinue_seconds": float(autocontinue_seconds)})
         if vis_image is not None:
             self._send_image(vis_image)
 
@@ -718,16 +751,19 @@ class WebInterface:
             self.switch_to_explanation_page()
         return confirmed
 
-    def get_attachment_detection_action(self, detection_type: str, vis_image=None, flip=True) -> str:
+    def get_attachment_detection_action(self, detection_type: str, vis_image=None, flip=True,
+                                        autocontinue_seconds: float = 0.0) -> str:
         """Like get_detection_confirmation but also supports 'correct_color' action.
 
         Returns 'confirm', 'redo', or 'correct_color'. Pass flip=False when the camera is
-        already upright for this capture (see _send_image).
+        already upright for this capture (see _send_image). ``autocontinue_seconds`` > 0
+        makes the page auto-confirm on expiry; <= 0 waits for the user.
         """
         self.current_page = "detection_confirm"
         self._send_message({"state": "detection_confirm", "status": "jump", "detection_type": detection_type})
         time.sleep(0.5)
-        self._send_message({"state": "detection_confirm", "status": "info", "detection_type": detection_type})
+        self._send_message({"state": "detection_confirm", "status": "info", "detection_type": detection_type,
+                            "autocontinue_seconds": float(autocontinue_seconds)})
         if vis_image is not None:
             self._send_image(vis_image, flip=flip)
 
@@ -1009,6 +1045,9 @@ class WebInterface:
             "state": "preference_correction_data",
             "field": field,
             "label": label,
+            # One plain-language sentence shown as the subtitle under the label
+            # (empty string = no subtitle rendered).
+            "description": _PREF_SHORT_DESCRIPTIONS.get(field, ""),
             "predicted": predicted,
             "options": list(options),
             "kind": kind,

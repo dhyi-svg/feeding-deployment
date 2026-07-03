@@ -110,15 +110,28 @@ DEFAULT_PHYSICAL_PROFILE = (
 )
 
 # Preference dimensions asked at the start of the meal (before fetching the
-# plate). The finalized wait drives the autocontinue of later correction pages.
-INITIAL_PREF_DIMS = ["robot_speed", "wait_before_autocontinue_seconds"]
+# plate). The two confirmation-mode dims fire first during the fridge leg
+# (navigation arrival page, handle-detection page), so they are asked up
+# front; they come BEFORE the wait pref so the user learns what pages exist
+# (and what "autocontinue" refers to) before choosing its duration. The
+# finalized wait then drives the autocontinue of every later correction and
+# confirmation page (the three earlier ask pages use the 10 s bootstrap
+# default).
+INITIAL_PREF_DIMS = [
+    "robot_speed",
+    "confirm_navigation_arrival",
+    "confirm_manipulation",
+    "wait_before_autocontinue_seconds",
+]
 
 # Behavior trees whose parameters come from (re)prediction: plate pickups read
 # HandleColor/ColorRange, navigations read PositionOffset, and the feeding
 # skills read the table dims. run.py joins the background reprediction before
 # executing these; every other skill only reads dims that are finalized before
-# it can run (Speed from the initial ask, MicrowaveDuration from the locked
-# microwave ask), which repredictions never touch.
+# it can run (Speed, confirm_navigation_arrival and confirm_manipulation from
+# the initial ask, MicrowaveDuration from the locked microwave ask), which
+# repredictions never touch. If a new dim is ever consumed by a skill BEFORE
+# its ask step, add that skill's BT prefix here.
 _PREDICTION_CONSUMING_BT_PREFIXES = (
     "pick_plate_from_",
     "navigate_to_",
@@ -136,7 +149,7 @@ def bt_consumes_predictions(bt_name: str) -> bool:
 # Preference dimensions asked at the table, just before feeding begins.
 TABLE_PREF_DIMS = [
     "skewering_axis",
-    "web_interface_confirmation",
+    "confirm_feeding_pickup",
     "bite_dipping_preference",
     "bite_ordering",
     "transfer_mode",

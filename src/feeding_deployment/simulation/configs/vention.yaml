@@ -87,7 +87,7 @@ microwave_plate_staging_pose:
 microwave_inside_gaze_pos:
   description: "Gaze configuration, the inside of microwave should be visible from this configuration"
   type: "joint_positions"
-  values: [1.00241916, -1.5238139, -2.46827096, -1.61134082, 0.44361969, -1.17142123, -1.02360407]
+  values: [1.1023354386685165, -1.683365482911456, -2.4612205088373638, -1.6060400680287872, 0.43602631578933226, -1.3430891293742873, -0.9331029364076411]
 
 sink_gaze_pos: 
   description: "Gaze configuration, the inside of sink should be visible from this configuration"

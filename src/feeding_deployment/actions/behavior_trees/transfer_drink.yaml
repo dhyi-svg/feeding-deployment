@@ -46,12 +46,12 @@ parameters:
     is_user_editable: True
     value: 0.1
   - name: "AskForConfirmationInitiatingTransferSequence"
-    description: "Ask for confirmation on the web app (web interface) before initiating the transfer sequence for drink. True is 1 and False is 0."
+    description: "Drink pickup confirmation page mode: 0 = skip, 1 = show with autocontinue, 2 = wait for the user."
     space:
       type: "Enum"
-      elements: [0, 1]
+      elements: [0, 1, 2]
     is_user_editable: True
-    value: 1
+    value: 2
   - name: "TimeToWaitBeforeAutocontinue"
     description: "Autocontinue duration for re-selecting drink transfer after a sip on the web app (web interface)."
     space:

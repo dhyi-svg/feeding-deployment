@@ -447,7 +447,12 @@ class PerceptionInterface:
         response = input(f"Is the {detection_type} detection correct? [y/N]: ").strip().lower()
         return response == "y"
 
-    def perceive_button_pressing_poses(self, web_interface=None):
+    def perceive_button_pressing_poses(self, web_interface=None, confirm_mode=None,
+                                       confirm_autocontinue_s: float = 0.0):
+        # confirm_mode (confirm_manipulation preference): 0 = auto-accept a
+        # successful detection without showing the page, 1 = page with
+        # autocontinue (confirm_autocontinue_s), 2/None = wait for the user.
+        # A FAILED detection keeps its normal failure path in every mode.
 
         if self.simulation:
             with open(self.log_dir / 'button_pressing_pose.pkl', 'rb') as f:
@@ -475,8 +480,12 @@ class PerceptionInterface:
                 vis_image = self._appliance_perception._last_images.get("rgb_button_pixel")
                 if web_interface is None:
                     confirmed = self._terminal_confirmation("button", vis_image)
+                elif confirm_mode == 0:
+                    print("Button detection auto-accepted (manipulation confirmation disabled by preference).")
+                    confirmed = True
                 else:
-                    confirmed = web_interface.get_detection_confirmation("button", vis_image)
+                    confirmed = web_interface.get_detection_confirmation(
+                        "button", vis_image, autocontinue_seconds=confirm_autocontinue_s)
                 if confirmed:
                     break
                 print("Button detection rejected by user. Re-running button perception ...")
@@ -502,7 +511,9 @@ class PerceptionInterface:
 
 
 
-    def perceive_handle_opening_poses(self, handle_type: str, web_interface=None):
+    def perceive_handle_opening_poses(self, handle_type: str, web_interface=None,
+                                      confirm_mode=None, confirm_autocontinue_s: float = 0.0):
+        # confirm_mode semantics: see perceive_button_pressing_poses.
 
         # if self.last_handle_poses is not None:
         #     print("Using last handle opening poses from perception cache")
@@ -537,8 +548,12 @@ class PerceptionInterface:
                 # camera is upside down); do not rotate here or it would double-flip.
                 if web_interface is None:
                     confirmed = self._terminal_confirmation("handle", vis_image)
+                elif confirm_mode == 0:
+                    print("Door-handle detection auto-accepted (manipulation confirmation disabled by preference).")
+                    confirmed = True
                 else:
-                    confirmed = web_interface.get_detection_confirmation("handle", vis_image)
+                    confirmed = web_interface.get_detection_confirmation(
+                        "handle", vis_image, autocontinue_seconds=confirm_autocontinue_s)
                 if confirmed:
                     break
                 print("Handle detection rejected by user. Re-running handle perception ...")
@@ -823,13 +838,18 @@ class PerceptionInterface:
         handle_orientation: str,
         initial_attachment_pose,
         flip=True,
+        notify_failure=False,
     ):
         """Run the interactive color correction loop on the web interface.
 
         Returns (confirmed, color, color_range, attachment_pose).
         confirmed=False means the user pressed Back; caller should redo detection.
+        initial_attachment_pose may be None (entry after a failed detection);
+        Confirm is gated on a successful Rerun both in the UI and here.
         flip: pass False when the camera is already upright for this capture (see
         WebInterface._send_image), e.g. the microwave plate pickup.
+        notify_failure: show the page's "No detection" badge on entry so the user
+        knows they landed here because detection failed, not by choosing to.
         """
         current_color = list(initial_color) if hasattr(initial_color, '__iter__') else initial_color
         current_range = float(initial_range)
@@ -858,6 +878,14 @@ class PerceptionInterface:
             initial_color_range=current_range,
             flip=flip,
         )
+
+        if notify_failure:
+            # Best-effort context: show the page's "No detection -- adjust color or
+            # range and retry" badge. Sent after a delay so it lands after the pick
+            # image loads (loading the pick image resets the badge); if the race
+            # goes the other way the badge is simply absent -- cosmetic either way.
+            time.sleep(1.5)
+            web_interface.send_color_correction_result(None, False, flip=flip)
 
         while True:
             msg = web_interface.wait_for_color_correction_message()
@@ -921,7 +949,15 @@ class PerceptionInterface:
             elif status == "back":
                 return False, initial_color, initial_range, initial_attachment_pose
 
-    def perceive_attachment_poses(self, handle_type: str, handle_color, color_range, handle_orientation: str = "front", web_interface=None, camera_flipped=False):
+    def perceive_attachment_poses(self, handle_type: str, handle_color, color_range,
+                                  handle_orientation: str = "front", web_interface=None,
+                                  camera_flipped=False, confirm_mode=None,
+                                  confirm_autocontinue_s: float = 0.0):
+        # confirm_mode (confirm_manipulation preference): 0 = auto-accept a
+        # successful detection (the Confirm/Redo/Correct-Color page never shows,
+        # so the color picker is unreachable and colors stop being refined),
+        # 1 = page with autocontinue (confirm_autocontinue_s), 2/None = wait for
+        # the user. A FAILED detection keeps its normal failure path regardless.
 
         # camera_flipped=True when the robot physically flipped its (upside-down) camera
         # for this capture (microwave plate pickup), making the frame already upright --
@@ -963,19 +999,49 @@ class PerceptionInterface:
                 depth_image = cam_data["depth_image"]
 
                 if rgb_image is not None and camera_info is not None and depth_image is not None:
+                    # Keep the newest valid frame even when detection fails, so a
+                    # total failure below can still enter color correction with a
+                    # usable fallback frame.
+                    last_rgb_image = rgb_image
+                    last_camera_info = camera_info
+                    last_depth_image = depth_image
                     attachment_pose = self._attachment_perception.detect_attachment(
                         rgb_image, camera_info, depth_image, handle_orientation,
                         handle_color=current_color, color_range=current_range,
                     )
                     if attachment_pose is not None:
-                        last_rgb_image = rgb_image
-                        last_camera_info = camera_info
-                        last_depth_image = depth_image
                         break
                 time.sleep(0.1)
 
             if attachment_pose is None:
-                raise RuntimeError("Could not detect attachment pose")
+                if web_interface is None or last_rgb_image is None:
+                    # Terminal/dev mode has no color picker; and if the camera never
+                    # produced a valid frame this is a camera failure, not a color
+                    # mismatch -- the picker couldn't help (no pick image, and a
+                    # Rerun would fall back to None frames and crash).
+                    raise RuntimeError("Could not detect attachment pose")
+                # Total failure means the stored color no longer matches the scene
+                # (empty mask / no cluster) -- route the user to the color picker
+                # instead of aborting the run. Confirm stays gated until one of
+                # their Reruns succeeds; the corrected color flows into the
+                # returned dict and persists like any other correction.
+                print("Attachment detection failed after 20 attempts; sending user to color correction ...")
+                confirmed, current_color, current_range, attachment_pose = self._interactive_color_correction(
+                    web_interface,
+                    last_rgb_image,
+                    last_camera_info,
+                    last_depth_image,
+                    current_color,
+                    current_range,
+                    handle_orientation,
+                    None,  # no detection to pre-populate the result panel
+                    flip=flip,
+                    notify_failure=True,
+                )
+                if confirmed:
+                    break
+                print("Color correction exited without confirmation; retrying detection ...")
+                continue
 
             vis_image = self._attachment_perception._last_images.get("attachment_corners")
             # Orientation is handled centrally in WebInterface._send_image (the
@@ -988,7 +1054,13 @@ class PerceptionInterface:
                 print("Attachment detection rejected by user. Re-running attachment perception ...")
                 continue
 
-            action = web_interface.get_attachment_detection_action("attachment", vis_image, flip=flip)
+            if confirm_mode == 0:
+                print("Attachment detection auto-accepted (manipulation confirmation disabled by preference).")
+                break
+
+            action = web_interface.get_attachment_detection_action(
+                "attachment", vis_image, flip=flip,
+                autocontinue_seconds=confirm_autocontinue_s)
 
             if action == "confirm":
                 web_interface.switch_to_explanation_page()
@@ -1016,7 +1088,7 @@ class PerceptionInterface:
         if handle_type == "microwave":
             offset[:3, 3] = np.array([0, 0.009, -0.01])
         elif handle_type == "bottom textured fridge door":
-            offset[:3, 3] = np.array([0, -0.012, -0.015])
+            offset[:3, 3] = np.array([0.01, -0.008, 0.0])
         elif handle_type == "table":
             offset[:3, 3] = np.array([0, -0.008, -0.015])
         else:
@@ -1026,7 +1098,7 @@ class PerceptionInterface:
         if handle_type == "microwave":
             offset[:3, 3] = np.array([0, 0.009, -0.11])
         elif handle_type == "bottom textured fridge door":
-            offset[:3, 3] = np.array([0, -0.012, -0.115])
+            offset[:3, 3] = np.array([0.01, -0.008, -0.1])
         elif handle_type == "table":
             offset[:3, 3] = np.array([0, -0.008, -0.115])
         else:
@@ -1058,7 +1130,9 @@ class PerceptionInterface:
 
         return attachment_poses
 
-    def perceive_sink_placement_poses(self, web_interface=None):
+    def perceive_sink_placement_poses(self, web_interface=None, confirm_mode=None,
+                                      confirm_autocontinue_s: float = 0.0):
+        # confirm_mode semantics: see perceive_button_pressing_poses.
 
         if self.simulation:
             # load them from a pickle file
@@ -1086,8 +1160,12 @@ class PerceptionInterface:
                 vis_image = self._appliance_perception._last_images.get("sink_back_pixel")
                 if web_interface is None:
                     confirmed = self._terminal_confirmation("sink", vis_image)
+                elif confirm_mode == 0:
+                    print("Sink placement detection auto-accepted (manipulation confirmation disabled by preference).")
+                    confirmed = True
                 else:
-                    confirmed = web_interface.get_detection_confirmation("sink", vis_image)
+                    confirmed = web_interface.get_detection_confirmation(
+                        "sink", vis_image, autocontinue_seconds=confirm_autocontinue_s)
                 if confirmed:
                     break
                 print("Sink placement detection rejected by user. Re-running sink placement perception ...")
@@ -1105,7 +1183,9 @@ class PerceptionInterface:
 
         return sink_placement_poses
 
-    def perceive_table_placement_poses(self, web_interface=None):
+    def perceive_table_placement_poses(self, web_interface=None, confirm_mode=None,
+                                       confirm_autocontinue_s: float = 0.0):
+        # confirm_mode semantics: see perceive_button_pressing_poses.
 
         if self.simulation:
             # load them from a pickle file
@@ -1137,8 +1217,12 @@ class PerceptionInterface:
                 # camera is upside down); do not rotate here or it would double-flip.
                 if web_interface is None:
                     confirmed = self._terminal_confirmation("plate", vis_image)
+                elif confirm_mode == 0:
+                    print("Table placement detection auto-accepted (manipulation confirmation disabled by preference).")
+                    confirmed = True
                 else:
-                    confirmed = web_interface.get_detection_confirmation("plate", vis_image)
+                    confirmed = web_interface.get_detection_confirmation(
+                        "plate", vis_image, autocontinue_seconds=confirm_autocontinue_s)
                 if confirmed:
                     break
                 print("Table placement detection rejected by user. Re-running table placement perception ...")

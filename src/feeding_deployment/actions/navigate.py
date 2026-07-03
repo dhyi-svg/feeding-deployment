@@ -336,7 +336,8 @@ class NavigateHLA(HighLevelAction):
             rate.sleep()
 
     def _navigate_to_target(
-        self, location_name: str, speed: str, via: list = None, position_offset=None
+        self, location_name: str, speed: str, via: list = None, position_offset=None,
+        arrival_confirm_mode=None,
     ) -> None:
         # if self.robot_interface is None:
         #     print(f"[SIM] Would navigate to {location_name} (speed={speed}).")
@@ -397,7 +398,8 @@ class NavigateHLA(HighLevelAction):
                 leg_used_recovery |= getattr(self, "_last_leg_used_recovery", False)
                 self._refinement_window(wp, pose)
                 self._offer_position_adjustment(
-                    wp, nominal_pose, pose, position_offset, leg_used_recovery
+                    wp, nominal_pose, pose, position_offset, leg_used_recovery,
+                    arrival_confirm_mode=arrival_confirm_mode,
                 )
 
     def _await_nav_result(self, client, location_name: str) -> str:
@@ -980,6 +982,7 @@ class NavigateHLA(HighLevelAction):
         commanded_pose: dict[str, Any],
         prev_offset,
         leg_used_recovery: bool = False,
+        arrival_confirm_mode=None,
     ) -> None:
         """After arrival at a real destination, let the user teleop the base to
         fine-adjust its position, and fold the adjustment into the learned
@@ -1000,6 +1003,17 @@ class NavigateHLA(HighLevelAction):
             return
         if location_name not in self._VALID_TARGETS:
             return
+        # confirm_navigation_arrival preference (AskForArrivalConfirmation BT
+        # param): 0 = page off (parking offsets stop being refined), 1 = page
+        # with autocontinue, 2 = page waits indefinitely. None (per-user YAML
+        # predating the param) keeps today's behavior (mode 1).
+        mode = 1 if arrival_confirm_mode is None else int(arrival_confirm_mode)
+        if mode == 0:
+            print(
+                f"[nav-offset] {location_name}: arrival confirmation disabled "
+                "by preference; keeping the learned offset as-is."
+            )
+            return
         if leg_used_recovery:
             # User decision: a recovery-teleop rescue is "get past the
             # failure", not a position preference. No prompt, no dataset row.
@@ -1018,8 +1032,11 @@ class NavigateHLA(HighLevelAction):
             return
 
         try:
+            # Mode 2 ("wait for me"): autocontinue_seconds <= 0 tells the page
+            # to show no countdown and wait for an explicit answer.
+            autocontinue_s = 0.0 if mode == 2 else self._adjust_autocontinue_seconds()
             choice = self.web_interface.get_nav_position_adjust_choice(
-                location_name, self._adjust_autocontinue_seconds()
+                location_name, autocontinue_s
             )
         except WebInterfaceTakeoverInterrupt:
             # A mid-skill arm takeover during the prompt wait must reach the
@@ -1239,23 +1256,34 @@ class NavigateHLA(HighLevelAction):
         assert dst.name in self._VALID_TARGETS
         return f"navigate_to_{dst.name}.yaml"
 
-    # position_offset defaults to None so per-user behavior trees that predate
-    # the PositionOffset parameter still execute (treated as a zero offset).
-    def navigate_to_fridge(self, speed: str, position_offset=None) -> None:
-        self._navigate_to_target("fridge", speed, position_offset=position_offset)
+    # position_offset / arrival_confirm_mode default to None so per-user
+    # behavior trees that predate those parameters still execute (zero offset;
+    # today's autocontinue arrival page).
+    def navigate_to_fridge(self, speed: str, position_offset=None, arrival_confirm_mode=None) -> None:
+        self._navigate_to_target(
+            "fridge", speed, position_offset=position_offset,
+            arrival_confirm_mode=arrival_confirm_mode,
+        )
 
-    def navigate_to_microwave(self, speed: str, position_offset=None) -> None:
-        self._navigate_to_target("microwave", speed, position_offset=position_offset)
+    def navigate_to_microwave(self, speed: str, position_offset=None, arrival_confirm_mode=None) -> None:
+        self._navigate_to_target(
+            "microwave", speed, position_offset=position_offset,
+            arrival_confirm_mode=arrival_confirm_mode,
+        )
 
-    def navigate_to_sink(self, speed: str, position_offset=None) -> None:
-        self._navigate_to_target("sink", speed, position_offset=position_offset)
+    def navigate_to_sink(self, speed: str, position_offset=None, arrival_confirm_mode=None) -> None:
+        self._navigate_to_target(
+            "sink", speed, position_offset=position_offset,
+            arrival_confirm_mode=arrival_confirm_mode,
+        )
 
-    def navigate_to_table(self, speed: str, position_offset=None) -> None:
+    def navigate_to_table(self, speed: str, position_offset=None, arrival_confirm_mode=None) -> None:
         # microwave -> table is the kitchen egress: reverse out through the narrow
         # corridor to the open staging area, then turn and drive to the table.
         # Routing via the staging waypoint stops TEB from oscillating as it tries
         # to turn inside the corridor. (Auto-skipped while the staging pose is an
         # unset placeholder.)
         self._navigate_to_target(
-            "table", speed, via=[self._STAGING_WAYPOINT], position_offset=position_offset
+            "table", speed, via=[self._STAGING_WAYPOINT], position_offset=position_offset,
+            arrival_confirm_mode=arrival_confirm_mode,
         )

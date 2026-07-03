@@ -19,7 +19,7 @@ from feeding_deployment.integration.apply_preferences import (
     apply_microwave_preference,
     apply_dip_preference,
     _SPEED_MAP,
-    _CONFIRMATION_MAP,
+    _CONFIRM_MODE_MAP,
     _AUTOCONTINUE_MAP,
     _OUTSIDE_MOUTH_DISTANCE_MAP,
     _CONVEY_READY_MAP,
@@ -32,6 +32,7 @@ from feeding_deployment.integration.apply_preferences import (
     _dipping_depth_translate,
     _microwave_duration_translate,
     _load_yaml,
+    _save_yaml,
 )
 from feeding_deployment.preference_learning.methods.utils import PREF_FIELDS
 
@@ -73,8 +74,10 @@ class TestValueTranslators:
     def test_speed_map_covers_all_bundle_options(self):
         assert set(_SPEED_MAP.keys()) == {"slow", "medium", "fast"}
 
-    def test_confirmation_map(self):
-        assert _CONFIRMATION_MAP == {"yes": 1, "no": 0}
+    def test_confirm_mode_map(self):
+        assert _CONFIRM_MODE_MAP == {
+            "no": 0, "yes (with auto-continue countdown)": 1, "yes (without any auto-continue)": 2,
+        }
 
     def test_autocontinue_map_values_are_floats(self):
         for v in _AUTOCONTINUE_MAP.values():
@@ -138,8 +141,8 @@ class TestApplyBundleToBehaviorTrees:
         data = _load(bt_dir, "acquire_bite.yaml")
         assert _get_param_value(data, "Speed") == "low"
 
-    def test_confirmation_written(self, bt_dir: Path):
-        bundle = {"web_interface_confirmation": "no"}
+    def test_feeding_confirmation_written(self, bt_dir: Path):
+        bundle = {"confirm_feeding_pickup": "no"}
         apply_bundle_to_behavior_trees(bundle, bt_dir)
 
         ab = _load(bt_dir, "acquire_bite.yaml")
@@ -150,6 +153,59 @@ class TestApplyBundleToBehaviorTrees:
 
         tw = _load(bt_dir, "transfer_wipe.yaml")
         assert _get_param_value(tw, "AskForConfirmationInitiatingTransferSequence") == 0
+
+    def test_navigation_confirmation_written(self, bt_dir: Path):
+        bundle = {"confirm_navigation_arrival": "yes (without any auto-continue)"}
+        apply_bundle_to_behavior_trees(bundle, bt_dir)
+        for loc in ("fridge", "microwave", "sink", "table"):
+            data = _load(bt_dir, f"navigate_to_{loc}.yaml")
+            assert _get_param_value(data, "AskForArrivalConfirmation") == 2
+
+    def test_manipulation_confirmation_written(self, bt_dir: Path):
+        bundle = {"confirm_manipulation": "yes (with auto-continue countdown)"}
+        apply_bundle_to_behavior_trees(bundle, bt_dir)
+        for fname in (
+            "pick_plate_from_fridge.yaml", "pick_plate_from_microwave.yaml",
+            "pick_plate_from_table.yaml", "place_plate_in_microwave.yaml",
+            "place_plate_on_table.yaml", "place_plate_in_sink.yaml",
+            "press_microwave_button.yaml", "gaze_at_table.yaml",
+            "open_fridge.yaml", "open_microwave.yaml",
+        ):
+            data = _load(bt_dir, fname)
+            assert _get_param_value(data, "AskForManipulationConfirmation") == 1
+
+    def test_confirm_param_upserted_into_legacy_tree(self, bt_dir: Path):
+        # A per-user tree that predates AskForArrivalConfirmation gets it
+        # APPENDED (last -- positional binding) on the first apply.
+        fpath = bt_dir / "navigate_to_fridge.yaml"
+        data = _load_yaml(fpath)
+        data["parameters"] = [p for p in data["parameters"]
+                              if p["name"] != "AskForArrivalConfirmation"]
+        _save_yaml(fpath, data)
+
+        apply_bundle_to_behavior_trees({"confirm_navigation_arrival": "no"}, bt_dir)
+        data = _load(bt_dir, "navigate_to_fridge.yaml")
+        assert data["parameters"][-1]["name"] == "AskForArrivalConfirmation"
+        assert data["parameters"][-1]["value"] == 0
+        assert data["parameters"][-1]["space"]["elements"] == [0, 1, 2]
+
+    def test_confirm_param_space_migrated_from_legacy_enum(self, bt_dir: Path):
+        # A per-user tree whose feeding confirmation still carries the legacy
+        # Enum [0, 1] space gets it widened so mode 2 passes space.contains().
+        fpath = bt_dir / "acquire_bite.yaml"
+        data = _load_yaml(fpath)
+        for p in data["parameters"]:
+            if p["name"] == "TransferAskForConfirmation":
+                p["space"] = {"type": "Enum", "elements": [0, 1]}
+                p["value"] = 1
+        _save_yaml(fpath, data)
+
+        apply_bundle_to_behavior_trees({"confirm_feeding_pickup": "yes (without any auto-continue)"}, bt_dir)
+        data = _load(bt_dir, "acquire_bite.yaml")
+        for p in data["parameters"]:
+            if p["name"] == "TransferAskForConfirmation":
+                assert p["value"] == 2
+                assert p["space"]["elements"] == [0, 1, 2]
 
     def test_autocontinue_written(self, bt_dir: Path):
         bundle = {"wait_before_autocontinue_seconds": "1000 sec"}
@@ -305,7 +361,7 @@ class TestApplyBundleWarnings:
 
     def test_missing_yaml_file_produces_warning(self, bt_dir: Path):
         (bt_dir / "acquire_bite.yaml").unlink()
-        bundle = {"web_interface_confirmation": "yes"}
+        bundle = {"confirm_feeding_pickup": "yes (without any auto-continue)"}
         warnings = apply_bundle_to_behavior_trees(bundle, bt_dir)
         assert any("not found" in w for w in warnings)
 
@@ -331,7 +387,9 @@ class TestApplyBundleFullBundle:
     def test_full_bundle_applies_without_error(self, bt_dir: Path):
         bundle = {
             "robot_speed": "slow",
-            "web_interface_confirmation": "yes",
+            "confirm_feeding_pickup": "yes (with auto-continue countdown)",
+            "confirm_navigation_arrival": "yes (with auto-continue countdown)",
+            "confirm_manipulation": "yes (without any auto-continue)",
             "wait_before_autocontinue_seconds": "100 sec",
             "outside_mouth_distance": "far",
             "convey_robot_ready_for_initiating_transfer": "speech",
@@ -355,6 +413,10 @@ class TestApplyBundleFullBundle:
         assert _get_param_value(data, "Speed") == "low"
         assert _get_param_value(data, "TransferAskForConfirmation") == 1
         assert _get_param_value(data, "TimeToWaitBeforeAutocontinue") == 100.0
+        nav = _load(bt_dir, "navigate_to_table.yaml")
+        assert _get_param_value(nav, "AskForArrivalConfirmation") == 1
+        pk = _load(bt_dir, "pick_plate_from_fridge.yaml")
+        assert _get_param_value(pk, "AskForManipulationConfirmation") == 2
 
 
 # -------------------------------------------------------------------

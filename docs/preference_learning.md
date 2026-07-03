@@ -12,9 +12,9 @@ Everything below was written against the current working tree. Code references a
 ## 1. TL;DR
 
 At the start of each meal (one meal = one "deployment day"), the system predicts the
-user's **entire preference bundle** — 25 dimensions covering robot speed, transfer style,
-interaction cues, bite ordering, microwave time, plate-handle detection colors, and
-navigation parking offsets — with a memory-augmented LLM. The prediction is *actuated
+user's **entire preference bundle** — 27 dimensions covering robot speed, transfer style,
+interaction cues, confirmation-page modes, bite ordering, microwave time, plate-handle
+detection colors, and navigation parking offsets — with a memory-augmented LLM. The prediction is *actuated
 immediately* (written into the per-user behavior-tree YAMLs and planner state), then
 **corrected just-in-time**: a few dimensions are shown on the iPad at natural pause points,
 colors are corrected with a live camera color picker during plate pickups, and parking
@@ -56,13 +56,13 @@ corrections over days.
 
 ### 2.2 The decision space: the preference bundle
 
-`Y = ∏_d Y_d` over `D = 25` dimensions, declared centrally in
+`Y = ∏_d Y_d` over `D = 27` dimensions, declared centrally in
 `preference_learning/config/preference_bundle.py` (`PREFERENCE_BUNDLE`, a list of
 `PreferenceDim(field, label, options, description, kind)`):
 
 | kind | dims | value space | corrected via |
 |---|---|---|---|
-| `categorical` (17) | `microwave_time`, `robot_speed`, `skewering_axis`, `web_interface_confirmation`, `transfer_mode`, `outside_mouth_distance`, `convey_robot_ready_for_initiating_transfer`, `detect_user_ready_for_initiating_transfer_{feeding,drinking,wiping}`, `convey_robot_ready_for_completing_transfer`, `detect_user_completed_transfer_{feeding,drinking,wiping}`, `retract_between_bites`, `bite_dipping_preference`, `wait_before_autocontinue_seconds` | finite option list | iPad "ask" pages + settings overlay |
+| `categorical` (19) | `microwave_time`, `robot_speed`, `skewering_axis`, `confirm_feeding_pickup`, `confirm_navigation_arrival`, `confirm_manipulation`, `transfer_mode`, `outside_mouth_distance`, `convey_robot_ready_for_initiating_transfer`, `detect_user_ready_for_initiating_transfer_{feeding,drinking,wiping}`, `convey_robot_ready_for_completing_transfer`, `detect_user_completed_transfer_{feeding,drinking,wiping}`, `retract_between_bites`, `bite_dipping_preference`, `wait_before_autocontinue_seconds` | finite option list | iPad "ask" pages + settings overlay |
 | `text` (1) | `bite_ordering` | free natural-language sentence | iPad ask page, "Other…" editor (typed or speech) |
 | `color` (3) | `plate_color_{fridge,microwave,table}` | HSV + tolerance `{h∈[0,179], s,v∈[0,255], range∈[0,1]}` | live camera color picker during the pickup |
 | `nav_offset` (4) | `nav_offset_{table,microwave,sink,fridge}` | SE(2) `{dx,dy∈[−0.5,0.5] m, dyaw∈[−45°,45°]}` in the stored goal's local frame | physical teleop adjustment after arrival |
@@ -74,6 +74,22 @@ Two structural facts the method exploits:
   `bundle_prediction.txt:43`).
 - The four nav offsets are **independent** per location — a correction at one is only weak
   evidence for the others.
+
+**Confirmation-page modes.** The three `confirm_*` dims share one option vocabulary —
+`"no"` (page skipped), `"yes (with auto-continue countdown)"` (page counts down for the global wait pref,
+then proceeds), `"yes (without any auto-continue)"` (page blocks until answered) — and gate the
+confirmation surfaces per skill family: `confirm_feeding_pickup` the bite/drink/wipe
+pickup-verification pages, `confirm_navigation_arrival` the post-arrival position
+check/adjust page, `confirm_manipulation` the detection-confirmation pages (plate
+handle at pickups, fridge/microwave door handles at opening, microwave button,
+sink/table placement spots) plus the plate-release confirms. The bundle stays flat: their
+relatedness (a shared supervision/trust latent — users relax confirmations together as
+trust grows) is expressed through the dim descriptions and the correlated-preferences
+prompt guidance, exactly like the color dims. Two learning side effects are deliberate:
+`confirm_navigation_arrival = "no"` freezes nav-offset learning (the adjust page is the
+teaching channel) and `confirm_manipulation = "no"` freezes color learning (the
+Correct-Color picker lives on the detection page); re-enabling from the settings overlay
+resumes both.
 
 ### 2.3 Interaction protocol (what the learner observes)
 
@@ -114,8 +130,18 @@ The predictor (`PredictionModel.predict_bundle`, `methods/prediction_model.py:35
 Claude call (`claude-opus-4-8` with adaptive thinking at `xhigh` effort —
 `PREDICTION_CLAUDE_MODEL`/`PREDICTION_EFFORT` in `utils/llm_config.py`; the LTM update
 also runs on Opus, while FLAIR planning/transparency stay on `claude-haiku-4-5`) per
-**prediction round** over a
-prompt assembled from three memory systems plus guardrails. Rounds are indexed by the
+**prediction round**. The request prefers **fast mode** (`PREDICTION_FAST_MODE`,
+research preview: same Opus weights at up to 2.5× output tokens/sec for 2× price —
+the call is output-dominated, so this cuts the ~60–90 s round roughly in half where the
+latency is still user-visible: `start()`, mid-batch ask joins, late `record_color`
+joins). Access is gated; `_create_prediction_message` falls back to standard speed on
+any fast-request failure. The API reports "access not granted" as a 429 with a
+fast-mode quota of **0** (`anthropic-fast-input-tokens-limit: 0`, verified live) — that
+and any hard 4xx latch fast mode off for the run, while a genuine capacity 429
+(non-zero quota) retries fast on the next call. The served speed is recorded in each
+`prediction_model_llm_calls/*.txt` header, and the meal-end LTM update always runs at
+standard speed. Each round's prompt is assembled from three memory systems plus
+guardrails. Rounds are indexed by the
 number of corrections so far: round `m = 0` runs at meal start
 (`PreferenceSession.start()`), and one further round runs after every user correction
 (from an ask page, a settings-overlay edit, a changed pickup color, or a changed nav
@@ -272,10 +298,15 @@ for both release logging and the memory day). `--pref_mode` defaults to `interfa
    `mealtime_context.food_items_for_flair`); predictions for open color/nav dims are
    **written into the BT YAMLs**; all categorical dims are applied
    (`_apply_non_planning`: BT writes + transfer-object re-init + FLAIR dip/ordering).
-5. **Initial ask** — `ask(["robot_speed", "wait_before_autocontinue_seconds"])`
-   (`run.py:154`). The finalized wait then drives every later correction page's
-   autocontinue countdown (`PreferenceSession.wait_seconds`; default 10 s before it is
-   finalized).
+5. **Initial ask** — `ask(INITIAL_PREF_DIMS)` = `robot_speed`,
+   `confirm_navigation_arrival`, `confirm_manipulation`,
+   `wait_before_autocontinue_seconds`, in that order: the two confirmation-mode dims fire
+   first during the fridge leg (arrival page, handle-detection page) so they must be
+   finalized up front, and they are asked BEFORE the wait pref so the user learns what
+   pages exist (and what "autocontinue" refers to) before choosing its duration. The
+   finalized wait then drives every later correction page's autocontinue countdown AND
+   every confirmation page in autocontinue mode (`PreferenceSession.wait_seconds`;
+   default 10 s before it is finalized).
 6. **Prep pipeline** (`_run_meal_preparation`, fixed indices for resume):
    1. `PlacePlateOnHolder` — the fridge pickup runs inside this plan; **fridge color** is
       corrected/confirmed during the pickup, then `record_color("fridge")` finalizes the
@@ -300,7 +331,10 @@ for both release logging and the memory day). `--pref_mode` defaults to `interfa
    the settings accessor is cleared (`run.py:869-874`, `_finalize_preference_session`).
 
 **Correction semantics inside `ask()`** (`preference_session.ask`): each dim is
-shown with its prediction highlighted; the page auto-confirms the prediction when the
+shown with its prediction highlighted, under a plain-language headline (`dim.label`) and a
+one-sentence subtitle (`dim.short_description`, sent as `description` in the
+`preference_correction_data` message — the long `description` is written for the LLM and
+appears only in the settings overlay); the page auto-confirms the prediction when the
 countdown expires without interaction (`webapp/src/views/preference_correction.vue` — user
 interaction cancels the countdown; the predicted value is prepended to the options if
 missing). A returned value ≠ prediction is a correction: it is finalized synchronously,
@@ -366,8 +400,10 @@ YAML must match the function signature.
 | bundle field | BT parameter (files) | consumed by |
 |---|---|---|
 | `robot_speed` | `Speed` (all 30 YAMLs), slow/medium/fast → low/medium/high | `robot_interface.set_speed` in every skill |
-| `web_interface_confirmation` | `TransferAskForConfirmation` (acquire_bite), `AskForConfirmationInitiatingTransferSequence` (transfer_drink/wipe) | post-acquisition success page (`acquisition.py:346-351`); drink/wipe pre-transfer confirm |
-| `wait_before_autocontinue_seconds` | `TimeToWaitBeforeAutocontinue` (acquire_bite, transfer_utensil, transfer_drink) | bite-selection / re-selection page countdowns; also (in memory) all correction pages and the nav adjust prompt |
+| `confirm_feeding_pickup` | `TransferAskForConfirmation` (acquire_bite), `AskForConfirmationInitiatingTransferSequence` (transfer_drink/wipe) — mode-coded 0/1/2 via `_CONFIRM_MODE_MAP` | bite/drink/wipe pickup-verification pages: 0 = skip, 1 = countdown then auto-confirm, 2 = block |
+| `confirm_navigation_arrival` | `AskForArrivalConfirmation` (navigate_to_*) — mode 0/1/2 | post-arrival "Position OK / Adjust" page (`navigate.py:_offer_position_adjustment`); 0 skips it and freezes nav-offset learning |
+| `confirm_manipulation` | `AskForManipulationConfirmation` (pick_plate_from_{fridge,microwave,table}, place_plate_{in_microwave,on_table,in_sink}, press_microwave_button, gaze_at_table, open_{fridge,microwave}) — mode 0/1/2 | detection-confirmation pages (plate handle / door handle / button / sink / plate; 0 auto-accepts successful detections and freezes color learning) + the plate-release confirms |
+| `wait_before_autocontinue_seconds` | `TimeToWaitBeforeAutocontinue` (acquire_bite, transfer_utensil, transfer_drink) | bite-selection / re-selection page countdowns; also (in memory, via the injected `get_autocontinue_seconds` provider) all correction pages and every confirmation page in autocontinue mode |
 | `outside_mouth_distance` | `OutsideMouthDistance` (3 transfer YAMLs), near/medium/far → 0.07/0.10/0.13 m; "not applicable" skips the write | outside-mouth transfer stop distance |
 | `convey_robot_ready_for_initiating_transfer` | `ReadyToInitiateTransferInteraction` → silent/voice/led/voice_led | `transfer_tool.relay_ready_to_initiate_transfer` (speech text adapts to the readiness mode; LED via serial) |
 | `detect_user_ready_for_initiating_transfer_*` | `InitiateTransferInteraction` → open_mouth/button/auto_timeout (per tool YAML) | `detect_initiate_transfer` (`transfer_tool.py:71`): mouth-open detector / physical button topic / **fixed 5 s sleep**; may also be an LLM-synthesized gesture name |
@@ -405,7 +441,15 @@ interactions into the same finalize/repredict/learn cycle as a button press.
   gizmo) and chooses **Confirm / Redo / Correct Color**. Correct Color opens the live
   picker: tap a pixel → RGB → HSV, adjust the tolerance slider, **Rerun** re-detects on a
   fresh frame (fresh TF stamp), **Confirm** locks the pose *from the exact frame the user
-  approved* (`perception_interface.py:815-1013`).
+  approved* (`perception_interface.py:815-1013`). The page itself is gated by
+  `confirm_manipulation`: "no" auto-accepts a successful detection (picker unreachable →
+  color learning frozen), "yes (with auto-continue countdown)" adds a countdown that auto-confirms.
+- If detection fails outright (all 20 attempts return `None`, typically a stale stored
+  color), the run no longer aborts: `perceive_attachment_poses` routes the user straight
+  into the same live picker with the "No detection" badge and no pre-populated result;
+  Confirm stays gated until a Rerun succeeds, and the confirmed color persists to the YAML
+  identically. The fatal `RuntimeError` remains only in terminal mode (no web interface)
+  or when the camera never produced a valid frame.
 - A changed color/range is written back into the YAML by the skill
   (`pick_plate.py:95-98`), and after the HLA completes the executive calls
   `record_color(location)`: the session joins any in-flight background reprediction, reads
@@ -419,8 +463,11 @@ interactions into the same finalize/repredict/learn cycle as a button press.
 - `NavigateHLA` composes the learned `PositionOffset` onto the nominal mapped goal in the
   goal's local frame, clamped to ±0.5 m / ±45° (`navigate.py:530-554`).
 - After a successful arrival (not after a recovery-teleop rescue), the iPad asks
-  **"Position OK / Adjust"** with the user's autocontinue wait; timeout ⇒ OK
-  (`web_interface.get_nav_position_adjust_choice`). On Adjust, the base is handed to the
+  **"Position OK / Adjust"**, gated by `confirm_navigation_arrival`: "no" skips the page
+  entirely (offsets frozen at the learned totals), "yes (with auto-continue countdown)" shows it with the
+  user's autocontinue wait (timeout ⇒ OK), "yes (without any auto-continue)" shows it with no countdown
+  (`web_interface.get_nav_position_adjust_choice`; `autocontinue_seconds <= 0` = no
+  countdown). On Adjust, the base is handed to the
   webapp joystick (no active move_base goal), the user parks it, presses Done; after a 10 s
   localization settle the new **total** offset is measured as the user's final localized
   pose expressed in the *nominal* goal frame (`navigate.py:1026-1027`) — accumulation is by
@@ -662,12 +709,13 @@ broken), **C** = corner case / sharp edge (works as coded, but surprising or fra
 
 ### Corner cases / sharp edges
 
-- **C1 — A bad color prediction can end the meal before the user can fix it.**
-  `start()`/repredictions write the LLM's color for still-open dims into the pickup YAML
-  (`_write_open_colors_to_bt`). If that color matches ~zero pixels, detection returns
-  `None` for all 20 attempts and `perceive_attachment_poses` raises `RuntimeError`
-  (`perception_interface.py:977-978`) → `FatalSkillFailure` (`run.py:1096-1105`) — the
-  color picker is only reachable *after* a successful detection. The opposite failure is
+- **C1 — A bad color prediction stalls the pickup for user correction instead of ending
+  the meal.** `start()`/repredictions write the LLM's color for still-open dims into the
+  pickup YAML (`_write_open_colors_to_bt`). If that color matches ~zero pixels, detection
+  returns `None` for all 20 attempts and `perceive_attachment_poses` routes the user
+  straight into the live color picker (see §6.1) rather than raising `RuntimeError` →
+  `FatalSkillFailure` (`run.py:1096-1105`); the fatal path remains only in terminal mode
+  or when the camera never produced a valid frame. The opposite failure is
   silent: a similar-colored larger blob wins DBSCAN and the robot confidently grasps the
   wrong thing (mitigated by the user-facing overlay + confirm gate). Note this risk grew
   with the correlated-preferences prompt revision: the model is now actively encouraged
@@ -767,6 +815,26 @@ broken), **C** = corner case / sharp edge (works as coded, but surprising or fra
 - **C18 — Depth validity window.** `pixel2World` rejects depth outside 0.05–1.0 m
   (`attachment_perception.py:552`), so handle detection silently fails if the robot gazes
   from farther than 1 m — appearing as C1's 20-frame failure.
+- **C19 — Confirmation-mode params migrate legacy per-user trees in place.** The
+  `AskFor*Confirmation` params are upserted by `apply_bundle_to_behavior_trees`
+  (`_upsert_confirm_param`): a per-user tree that predates a param gets it APPENDED — safe
+  only because the factory YAMLs and the skill signatures also put these params LAST
+  (positional binding), and the skills default the argument to None = pre-change behavior.
+  The two feeding params' legacy `Enum [0, 1]` spaces are widened to `[0, 1, 2]` on the
+  same pass, otherwise mode 2 would fail `space.contains()` at execution. If you ever add
+  a confirmation param NON-last, positional binding breaks silently for migrated trees.
+- **C20 — Auto-proceed trades explicit consent for flow.** With
+  `confirm_manipulation = "yes (with auto-continue countdown)"`, the plate release and detection pages
+  proceed on countdown expiry — the robot releases the plate / acts on a detection the
+  user never explicitly approved. That is the user's chosen trade (same class as C5's
+  autocontinue-confirms-as-ground-truth caveat). A failed/absent detection still takes the
+  normal failure path in every mode — "no" never auto-accepts nothing.
+- **C21 — The FLAIR next-bite page is NOT governed by a confirmation dim.** A
+  `confirm_bite_selection` dim (feeding family: "no" = silent full-auto feeding per the
+  learned bite_ordering, "wait for me" = never auto-pick) was considered and deferred;
+  the page keeps its existing always-on autocontinue via the wait pref. Door closing
+  (`perceive_handle_closing_poses`) shows no page (cached poses), so `close_*` skills are
+  intentionally outside `confirm_manipulation`.
 
 ---
 

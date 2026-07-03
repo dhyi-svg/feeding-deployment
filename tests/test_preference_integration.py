@@ -192,10 +192,16 @@ def _fake_anthropic_text(text: str) -> MagicMock:
 
 
 @pytest.fixture(autouse=True)
-def _mock_anthropic():
+def _mock_anthropic(monkeypatch):
     """Patch the Anthropic chat client for every test in this module so
     PredictionModel construction never needs a real ANTHROPIC_API_KEY. Chat
-    tests configure ``_mock_anthropic.messages.create.return_value``."""
+    tests configure ``_mock_anthropic.messages.create.return_value``.
+
+    Fast mode is forced OFF here so requests deterministically go through the
+    standard ``client.messages.create`` these tests spy on; the fast/standard
+    routing itself is covered by TestPredictionFastMode."""
+    import feeding_deployment.preference_learning.methods.prediction_model as pm
+    monkeypatch.setattr(pm, "PREDICTION_FAST_MODE", False)
     with patch(f"{_PM_MODULE}.anthropic.Anthropic") as mock_cls:
         client = MagicMock()
         mock_cls.return_value = client
@@ -806,3 +812,152 @@ class TestTerminalCorrectPreferences:
         result = terminal_correct_preferences(predicted, dict(PREF_OPTIONS))
         corrected = {k: v for k, v in result.items() if v != predicted.get(k)}
         assert corrected == {}
+
+
+# -------------------------------------------------------------------
+# Fast-mode routing for the prediction request (no network)
+# -------------------------------------------------------------------
+
+
+class _FakeMessagesEndpoint:
+    """Records create() calls; raises `outcome` if it is an exception."""
+
+    def __init__(self, outcome):
+        self.outcome = outcome
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if isinstance(self.outcome, Exception):
+            raise self.outcome
+        return self.outcome
+
+
+class _FakeAnthropicClient:
+    def __init__(self, fast_outcome, standard_outcome):
+        import types
+        self.beta = types.SimpleNamespace(messages=_FakeMessagesEndpoint(fast_outcome))
+        self.messages = _FakeMessagesEndpoint(standard_outcome)
+
+    def with_options(self, **_kwargs):
+        return self
+
+
+def _bare_prediction_model(client):
+    """PredictionModel with only the attributes _create_prediction_message
+    uses -- __init__ needs API keys and disk, which these tests do not."""
+    from feeding_deployment.preference_learning.methods.prediction_model import (
+        PredictionModel,
+    )
+    m = PredictionModel.__new__(PredictionModel)
+    m.client = client
+    m.chat_model = "claude-opus-4-8"
+    m._fast_mode_unavailable = False
+    return m
+
+
+def _rate_limit_exc(fast_input_limit=None):
+    """RateLimitError carrying fast-mode rate-limit headers. The API reports
+    'fast-mode access not granted' as a quota of 0 (429), so the header value
+    is what decides latching."""
+    import anthropic
+    import types
+    e = anthropic.RateLimitError.__new__(anthropic.RateLimitError)
+    headers = {}
+    if fast_input_limit is not None:
+        headers["anthropic-fast-input-tokens-limit"] = str(fast_input_limit)
+    e.response = types.SimpleNamespace(headers=headers)
+    return e
+
+
+def _exc(cls, status_code=None):
+    e = cls.__new__(cls)  # skip __init__ (needs an httpx response)
+    if status_code is not None:
+        e.status_code = status_code
+    return e
+
+
+class TestPredictionFastMode:
+
+    def test_fast_path_used_when_enabled(self, monkeypatch):
+        import feeding_deployment.preference_learning.methods.prediction_model as pm
+        monkeypatch.setattr(pm, "PREDICTION_FAST_MODE", True)
+        client = _FakeAnthropicClient(fast_outcome="fast-resp", standard_outcome="std-resp")
+        m = _bare_prediction_model(client)
+
+        assert m._create_prediction_message(max_tokens=1, messages=[]) == "fast-resp"
+        (call,) = client.beta.messages.calls
+        assert call["speed"] == "fast"
+        assert call["betas"] == ["fast-mode-2026-02-01"]
+        assert client.messages.calls == []
+
+    def test_rate_limit_falls_back_without_latching(self, monkeypatch):
+        # A 429 with a REAL (non-zero) fast-mode quota is transient capacity:
+        # fall back for this call only and try fast again next time.
+        import feeding_deployment.preference_learning.methods.prediction_model as pm
+        monkeypatch.setattr(pm, "PREDICTION_FAST_MODE", True)
+        client = _FakeAnthropicClient(
+            fast_outcome=_rate_limit_exc(fast_input_limit=200000),
+            standard_outcome="std-resp")
+        m = _bare_prediction_model(client)
+
+        assert m._create_prediction_message(max_tokens=1, messages=[]) == "std-resp"
+        assert m._fast_mode_unavailable is False  # capacity comes back; retry next call
+        assert len(client.beta.messages.calls) == 1
+        assert len(client.messages.calls) == 1
+
+    def test_zero_quota_rate_limit_latches_fast_mode_off(self, monkeypatch):
+        # The API reports "research-preview access not granted" as a 429 with
+        # anthropic-fast-input-tokens-limit: 0 (verified live) -- latch so the
+        # doomed fast attempt isn't repeated on every prediction round.
+        import feeding_deployment.preference_learning.methods.prediction_model as pm
+        monkeypatch.setattr(pm, "PREDICTION_FAST_MODE", True)
+        client = _FakeAnthropicClient(
+            fast_outcome=_rate_limit_exc(fast_input_limit=0),
+            standard_outcome="std-resp")
+        m = _bare_prediction_model(client)
+
+        assert m._create_prediction_message(max_tokens=1, messages=[]) == "std-resp"
+        assert m._fast_mode_unavailable is True
+        assert m._create_prediction_message(max_tokens=1, messages=[]) == "std-resp"
+        assert len(client.beta.messages.calls) == 1
+        assert len(client.messages.calls) == 2
+
+    def test_rate_limit_without_headers_does_not_latch(self, monkeypatch):
+        # Defensive: a RateLimitError whose response/headers are missing (or
+        # unparseable) must not latch fast mode off.
+        import feeding_deployment.preference_learning.methods.prediction_model as pm
+        monkeypatch.setattr(pm, "PREDICTION_FAST_MODE", True)
+        import anthropic
+        client = _FakeAnthropicClient(
+            fast_outcome=_exc(anthropic.RateLimitError),  # no .response at all
+            standard_outcome="std-resp")
+        m = _bare_prediction_model(client)
+
+        assert m._create_prediction_message(max_tokens=1, messages=[]) == "std-resp"
+        assert m._fast_mode_unavailable is False
+
+    def test_hard_4xx_latches_fast_mode_off(self, monkeypatch):
+        import anthropic
+        import feeding_deployment.preference_learning.methods.prediction_model as pm
+        monkeypatch.setattr(pm, "PREDICTION_FAST_MODE", True)
+        client = _FakeAnthropicClient(
+            fast_outcome=_exc(anthropic.APIStatusError, status_code=403),
+            standard_outcome="std-resp")
+        m = _bare_prediction_model(client)
+
+        assert m._create_prediction_message(max_tokens=1, messages=[]) == "std-resp"
+        assert m._fast_mode_unavailable is True
+        # Second call: the doomed fast attempt is skipped entirely.
+        assert m._create_prediction_message(max_tokens=1, messages=[]) == "std-resp"
+        assert len(client.beta.messages.calls) == 1
+        assert len(client.messages.calls) == 2
+
+    def test_flag_off_uses_standard_only(self, monkeypatch):
+        import feeding_deployment.preference_learning.methods.prediction_model as pm
+        monkeypatch.setattr(pm, "PREDICTION_FAST_MODE", False)
+        client = _FakeAnthropicClient(fast_outcome="fast-resp", standard_outcome="std-resp")
+        m = _bare_prediction_model(client)
+
+        assert m._create_prediction_message(max_tokens=1, messages=[]) == "std-resp"
+        assert client.beta.messages.calls == []

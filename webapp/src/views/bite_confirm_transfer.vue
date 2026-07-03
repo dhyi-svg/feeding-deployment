@@ -13,6 +13,7 @@
         <div class="cf-left">
           <strong>Did the robot grab the bite successfully?</strong>
           <p>If the pickup looks correct, continue and the robot will bring it to your mouth.<br><br>If not, retry and it will try again.</p>
+          <p v-if="!userInteracted && countdown !== null" class="cdown">Auto-continuing in <span>{{ countdown }}s</span></p>
         </div>
         <div class="cf-right">
           <button class="btn lg amber w100" @click="handleButtonClick">Continue — Transfer Bite</button>
@@ -32,8 +33,11 @@ export default {
     return {
       ros: null,
       username: USER,
-      listener: null, 
+      listener: null,
       publisher: null,
+      countdown: null,
+      countdownInterval: null,
+      userInteracted: false,
     }
   },
   mounted () {
@@ -49,6 +53,7 @@ export default {
   },
   beforeRouteLeave (to, from, next) {
     window.removeEventListener('takeover-press', this.handleButtonClick)
+    this.stopCountdown()
 
     if (this.listener) {
       this.listener.unsubscribe();
@@ -64,19 +69,48 @@ export default {
   },
   methods: {
     handleRosMessage(message) {
-      
+
       try {
         const parsedMessage = JSON.parse(message.data);
+
+        // The routing jump is consumed by the previous page; the backend
+        // re-sends it until answered so this page can pick up the countdown
+        // (autocontinue_seconds <= 0 means wait for the user).
+        if (parsedMessage.state === 'bite_confirm_transfer' && parsedMessage.status === 'jump') {
+          if (Number.isFinite(parsedMessage.autocontinue_seconds) && parsedMessage.autocontinue_seconds > 0 && this.countdownInterval === null && !this.userInteracted) {
+            this.startCountdown(Math.round(parsedMessage.autocontinue_seconds))
+          }
+          return
+        }
+
         const route = routeMap[parsedMessage.state]?.[parsedMessage.status];
         if (route) {
           if (typeof route === 'string') {
-            this.$router.push(route); 
+            this.$router.push(route);
           } else if (typeof route === 'object') {
-            this.$router.push(route); 
+            this.$router.push(route);
           }
         }
 
       } catch (error) {
+      }
+    },
+    startCountdown(seconds) {
+      this.countdown = seconds
+      this.countdownInterval = setInterval(() => {
+        if (this.countdown > 0) {
+          this.countdown -= 1;
+        } else {
+          this.stopCountdown()
+          // Unattended: confirm and let the transfer proceed.
+          this.handleButtonClick()
+        }
+      }, 1000);
+    },
+    stopCountdown() {
+      if (this.countdownInterval) {
+        clearInterval(this.countdownInterval);
+        this.countdownInterval = null;
       }
     },
     initPublisher() {
@@ -119,10 +153,14 @@ export default {
       });
     },
     handleButtonClick() {
+      this.userInteracted = true
+      this.stopCountdown()
       this.publishMessage();
       this.$router.push('/robot_executing');
     },
     handleButtonClick2() {
+      this.userInteracted = true
+      this.stopCountdown()
       this.publishMessage2();
       this.$router.push('/robot_executing');
     },

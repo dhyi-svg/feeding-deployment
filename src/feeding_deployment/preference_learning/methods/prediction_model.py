@@ -31,7 +31,11 @@ from feeding_deployment.preference_learning.methods.prompts.bundle_prediction im
     get_bundle_prediction_prompt,
 )
 from feeding_deployment.preference_learning.methods.utils import _episode_text, PREF_FIELDS, _resolve_api_key, _retry_on_rate_limit
-from feeding_deployment.utils.llm_config import PREDICTION_CLAUDE_MODEL, PREDICTION_EFFORT
+from feeding_deployment.utils.llm_config import (
+    PREDICTION_CLAUDE_MODEL,
+    PREDICTION_EFFORT,
+    PREDICTION_FAST_MODE,
+)
 
 PREF_OPTIONS: Dict[str, List[str]] = {name: opts for (name, _, opts) in root_config.PREFERENCE_BUNDLE}
 PREF_DESCRIPTIONS: Dict[str, str] = {dim.field: dim.description for dim in _PREF_BUNDLE_DIMS}
@@ -195,6 +199,10 @@ class PredictionModel:
         self.physical_profile_label = physical_profile_label
         self.physical_profile_description = physical_profile_description
         self.client = anthropic.Anthropic()  # chat (reads ANTHROPIC_API_KEY)
+        # Latched True on the first hard 4xx from a fast-mode request (no
+        # access / bad request) so later calls skip the doomed fast attempt.
+        # Rate limits do NOT latch -- fast capacity replenishes continuously.
+        self._fast_mode_unavailable = False
         self.embed_client = OpenAI(api_key=_resolve_api_key(None))  # embeddings stay on OpenAI (falls back to OPENAI_API_KEY)
         self.chat_model = chat_model
         self.embed_model = embed_model
@@ -362,6 +370,57 @@ class PredictionModel:
         }
         _write_json(_day_path(self.working_memory_dir, day), working_memory_record)
 
+    def _create_prediction_message(self, **request_kwargs: Any) -> Any:
+        """One prediction request, preferring fast mode when enabled.
+
+        Fast mode (research preview) serves the same Opus weights at up to
+        2.5x output tokens/sec for 2x price -- the prediction call is
+        output-dominated (adaptive thinking + the full-bundle JSON), which is
+        exactly where that speedup lands. The fast attempt uses max_retries=0
+        so ANY failure falls through to standard speed immediately instead of
+        stalling the robot on fast-mode capacity:
+        - RateLimitError with a fast-mode quota of 0 (the API reports
+          "research-preview access not granted" as a zero per-minute limit;
+          verified against the live API): latch _fast_mode_unavailable so
+          later calls skip the doomed attempt -- one clear message per run.
+        - RateLimitError with a real (non-zero) quota: fall back for this
+          call only; capacity replenishes continuously.
+        - other 4xx: latch _fast_mode_unavailable.
+        - 5xx / connection errors: transient; fall back for this call.
+        The standard-speed path keeps the caller's normal retry behavior.
+        """
+        if PREDICTION_FAST_MODE and not self._fast_mode_unavailable:
+            try:
+                return self.client.with_options(max_retries=0).beta.messages.create(
+                    speed="fast", betas=["fast-mode-2026-02-01"], **request_kwargs
+                )
+            except anthropic.RateLimitError as e:
+                try:
+                    fast_limit = e.response.headers.get("anthropic-fast-input-tokens-limit")
+                except Exception:
+                    fast_limit = None
+                if fast_limit is not None and str(fast_limit).strip() == "0":
+                    self._fast_mode_unavailable = True
+                    print(
+                        "[prediction] fast mode is not enabled for this org "
+                        "(quota 0 -- research-preview access not granted); "
+                        "using standard speed from now on.", flush=True,
+                    )
+                else:
+                    print("[prediction] fast mode rate-limited; using standard speed for this call.", flush=True)
+            except anthropic.APIStatusError as e:
+                if e.status_code < 500:
+                    self._fast_mode_unavailable = True
+                    print(
+                        f"[prediction] fast mode unavailable (HTTP {e.status_code}); "
+                        "using standard speed from now on.", flush=True,
+                    )
+                else:
+                    print(f"[prediction] fast mode request failed (HTTP {e.status_code}); using standard speed for this call.", flush=True)
+            except anthropic.APIConnectionError:
+                print("[prediction] fast mode connection error; using standard speed for this call.", flush=True)
+        return self.client.messages.create(**request_kwargs)
+
     def predict_bundle(
         self,
         context: Dict[str, Any],
@@ -421,7 +480,7 @@ class PredictionModel:
         )
 
         def _call() -> Any:
-            return self.client.messages.create(
+            return self._create_prediction_message(
                 model=self.chat_model,
                 max_tokens=16000,
                 # Adaptive thinking + xhigh effort: the reprediction must commit
@@ -455,10 +514,14 @@ class PredictionModel:
 
         if self.working_memory_calls_dir:
             log_file = self.working_memory_calls_dir / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            # usage.speed reports which speed actually served the request
+            # ("fast" or "standard"); absent on responses without usage.
+            served_speed = getattr(getattr(resp, "usage", None), "speed", None) or "standard"
+            header = f"===MODEL===\n{self.chat_model} (speed={served_speed}, effort={PREDICTION_EFFORT})\n\n"
             if data:
-                log_file.write_text(f"===PROMPT===\n{prompt}\n\n===RESPONSE===\n{json.dumps(data, indent=2)}", encoding="utf-8")
+                log_file.write_text(f"{header}===PROMPT===\n{prompt}\n\n===RESPONSE===\n{json.dumps(data, indent=2)}", encoding="utf-8")
             else:
-                log_file.write_text(f"===PROMPT===\n{prompt}\n\n===RESPONSE===\nFailed to parse response as JSON. Raw response:\n{resp}", encoding="utf-8")
+                log_file.write_text(f"{header}===PROMPT===\n{prompt}\n\n===RESPONSE===\nFailed to parse response as JSON. Raw response:\n{resp}", encoding="utf-8")
 
         # Per-open-dim reasons + the leading latent-factor inference; extra
         # response keys, not preference fields (the validation loop below only

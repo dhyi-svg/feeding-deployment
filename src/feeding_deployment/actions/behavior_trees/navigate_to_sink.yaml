@@ -17,4 +17,11 @@ parameters:
       upper: [0.5, 0.5, 0.7853981633974483]
     is_user_editable: True
     value: [0.0, 0.0, 0.0]
+  - name: "AskForArrivalConfirmation"
+    description: "Post-arrival position check/adjust page mode: 0 = skip, 1 = show with autocontinue, 2 = wait for the user."
+    space:
+      type: Enum
+      elements: [0, 1, 2]
+    is_user_editable: True
+    value: 1
 fn: !hla navigate_to_sink

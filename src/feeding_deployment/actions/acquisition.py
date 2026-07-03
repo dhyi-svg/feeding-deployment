@@ -343,8 +343,15 @@ class AcquireBiteHLA(HighLevelAction):
                 traceback.print_exc()
                 continue
             
+            # ask_confirmation (TransferAskForConfirmation, from the
+            # confirm_feeding_pickup preference): 0 = skip the page, 1 = show
+            # with autocontinue (timeout => confirm), 2 = wait for the user.
             if self.web_interface is not None and ask_confirmation:
-                get_success_confirmation = self.web_interface.get_successful_food_acquisition_confirmation()
+                autocontinue_s = (
+                    self._confirm_autocontinue_seconds()
+                    if int(ask_confirmation) == 1 else 0.0
+                )
+                get_success_confirmation = self.web_interface.get_successful_food_acquisition_confirmation(autocontinue_s)
                 if get_success_confirmation:
                     break
             else:

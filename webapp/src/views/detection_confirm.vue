@@ -34,6 +34,7 @@
         <button class="btn md ghost" @click="redoDetection">Redo</button>
         <button v-if="detectionType === 'attachment'" class="btn md teal" @click="correctColor">Correct Color</button>
       </div>
+      <p v-if="!userInteracted && countdown !== null" class="cdown">Auto-confirming in <span>{{ countdown }}s</span></p>
     </div>
   </div>
 </template>
@@ -102,11 +103,14 @@ export default {
     return {
       ros: null,
       username: USER,
-      detectionType: 'handle', 
-      listener: null, 
-      imageListener: null, 
+      detectionType: 'handle',
+      listener: null,
+      imageListener: null,
       publisher: null,
       imageSrc: null,
+      countdown: null,
+      countdownInterval: null,
+      userInteracted: false,
     }
   },
   computed: {
@@ -129,6 +133,7 @@ export default {
     this.initPublisher()
   },
   beforeRouteLeave (to, from, next) {
+    this.stopCountdown()
     if (this.listener) {
       this.listener.unsubscribe();
       this.listener = null;
@@ -150,6 +155,12 @@ export default {
         
         if (parsedMessage.state === 'detection_confirm' && parsedMessage.detection_type) {
           this.detectionType = parsedMessage.detection_type;
+          // The 'info' message carries the countdown (autocontinue_seconds
+          // <= 0 means wait for the user). A redo suppresses restarting it:
+          // the user is clearly attending.
+          if (Number.isFinite(parsedMessage.autocontinue_seconds) && parsedMessage.autocontinue_seconds > 0 && this.countdownInterval === null && !this.userInteracted) {
+            this.startCountdown(Math.round(parsedMessage.autocontinue_seconds))
+          }
         }
         const route = routeMap[parsedMessage.state]?.[parsedMessage.status];
         if (route) {
@@ -198,14 +209,38 @@ export default {
       })
       this.publisher.publish(message);
     },
+    startCountdown (seconds) {
+      this.countdown = seconds
+      this.countdownInterval = setInterval(() => {
+        if (this.countdown > 0) {
+          this.countdown -= 1;
+        } else {
+          this.stopCountdown()
+          // Unattended: accept the detection.
+          this.confirmDetection()
+        }
+      }, 1000);
+    },
+    stopCountdown () {
+      if (this.countdownInterval) {
+        clearInterval(this.countdownInterval);
+        this.countdownInterval = null;
+      }
+    },
     confirmDetection () {
+      this.userInteracted = true
+      this.stopCountdown()
       this.publishResponse('confirm');
     },
     redoDetection () {
+      this.userInteracted = true
+      this.stopCountdown()
       this.imageSrc = null;
       this.publishResponse('redo');
     },
     correctColor () {
+      this.userInteracted = true
+      this.stopCountdown()
       this.publishResponse('correct_color');
     }
   }
