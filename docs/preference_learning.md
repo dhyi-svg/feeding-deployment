@@ -111,7 +111,10 @@ per-dimension m0 accuracy, zero-correction meal counts overall and for the final
 ### 2.5 Method: memory-augmented LLM prediction
 
 The predictor (`PredictionModel.predict_bundle`, `methods/prediction_model.py:356`) is one
-Claude call (`claude-haiku-4-5`, `utils/llm_config.py`) per **prediction round** over a
+Claude call (`claude-opus-4-8` with adaptive thinking at `xhigh` effort —
+`PREDICTION_CLAUDE_MODEL`/`PREDICTION_EFFORT` in `utils/llm_config.py`; the LTM update
+also runs on Opus, while FLAIR planning/transparency stay on `claude-haiku-4-5`) per
+**prediction round** over a
 prompt assembled from three memory systems plus guardrails. Rounds are indexed by the
 number of corrections so far: round `m = 0` runs at meal start
 (`PreferenceSession.start()`), and one further round runs after every user correction
@@ -157,14 +160,13 @@ history) is read-only during all rounds — it is written once at meal end (§2.
   printed by the terminal emulator).
 - **Seeding for continuous dims**: each color / nav-offset line in the prompt carries a
   *seed* — the currently saved value read from the per-user behavior-tree YAML
-  (`PreferenceSession._read_color_seed` / `_read_nav_offset_seed`) — with the instruction
-  "return the seed unchanged unless memory/corrections give clear evidence". Day 1 the
+  (`PreferenceSession._read_color_seed` / `_read_nav_offset_seed`) — framed as "one piece
+  of evidence among the others", decisive only when neither this meal's corrections nor
+  similar prior meals bear on the dimension. Day 1 the
   seeds are factory defaults (`DEFAULT_COLOR = {h:82,s:55,v:84,range:0.1}`,
   zero offsets); later days they are the last accepted values, because the per-user BT
-  YAMLs persist across days. The prompt frames the seed as "a reasonable default when
-  nothing else bears on the dimension, not immutable" — to be weighed against this meal's
-  corrections and similar prior episodes. So for continuous dims the learner is
-  effectively a *carry-forward prior with LLM-proposed deltas*.
+  YAMLs persist across days. So for continuous dims the learner is effectively a
+  *carry-forward prior with LLM-proposed deltas*.
 - **Deterministic guardrails** (`prediction_model.py:427-463`):
   - each categorical output is validated against its option list; invalid/missing values
     fall back to the correction if one exists, else the **first option**;
@@ -639,9 +641,12 @@ broken), **C** = corner case / sharp edge (works as coded, but surprising or fra
   (`perception_interface.py:977-978`) → `FatalSkillFailure` (`run.py:1096-1105`) — the
   color picker is only reachable *after* a successful detection. The opposite failure is
   silent: a similar-colored larger blob wins DBSCAN and the robot confidently grasps the
-  wrong thing (mitigated by the user-facing overlay + confirm gate). The prompt's
-  "return the seed unchanged unless evidence" instruction is the only guard on the LLM
-  side.
+  wrong thing (mitigated by the user-facing overlay + confirm gate). Note this risk grew
+  with the correlated-preferences prompt revision: the model is now actively encouraged
+  to move open colors off their seeds after a this-meal correction, so a wrong inferred
+  color reaching a pickup is more likely than under the old keep-the-seed prompt; the
+  clipping in `parse_color` and the 20-frame → picker → redo loop are the remaining
+  guards.
 - **C2 — Predicted (unconfirmed) nav offsets are actuated.** Open nav-offset predictions
   are written to the YAML at `start()` and after every reprediction, so an LLM-invented
   offset physically moves the parking pose by up to ±0.5 m / ±45° with no confirmation

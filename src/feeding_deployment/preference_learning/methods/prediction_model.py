@@ -31,7 +31,7 @@ from feeding_deployment.preference_learning.methods.prompts.bundle_prediction im
     get_bundle_prediction_prompt,
 )
 from feeding_deployment.preference_learning.methods.utils import _episode_text, PREF_FIELDS, _resolve_api_key, _retry_on_rate_limit
-from feeding_deployment.utils.llm_config import DEFAULT_CLAUDE_MODEL
+from feeding_deployment.utils.llm_config import PREDICTION_CLAUDE_MODEL, PREDICTION_EFFORT
 
 PREF_OPTIONS: Dict[str, List[str]] = {name: opts for (name, _, opts) in root_config.PREFERENCE_BUNDLE}
 PREF_DESCRIPTIONS: Dict[str, str] = {dim.field: dim.description for dim in _PREF_BUNDLE_DIMS}
@@ -186,7 +186,7 @@ class PredictionModel:
         use_long_term_memory: bool = True,
         use_episodic_memory: bool = True,
         k_retrieve: int = 5,
-        chat_model: str = DEFAULT_CLAUDE_MODEL,
+        chat_model: str = PREDICTION_CLAUDE_MODEL,
         embed_model: str = "text-embedding-3-small",
         physical_profile_description: str | None = None,
     ) -> None:
@@ -423,7 +423,13 @@ class PredictionModel:
         def _call() -> Any:
             return self.client.messages.create(
                 model=self.chat_model,
-                max_tokens=15000,
+                max_tokens=16000,
+                # Adaptive thinking + xhigh effort: the reprediction must commit
+                # to values implied by this meal's corrections (cross-dimension
+                # correlations), which needs reasoning depth. Thinking tokens
+                # share the max_tokens budget with the JSON output.
+                thinking={"type": "adaptive"},
+                output_config={"effort": PREDICTION_EFFORT},
                 system="Return JSON only. No extra text.",
                 messages=[
                     {"role": "user", "content": prompt},
