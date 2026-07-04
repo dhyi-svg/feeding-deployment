@@ -576,11 +576,12 @@ class AppliancePerception(TFInterface):
         vis_image = self._draw_sink_overlay(rgb_image, (x1, y1, x2, y2), center_pixel)
         self._log_image("sink_back_pixel", vis_image)
 
-        ok, center_3d = self.pixel2World(camera_info_msg, center_pixel[0], center_pixel[1], depth_image)
+        ok, center_3d = self.pixel2World(camera_info_msg, center_pixel[0], center_pixel[1], depth_image, use_surrounding_pixels=True)
         if not ok:
             print("Could not get valid 3D point for sink placement")
+            return None
 
-        if transform is not None:   
+        if transform is not None:
             base_to_camera = self.make_homogeneous_transform(transform)
 
             camera_to_sink = np.eye(4)
@@ -744,7 +745,7 @@ class AppliancePerception(TFInterface):
 
         if math.isnan(depth) or depth < 0.05 or depth > 2.0:
             if use_surrounding_pixels:
-                pixel_range = 70
+                pixel_range = 25
                 depth_values = []
                 for dy in range(-pixel_range, pixel_range + 1):
                     for dx in range(-pixel_range, pixel_range + 1):

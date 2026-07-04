@@ -138,6 +138,10 @@ def _replay_pickup(session: PreferenceSession, bt_dir: Path, location: str,
         handle_color, color_range = color_to_bt(canonical)
         _write_params(bt_path, {"HandleColor": handle_color, "ColorRange": color_range})
     session.record_color(location)
+    # record_color schedules the propagation reprediction in the BACKGROUND;
+    # settle it before reading the other open dims, or the rows below measure
+    # the pre-repredict bundle (looks like zero propagation at every effort).
+    session.wait_for_reprediction()
 
     is_correction = desired_color is not None and _hsv(desired_color) != _hsv(predicted)
     if is_correction:

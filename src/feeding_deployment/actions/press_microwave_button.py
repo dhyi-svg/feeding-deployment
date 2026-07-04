@@ -83,6 +83,7 @@ class PressMicrowaveButtonHLA(HighLevelAction):
         num_presses = max(1, int(round(duration / 30.0)))
         print(f"Pressing microwave button {num_presses} times (duration={duration}s) ...")
 
+        self.report_activity("Looking at the microwave buttons")
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.microwave_closeup_gaze_pos)
 
@@ -95,6 +96,7 @@ class PressMicrowaveButtonHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.fridge_door_staging_pos)
         self.close_gripper() # just in case the gripper is open
         self.move_to_ee_pose(press_button_poses["pre_press_pose"])
+        self.report_activity(f"Pressing the microwave start button ({num_presses}x)")
         with slight_push_threshold:
             for i in range(num_presses):
                 self.move_to_ee_pose(press_button_poses["press_pose"])
@@ -104,4 +106,5 @@ class PressMicrowaveButtonHLA(HighLevelAction):
 
         for i in range(num_presses):
             print(f"Waiting for the microwave to finish heating... (iteration {i+1}/{num_presses})")
-            time.sleep(30) # wait for the microwave to finish heating. 
+            self.report_activity(f"Heating the food in the microwave… ({i + 1}/{num_presses})")
+            time.sleep(30) # wait for the microwave to finish heating.

@@ -94,6 +94,13 @@ class FakeWeb:
     def finish_preference_correction(self):
         self.finished = True
 
+    # Deterministic activity channel (mirrors WebInterface); no-ops for tests.
+    def report_activity(self, text, busy=True):
+        pass
+
+    def clear_activity(self):
+        pass
+
 
 # Only the YAMLs the session reads or seeds from: the color / nav-offset
 # write-back targets plus the categorical-dim targets. Copying — and rewriting

@@ -73,6 +73,8 @@ class PlacePlateInApplianceHLA(HighLevelAction):
 
         print("Placing plate in fridge ...")
 
+        self.report_activity("Placing the plate in the fridge")
+
     # manip_confirm_mode defaults to None so per-user behavior trees that
     # predate the AskForManipulationConfirmation parameter still execute
     # (today's wait-for-the-user release confirm).
@@ -87,10 +89,12 @@ class PlacePlateInApplianceHLA(HighLevelAction):
         behind_placement_pose = perceived_poses["behind_placement_pose"]
         placement_pose = perceived_poses["placement_pose"]
 
+        self.report_activity("Placing the plate into the microwave")
         self.move_to_joint_positions(self.sim.scene_description.microwave_plate_staging_pos)
         self.move_to_ee_pose(placement_pose)
         self.confirm_plate_release("microwave", manip_confirm_mode)
         self.close_gripper()
+        self.report_activity("Backing the arm out of the microwave")
         self.move_to_ee_pose(behind_placement_pose)
         self.move_to_ee_pose(self.sim.scene_description.microwave_plate_staging_pose)
 
@@ -150,12 +154,14 @@ class PlacePlateOnHolderHLA(HighLevelAction):
 
         print("Placing plate on holder ...")
 
+        self.report_activity("Carrying the plate to the stand")
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.behind_intermediate_pos)
         self.move_to_joint_positions(self.sim.scene_description.intermediate_plate_holder_pos)
         self.move_to_joint_positions(self.sim.scene_description.above_plate_holder_pos)
-        
+
         with holder_threshold:
+            self.report_activity("Setting the plate down on the stand")
             self.move_to_ee_pose(self.sim.scene_description.inside_plate_holder_pose)
             self.close_gripper()
 
@@ -210,6 +216,7 @@ class PlacePlateInSinkHLA(HighLevelAction):
 
         print("Placing plate in sink ...")
 
+        self.report_activity("Looking at the sink")
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.right_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.sink_gaze_pos)
@@ -219,6 +226,7 @@ class PlacePlateInSinkHLA(HighLevelAction):
             web_interface=self.web_interface, confirm_mode=confirm_mode,
             confirm_autocontinue_s=confirm_autocontinue_s)
 
+        self.report_activity("Lowering the plate into the sink")
         self.move_to_joint_positions(self.sim.scene_description.sink_plate_staging_pos)
         self.move_to_ee_pose(placement_poses["sink_placement_pose"])
         self.confirm_plate_release("sink", manip_confirm_mode)
@@ -282,11 +290,13 @@ class PlacePlateOnTableHLA(HighLevelAction):
 
         print("Placing plate on table ...")
 
+        self.report_activity("Carrying the plate to the table")
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.table_plate_staging_pos)
 
         placement_poses = self.perception_interface.get_perceived_table_placement_poses()
 
+        self.report_activity("Lowering the plate onto the table")
         self.move_to_ee_pose(placement_poses["pre_table_placement_pose"])
         self.move_to_ee_pose(placement_poses["table_placement_pose"])
         self.confirm_plate_release("table", manip_confirm_mode)

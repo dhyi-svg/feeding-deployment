@@ -348,6 +348,7 @@ class NavigateHLA(HighLevelAction):
         # via waypoints + destination). No-op visualization in sim.
         if self.robot_interface is not None:
             self.robot_interface.set_speed(speed)
+        self.report_activity("Tucking the arm in before driving")
         print("Retracting arm to left_back_retract_pos before navigation ...")
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
 
@@ -368,6 +369,7 @@ class NavigateHLA(HighLevelAction):
         if len(waypoints) > 1:
             print(f"[nav] routing {' -> '.join(waypoints)}")
 
+        self.report_activity(f"Driving to the {location_name}")
         for i, wp in enumerate(waypoints):
             pose = self._load_target_pose(wp)
             is_final = i == len(waypoints) - 1
@@ -396,6 +398,7 @@ class NavigateHLA(HighLevelAction):
                 )
                 self._drive_to_pose(wp, pose)
                 leg_used_recovery |= getattr(self, "_last_leg_used_recovery", False)
+                self.report_activity(f"Arriving at the {location_name}")
                 self._refinement_window(wp, pose)
                 self._offer_position_adjustment(
                     wp, nominal_pose, pose, position_offset, leg_used_recovery,

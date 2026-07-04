@@ -84,6 +84,7 @@ class CloseDoorHLA(HighLevelAction):
             else nullcontext()
         )
 
+        self.report_activity("Reaching for the fridge handle")
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.open_gripper()
 
@@ -96,6 +97,7 @@ class CloseDoorHLA(HighLevelAction):
         self.move_to_ee_pose(handle_closing_poses["pull_closing_waypoint"])
 
         with pull_threshold:
+            self.report_activity("Swinging the fridge door closed")
             self.close_gripper()
             self.move_to_ee_pose_trajectory(handle_closing_poses["pull_closing_waypoints"])
             self.open_gripper()
@@ -106,6 +108,7 @@ class CloseDoorHLA(HighLevelAction):
         self.move_to_ee_pose(handle_closing_poses["push_closing_waypoints"][0])
 
         with hard_push_threshold:
+            self.report_activity("Pushing the fridge door shut")
             self.move_to_ee_pose_trajectory(handle_closing_poses["push_closing_waypoints"])
             time.sleep(1.0)
             self.move_to_ee_pose(handle_closing_poses["push_closing_waypoints"][-3])
@@ -136,6 +139,7 @@ class CloseDoorHLA(HighLevelAction):
             else nullcontext()
         )
 
+        self.report_activity("Reaching for the microwave door")
         # self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
         self.open_gripper()
@@ -145,16 +149,18 @@ class CloseDoorHLA(HighLevelAction):
         self.move_to_ee_pose(handle_closing_poses["before_above_closing_waypoint"])
         self.move_to_ee_pose(handle_closing_poses["above_closing_waypoint"])
         self.move_to_ee_pose(handle_closing_poses["closing_waypoint"])
-        
+
         with slight_push_threshold:
+            self.report_activity("Swinging the microwave door closed")
             self.move_to_ee_pose_trajectory(handle_closing_poses["closing_waypoints"])
             time.sleep(1.0) # wait for the door to be fully closed before moving the arm away
             self.move_to_ee_pose(handle_closing_poses["closing_waypoints"][-2])
 
         self.close_gripper()
         self.move_to_ee_pose(handle_closing_poses["offset_closing_waypoints"][0])
-        
+
         with hard_push_threshold:
+            self.report_activity("Pushing the microwave door shut")
             self.move_to_ee_pose_trajectory(handle_closing_poses["offset_closing_waypoints"])
             self.move_to_ee_pose(handle_closing_poses["pre_grasp_pose"])
 

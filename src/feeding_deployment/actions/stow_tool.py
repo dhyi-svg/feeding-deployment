@@ -59,6 +59,8 @@ class StowToolHLA(HighLevelAction):
 
         print("Stowing utensil ...")
 
+        self.report_activity("Putting the feeding utensil away")
+
         if self.robot_interface is not None:
             self.robot_interface.set_speed(speed)
         
@@ -77,6 +79,7 @@ class StowToolHLA(HighLevelAction):
         if self.robot_interface is not None:
             self.robot_interface.set_speed(speed)
         
+        self.report_activity("Putting the drink back")
         last_drink_poses, last_drink_pickup_joint_pos = self.perception_interface.get_last_drink_pickup_configs()
         x_movement, y_movement = self.sim.scene_description.drink_delta_xy
         self.sim.scene_description.drink_delta_xy = (0, 0)
@@ -100,6 +103,7 @@ class StowToolHLA(HighLevelAction):
         if self.robot_interface is not None:
             self.robot_interface.set_speed(speed)
         
+        self.report_activity("Putting the wipe away")
         self.move_to_joint_positions(self.sim.scene_description.before_transfer_pos)
         self.move_to_joint_positions(self.sim.scene_description.retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.wipe_outside_above_mount_pos)
@@ -116,6 +120,7 @@ class StowToolHLA(HighLevelAction):
         if self.robot_interface is not None:
             self.robot_interface.set_speed(speed)
 
+        self.report_activity("Putting the plate down")
         last_plate_poses = self.perception_interface.get_last_plate_pickup_configs(study_poses=False)
 
         # x_movement = input("Input the amount of x movement (to your right) for the plate: ")

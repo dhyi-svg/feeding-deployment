@@ -60,7 +60,8 @@ class PickToolHLA(HighLevelAction):
 
         if self.robot_interface is not None:
             self.robot_interface.set_speed(speed)
-            
+
+        self.report_activity("Picking up the feeding utensil")
         self.move_to_joint_positions(self.sim.scene_description.retract_pos)
         self.close_gripper()
         self.move_to_joint_positions(self.sim.scene_description.utensil_above_mount_pos)
@@ -84,12 +85,14 @@ class PickToolHLA(HighLevelAction):
         if self.robot_interface is not None:
             self.robot_interface.set_speed(speed)
 
+        self.report_activity("Looking for the drink")
         self.move_to_joint_positions(self.sim.scene_description.retract_pos)
         self.close_gripper()
         self.move_to_joint_positions(self.sim.scene_description.drink_gaze_pos)
 
         drink_poses = self.perception_interface.perceive_drink_pickup_poses()
 
+        self.report_activity("Picking up the drink")
         self.move_to_joint_positions(self.sim.scene_description.drink_staging_pos)
         self.move_to_ee_pose(drink_poses['pre_grasp_pose'])
         self.move_to_ee_pose(drink_poses['inside_bottom_pose'])
@@ -105,6 +108,7 @@ class PickToolHLA(HighLevelAction):
         if self.robot_interface is not None:
             self.robot_interface.set_speed(speed)
 
+        self.report_activity("Picking up the wipe")
         self.move_to_joint_positions(self.sim.scene_description.retract_pos)
         self.close_gripper()
         self.move_to_joint_positions(self.sim.scene_description.wipe_above_mount_pos)
@@ -121,6 +125,7 @@ class PickToolHLA(HighLevelAction):
         if self.robot_interface is not None:    
             self.robot_interface.set_speed(speed)
 
+        self.report_activity("Picking up the plate")
         if self.perception_interface.last_plate_poses is None:
             self.move_to_joint_positions(self.sim.scene_description.retract_pos)
             self.close_gripper()

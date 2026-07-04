@@ -217,6 +217,10 @@ class HighLevelAction(abc.ABC):
                 "User took over during a perception confirmation wait",
                 redo_current=(choice == "redo"),
             )
+        finally:
+            # Stop the "still working" timer / stale activity line once the skill
+            # ends; the LLM fallback (or the next skill's activity) takes over.
+            self.clear_activity()
 
     def process_behavior_tree_node_addition(
         self,
@@ -387,6 +391,19 @@ class HighLevelAction(abc.ABC):
             raise ValueError("Robot interface is not available to get joint positions.")
         return np.asarray(self.robot_interface.get_state()["position"], dtype=float)
 
+    def report_activity(self, text: str, busy: bool = True) -> None:
+        """Report a concrete, user-facing description of what this skill is doing
+        right now to the web app (e.g. "Grasping the fridge handle"). No-op when
+        there is no web interface (simulation / tests)."""
+        if self.web_interface is not None:
+            self.web_interface.report_activity(text, busy=busy)
+
+    def clear_activity(self) -> None:
+        """Clear the current activity so the web app hides the busy timer and the
+        fallback explanation line resumes. No-op without a web interface."""
+        if self.web_interface is not None:
+            self.web_interface.clear_activity()
+
     def move_to_joint_positions(self, joint_positions: list[float]) -> None:
 
         plan = None
@@ -397,6 +414,22 @@ class HighLevelAction(abc.ABC):
         else:
             self.execute_robot_command(JointCommand(pos=joint_positions), plan)
             
+    @staticmethod
+    def _validate_ee_pose(pose: Pose) -> None:
+        """Reject non-finite positions and non-unit quaternions before commanding
+        the arm. A NaN/degenerate pose (e.g. from a failed perception back-project)
+        would otherwise surface as a cryptic "zero norm quaternions" error deep in
+        the Kinova driver -- or, worse, drive the arm to an undefined target."""
+        position = np.asarray(pose.position, dtype=float)
+        orientation = np.asarray(pose.orientation, dtype=float)
+        if position.shape != (3,) or not np.all(np.isfinite(position)):
+            raise ValueError(f"Invalid EE-pose position (must be 3 finite values): {pose.position}")
+        if orientation.shape != (4,) or not np.all(np.isfinite(orientation)):
+            raise ValueError(f"Invalid EE-pose quaternion (must be 4 finite values): {pose.orientation}")
+        norm = float(np.linalg.norm(orientation))
+        if not np.isclose(norm, 1.0, atol=1e-3):
+            raise ValueError(f"Invalid EE-pose quaternion (norm {norm:.4f}, expected unit): {pose.orientation}")
+
     def move_to_ee_pose(self, pose: Pose) -> None:
 
         plan = None
@@ -405,6 +438,7 @@ class HighLevelAction(abc.ABC):
         if self.robot_interface is None:
             self.sim.visualize_plan(plan)
         else:
+            self._validate_ee_pose(pose)
             self.execute_robot_command(CartesianCommand(pos=pose.position, quat=pose.orientation), plan)
 
     def move_to_ee_pose_trajectory(self, traj: list[Pose]) -> None:
@@ -415,6 +449,8 @@ class HighLevelAction(abc.ABC):
         if self.robot_interface is None:
             self.sim.visualize_plan(plan)
         else:
+            for pose in traj:
+                self._validate_ee_pose(pose)
             self.execute_robot_command(CartesianTrajectoryCommand(traj=traj), plan)
     
     def grasp_tool(self, tool: str) -> None:

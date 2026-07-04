@@ -402,10 +402,29 @@ class PreferenceSession:
             }
         return corrected, confirmed
 
+    def _report_activity(self, text: str, busy: bool = True) -> None:
+        """Best-effort user-facing activity update to the web app. Never raises:
+        a web/ROS hiccup must not break the prediction critical path. Safe to call
+        from the background repredict thread (WebInterface.report_activity is
+        thread-safe)."""
+        if self._web is not None:
+            try:
+                self._web.report_activity(text, busy=busy)
+            except Exception as e:
+                print(f"[preference-session] report_activity failed: {e}")
+
+    def _clear_activity(self) -> None:
+        if self._web is not None:
+            try:
+                self._web.clear_activity()
+            except Exception as e:
+                print(f"[preference-session] clear_activity failed: {e}")
+
     def _predict(
         self,
         color_seeds: Optional[Dict[str, Any]] = None,
         nav_offset_seeds: Optional[Dict[str, Any]] = None,
+        activity_msg: str = "Thinking about your food preferences… (this can take ~15s)",
     ) -> Dict[str, Any]:
         # predict_bundle may call an LLM (slow). Callers must NOT hold self._lock
         # across this (see _repredict_open) so the settings worker / execution
@@ -413,6 +432,9 @@ class PreferenceSession:
         # seeds so they can later detect external YAML writes that landed while
         # the LLM call was in flight.
         corrected, confirmed = self._pinned_split()
+        # Surface the slow Opus reasoning as a concrete "why we're waiting" line
+        # (the model is claude-opus-4-8 at xhigh effort -- multiple seconds).
+        self._report_activity(activity_msg)
         pred = self._model.predict_bundle(
             self.context,
             corrected,
@@ -442,7 +464,10 @@ class PreferenceSession:
         following record_* finalizes the external value and repredicts again)."""
         color_seeds = self._color_seeds()
         nav_offset_seeds = self._nav_offset_seeds()
-        pred = self._predict(color_seeds, nav_offset_seeds)  # LLM OUTSIDE all locks
+        pred = self._predict(  # LLM OUTSIDE all locks
+            color_seeds, nav_offset_seeds,
+            activity_msg="Updating your preferences in the background…",
+        )
         with self._bt_write_mutex:
             with self._lock:
                 stale: set[str] = set()
@@ -503,6 +528,8 @@ class PreferenceSession:
                 if not self._repredict_dirty:
                     self._repredict_running = False
                     self._repredict_cv.notify_all()
+                    # Background work drained: stop the "still working" timer.
+                    self._clear_activity()
                     return
                 self._repredict_dirty = False
             try:
@@ -638,6 +665,10 @@ class PreferenceSession:
             predicted_bundle=self._loggable_bundle(),
             explanations=dict(self.last_explanations),
         )
+        # Stop the "thinking about your preferences" timer now that the initial
+        # prediction is done (a scheduled background repredict, if any, sets and
+        # clears its own activity).
+        self._clear_activity()
 
     @property
     def wait_seconds(self) -> float:

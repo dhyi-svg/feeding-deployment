@@ -83,6 +83,7 @@ class PickPlateFromApplianceHLA(HighLevelAction):
 
         print("Picking plate from fridge ...")
 
+        self.report_activity("Looking inside the fridge for the plate")
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.fridge_contents_gaze_pos)
         confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm_mode)
@@ -104,10 +105,12 @@ class PickPlateFromApplianceHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.fridge_inside_intermediate_pos)
 
+        self.report_activity("Reaching into the fridge for the plate")
         self.move_to_ee_pose(pre_pickup_pose)
         self.close_gripper()
         self.move_to_ee_pose(pickup_pose)
         self.open_gripper()
+        self.report_activity("Lifting the plate out of the fridge")
         self.move_to_ee_pose(above_pickup_pose)
         self.move_to_ee_pose(post_pickup_pose)
         
@@ -123,6 +126,7 @@ class PickPlateFromApplianceHLA(HighLevelAction):
 
         print("Picking plate from microwave ...")
 
+        self.report_activity("Looking inside the microwave for the plate")
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.right_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.microwave_inside_gaze_pos)
@@ -148,10 +152,12 @@ class PickPlateFromApplianceHLA(HighLevelAction):
 
         self.close_gripper()
         self.move_to_joint_positions(self.sim.scene_description.microwave_plate_staging_pos)
+        self.report_activity("Reaching into the microwave for the plate")
         self.move_to_ee_pose(pre_pickup_pose)
         self.move_to_ee_pose(pickup_pose)
         # input("Press Enter to open gripper and pick up the plate ...")
         self.open_gripper()
+        self.report_activity("Lifting the plate out of the microwave")
         self.move_to_ee_pose(self.sim.scene_description.microwave_plate_staging_pose)
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
 
@@ -225,14 +231,17 @@ class PickPlateFromHolderHLA(HighLevelAction):
 
         print("Picking plate from holder ...")
 
+        self.report_activity("Reaching for the plate on the stand")
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.behind_intermediate_pos)
         self.move_to_joint_positions(self.sim.scene_description.above_plate_holder_pos)
         self.close_gripper()
+        self.report_activity("Picking up the plate")
         self.move_to_ee_pose(self.sim.scene_description.inside_plate_holder_pose)
-        
+
         with holder_threshold:
             self.open_gripper()
+            self.report_activity("Lifting the plate off the stand")
             self.move_to_ee_pose(self.sim.scene_description.above_plate_holder_pose)
 
         self.move_to_ee_pose(self.sim.scene_description.intermediate_plate_holder_pose)
@@ -287,6 +296,7 @@ class PickPlateFromTableHLA(HighLevelAction):
 
         print("Picking plate from table ...")
 
+        self.report_activity("Looking at the table for the plate")
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.table_plate_gaze_pos)
 
@@ -305,10 +315,12 @@ class PickPlateFromTableHLA(HighLevelAction):
             self.process_behavior_tree_parameter_update(objects, {}, "PickPlateFromTable", "ColorRange", new_range)
 
         self.move_to_joint_positions(self.sim.scene_description.table_intermediate_pos)
+        self.report_activity("Reaching for the plate on the table")
         self.move_to_ee_pose(pre_pickup_pose)
         self.close_gripper()
         self.move_to_ee_pose(pickup_pose)
         self.open_gripper()
+        self.report_activity("Lifting the plate off the table")
         self.move_to_ee_pose(above_pickup_pose)
         self.move_to_ee_pose(self.sim.scene_description.table_intermediate_pose)
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)

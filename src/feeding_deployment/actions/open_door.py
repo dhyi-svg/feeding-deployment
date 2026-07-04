@@ -93,6 +93,7 @@ class OpenDoorHLA(HighLevelAction):
 
         print("Opening fridge door ...")
         # return
+        self.report_activity("Looking at the fridge door")
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.fridge_door_gaze_pos)
 
@@ -124,13 +125,16 @@ class OpenDoorHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.microwave_plate_staging_pos)
 
+        self.report_activity("Reaching for the fridge handle")
         self.move_to_ee_pose(handle_opening_poses["pre_grasp_pose"])
         self.open_gripper()
-        
+
         with pull_threshold:
+            self.report_activity("Grasping the fridge handle")
             self.move_to_ee_pose(handle_opening_poses["grasp_pose"])
             self.close_gripper()
             # self.move_to_ee_pose(handle_opening_poses["post_grasp_pose"])
+            self.report_activity("Pulling the fridge door open")
             self.move_to_ee_pose_trajectory(handle_opening_poses["opening_waypoints"])
             self.open_gripper()
         
@@ -172,6 +176,7 @@ class OpenDoorHLA(HighLevelAction):
 
         print("Opening microwave door ...")
 
+        self.report_activity("Looking at the microwave door")
         # self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
 
@@ -199,13 +204,16 @@ class OpenDoorHLA(HighLevelAction):
         # self.move_to_joint_positions(self.sim.scene_description.home_pos)
         self.move_to_joint_positions(self.sim.scene_description.fridge_door_staging_pos)
 
+        self.report_activity("Reaching for the microwave handle")
         self.move_to_ee_pose(handle_opening_poses["pre_grasp_pose"])
         self.open_gripper()
+        self.report_activity("Grasping the microwave handle")
         self.move_to_ee_pose(handle_opening_poses["grasp_pose"])
-        
+
         with pull_threshold:
             self.close_gripper()
             # self.move_to_ee_pose(handle_opening_poses["post_grasp_pose"])
+            self.report_activity("Pulling the microwave door open")
             self.move_to_ee_pose_trajectory(handle_opening_poses["opening_waypoints"])
             self.open_gripper()
 

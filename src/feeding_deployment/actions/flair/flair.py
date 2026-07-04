@@ -124,9 +124,9 @@ class FLAIR:
     def crop_plate(self, camera_color_data):
         return self.inference_server.crop_plate(camera_color_data)
 
-    def detect_items(self, camera_color_data, camera_depth_data, camera_info_data, log_path):
+    def detect_items(self, camera_color_data, camera_depth_data, camera_info_data, log_path, report=None):
 
-        annotated_image, detections, item_masks, item_portions, item_labels, plate_bounds = self.inference_server.detect_items(camera_color_data, log_path)
+        annotated_image, detections, item_masks, item_portions, item_labels, plate_bounds = self.inference_server.detect_items(camera_color_data, log_path, report=report)
 
         item_bounding_boxes = []
         item_bounding_boxes_plate = []

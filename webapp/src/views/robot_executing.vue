@@ -27,7 +27,11 @@
     </div>
 
     <div class="bd exec-body">
-      <div class="exec-text">{{ displayedMessage }}</div>
+      <div class="exec-text">{{ activity || displayedMessage }}</div>
+      <div class="exec-status" v-if="busy">
+        <span class="spinner"></span>
+        <span class="exec-elapsed">still working ({{ elapsedSec }}s)</span>
+      </div>
     </div>
   </div>
 </template>
@@ -44,6 +48,14 @@ export default {
       ros: null,
       username: USER,
       displayedMessage: '',
+      // Deterministic activity line (from report_activity on the robot): a
+      // concrete "what/why" phrase that takes precedence over displayedMessage
+      // (the LLM fallback). `busy` drives the spinner + "still working (Ns)"
+      // timer so long Opus/detection waits read as intentional, not frozen.
+      activity: '',
+      busy: false,
+      elapsedSec: 0,
+      timerHandle: null,
       listener: null,
       skillPlanListener: null,
       skillPlan: [],
@@ -86,6 +98,8 @@ export default {
       this.skillPlanListener = null;
     }
 
+    this.stopTimer();
+
     if (this.publisher) {
       this.publisher.unadvertise();
       this.publisher = null;
@@ -98,6 +112,10 @@ export default {
 
       try {
         const parsedMessage = JSON.parse(message.data);
+        if (parsedMessage.state === 'activity') {
+          this.handleActivity(parsedMessage);
+          return;
+        }
         const route = routeMap[parsedMessage.state]?.[parsedMessage.status];
         if (!route && parsedMessage.status) {
           this.displayedMessage = parsedMessage.status;
@@ -114,6 +132,35 @@ export default {
     },
     skillLabel(name) {
       return skillLabel(name);
+    },
+    handleActivity(msg) {
+      const text = msg.status || '';
+      const busy = !!msg.busy;
+      if (!text || !busy) {
+        // Cleared: stop the timer and fall back to the LLM explanation line.
+        this.activity = '';
+        this.busy = false;
+        this.stopTimer();
+        return;
+      }
+      // New phase -> restart the elapsed counter; same text -> keep counting.
+      if (text !== this.activity) {
+        this.elapsedSec = 0;
+      }
+      this.activity = text;
+      this.busy = true;
+      this.ensureTimer();
+    },
+    ensureTimer() {
+      if (this.timerHandle) return;
+      this.timerHandle = setInterval(() => { this.elapsedSec += 1; }, 1000);
+    },
+    stopTimer() {
+      if (this.timerHandle) {
+        clearInterval(this.timerHandle);
+        this.timerHandle = null;
+      }
+      this.elapsedSec = 0;
     },
     handleSkillPlan(message) {
       try {
@@ -226,5 +273,30 @@ export default {
   text-align: center;
   max-width: 80vw;
   line-height: 1.4;
+}
+
+.exec-status {
+  display: flex;
+  align-items: center;
+  gap: 1vw;
+  color: var(--tm);
+  font-size: 2.2vh;
+}
+
+.exec-elapsed {
+  font-variant-numeric: tabular-nums;
+}
+
+.spinner {
+  width: 2.2vh;
+  height: 2.2vh;
+  border: 0.35vh solid var(--s2);
+  border-top-color: var(--a);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 </style>

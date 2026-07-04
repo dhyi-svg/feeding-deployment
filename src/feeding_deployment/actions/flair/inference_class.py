@@ -563,7 +563,10 @@ class BiteAcquisitionInference:
 
         return cropped_image
 
-    def detect_items(self, image, log_path = None):
+    def detect_items(self, image, log_path = None, report = None):
+        # ``report`` is an optional callback(str) used to surface live detection
+        # progress to the user-facing web app (counts of regions found/filtered).
+        # It is None for callers that don't want UI updates (behavior unchanged).
 
         assert FOOD_MODELS_IMPORTS, "Food detection imports (Grounding DINO, Segment Anything, Depth Anything) required to run this function"
         assert self.FOOD_CLASSES is not None, "Food classes not initialized"
@@ -636,6 +639,8 @@ class BiteAcquisitionInference:
         # food_classes_being_detected.append('blue plate')
         print("Food Classes being detected: ", food_classes_being_detected)
 
+        if report is not None:
+            report("Scanning the plate for food")
         # detect objects
         detections = self.grounding_dino_model.predict_with_classes(
             image=cropped_image,
@@ -643,6 +648,8 @@ class BiteAcquisitionInference:
             box_threshold=self.BOX_THRESHOLD,
             text_threshold=self.TEXT_THRESHOLD
         )
+        if report is not None:
+            report(f"Found {len(detections.xyxy)} possible food regions — filtering…")
         
         # if IS_NOODLE:
         #     filtered_idxs = []
@@ -688,6 +695,8 @@ class BiteAcquisitionInference:
         detections.confidence = detections.confidence[nms_idx]
         detections.class_id = detections.class_id[nms_idx]
         #print(f"After NMS: {len(detections.xyxy)} boxes")
+        if report is not None:
+            report(f"Narrowed down to {len(detections.xyxy)} food items — outlining each…")
 
         if self.use_efficient_sam:
             # collect segment results from EfficientSAM
@@ -795,6 +804,9 @@ class BiteAcquisitionInference:
                 print(f"Ignoring {labels[i]} due to large area: {area} with max area threshold: {MAX_AREA_THRESHOLD}")
 
         labels = refined_labels
+
+        if report is not None:
+            report(f"Identified {len(labels)} bites on the plate")
 
         # Detect the plate, detect blue color
         # plate_mask = detect_plate(image)

@@ -134,6 +134,18 @@ class WebInterface:
 
         self.explanation_lock = threading.Lock() # Lock for generating continuous explanations
 
+        # Deterministic "activity" channel: a user-facing phrase describing what the
+        # robot is concretely doing right now (emitted directly from the action code
+        # via report_activity), plus a "busy" flag that drives the webapp's
+        # "still working (Ns)" timer. While an activity is set it takes priority over
+        # the LLM continuous explanations, which are demoted to a gap-filling fallback.
+        # _activity_lock guards _activity; _send_lock serializes _send_message so the
+        # background preference thread and the main thread cannot interleave a publish
+        # with a log-file append.
+        self._activity: str | None = None
+        self._activity_lock = threading.Lock()
+        self._send_lock = threading.Lock()
+
         # Mid-skill manual takeover: set when the user taps the global "Take Over"
         # button. Checked by the executive (idle loop) and by execute_robot_command
         # (mid-skill). _takeover_stop_fn, if registered, is called immediately to
@@ -187,13 +199,17 @@ class WebInterface:
         self.skill_plan_publisher.publish(String(json.dumps({"plan": [], "current": -1})))
 
     def _send_message(self, msg_dict: dict[str, Any], explanation=False) -> None:
-        self.web_interface_publisher.publish(String(json.dumps(msg_dict)))
-        if explanation and msg_dict["status"] != "":
-            with open(self.webapp_explanation_messages_log, "a") as f:
-                f.write(json.dumps(msg_dict) + "\n")
-        else:
-            with open(self.webapp_sent_messages_log, "a") as f:
-                f.write(json.dumps(msg_dict) + "\n")
+        # Serialized: report_activity may be called from the background preference
+        # thread while the main thread publishes here, and interleaving the ROS
+        # publish with the log-file append would garble both.
+        with self._send_lock:
+            self.web_interface_publisher.publish(String(json.dumps(msg_dict)))
+            if explanation and msg_dict["status"] != "":
+                with open(self.webapp_explanation_messages_log, "a") as f:
+                    f.write(json.dumps(msg_dict) + "\n")
+            else:
+                with open(self.webapp_sent_messages_log, "a") as f:
+                    f.write(json.dumps(msg_dict) + "\n")
 
     def _send_image(self, image, flip=True) -> None:
         # Every key image shown to the user (plate image, bite-selection image,
@@ -1218,6 +1234,30 @@ class WebInterface:
                 print("Unsupported message received from the web interface: ", msg_dict)
         return timestamps
 
+    #### Deterministic activity reporting ####
+
+    def report_activity(self, text: str, busy: bool = True) -> None:
+        """Publish a concrete, user-facing description of what the robot is doing
+        right now (e.g. "Grasping the fridge handle", "Thinking about your food
+        preferences… (~15s)").
+
+        Emitted directly from the action code at meaningful phase boundaries. While
+        an activity is set it takes priority over the LLM continuous explanations
+        (see provide_continuous_explanations). ``busy=True`` tells the webapp to show
+        a spinner and a "still working (Ns)" elapsed timer. Thread-safe: safe to call
+        from the background preference-reprediction thread.
+        """
+        with self._activity_lock:
+            self._activity = text
+        self._send_message({"state": "activity", "status": text, "busy": busy}, explanation=True)
+
+    def clear_activity(self) -> None:
+        """Clear the current activity so the webapp hides the busy timer and the LLM
+        continuous explanations resume as the fallback line."""
+        with self._activity_lock:
+            self._activity = None
+        self._send_message({"state": "activity", "status": "", "busy": False})
+
     #### Continuous Explanations ####
 
     def fix_explanation(self, explanation: str) -> None:
@@ -1237,8 +1277,12 @@ class WebInterface:
     def provide_continuous_explanations(self) -> None:
         current_explanation = ""
         while self.active:
+            # The LLM narrator is a fallback: skip it while a deterministic activity
+            # is being reported (report_activity) or a fixed explanation is pinned.
+            with self._activity_lock:
+                activity_active = self._activity is not None
             # Only provide continuous explanations if no one has fixed an explanation
-            if not self.explanation_lock.locked():
+            if not activity_active and not self.explanation_lock.locked():
                 try:
                     response = self.transparency_continuous.get_explanation()
                     if response != "No new explanation to provide" and response != current_explanation:

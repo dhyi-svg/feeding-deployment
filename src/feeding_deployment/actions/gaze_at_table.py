@@ -58,6 +58,7 @@ class GazeAtTableHLA(HighLevelAction):
 
         print("Gazing at table ...")
 
+        self.report_activity("Looking at the table")
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.table_gaze_pos)
 

@@ -124,7 +124,8 @@ class AcquireBiteHLA(HighLevelAction):
                         "first (the meal_setup page was removed)."
                     )
 
-                    items_detection = self.flair.detect_items(camera_color_data, camera_depth_data, camera_info_data, log_path=None)
+                    self.report_activity("Looking at the plate")
+                    items_detection = self.flair.detect_items(camera_color_data, camera_depth_data, camera_info_data, log_path=None, report=self.report_activity)
 
                     assert self.log_dir is not None, "Log path must be set to save food detection data"
                     # save food detection data
@@ -200,6 +201,7 @@ class AcquireBiteHLA(HighLevelAction):
                     self.wrist_interface.set_velocity_mode()
                     self.wrist_interface.reset()
 
+                self.report_activity("Choosing the best bite to pick up")
                 next_action_prediction = self.flair.predict_next_action(camera_color_data, items_detection, log_path=None)
 
                 next_food_item = next_action_prediction['labels_list'][next_action_prediction['food_id']]
