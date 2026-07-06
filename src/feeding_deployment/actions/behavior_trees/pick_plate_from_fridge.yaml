@@ -16,7 +16,7 @@ parameters:
       lower: [0, 0, 0]
       upper: [179, 255, 255]
     is_user_editable: True
-    value: [82, 55, 84]
+    value: [12, 223, 169]
   - name: "ColorRange"
     description: "Tolerance fraction (0.0-1.0) applied proportionally across all HSV channels."
     space:

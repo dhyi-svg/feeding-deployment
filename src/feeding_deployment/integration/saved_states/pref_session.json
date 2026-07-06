@@ -64,36 +64,15 @@
     "setting": "Personal",
     "time_of_day": "evening"
   },
-  "corrected": {
-    "confirm_navigation_arrival": "yes (without any auto-continue)"
-  },
+  "corrected": {},
   "finalized": [
-    "bite_dipping_preference",
-    "bite_ordering",
-    "confirm_feeding_pickup",
     "confirm_manipulation",
     "confirm_navigation_arrival",
-    "convey_robot_ready_for_completing_transfer",
-    "convey_robot_ready_for_initiating_transfer",
-    "detect_user_completed_transfer_drinking",
-    "detect_user_completed_transfer_feeding",
-    "detect_user_completed_transfer_wiping",
-    "detect_user_ready_for_initiating_transfer_drinking",
-    "detect_user_ready_for_initiating_transfer_feeding",
-    "detect_user_ready_for_initiating_transfer_wiping",
     "microwave_time",
     "nav_offset_fridge",
     "nav_offset_microwave",
-    "nav_offset_sink",
-    "nav_offset_table",
-    "outside_mouth_distance",
     "plate_color_fridge",
-    "plate_color_microwave",
-    "plate_color_table",
-    "retract_between_bites",
     "robot_speed",
-    "skewering_axis",
-    "transfer_mode",
     "wait_before_autocontinue_seconds"
   ]
 }

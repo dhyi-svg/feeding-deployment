@@ -422,7 +422,7 @@ class AttachmentPerception(TFInterface):
     def detect_attachment_color(self, bgr_image, handle_color=None, color_range=0.1):
         hsv = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV)
         if handle_color is None:
-            handle_color = np.array([82, 55, 84])
+            handle_color = np.array([12, 223, 169])
         h, s, v = np.asarray(handle_color, dtype=int).tolist()
 
         # Hue is the discriminative channel, so keep its tolerance tight while

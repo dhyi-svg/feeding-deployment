@@ -264,7 +264,7 @@ TEXT_FIELDS: List[str] = [dim.field for dim in PREFERENCE_BUNDLE if dim.kind == 
 
 DEFAULT_BITE_ORDERING: str = "no particular order"
 
-DEFAULT_COLOR: dict = {"h": 82, "s": 55, "v": 84, "range": 0.1}
+DEFAULT_COLOR: dict = {"h": 12, "s": 223, "v": 169, "range": 0.1}
 
 # pickup location <-> color field (location names match HLA/perception usage).
 COLOR_FIELD_BY_LOCATION: dict = {
