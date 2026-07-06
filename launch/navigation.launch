@@ -21,8 +21,10 @@
     <param name="planner_patience" value="15.0"/>
     <param name="controller_patience" value="15.0"/>
 
-    <!-- optional but often helpful for your exact symptom -->
-    <param name="planner_frequency" value="1.0"/>
+    <!-- 0.2 Hz: global replans re-inject Cartographer yaw jitter into TEB via the
+         plan; at 1.0 Hz this drove ~1 Hz left/right hunting (navlog_20260706_131121).
+         TEB still avoids obstacles locally between replans. -->
+    <param name="planner_frequency" value="1"/>
     <param name="controller_frequency" value="10.0"/>
   </node>
 
@@ -68,5 +70,21 @@
     <param name="max_lin_vel" value="0.5"/>
     <param name="max_ang_vel" value="1.5"/>
     <param name="recovery_stable_s" value="2.0"/>
+    <!-- map->odom yank channel: Cartographer relocalization/alias (e.g. the
+         6.6 m / 180-deg table alias, 2026-07-06). On a jump above the gates:
+         same hold as the ZED channels + clear move_base costmaps (marks
+         painted before the jump are misplaced by it). Gates sit far above
+         normal correction jitter (~0.13 m); settle is longer than the ZED
+         channels because pose-graph snaps ping-pong. Disable for ablation
+         with enable_yank_channel=false. -->
+    <param name="enable_yank_channel" value="true"/>
+    <param name="yank_lin_m" value="0.5"/>
+    <param name="yank_ang_rad" value="0.4"/>
+    <param name="yank_settle_s" value="5.0"/>
+    <!-- Release hardening: don't release while map->odom yaw is still moving
+         under the held robot (healthy-stationary median 0.002 rad/s; wander
+         episodes 0.07-0.22). max_hold_s is the escape hatch. -->
+    <param name="release_mo_rate_rad_s" value="0.03"/>
+    <param name="max_hold_s" value="45.0"/>
   </node>
 </launch>

@@ -127,14 +127,16 @@ per-dimension m0 accuracy, zero-correction meal counts overall and for the final
 ### 2.5 Method: memory-augmented LLM prediction
 
 The predictor (`PredictionModel.predict_bundle`, `methods/prediction_model.py:356`) is one
-Claude call (`claude-opus-4-8` with adaptive thinking at `xhigh` effort —
+Claude call (`claude-opus-4-8` with adaptive thinking at `medium` effort — a
+low/medium/high/xhigh sweep over the recorded 3-day stress test found quality flat
+across levels while latency scaled 23→68 s/call, so medium is the default;
 `PREDICTION_CLAUDE_MODEL`/`PREDICTION_EFFORT` in `utils/llm_config.py`; the LTM update
 also runs on Opus, while FLAIR planning/transparency stay on `claude-haiku-4-5`) per
 **prediction round**. The request prefers **fast mode** (`PREDICTION_FAST_MODE`,
 research preview: same Opus weights at up to 2.5× output tokens/sec for 2× price —
-the call is output-dominated, so this cuts the ~60–90 s round roughly in half where the
-latency is still user-visible: `start()`, mid-batch ask joins, late `record_color`
-joins). Access is gated; `_create_prediction_message` falls back to standard speed on
+the call is output-dominated, so this roughly halves the prediction round — ~30 s at
+medium effort today, ~15 s with fast mode — where the latency is still user-visible:
+`start()`, mid-batch ask joins, late `record_color` joins). Access is gated; `_create_prediction_message` falls back to standard speed on
 any fast-request failure. The API reports "access not granted" as a 429 with a
 fast-mode quota of **0** (`anthropic-fast-input-tokens-limit: 0`, verified live) — that
 and any hard 4xx latch fast mode off for the run, while a genuine capacity 429

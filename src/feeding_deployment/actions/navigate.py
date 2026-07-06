@@ -80,7 +80,10 @@ class NavigateHLA(HighLevelAction):
     # refinement window's before-residual records whether the second park truly
     # landed within tolerance. (Pure wait -- no shared clock with the refinement
     # timeout, so it cannot eat into the refinement driving budget.)
-    _GOAL_CONFIRM_SETTLE_S = 25.0
+    # 25 -> 10 s: sized for Cartographer's correction cadence. At
+    # optimize_every_n_nodes=90 a parked robot got a correction only every
+    # ~45 s; at 25 (2026-07-06) it's every ~12 s, so 10 s spans ~one epoch.
+    _GOAL_CONFIRM_SETTLE_S = 10.0
 
     # Learned per-location navigation offset (PositionOffset BT parameter):
     # an SE(2) correction (dx m, dy m, dyaw rad) in the goal pose's LOCAL frame,

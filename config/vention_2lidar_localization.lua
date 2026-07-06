@@ -53,6 +53,12 @@ TRAJECTORY_BUILDER_2D.motion_filter.max_angle_radians = math.rad(0.5)
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.translation_weight = 10.
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.rotation_weight = 40.
 
-POSE_GRAPH.optimize_every_n_nodes = 90
+-- Corrections (map->odom snaps) are applied only at pose-graph optimizations,
+-- and this counts NODES, not seconds. Node rate is motion-filter gated
+-- (0.5 s stationary / 5 cm driving), so 90 meant one correction opportunity
+-- every ~22 s driving and ~45 s parked -- the measured 86.6 s mislocalization
+-- epoch was ~2 stationary cycles. 25 -> every ~6 s driving / ~12 s parked.
+-- Watch sys_1hz.csv load after this change (optimization runs ~3-4x as often).
+POSE_GRAPH.optimize_every_n_nodes = 25
 
 return options

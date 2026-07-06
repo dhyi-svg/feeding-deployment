@@ -424,7 +424,7 @@ class PreferenceSession:
         self,
         color_seeds: Optional[Dict[str, Any]] = None,
         nav_offset_seeds: Optional[Dict[str, Any]] = None,
-        activity_msg: str = "Thinking about your food preferences… (this can take ~15s)",
+        activity_msg: str = "Thinking about your food preferences… (this can take ~30s)",
     ) -> Dict[str, Any]:
         # predict_bundle may call an LLM (slow). Callers must NOT hold self._lock
         # across this (see _repredict_open) so the settings worker / execution
@@ -433,7 +433,8 @@ class PreferenceSession:
         # the LLM call was in flight.
         corrected, confirmed = self._pinned_split()
         # Surface the slow Opus reasoning as a concrete "why we're waiting" line
-        # (the model is claude-opus-4-8 at xhigh effort -- multiple seconds).
+        # (claude-opus-4-8 at PREDICTION_EFFORT: ~30 s mean at medium -- keep
+        # the estimate in the default activity_msg in sync with llm_config).
         self._report_activity(activity_msg)
         pred = self._model.predict_bundle(
             self.context,

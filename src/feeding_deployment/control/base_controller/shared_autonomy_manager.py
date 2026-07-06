@@ -49,7 +49,7 @@ import actionlib
 import rospy
 from actionlib_msgs.msg import GoalStatus
 from move_base_msgs.msg import MoveBaseAction, MoveBaseResult
-from std_msgs.msg import Bool, Empty
+from std_msgs.msg import Bool, Empty, String
 
 # State labels
 AUTONOMOUS = "AUTONOMOUS"
@@ -81,6 +81,9 @@ class SharedAutonomyManager:
         self.safety_hold_topic = rospy.get_param(
             "~safety_hold_topic", "/nav_safety_hold"
         )
+        self.safety_hold_reason_topic = rospy.get_param(
+            "~safety_hold_reason_topic", self.safety_hold_topic + "_reason"
+        )
         self.loop_hz = float(rospy.get_param("~loop_hz", 20.0))
         self.move_base_wait_s = float(rospy.get_param("~move_base_wait_s", 30.0))
 
@@ -93,6 +96,9 @@ class SharedAutonomyManager:
 
         # Level (not edge): mirrors the latched /nav_safety_hold Bool.
         self._hold = False
+        # Latest reason string from the monitor ("" while clear); cited in the
+        # pause/resume log lines so the run log records WHY navigation paused.
+        self._hold_reason = ""
 
         # Client to the real move_base.
         self.mb_client = actionlib.SimpleActionClient(
@@ -113,6 +119,9 @@ class SharedAutonomyManager:
         rospy.Subscriber(self.resume_topic, Empty, self._on_resume, queue_size=1)
         rospy.Subscriber(self.cancel_topic, Empty, self._on_cancel, queue_size=1)
         rospy.Subscriber(self.safety_hold_topic, Bool, self._on_hold, queue_size=1)
+        rospy.Subscriber(
+            self.safety_hold_reason_topic, String, self._on_hold_reason, queue_size=1
+        )
 
         # Our own action server. auto_start=False so we can start() after setup.
         self.server = actionlib.SimpleActionServer(
@@ -150,6 +159,9 @@ class SharedAutonomyManager:
     def _on_hold(self, msg: Bool) -> None:
         self._hold = bool(msg.data)
 
+    def _on_hold_reason(self, msg: String) -> None:
+        self._hold_reason = msg.data
+
     def _consume_flags(self):
         with self._lock:
             takeover, done, resume, cancel = (
@@ -174,6 +186,7 @@ class SharedAutonomyManager:
         # True while we have cancelled move_base because of a safety hold and
         # are waiting for the hold to release. Only meaningful in AUTONOMOUS.
         paused = False
+        paused_reason = ""
 
         rospy.loginfo("shared_autonomy_manager: new goal -> forwarding to move_base.")
         self.mb_client.send_goal(goal)
@@ -248,10 +261,12 @@ class SharedAutonomyManager:
                 # replan-from-current-pose mechanism as resume.
                 if self._hold and not paused:
                     paused = True
+                    paused_reason = self._hold_reason or "reason not yet received"
                     self.mb_client.cancel_goal()
                     rospy.logwarn(
-                        "shared_autonomy_manager: safety HOLD -> goal paused "
-                        "(move_base cancelled); will re-send on recovery."
+                        "shared_autonomy_manager: safety HOLD [%s] -> goal paused "
+                        "(move_base cancelled); will re-send on recovery.",
+                        paused_reason,
                     )
                 elif not self._hold and paused:
                     paused = False
@@ -259,8 +274,9 @@ class SharedAutonomyManager:
                     self.mb_client.send_goal(goal)
                     seen_active = False
                     rospy.loginfo(
-                        "shared_autonomy_manager: HOLD released -> goal re-sent, "
-                        "autonomy resuming from current pose."
+                        "shared_autonomy_manager: HOLD released (was: %s) -> goal "
+                        "re-sent, autonomy resuming from current pose.",
+                        paused_reason,
                     )
                 if paused:
                     rate.sleep()

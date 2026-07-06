@@ -1239,7 +1239,7 @@ class WebInterface:
     def report_activity(self, text: str, busy: bool = True) -> None:
         """Publish a concrete, user-facing description of what the robot is doing
         right now (e.g. "Grasping the fridge handle", "Thinking about your food
-        preferences… (~15s)").
+        preferences… (~30s)").
 
         Emitted directly from the action code at meaningful phase boundaries. While
         an activity is set it takes priority over the LLM continuous explanations

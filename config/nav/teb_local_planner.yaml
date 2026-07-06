@@ -12,7 +12,7 @@ TebLocalPlannerROS:
   max_samples: 500
   global_plan_overwrite_orientation: true
   allow_init_with_backwards_motion: true
-  max_global_plan_lookahead_dist: 1.0
+  max_global_plan_lookahead_dist: 1.5 # was 1.0; longer band averages over map->odom yaw jitter instead of chasing it (2.0 walked back to keep the 10 Hz control loop cheap)
   global_plan_viapoint_sep: 0.3
   global_plan_prune_distance: 1.0
   exact_arc_length: false
@@ -90,7 +90,7 @@ TebLocalPlannerROS:
   weight_inflation: 0.2
   weight_dynamic_obstacle: 10.0
   weight_dynamic_obstacle_inflation: 0.2
-  weight_viapoint: 5.0
+  weight_viapoint: 1.0 # was 5.0; strong pull to the jittering global plan drove left/right hunting. Side effect: more corner-cutting near obstacles (companion fix if resets increase: min_obstacle_dist 0.01 -> 0.05)
   weight_adapt_factor: 2.0
 
   # =====================================================================

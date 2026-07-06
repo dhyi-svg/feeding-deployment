@@ -483,10 +483,11 @@ class PredictionModel:
             return self._create_prediction_message(
                 model=self.chat_model,
                 max_tokens=16000,
-                # Adaptive thinking + xhigh effort: the reprediction must commit
-                # to values implied by this meal's corrections (cross-dimension
-                # correlations), which needs reasoning depth. Thinking tokens
-                # share the max_tokens budget with the JSON output.
+                # Adaptive thinking + PREDICTION_EFFORT (see llm_config.py for
+                # the effort-sweep rationale): the reprediction must commit to
+                # values implied by this meal's corrections (cross-dimension
+                # correlations). Thinking tokens share the max_tokens budget
+                # with the JSON output.
                 thinking={"type": "adaptive"},
                 output_config={"effort": PREDICTION_EFFORT},
                 system="Return JSON only. No extra text.",

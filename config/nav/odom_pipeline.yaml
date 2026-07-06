@@ -16,13 +16,13 @@
 # Gate single-frame ZED VIO teleports on the pose that feeds Cartographer.
 #   true  = drop physically-impossible jumps, hold last good pose
 #   false = pass raw ZED pose through unchanged (ORIGINAL behavior)
-enable_sanitizer: false
+enable_sanitizer: true
 
 # --- STAGE 2: windowed velocity differentiation ------------------------------
 # How the odom_feedback twist (for move_base/TEB) is computed from the pose.
 #   true  = difference the pose over vel_diff_window seconds (low velocity noise)
 #   false = difference consecutive frames (ORIGINAL behavior)
-enable_windowed_diff: false
+enable_windowed_diff: true
 
 # --- sanitizer tunables (used only when enable_sanitizer: true) --------------
 max_lin_vel: 0.5        # m/s  — pose jumps implying faster than this are dropped

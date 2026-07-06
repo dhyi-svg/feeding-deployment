@@ -20,9 +20,11 @@ refinement:
   rate_hz: 10.0          # control/sample rate (must exceed cmd_vel bridge cmd_timeout)
   window_s: 1.0          # sliding-average window over the error (smooths jitter)
   warmup_s: 1.0          # delay before the divergence safety check arms
-  localization_settle_s: 5.0   # short settle before the pre-refinement error read; the heavy
-                               # ~25s post-arrival settle + single replan now happens upstream
-                               # (navigate.py _GOAL_CONFIRM_SETTLE_S) before refinement runs
+  localization_settle_s: 0.0   # refinement starts immediately after the confirm leg parks
+                               # (0 = skip the pre-refinement settle entirely). The post-arrival
+                               # settle + single replan happens upstream (navigate.py
+                               # _GOAL_CONFIRM_SETTLE_S, 10 s) and already follows a settled
+                               # estimate; a second wait here bought nothing but latency.
 
   # --- stop-when-good threshold ---------------------------------------------
   # Heading-only refinement: the controller ALWAYS rotates toward the goal
