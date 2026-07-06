@@ -394,18 +394,32 @@ class NavigateHLA(HighLevelAction):
                 # Recovery use is accumulated across BOTH drives: the confirm
                 # resend usually succeeds trivially (attempts == 0) and would
                 # otherwise mask a recovery on the initial drive.
+                # EXCEPTION: if the human parked the base and pressed Done, the
+                # park is final -- confirm replan / refinement would drive the
+                # base away from where the human deliberately put it.
                 leg_used_recovery = getattr(self, "_last_leg_used_recovery", False)
-                self._wait_for_localization_settle(
-                    self._GOAL_CONFIRM_SETTLE_S,
-                    "confirming the goal pose (replan once)",
-                )
-                self._drive_to_pose(wp, pose)
-                leg_used_recovery |= getattr(self, "_last_leg_used_recovery", False)
+                human_parked = getattr(self, "_last_leg_human_completed", False)
+                if human_parked:
+                    print(f"[nav] {wp}: human parked the base (Done) -- the "
+                          "park is final; skipping confirm settle/replan, "
+                          "refinement, and the adjust prompt.")
+                else:
+                    self._wait_for_localization_settle(
+                        self._GOAL_CONFIRM_SETTLE_S,
+                        "confirming the goal pose (replan once)",
+                    )
+                    self._drive_to_pose(wp, pose)
+                    leg_used_recovery |= getattr(
+                        self, "_last_leg_used_recovery", False)
+                    human_parked = getattr(
+                        self, "_last_leg_human_completed", False)
                 self.report_activity(f"Arriving at the {location_name}")
-                self._refinement_window(wp, pose)
+                if not human_parked:
+                    self._refinement_window(wp, pose)
                 self._offer_position_adjustment(
                     wp, nominal_pose, pose, position_offset, leg_used_recovery,
                     arrival_confirm_mode=arrival_confirm_mode,
+                    human_parked=human_parked,
                 )
 
     def _await_nav_result(self, client, location_name: str) -> str:
@@ -518,6 +532,10 @@ class NavigateHLA(HighLevelAction):
         # navigations -- a recovery park is "get past the failure", not a
         # position preference.
         self._last_leg_used_recovery = False
+        # Whether THIS leg was completed by the human pressing Done (manager
+        # reports a blind SUCCEEDED). The caller treats such a park as final:
+        # no confirm replan, no refinement, no adjustment prompt.
+        self._last_leg_human_completed = False
         while True:
             goal.target_pose.header.stamp = rospy.Time.now()
             client.send_goal(goal)
@@ -541,7 +559,15 @@ class NavigateHLA(HighLevelAction):
 
             if outcome == "succeeded":
                 self._last_leg_used_recovery = attempts > 0
-                print(f"Reached {location_name}.")
+                # The manager's only two success texts are "Goal completed by
+                # human teleoperation." (Done) and "move_base reached the
+                # goal."; a direct move_base client never matches.
+                self._last_leg_human_completed = (
+                    "human teleoperation" in (client.get_goal_status_text() or "")
+                )
+                print(f"Reached {location_name}."
+                      + (" (human parked via Done)"
+                         if self._last_leg_human_completed else ""))
                 return
 
             # ZED-divergence hold: not a real failure. Wait for the ZED to
@@ -989,6 +1015,7 @@ class NavigateHLA(HighLevelAction):
         prev_offset,
         leg_used_recovery: bool = False,
         arrival_confirm_mode=None,
+        human_parked: bool = False,
     ) -> None:
         """After arrival at a real destination, let the user teleop the base to
         fine-adjust its position, and fold the adjustment into the learned
@@ -1025,6 +1052,15 @@ class NavigateHLA(HighLevelAction):
             # failure", not a position preference. No prompt, no dataset row.
             print(
                 f"[nav-offset] {location_name}: final leg used recovery teleop; "
+                "skipping the position-adjustment prompt."
+            )
+            return
+        if human_parked:
+            # The user drove the base here and pressed Done -- the park IS the
+            # confirmation. No prompt, no dataset row (park residual is not a
+            # measured adjustment; same reasoning as the recovery branch above).
+            print(
+                f"[nav-offset] {location_name}: human parked via Done; "
                 "skipping the position-adjustment prompt."
             )
             return

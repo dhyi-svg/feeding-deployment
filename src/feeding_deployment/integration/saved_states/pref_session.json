@@ -4,7 +4,7 @@
     "bite_ordering": "no particular order",
     "confirm_feeding_pickup": "yes (with auto-continue countdown)",
     "confirm_manipulation": "yes (with auto-continue countdown)",
-    "confirm_navigation_arrival": "yes (with auto-continue countdown)",
+    "confirm_navigation_arrival": "yes (without any auto-continue)",
     "convey_robot_ready_for_completing_transfer": "speech + LED",
     "convey_robot_ready_for_initiating_transfer": "speech + LED",
     "detect_user_completed_transfer_drinking": "perception",
@@ -62,29 +62,10 @@
   "context": {
     "meal": "chicken nuggets",
     "setting": "Personal",
-    "time_of_day": "morning"
+    "time_of_day": "evening"
   },
   "corrected": {
-    "microwave_time": "1 min",
-    "plate_color_fridge": {
-      "h": 10,
-      "range": 0.1,
-      "s": 206,
-      "v": 151
-    },
-    "plate_color_microwave": {
-      "h": 13,
-      "range": 0.1,
-      "s": 240,
-      "v": 187
-    },
-    "plate_color_table": {
-      "h": 6,
-      "range": 0.11,
-      "s": 177,
-      "v": 157
-    },
-    "wait_before_autocontinue_seconds": "100 sec"
+    "confirm_navigation_arrival": "yes (without any auto-continue)"
   },
   "finalized": [
     "bite_dipping_preference",

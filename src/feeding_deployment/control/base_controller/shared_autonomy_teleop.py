@@ -64,9 +64,12 @@ class SharedAutonomyTeleop:
         self.deadman_button = int(rospy.get_param("~deadman_button", 5))
         self.done_button = int(rospy.get_param("~done_button", 7))
 
-        # ---- Velocity limits (match config/nav/teb_local_planner.yaml) ----
-        self.max_vel_x = float(rospy.get_param("~max_vel_x", 0.2))
-        self.max_vel_theta = float(rospy.get_param("~max_vel_theta", 0.5))
+        # ---- Velocity limits ----
+        # Required (no defaults): the launch file is the single source of truth
+        # for teleop speed, which is intentionally faster than the autonomy's
+        # TEB limits. Missing params fail the node loudly at startup.
+        self.max_vel_x = float(rospy.get_param("~max_vel_x"))
+        self.max_vel_theta = float(rospy.get_param("~max_vel_theta"))
         self.deadband = float(rospy.get_param("~deadband", 0.12))
 
         # Flip these if a stick drives the robot the wrong way on real hardware.

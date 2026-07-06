@@ -49,9 +49,15 @@
     <param name="done_button" value="3"/>      <!-- Y: press = goal reached -->
     <param name="axis_linear" value="1"/>
     <param name="axis_angular" value="0"/>
-    <!-- Clamp to the autonomy's safe limits (see teb_local_planner.yaml). -->
-    <param name="max_vel_x" value="0.2"/>
-    <param name="max_vel_theta" value="0.5"/>
+    <!-- Teleop publishes on its own topic; the cmd_vel bridge executes it with
+         priority over /cmd_vel and WITHOUT the ZED-divergence hold gate (the
+         human is supervising). Autonomous nav stays on /cmd_vel. -->
+    <param name="cmd_vel_topic" value="/cmd_vel_teleop"/>
+    <!-- Intentionally faster than the autonomy's TEB limits (see
+         teb_local_planner.yaml: 0.2 m/s / 0.5 rad/s); takeover driving is
+         deadman-gated and human-supervised. -->
+    <param name="max_vel_x" value="0.6"/>
+    <param name="max_vel_theta" value="1.0"/>
     <param name="deadband" value="0.12"/>
   </node>
 </launch>

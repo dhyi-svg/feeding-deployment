@@ -53,8 +53,11 @@ import { ROS_URL, USER } from '@/config/parameterConfig'
 import { skillLabel } from '@/config/skillLabels'
 import { categoryOf } from '@/config/skillCategories'
 
-const MAX_LIN = 0.30
-const MAX_ANG = 0.60
+// Takeover driving is human-supervised, so these are intentionally faster than
+// the autonomy's TEB limits (0.2 m/s / 0.5 rad/s). Published on /cmd_vel_teleop,
+// which the cmd_vel bridge executes with priority and without the ZED hold gate.
+const MAX_LIN = 0.6
+const MAX_ANG = 1.0
 const SEND_HZ = 10
 const R = 96
 const KCENTER = 96
@@ -134,7 +137,7 @@ export default {
     this.ros.on('close', () => this.setLinkHealthy(false))
     this.ros.on('error', () => this.setLinkHealthy(false))
 
-    this.cmdVelPub = new ROSLIB.Topic({ ros: this.ros, name: '/cmd_vel', messageType: 'geometry_msgs/Twist' })
+    this.cmdVelPub = new ROSLIB.Topic({ ros: this.ros, name: '/cmd_vel_teleop', messageType: 'geometry_msgs/Twist' })
 
     this.takeoverPub = new ROSLIB.Topic({ ros: this.ros, name: '/shared_autonomy/takeover', messageType: 'std_msgs/Empty' })
     this.donePub = new ROSLIB.Topic({ ros: this.ros, name: '/shared_autonomy/done', messageType: 'std_msgs/Empty' })

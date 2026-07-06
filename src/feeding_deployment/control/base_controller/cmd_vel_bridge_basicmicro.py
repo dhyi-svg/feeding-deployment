@@ -14,8 +14,18 @@ network drop) shows up at the NUC as "set_speeds stopped arriving" and is caught
 BaseInterface's authoritative timeout there. A watchdog here could not cover a
 compute hang anyway (its timer would freeze with the box).
 
-Used by BOTH autonomous nav (move_base/TEB -> /cmd_vel) and the shared-autonomy
-Xbox teleop, so it must faithfully reproduce whatever (v, w) it is handed.
+Two command streams, split by source:
+  * /cmd_vel        -- autonomous nav (move_base/TEB, navigate.py refinement).
+                       Gated by the ZED-divergence hold and muted while a human
+                       is actively driving.
+  * /cmd_vel_teleop -- human teleop (Xbox deadman, webapp joystick). Executed
+                       with priority and WITHOUT the hold gate: the human is
+                       supervising, and driving out of a divergence is exactly
+                       what a takeover is for. A nonzero teleop command mutes
+                       /cmd_vel for ~teleop_mute_s so autonomy cannot fight the
+                       human; zeros execute (a stop is always safe) but do not
+                       mute, so an idle teleop source (webapp page open, stick
+                       centered, streaming zeros) never starves autonomy.
 
 Keeps combined translate+turn intact by:
   1) Mixing linear+angular into left/right, then clamping each wheel symmetrically
@@ -32,6 +42,7 @@ Keeps combined translate+turn intact by:
 import math
 import os
 import sys
+import threading
 import traceback
 
 import rospy
@@ -103,18 +114,31 @@ class CmdVelBridgeBasicmicro:
         # ---- Safety hold (ZED-divergence interlock) ----
         # zed_health_monitor asserts /nav_safety_hold when ZED tracking diverges
         # (odom becomes garbage). While held, we command zero regardless of
-        # /cmd_vel, so the base stops until the ZED recovers. Gating here -- the
-        # single point to the motors -- guarantees the stop for both nav and
-        # teleop. Fail-safe: once we've ever heard the monitor, a stale flag
-        # (monitor died) also holds; if the monitor was never launched, we never
-        # hold (backward compatible).
+        # /cmd_vel, so the base stops until the ZED recovers. The hold gates
+        # AUTONOMOUS commands only: teleop is human-supervised and exempt --
+        # driving out of a divergence is exactly what a takeover is for.
+        # Fail-safe: once we've ever heard the monitor, a stale flag (monitor
+        # died) also holds; if the monitor was never launched, we never hold
+        # (backward compatible).
         self.hold_topic = rospy.get_param("~safety_hold_topic", "/nav_safety_hold")
         self.hold_stale_s = float(rospy.get_param("~safety_hold_stale_s", 1.0))
         self.safety_hold = False
         self.hold_last_msg = None
 
+        # ---- Teleop priority (see module docstring) ----
+        self.teleop_cmd_vel_topic = rospy.get_param("~teleop_cmd_vel_topic",
+                                                    "/cmd_vel_teleop")
+        self.teleop_mute_s = float(rospy.get_param("~teleop_mute_s", 0.5))
+        self.last_teleop_active = None  # wall time of the last NONZERO teleop cmd
+
+        # Each subscription's callbacks run on their own thread; serialize the
+        # conversion + set_speeds RPC so the two streams can't interleave.
+        self.cmd_lock = threading.Lock()
+
         # ---- ROS wiring ----
         self.sub = rospy.Subscriber(self.cmd_vel_topic, Twist, self.cb, queue_size=10)
+        self.teleop_sub = rospy.Subscriber(self.teleop_cmd_vel_topic, Twist,
+                                           self.cb_teleop, queue_size=10)
         self.hold_sub = rospy.Subscriber(self.hold_topic, Bool, self.cb_hold, queue_size=5)
 
         # Diagnostics echo of the effectively-applied command (after the
@@ -122,7 +146,9 @@ class CmdVelBridgeBasicmicro:
         # be overlaid against the incoming /cmd_vel.
         self.applied_pub = rospy.Publisher("~applied", Twist, queue_size=10)
 
-        rospy.loginfo("cmd_vel bridge running. Waiting for %s...", self.cmd_vel_topic)
+        rospy.loginfo("cmd_vel bridge running. Waiting for %s (autonomous, hold-gated) "
+                      "and %s (teleop, priority, mute %.2fs)...",
+                      self.cmd_vel_topic, self.teleop_cmd_vel_topic, self.teleop_mute_s)
 
     @staticmethod
     def _clamp(x: int, max_abs: int) -> int:
@@ -155,17 +181,39 @@ class CmdVelBridgeBasicmicro:
             return True
         return (rospy.Time.now() - self.hold_last_msg).to_sec() > self.hold_stale_s
 
+    def _teleop_active(self) -> bool:
+        """True while a nonzero teleop command arrived within ~teleop_mute_s."""
+        if self.last_teleop_active is None:
+            return False
+        return (rospy.Time.now() - self.last_teleop_active).to_sec() < self.teleop_mute_s
+
     def cb(self, msg: Twist):
+        # Autonomous stream: muted while a human is actively driving, then
+        # gated by the ZED-divergence hold.
+        if self._teleop_active():
+            rospy.logwarn_throttle(2.0, "cmd_vel bridge: teleop active -- "
+                                   "muting autonomous /cmd_vel")
+            return
         # Safety interlock: ZED tracking diverged -> command zero, ignore /cmd_vel.
         if self._held():
-            try:
-                self.base.set_speeds(0, 0)
-            except Exception:
-                rospy.logerr("Motor command failed (safety hold):\n%s", traceback.format_exc())
+            with self.cmd_lock:
+                try:
+                    self.base.set_speeds(0, 0)
+                except Exception:
+                    rospy.logerr("Motor command failed (safety hold):\n%s", traceback.format_exc())
             rospy.logwarn_throttle(2.0, "cmd_vel bridge: safety HOLD active "
                                    "(ZED tracking) -- commanding zero")
             return
+        self._execute(msg)
 
+    def cb_teleop(self, msg: Twist):
+        # Human stream: priority, no hold gate (see module docstring). Only
+        # nonzero commands arm the mute; zeros still execute (stops are safe).
+        if msg.linear.x != 0.0 or msg.angular.z != 0.0:
+            self.last_teleop_active = rospy.Time.now()
+        self._execute(msg)
+
+    def _execute(self, msg: Twist):
         v = float(msg.linear.x)
         w = float(msg.angular.z)
 
@@ -198,22 +246,23 @@ class CmdVelBridgeBasicmicro:
         right = self._clamp(right, self.max_speed_units)
         left = self._clamp(left, self.max_speed_units)
 
-        # Echo applied command (pre-wiring-mapping, in the /cmd_vel convention).
-        applied = Twist()
-        applied.linear.x = (right + left) / 2.0 / self.linear_scale
-        w_applied = (right - left) / 2.0 / self.angular_scale
-        applied.angular.z = -w_applied if self.flip_angular else w_applied
-        self.applied_pub.publish(applied)
+        with self.cmd_lock:
+            # Echo applied command (pre-wiring-mapping, in the /cmd_vel convention).
+            applied = Twist()
+            applied.linear.x = (right + left) / 2.0 / self.linear_scale
+            w_applied = (right - left) / 2.0 / self.angular_scale
+            applied.angular.z = -w_applied if self.flip_angular else w_applied
+            self.applied_pub.publish(applied)
 
-        right, left = self._apply_output_mapping(right, left)
+            right, left = self._apply_output_mapping(right, left)
 
-        try:
-            # NOTE: BaseInterface.set_speeds(speed_a, speed_b) over RPC.
-            # If speed_a maps to right and speed_b maps to left in your hardware, this is correct.
-            # If reversed, set ~swap_left_right:=true.
-            self.base.set_speeds(right, left)
-        except Exception:
-            rospy.logerr("Motor command failed:\n%s", traceback.format_exc())
+            try:
+                # NOTE: BaseInterface.set_speeds(speed_a, speed_b) over RPC.
+                # If speed_a maps to right and speed_b maps to left in your hardware, this is correct.
+                # If reversed, set ~swap_left_right:=true.
+                self.base.set_speeds(right, left)
+            except Exception:
+                rospy.logerr("Motor command failed:\n%s", traceback.format_exc())
 
 
 def main():

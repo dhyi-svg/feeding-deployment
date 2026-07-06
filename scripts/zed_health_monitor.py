@@ -48,6 +48,7 @@ from collections import deque
 
 import rospy
 import tf2_ros
+from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Empty
@@ -82,6 +83,17 @@ class ZedHealthMonitor:
         # Same physical-plausibility gate as the sanitizer; a divergence blows past it.
         self.max_lin = rospy.get_param("~max_lin_vel", 0.5)
         self.max_ang = rospy.get_param("~max_ang_vel", 1.5)
+        # The jump gate assumes autonomy's speed limits. Teleop is allowed to
+        # drive faster (0.6 m/s / 1.0 rad/s > the gates), so while a human is
+        # actively driving, fast motion is EXPECTED -- pause only the jump
+        # channel then (status/silence/gap/yank still run; they detect sensor
+        # failure regardless of who is driving). teleop_active_s outlasts the
+        # bridge's teleop mute (0.5 s) and the NUC watchdog decel (~0.3 s), so
+        # the channel never re-arms onto teleop-induced fast samples.
+        self.teleop_cmd_vel_topic = rospy.get_param("~teleop_cmd_vel_topic",
+                                                    "/cmd_vel_teleop")
+        self.teleop_active_s = rospy.get_param("~teleop_active_s", 1.0)
+        self.last_teleop_cmd = None    # wall time of the last NONZERO teleop cmd
         self.odom_gap_s = rospy.get_param("~odom_gap_s", 0.3)
         # Liveness: hold if no odom message has ARRIVED for this long (wall
         # clock, evaluated on the tick timer -- works while ZED is silent,
@@ -144,6 +156,8 @@ class ZedHealthMonitor:
             tf2_ros.TransformListener(self.tf_buf)
 
         rospy.Subscriber(self.odom_topic, Odometry, self.cb_odom, queue_size=50)
+        rospy.Subscriber(self.teleop_cmd_vel_topic, Twist, self.cb_teleop_cmd,
+                         queue_size=10)
         if _HAVE_STATUS:
             rospy.Subscriber("/zed_mini/zed_node/odom/status", PosTrackStatus,
                              self.cb_status, queue_size=5)
@@ -174,6 +188,17 @@ class ZedHealthMonitor:
             self._mark_bad("status",
                            f"tracking status={msg.status} (SEARCHING=0, OFF=2)")
 
+    def cb_teleop_cmd(self, msg):
+        # Only nonzero commands count as "actively driving" -- idle teleop
+        # sources (webapp page open, stick centered) stream zeros.
+        if msg.linear.x != 0.0 or msg.angular.z != 0.0:
+            self.last_teleop_cmd = rospy.Time.now()
+
+    def _teleop_recent(self, now):
+        if self.last_teleop_cmd is None:
+            return False
+        return (now - self.last_teleop_cmd).to_sec() < self.teleop_active_s
+
     def cb_odom(self, msg):
         self.last_odom_walltime = rospy.Time.now()
         stamp = msg.header.stamp if msg.header.stamp != rospy.Time() else rospy.Time.now()
@@ -186,7 +211,9 @@ class ZedHealthMonitor:
                 self._mark_bad("gap",
                                f"odom stamp gap {dt:.2f}s (limit {self.odom_gap_s:.2f}s)"
                                " -- SDK/driver stall signature")
-            elif dt > 0.0:
+            elif dt > 0.0 and not self._teleop_recent(self.last_odom_walltime):
+                # Jump channel paused while a human is actively driving: teleop
+                # is allowed past the gates, so fast samples are expected there.
                 dist = math.sqrt((pos.x - pp.x) ** 2 + (pos.y - pp.y) ** 2 +
                                  (pos.z - pp.z) ** 2)
                 dyaw = abs(angle_diff(yaw, pyaw))

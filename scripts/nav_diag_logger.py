@@ -153,6 +153,9 @@ class NavDiagLogger:
                          queue_size=10)
         rospy.Subscriber("/move_base/odom_feedback", Odometry, self.cb_fb, queue_size=100)
         rospy.Subscriber("/cmd_vel", Twist, self.cb_cmd, queue_size=50)
+        # Teleop publishes on its own topic (bridge executes it hold-exempt with
+        # priority); merge it into the same cmd_vel.csv for the full command view.
+        rospy.Subscriber("/cmd_vel_teleop", Twist, self.cb_cmd, queue_size=50)
         rospy.Subscriber("/cmd_vel_bridge_basicmicro/applied", Twist, self.cb_applied,
                          queue_size=50)
         rospy.Subscriber("/move_base/current_goal", PoseStamped, self.cb_goal_pose, queue_size=5)
