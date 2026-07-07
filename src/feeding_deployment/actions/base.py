@@ -633,7 +633,7 @@ class HighLevelAction(abc.ABC):
                 redo_current=(choice == "redo"),
             )
 
-        if not success and not isinstance(robot_command, (OpenGripperCommand, CloseGripperCommand)):
+        if not success:
             # The command was rejected (joint limit / unreachable pose). Instead
             # of aborting the whole task, hand control to the user for manual
             # recovery via the teleop screen, then let them choose to redo or

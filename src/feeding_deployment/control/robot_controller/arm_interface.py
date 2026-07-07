@@ -60,6 +60,13 @@ class ArmInterface:
     def _require_bulldog(self):
         assert self.bulldog_ready, "Bulldog is not running — arm commands are locked"
 
+    def _log_command(self, message: str):
+        # One line per command, full precision, timestamped so entries
+        # cross-correlate with the tmux pane logs (and failed trajectories can
+        # be replayed exactly from this file alone).
+        with open(self.log_file, "a") as f:
+            f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {message}\n")
+
     def _bulldog_monitor(self):
         while not self.emergency_stop_active:
             time.sleep(0.2)
@@ -117,6 +124,8 @@ class ArmInterface:
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert not self.in_compliant_mode, "Cannot set speed while in compliant mode"
         
+        self._log_command(f"set_speed: {speed}")
+
         print(f"Setting speed to {speed}")
         try:
             self.arm.choose_from_speed_presets(speed)
@@ -145,9 +154,7 @@ class ArmInterface:
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert not self.in_compliant_mode, "Already in compliant mode"
 
-        # save in log file
-        with open(self.log_file, "a") as f:
-            f.write("switch_to_task_compliant_mode\n")
+        self._log_command("switch_to_task_compliant_mode")
 
         # clear command queue
         print("Clearing command queue")
@@ -170,9 +177,7 @@ class ArmInterface:
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert not self.in_compliant_mode, "Already in compliant mode"
 
-        # save in log file
-        with open(self.log_file, "a") as f:
-            f.write("switch_to_joint_compliant_mode\n")
+        self._log_command("switch_to_joint_compliant_mode")
 
         # clear command queue
         print("Clearing command queue")
@@ -196,9 +201,7 @@ class ArmInterface:
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert self.in_compliant_mode, "Not in compliant mode"
 
-        # save in log file
-        with open(self.log_file, "a") as f:
-            f.write("switch_out_of_compliant_mode\n")
+        self._log_command("switch_out_of_compliant_mode")
 
         # first move to gravity compensation 
         print("Moving to gravity compensation")
@@ -228,22 +231,20 @@ class ArmInterface:
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert self.in_compliant_mode, "Not in compliant mode"
 
-        # save in log file
-        with open(self.log_file, "a") as f:
-            f.write(f"compliant_set_joint_position: {command_pos}\n")
+        self._log_command(f"compliant_set_joint_position: {np.asarray(command_pos).tolist()}")
 
         # print(f"Received compliant joint pos command: {command_pos}")
         gripper_pos = 0
         self.command_queue.put((command_pos, gripper_pos))
+
+        return True
 
     def compliant_set_ee_pose(self, xyz, xyz_quat):
         self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert self.in_compliant_mode, "Not in compliant mode"
 
-        # save in log file
-        with open(self.log_file, "a") as f:
-            f.write(f"compliant_set_ee_pose: {xyz}, {xyz_quat}\n")
+        self._log_command(f"compliant_set_ee_pose: {np.asarray(xyz).tolist()}, {np.asarray(xyz_quat).tolist()}")
 
         command_pose = np.zeros(7)
         command_pose[:3] = xyz
@@ -253,14 +254,14 @@ class ArmInterface:
         gripper_pos = 0
         self.command_queue.put((command_pose, gripper_pos))
 
+        return True
+
     def set_joint_position(self, command_pos):
         self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert not self.in_compliant_mode, "In compliant mode"
 
-        # save in log file
-        with open(self.log_file, "a") as f:
-            f.write(f"set_joint_position: {command_pos}\n")
+        self._log_command(f"set_joint_position: {np.asarray(command_pos).tolist()}")
 
         print(f"Received joint pos command: {command_pos}")
 
@@ -277,6 +278,9 @@ class ArmInterface:
         self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert not self.in_compliant_mode, "In compliant mode"
+
+        traj_str = "; ".join(str(np.asarray(w).tolist()) for w in trajectory_command)
+        self._log_command(f"set_joint_trajectory ({len(trajectory_command)} waypoints): {traj_str}")
 
         print(
             f"Received joint trajectory command with {len(trajectory_command)} waypoints"
@@ -295,9 +299,7 @@ class ArmInterface:
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert not self.in_compliant_mode, "In compliant mode"
 
-        # save in log file
-        with open(self.log_file, "a") as f:
-            f.write(f"set_ee_pose: {xyz}, {xyz_quat}\n")
+        self._log_command(f"set_ee_pose: {np.asarray(xyz).tolist()}, {np.asarray(xyz_quat).tolist()}")
 
         print(f"Received cartesian pose command: {xyz}, {xyz_quat}")
 
@@ -313,6 +315,12 @@ class ArmInterface:
         self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert not self.in_compliant_mode, "In compliant mode"
+
+        traj_str = "; ".join(
+            f"{np.asarray(pos).tolist()} {np.asarray(quat).tolist()}"
+            for pos, quat in trajectory_command
+        )
+        self._log_command(f"set_cartesian_trajectory ({len(trajectory_command)} waypoints): {traj_str}")
 
         print(
             f"Received cartesian trajectory command with {len(trajectory_command)} waypoints"
@@ -331,6 +339,8 @@ class ArmInterface:
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert not self.in_compliant_mode, "In compliant mode"
 
+        self._log_command(f"set_gripper: {gripper_pos}")
+
         print(f"Received gripper pos command: {gripper_pos}")
 
         try:
@@ -340,10 +350,14 @@ class ArmInterface:
             # Re-raise a simplified exception to avoid pickling issues
             raise Exception(f"Error in set_gripper: {str(e)}") from None # suppress original exception
 
+        return True
+
     def open_gripper(self):
         self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert not self.in_compliant_mode, "In compliant mode"
+
+        self._log_command("open_gripper")
 
         print("Received open gripper command")
 
@@ -354,10 +368,14 @@ class ArmInterface:
             # Re-raise a simplified exception to avoid pickling issues
             raise Exception(f"Error in open_gripper: {str(e)}") from None # suppress original exception
 
+        return True
+
     def close_gripper(self):
         self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert not self.in_compliant_mode, "In compliant mode"
+
+        self._log_command("close_gripper")
 
         print("Received close gripper command")
 
@@ -367,6 +385,8 @@ class ArmInterface:
             print(f"Error in close_gripper: {e}")
             # Re-raise a simplified exception to avoid pickling issues
             raise Exception(f"Error in close_gripper: {str(e)}") from None # suppress original exception
+
+        return True
 
     def close(self):
         print("Close arm command received")
@@ -406,9 +426,7 @@ class ArmInterface:
         arm keeps accepting commands afterward. Used to preempt the (long) move
         to the default pose from the manual teleop recovery screen.
         """
-        # save in log file
-        with open(self.log_file, "a") as f:
-            f.write("stop_action\n")
+        self._log_command("stop_action")
 
         if self.in_compliant_mode:
             print("stop_action ignored: arm is in compliant mode")
@@ -422,9 +440,7 @@ class ArmInterface:
     def emergency_stop(self):
         assert not self.emergency_stop_active, "Emergency stop is already active"
 
-        # save in log file
-        with open(self.log_file, "a") as f:
-            f.write("emergency_stop\n")
+        self._log_command("emergency_stop")
 
         with self.gravity_compensation_external_event_lock:
             self.emergency_stop_active = True

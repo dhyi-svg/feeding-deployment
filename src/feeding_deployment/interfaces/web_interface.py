@@ -537,7 +537,7 @@ class WebInterface:
     # preference is predicted/corrected via the preference session, so FLAIR is
     # already configured before bite acquisition begins.
 
-    def get_next_bite_selection(self, plate_image, n_solid_food_types, bite_data, predicted_bite, n_dip_food_types, dip_data, autocontinue_timeout) -> None:
+    def get_next_bite_selection(self, plate_image, n_solid_food_types, bite_data, predicted_bite, n_dip_food_types, dip_data, autocontinue_timeout, no_detections: bool = False) -> None:
 
         self.current_page = "meal_assistance"
 
@@ -562,6 +562,40 @@ class WebInterface:
             ),
             resend=lambda: self._send_message(jump_msg),
         )
+
+        if no_detections:
+            # Detection found no actionable bite: run the page in manual-only
+            # mode. Send only the plate image and the no_detections status --
+            # skip the bite/dip payloads (an empty current_bite dict hangs the
+            # page's data parsing) and auto_time (the page parses "0.0" as
+            # truthy, so a zero countdown would instantly auto-publish
+            # acquire_food with placeholder data).
+            no_detections_msg = {"state": "bite_selection", "status": "no_detections"}
+
+            def _send_no_detections_data():
+                # Also re-sent periodically while waiting: a page refresh loses
+                # the mode and the image, and the robot is idle while this wait
+                # blocks, so re-sending both is idempotent and lets the
+                # remounted page recover.
+                self._send_image(plate_image)
+                self._send_message(no_detections_msg)
+
+            _send_no_detections_data()
+
+            # Only the manual skills the backend supports are accepted here
+            # (status 0 = skewering, 2 = dipping); the page hides the
+            # autonomous pickup button in this mode.
+            msg_dict = self.get_required_web_interface_message(
+                lambda m: m.get("status") in (0, 2),
+                resend=_send_no_detections_data,
+                resend_interval=5.0,
+            )
+            if msg_dict is None:
+                # Wait aborted by a task-selection jump.
+                return None, None, None
+            if msg_dict["status"] == 0:
+                return "manual_skewering", msg_dict["positions"], None
+            return "manual_dipping", msg_dict["positions"], None
 
         # Send required data for the next bite selection page
         self._send_image(plate_image)

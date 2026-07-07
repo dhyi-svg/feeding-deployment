@@ -13,7 +13,7 @@
         <button class="modal-close" @click="closeModal">×</button>
 
         <template v-if="currentStep === 1">
-          <p class="skill-modal-hdr">Trouble picking up your choice? Let's try a different approach.</p>
+          <p class="skill-modal-hdr">{{ noDetections ? "No bites were detected — let's pick one up manually." : "Trouble picking up your choice? Let's try a different approach." }}</p>
           <p class="skill-modal-sub">Select a skill and continue enjoying your meal.</p>
           <div class="skill-grid">
             <div
@@ -89,48 +89,62 @@
             </div>
           </div>
 
-          <button class="btn md amber w100" @click="redirectToChangeItem">Pickup Bite</button>
-          <p class="cdown">{{ countdownText }}</p>
+          <template v-if="!noDetections">
+            <button class="btn md amber w100" @click="redirectToChangeItem">Pickup Bite</button>
+            <p class="cdown">{{ countdownText }}</p>
+          </template>
+          <button v-else class="btn md amber w100" @click="showModal = true; currentStep = 1">Pick Up Manually 🛠️</button>
         </div>
 
         <div class="bite-side">
-          <span class="field-lbl">Current bite</span>
-          <div class="bite-current" @click="stopCountdown">
-            <img :src="currentItem.image" alt="current bite" class="bc-img" />
-            <div>
-              <div class="bc-name">{{ currentItem.name }}</div>
-              <div class="bc-next" v-if="nextItem">Next: {{ nextItem.name }}</div>
+          <template v-if="noDetections">
+            <span class="field-lbl">Current bite</span>
+            <div class="bite-current">
+              <div>
+                <div class="bc-name">No bites detected on the plate</div>
+                <div class="bc-next">Use manual pickup to continue</div>
+              </div>
             </div>
-          </div>
+          </template>
+          <template v-else>
+            <span class="field-lbl">Current bite</span>
+            <div class="bite-current" @click="stopCountdown">
+              <img :src="currentItem.image" alt="current bite" class="bc-img" />
+              <div>
+                <div class="bc-name">{{ currentItem.name }}</div>
+                <div class="bc-next" v-if="nextItem">Next: {{ nextItem.name }}</div>
+              </div>
+            </div>
 
-          <span class="field-lbl">Swap food item</span>
-          <div class="swap-row" @click="stopCountdown">
-            <div v-if="nFoodTypes === 1" class="swap-empty">Only one option available</div>
-            <div
-              v-else
-              v-for="(item, index) in items.slice(0, nFoodTypes-1)"
-              :key="index"
-              class="swap-item"
-              @click="swapItems(index)"
-            >
-              <img :src="item.image" alt="food item" />
-              <span class="swap-name">{{ item.name }}</span>
+            <span class="field-lbl">Swap food item</span>
+            <div class="swap-row" @click="stopCountdown">
+              <div v-if="nFoodTypes === 1" class="swap-empty">Only one option available</div>
+              <div
+                v-else
+                v-for="(item, index) in items.slice(0, nFoodTypes-1)"
+                :key="index"
+                class="swap-item"
+                @click="swapItems(index)"
+              >
+                <img :src="item.image" alt="food item" />
+                <span class="swap-name">{{ item.name }}</span>
+              </div>
             </div>
-          </div>
 
-          <span class="field-lbl">Choose your dip</span>
-          <div class="dip-opts" @click="stopCountdown">
-            <div
-              class="dip-opt"
-              v-for="(option, index) in optionTexts"
-              :key="index"
-              :class="{ sel: selectedOption === index + 1 }"
-              @click="selectOption(index + 1)"
-            >
-              <span>{{ option }}</span>
-              <div class="och" style="width:16px;height:16px;font-size:9px" v-if="selectedOption === index + 1">✓</div>
+            <span class="field-lbl">Choose your dip</span>
+            <div class="dip-opts" @click="stopCountdown">
+              <div
+                class="dip-opt"
+                v-for="(option, index) in optionTexts"
+                :key="index"
+                :class="{ sel: selectedOption === index + 1 }"
+                @click="selectOption(index + 1)"
+              >
+                <span>{{ option }}</span>
+                <div class="och" style="width:16px;height:16px;font-size:9px" v-if="selectedOption === index + 1">✓</div>
+              </div>
             </div>
-          </div>
+          </template>
 
           <div class="skill-fallback" v-if="!showModal">
             <span class="skill-fallback-lbl">Trouble picking this up?</span>
@@ -176,6 +190,7 @@ export default {
       sizeCheckInterval: null,
       markerSize: 30,
       nFoodTypes: 0,
+      noDetections: false,
       imageSrc: '',
       showModal: false,
       currentStep: 1,
@@ -411,6 +426,26 @@ export default {
             this.startCountdown();
           }
         } else {
+        }
+        if (parsedMessage.state === 'bite_selection' && parsedMessage.status === 'no_detections') {
+          // Manual-only mode: detection found nothing actionable. Stop the
+          // countdown unconditionally (also sets countdownCancelled, so a
+          // stray auto_time can't re-arm it and auto-publish acquire_food
+          // with placeholder data).
+          this.stopCountdown();
+          if (!this.noDetections) {
+            // First entry only: the backend re-sends this status every few
+            // seconds (page-refresh recovery), and re-opening the modal would
+            // yank a user placing markers back to step 1.
+            this.noDetections = true;
+            // Clear the "Waiting for content" placeholder boxes overlaid on
+            // the plate image -- no bite data message arrives in this mode.
+            this.currentItem = { name: 'No bites detected', image: '', boxes: [] };
+            this.nextItem = null;
+            this.showModal = true;
+            this.currentStep = 1;
+            this.activeIndex = 0;
+          }
         }
         const route = routeMap[parsedMessage.state]?.[parsedMessage.status];
         if (route) {

@@ -32,6 +32,11 @@ from feeding_deployment.actions.base import (
 
 from feeding_deployment.actions.flair.food_manipulation_skill_library import FoodManipulationSkillLibrary
 
+# After this many consecutive detection cycles with no actionable bite, stop
+# silently retrying and show the bite selection page in no-detection mode so
+# the user can fall back to manual skill selection.
+MAX_CONSECUTIVE_FAILED_DETECTIONS = 3
+
 class AcquireBiteHLA(HighLevelAction):
     """Bite acquisition; other tools are always prepared."""
 
@@ -101,7 +106,8 @@ class AcquireBiteHLA(HighLevelAction):
 
         # self.move_to_joint_positions(self.sim.scene_description.before_transfer_pos) # leads to safer motion
         self.move_to_joint_positions(self.sim.scene_description.above_plate_pos)
-        
+
+        consecutive_failed_detections = 0
         while True:
             if self.wrist_interface is not None:
                 self.wrist_interface.set_velocity_mode()
@@ -204,48 +210,72 @@ class AcquireBiteHLA(HighLevelAction):
                 self.report_activity("Choosing the best bite to pick up")
                 next_action_prediction = self.flair.predict_next_action(camera_color_data, items_detection, log_path=None)
 
-                next_food_item = next_action_prediction['labels_list'][next_action_prediction['food_id']]
-                bite_mask_idx = next_action_prediction['bite_mask_idx']
-                print(" --- Next Food Item Prediction:", next_action_prediction['labels_list'][next_action_prediction['food_id']])
-                print(" --- Next Action Prediction:", next_action_prediction['action_type'])
-
-                # remove next_food_item from data
-                solid_food_type_to_data = {}
-                for id in range(0, len(items_detection['labels_list'])):
-                    if items_detection['category_list'][id] == "solid":
-                        label = items_detection['labels_list'][id]
-                        solid_food_type_to_data[label] = items_detection['food_type_to_bounding_boxes_plate'][label]
-
-                n_food_types = len(solid_food_type_to_data)
-                data = [{k: v} for k, v in solid_food_type_to_data.items() if k != next_food_item]
-                predicted_bite = {next_food_item: solid_food_type_to_data[next_food_item]}
-
-                dip_food_type_to_data = {}
-                for id in range(0, len(items_detection['labels_list'])):
-                    if items_detection['category_list'][id] == "dip":
-                        label = items_detection['labels_list'][id]
-                        dip_food_type_to_data[label] = items_detection['food_type_to_bounding_boxes_plate'][label]
-
-                if len(dip_food_type_to_data) == 0: # no dips detected
-                    dip_data = ["No dip"]     
+                if next_action_prediction is None:
+                    # No actionable bite: nothing detected, only dips, or the
+                    # planner couldn't match a next bite. Retry detection a few
+                    # times, then hand control to the user -- the bite selection
+                    # page in no-detection mode offers manual skills only.
+                    consecutive_failed_detections += 1
+                    print(f"No actionable bite detected ({consecutive_failed_detections}/{MAX_CONSECUTIVE_FAILED_DETECTIONS})")
+                    if self.web_interface is None or consecutive_failed_detections < MAX_CONSECUTIVE_FAILED_DETECTIONS:
+                        continue
+                    self.report_activity("No bites found -- choose manually on the app")
+                    skill_type, skill_params, dip_type = self.web_interface.get_next_bite_selection(
+                        items_detection['plate_image'], 0, [], None, 1, ["No dip"],
+                        autocontinue_timeout=0.0, no_detections=True,
+                    )
+                    # Only manual skills are valid with no detections (a
+                    # task-selection jump returns None); anything else goes back
+                    # to detection. The counter is deliberately not reset: once
+                    # triggered, each further failed detection re-shows the page
+                    # after a single attempt instead of another three.
+                    if skill_type not in ("manual_skewering", "manual_dipping"):
+                        continue
                 else:
-                    if next_action_prediction['dip_id'] is None: 
-                        dip_data = ["No dip"]
-                        dip_data.extend(list(dip_food_type_to_data.keys()))
-                    else: # some dip was predicted
-                        next_dip_item = next_action_prediction['labels_list'][next_action_prediction['dip_id']]
-                        dip_data = [next_dip_item]
-                        dip_data.append("No dip")
-                        dip_data.extend([k for k in dip_food_type_to_data.keys() if k != next_dip_item])
-                n_dip_food_types = len(dip_data)
+                    consecutive_failed_detections = 0
 
-                if self.web_interface is not None:
-                    skill_type, skill_params, dip_type = self.web_interface.get_next_bite_selection(items_detection['plate_image'], n_food_types, data, predicted_bite, n_dip_food_types, dip_data, autocontinue_timeout=autocontinue_timeout)   
-                else:
-                    # params must be set to the autonomously selected values
-                    skill_type = "autonomous"
-                    skill_params = [next_food_item, bite_mask_idx]
-                    dip_type = "No dip"
+                    next_food_item = next_action_prediction['labels_list'][next_action_prediction['food_id']]
+                    bite_mask_idx = next_action_prediction['bite_mask_idx']
+                    print(" --- Next Food Item Prediction:", next_action_prediction['labels_list'][next_action_prediction['food_id']])
+                    print(" --- Next Action Prediction:", next_action_prediction['action_type'])
+
+                    # remove next_food_item from data
+                    solid_food_type_to_data = {}
+                    for id in range(0, len(items_detection['labels_list'])):
+                        if items_detection['category_list'][id] == "solid":
+                            label = items_detection['labels_list'][id]
+                            solid_food_type_to_data[label] = items_detection['food_type_to_bounding_boxes_plate'][label]
+
+                    n_food_types = len(solid_food_type_to_data)
+                    data = [{k: v} for k, v in solid_food_type_to_data.items() if k != next_food_item]
+                    predicted_bite = {next_food_item: solid_food_type_to_data[next_food_item]}
+
+                    dip_food_type_to_data = {}
+                    for id in range(0, len(items_detection['labels_list'])):
+                        if items_detection['category_list'][id] == "dip":
+                            label = items_detection['labels_list'][id]
+                            dip_food_type_to_data[label] = items_detection['food_type_to_bounding_boxes_plate'][label]
+
+                    if len(dip_food_type_to_data) == 0: # no dips detected
+                        dip_data = ["No dip"]     
+                    else:
+                        if next_action_prediction['dip_id'] is None: 
+                            dip_data = ["No dip"]
+                            dip_data.extend(list(dip_food_type_to_data.keys()))
+                        else: # some dip was predicted
+                            next_dip_item = next_action_prediction['labels_list'][next_action_prediction['dip_id']]
+                            dip_data = [next_dip_item]
+                            dip_data.append("No dip")
+                            dip_data.extend([k for k in dip_food_type_to_data.keys() if k != next_dip_item])
+                    n_dip_food_types = len(dip_data)
+
+                    if self.web_interface is not None:
+                        skill_type, skill_params, dip_type = self.web_interface.get_next_bite_selection(items_detection['plate_image'], n_food_types, data, predicted_bite, n_dip_food_types, dip_data, autocontinue_timeout=autocontinue_timeout)   
+                    else:
+                        # params must be set to the autonomously selected values
+                        skill_type = "autonomous"
+                        skill_params = [next_food_item, bite_mask_idx]
+                        dip_type = "No dip"
 
                 skill_success = False
                 if skill_type == "autonomous":
