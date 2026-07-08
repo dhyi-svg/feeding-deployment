@@ -174,6 +174,44 @@ must hold (re-baseline), not teleport.
 Set the calibrated values as node params (or bake new defaults into
 `wheel_odom_publisher.py`).
 
+## Drift test (wheel vs ZED vs Cartographer, live on the map)
+
+The diagnostic the wheel odometry was built for. Four traces in RViz on the
+known map: **green** = live Cartographer (lidar reference), **red** = raw ZED
+odom (open loop), **orange** = sanitized ZED odom (open loop), **blue** = wheel
+odom (open loop). Reading: red/orange peeling from green = VIO drift, located
+on the map (this is the instrument for the Jul 8 slow-creep failure); blue
+peeling from green = wheel slip; red-vs-blue disagreements are arbitrated by
+green.
+
+Bring-up:
+
+```bash
+# 1. NUC: base_server up (tmux 'robot').  2. compute: sensors.launch.
+# 3. compute:
+roslaunch feeding_deployment zed_drift_test.launch          # carto:=false if
+                                                            # localization pane
+                                                            # already runs
+# 4. your terminal:
+rosrun feeding_deployment drift_lock.py
+#    -> live map pose prints; let localization settle (scan hugs the walls in
+#       RViz), press ENTER to lock the anchor. Traces start from that point.
+#       Press ENTER again anytime to RE-lock (clears traces). Ctrl-C to exit.
+# 5. drive with the Xbox X-deadman; watch the traces.
+```
+
+Caveats:
+- **Do NOT run alongside navigation.launch / shared_autonomy.launch** — same
+  node names, ROS silently kills the older instances.
+- Open-loop traces are baked with the anchor-time `map→odom`; post-lock
+  Cartographer yanks move only the green trace (by design).
+- A full ZED restart re-zeroes its odom origin → red/orange teleport; re-lock.
+  A wheel_odom_publisher restart freezes the blue trace (loud log); re-lock.
+- Run RViz on the operator laptop if possible (heavy rendering on the compute
+  box starves ZED VIO); `rviz:=false` disables the local one.
+- `record:=true` bags the odoms + tf + scans (no images/Paths) into
+  `system_logs/`.
+
 ## Files
 
 | What | Where |

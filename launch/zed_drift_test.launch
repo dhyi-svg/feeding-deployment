@@ -1,0 +1,90 @@
+<launch>
+  <!-- ZED drift test: map-anchored live traces of wheel odom vs ZED odom
+       (raw + sanitized) vs live Cartographer, driven by Xbox teleop.
+
+       Bring-up order:
+         1. NUC: base_server up (tmux 'robot', launch_base)
+         2. compute: sensors.launch
+         3. compute: THIS file
+         4. your terminal: rosrun feeding_deployment drift_lock.py
+            -> let localization settle, press ENTER to lock the anchor,
+               then drive with the X-deadman.
+
+       MUTUALLY EXCLUSIVE with navigation.launch and shared_autonomy.launch:
+       they declare the same node names (cmd_vel_bridge_basicmicro,
+       shared_autonomy_teleop) and ROS silently kills the older instance.
+       If cartographer localization is ALREADY running (tmux pane), pass
+       carto:=false. -->
+
+  <arg name="load_state_filename"
+       default="$(find feeding_deployment)/maps/aimee-7-3.pbstream"/>
+  <arg name="carto"  default="true"/>
+  <arg name="rviz"   default="true"/>
+  <arg name="record" default="false"/>
+  <arg name="log_dir"
+       default="$(find feeding_deployment)/src/feeding_deployment/integration/log/system_logs"/>
+
+  <!-- Cartographer localization on the known map (map->odom). -->
+  <include if="$(arg carto)"
+           file="$(find feeding_deployment)/launch/cartographer_localization.launch">
+    <arg name="load_state_filename" value="$(arg load_state_filename)"/>
+  </include>
+
+  <!-- Teleop: Xbox controller -> Twist on /cmd_vel_teleop (deadman-gated).
+       Verbatim from shared_autonomy.launch; max_vel_x/max_vel_theta are
+       REQUIRED (the node has no code defaults). -->
+  <node pkg="feeding_deployment"
+        type="shared_autonomy_teleop.py"
+        name="shared_autonomy_teleop"
+        output="screen"
+        cwd="node">
+    <param name="deadman_button" value="2"/>   <!-- X: hold to drive -->
+    <param name="done_button" value="3"/>      <!-- Y (unused here) -->
+    <param name="axis_linear" value="1"/>
+    <param name="axis_angular" value="0"/>
+    <param name="cmd_vel_topic" value="/cmd_vel_teleop"/>
+    <param name="max_vel_x" value="0.6"/>
+    <param name="max_vel_theta" value="1.0"/>
+    <param name="deadband" value="0.12"/>
+  </node>
+
+  <!-- cmd_vel bridge: /cmd_vel_teleop -> set_speeds RPC to the NUC.
+       Verbatim params from navigation.launch. Teleop is executed with
+       priority and without the ZED-divergence hold gate. -->
+  <node pkg="feeding_deployment"
+        type="cmd_vel_bridge_basicmicro.py"
+        name="cmd_vel_bridge_basicmicro"
+        output="screen"
+        cwd="node">
+    <param name="linear_scale" value="800.0"/>
+    <param name="angular_scale" value="600.0"/>
+    <param name="max_speed_units" value="2500"/>
+    <param name="min_move_units" value="250"/>
+  </node>
+
+  <!-- Wheel-encoder odometry (calibrated defaults baked into the node). -->
+  <node pkg="feeding_deployment"
+        type="wheel_odom_publisher.py"
+        name="wheel_odom_publisher"
+        output="screen"/>
+
+  <!-- The tracer: /drift_test/{carto,zed,zed_sanitized,wheel}_path + anchor.
+       Draws nothing until /drift_test/lock (see drift_lock.py). -->
+  <node pkg="feeding_deployment"
+        type="drift_trace_compare.py"
+        name="drift_trace_compare"
+        output="screen"/>
+
+  <node if="$(arg rviz)" pkg="rviz" type="rviz" name="drift_test_rviz"
+        args="-d $(find feeding_deployment)/rviz/drift_test.rviz"/>
+
+  <!-- Optional bag for post-analysis (no images, no Path topics; traces are
+       reconstructable from the odoms + tf + anchor). -->
+  <node if="$(arg record)" pkg="rosbag" type="record" name="drift_test_record"
+        args="record -o $(arg log_dir)/drift_test
+              /tf /tf_static /cmd_vel_teleop
+              /zed_mini/zed_node/odom /zed_mini/zed_node/odom_sanitized
+              /zed_mini/zed_node/pose/status
+              /wheel_odom /wheel_odom/counts /wheel_odom/side_disagreement
+              /drift_test/anchor /lidar_r/scan /lidar_l/scan"/>
+</launch>
