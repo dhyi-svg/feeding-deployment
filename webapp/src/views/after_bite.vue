@@ -1,5 +1,5 @@
 <template>
-  <div class="page">
+  <div class="page" @click="cancelAutocontinue">
     <div class="tb">
       <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
       <div>
@@ -97,13 +97,18 @@ export default {
         }
       }, 1000);
     },
-    onSettingsOpen() {
-      // User entered settings: stop auto-advancing and wait for an explicit tap.
+    cancelAutocontinue() {
+      // Any tap on the page (or opening settings) cancels the on-screen
+      // autocontinue for this visit; it is not re-armed.
       this.autocontinueCancelled = true;
       if (this.countdownInterval) {
         clearInterval(this.countdownInterval);
         this.countdownInterval = null;
       }
+    },
+    onSettingsOpen() {
+      // User entered settings: stop auto-advancing and wait for an explicit tap.
+      this.cancelAutocontinue();
     },
     initSubscriber() {
 

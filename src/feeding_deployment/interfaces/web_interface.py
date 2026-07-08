@@ -530,6 +530,43 @@ class WebInterface:
                 time.sleep(0.1)
                 continue
 
+    def detect_button_press(self) -> bool:
+        """Block until the user presses the physical transfer button, relayed by the webapp.
+
+        The button is detected in the browser (App.vue audio input) and handled on the
+        robot_executing page, which publishes ``{state:'button_press', status:'pressed'}``
+        on /webapp_to_robot -- but only while armed. We arm it here by sending
+        ``{state:'button_arm', status:'on'}`` (and re-send the robot_executing jump so the
+        page is present on the non-latched topic), then block for the press, disarming in a
+        ``finally``. This replaces the old ``/transfer_button`` path.
+
+        There is deliberately no ``no_waits`` short-circuit: the button is a genuine user
+        input, not a developer press-enter prompt. ``get_required_web_interface_message``
+        still exits on shutdown (``self.active`` False) and raises
+        WebInterfaceTakeoverInterrupt on a mid-wait "Take Over".
+        """
+        arm_msg = {"state": "button_arm", "status": "on"}
+        jump_msg = {"state": "robot_executing", "status": "jump"}
+
+        def resend():
+            self._send_message(jump_msg)
+            self._send_message(arm_msg)
+
+        resend()
+        try:
+            self.get_required_web_interface_message(
+                lambda msg_dict: (
+                    msg_dict.get("state") == "button_press"
+                    and msg_dict.get("status") == "pressed"
+                ),
+                resend=resend,
+                resend_interval=2.0,
+            )
+        finally:
+            # Always disarm so a later stray press can't satisfy the next wait.
+            self._send_message({"state": "button_arm", "status": "off"})
+        return True
+
     #### Meal Assistance Pages ####
 
     # NOTE: the old meal_setup page (get_new_meal_input) was removed. Food items
@@ -780,15 +817,23 @@ class WebInterface:
         # confirmation page which detection this is and send the visualization
         # image. The "info" status is not in the frontend routeMap, so it only
         # updates the page's copy without triggering a re-navigation.
+        info_msg = {"state": "detection_confirm", "status": "info", "detection_type": detection_type,
+                    "autocontinue_seconds": float(autocontinue_seconds)}
         time.sleep(0.5)
-        self._send_message({"state": "detection_confirm", "status": "info", "detection_type": detection_type,
-                            "autocontinue_seconds": float(autocontinue_seconds)})
+        self._send_message(info_msg)
         if vis_image is not None:
             self._send_image(vis_image)
 
-        # Wait until the user confirms or rejects the detection.
+        # Wait until the user confirms or rejects the detection. Resend "info"
+        # until answered: /robot_to_webapp is not latched and the routing jump is
+        # consumed by the PREVIOUS page, so a page that subscribes >0.5 s after
+        # the jump would otherwise never learn its autocontinue countdown (mirrors
+        # get_successful_food_acquisition_confirmation). Resending is idempotent --
+        # the page's guard won't restart a running/cancelled countdown.
         msg_dict = self.get_required_web_interface_message(
-            lambda msg_dict: (msg_dict["state"] == "detection_confirm")
+            lambda msg_dict: (msg_dict["state"] == "detection_confirm"),
+            resend=lambda: self._send_message(info_msg),
+            resend_interval=2.0,
         )
 
         if msg_dict is None:
@@ -811,14 +856,19 @@ class WebInterface:
         """
         self.current_page = "detection_confirm"
         self._send_message({"state": "detection_confirm", "status": "jump", "detection_type": detection_type})
+        info_msg = {"state": "detection_confirm", "status": "info", "detection_type": detection_type,
+                    "autocontinue_seconds": float(autocontinue_seconds)}
         time.sleep(0.5)
-        self._send_message({"state": "detection_confirm", "status": "info", "detection_type": detection_type,
-                            "autocontinue_seconds": float(autocontinue_seconds)})
+        self._send_message(info_msg)
         if vis_image is not None:
             self._send_image(vis_image, flip=flip)
 
+        # Resend "info" until answered so the freshly-mounted page reliably arms its
+        # autocontinue countdown on the non-latched topic (see get_detection_confirmation).
         msg_dict = self.get_required_web_interface_message(
-            lambda msg_dict: (msg_dict["state"] == "detection_confirm")
+            lambda msg_dict: (msg_dict["state"] == "detection_confirm"),
+            resend=lambda: self._send_message(info_msg),
+            resend_interval=2.0,
         )
         if msg_dict is None:
             return "redo"

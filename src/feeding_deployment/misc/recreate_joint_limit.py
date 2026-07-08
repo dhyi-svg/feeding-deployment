@@ -158,6 +158,10 @@ def main():
         run_step("close gripper", lambda: client.execute_command(CloseGripperCommand()))
         if reset_before_arc:
             run_step(
+                "posture reset: joint move to behind_back_retract_pos",
+                lambda: client.execute_command(JointCommand(BEHIND_BACK_RETRACT_POS)),
+            )
+            run_step(
                 "posture reset: joint move to left_back_retract_pos",
                 lambda: client.execute_command(JointCommand(LEFT_BACK_RETRACT_POS)),
             )

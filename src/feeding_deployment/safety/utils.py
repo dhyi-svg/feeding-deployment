@@ -22,6 +22,7 @@ class AnomalyStatus(Enum):
     ROBOT_JOINT_STATES_FREQUENCY = 16
     ROBOT_CARTESIAN_STATE_FREQUENCY = 17
     CAMERA_RESOLUTION = 18
+    CAMERA_DEPTH_FREQUENCY = 19
 
     @classmethod
     def get_error_message(cls, status):
@@ -46,7 +47,8 @@ class AnomalyStatus(Enum):
             cls.ZED_FREQUENCY: "ZED camera odometry frequency is below the expected rate. Please check the ZED camera.",
             cls.ROBOT_JOINT_STATES_FREQUENCY: "Robot joint states frequency is below the expected rate. Please check the joint states publisher.",
             cls.ROBOT_CARTESIAN_STATE_FREQUENCY: "Robot cartesian state frequency is below the expected rate. Please check the joint states publisher.",
-            cls.CAMERA_RESOLUTION: "Camera image resolution is not as expected. Please check the RealSense launch configuration."
+            cls.CAMERA_RESOLUTION: "Camera image resolution is not as expected. Please check the RealSense launch configuration.",
+            cls.CAMERA_DEPTH_FREQUENCY: "Camera depth stream frequency is below the expected rate (color may still be live). RGBD perception needs depth -- check the RealSense USB connection / power-cycle the camera."
         }
         return messages.get(status, "Unknown anomaly status.")
     

@@ -59,7 +59,12 @@ export default {
       listener: null,
       skillPlanListener: null,
       skillPlan: [],
-      currentSkillIndex: -1
+      currentSkillIndex: -1,
+      // Armed by the robot (button_arm:on) only while it is blocking on a transfer
+      // button press. The physical button fires a global 'takeover-press' event on
+      // every page; we relay it to the robot ONLY while armed so stray presses are
+      // dropped here rather than queued on the robot side.
+      awaitingButton: false
     }
   },
   computed: {
@@ -81,6 +86,9 @@ export default {
     this.ros = new ROSLIB.Ros({ url: ROS_URL })
     this.initSubscriber()
     this.initPublisher()
+    // The physical transfer button is detected globally in App.vue and dispatched as
+    // 'takeover-press'; this page relays it to the robot (only while armed).
+    window.addEventListener('takeover-press', this.handleButtonPress)
 
     if (this.$route.query.plan) {
       this.skillPlan = String(this.$route.query.plan).split(',')
@@ -88,6 +96,8 @@ export default {
     }
   },
   beforeRouteLeave (to, from, next) {
+    window.removeEventListener('takeover-press', this.handleButtonPress)
+
     if (this.listener) {
       this.listener.unsubscribe();
       this.listener = null;
@@ -114,6 +124,11 @@ export default {
         const parsedMessage = JSON.parse(message.data);
         if (parsedMessage.state === 'activity') {
           this.handleActivity(parsedMessage);
+          return;
+        }
+        if (parsedMessage.state === 'button_arm') {
+          // Robot is (dis)arming the transfer button; enable relaying while 'on'.
+          this.awaitingButton = parsedMessage.status === 'on';
           return;
         }
         const route = routeMap[parsedMessage.state]?.[parsedMessage.status];
@@ -176,9 +191,18 @@ export default {
 
       this.publisher = new ROSLIB.Topic({
         ros: this.ros,
-        name: '/webapp_to_robot', 
-        messageType: 'std_msgs/String' 
+        name: '/webapp_to_robot',
+        messageType: 'std_msgs/String'
       })
+    },
+    handleButtonPress() {
+      // Relay the physical transfer button to the robot ONLY while it has armed us
+      // (button_arm:on). Unarmed presses are dropped so they can't satisfy a later
+      // wait. Stay on this page; the robot advances the flow.
+      if (!this.awaitingButton || !this.publisher) return;
+      this.publisher.publish(new ROSLIB.Message({
+        data: JSON.stringify({ state: 'button_press', status: 'pressed' })
+      }));
     },
     initSubscriber() {
 

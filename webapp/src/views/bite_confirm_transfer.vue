@@ -1,5 +1,5 @@
 <template>
-  <div class="page">
+  <div class="page" @click="cancelAutocontinue">
     <div class="tb">
       <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
       <div>
@@ -44,15 +44,13 @@ export default {
     this.ros = new ROSLIB.Ros({ url: ROS_URL })
     this.initSubscriber()
     this.initPublisher()
-    // A press of the physical switch-button confirms the transfer,
-    // same as tapping "Continue — Transfer Bite".
-    window.addEventListener('takeover-press', this.handleButtonClick)
-  },
-  beforeUnmount () {
-    window.removeEventListener('takeover-press', this.handleButtonClick)
+    // NOTE: the physical button is intentionally NOT wired here. It is handled only
+    // on the robot_executing page (to avoid confusing the user about whether to use
+    // the on-screen button or the physical one). handleButtonClick() below is still
+    // used by the on-screen "Continue — Transfer Bite" tap and the auto-continue
+    // countdown.
   },
   beforeRouteLeave (to, from, next) {
-    window.removeEventListener('takeover-press', this.handleButtonClick)
     this.stopCountdown()
 
     if (this.listener) {
@@ -112,6 +110,13 @@ export default {
         clearInterval(this.countdownInterval);
         this.countdownInterval = null;
       }
+    },
+    cancelAutocontinue() {
+      // Any tap on the page cancels the auto-continue countdown; the user must
+      // then confirm explicitly. userInteracted also stops a resent jump from
+      // re-arming the countdown.
+      this.userInteracted = true
+      this.stopCountdown()
     },
     initPublisher() {
 

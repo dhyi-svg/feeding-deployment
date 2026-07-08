@@ -1,5 +1,5 @@
 <template>
-  <div class="page">
+  <div class="page" @click="cancelAutocontinue">
     <div class="tb">
       <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
       <div>
@@ -178,6 +178,13 @@ export default {
         clearInterval(this.countdownTimer)
         this.countdownTimer = null
       }
+    },
+    cancelAutocontinue() {
+      // Any tap on the page cancels the auto-confirm countdown; the user must
+      // then press Continue/Confirm explicitly (same effect as selectOption's
+      // takeover, without changing the selection).
+      this.userInteracted = true
+      this.clearCountdownTimer()
     },
     initPublisher() {
       this.publisher = new ROSLIB.Topic({

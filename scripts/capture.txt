@@ -1,0 +1,12 @@
+detect_handle_and_placementv_adjust","status":"ok"}
+Received message on /webapp_to_robot:  {"state":"nav_adjust","status":"ok"}
+Received required message from the web interface
+Saved system state -> last_state.p, 02_navigate_to_fridge.p
+Refining OpenDoor(fridge)
+Executing parameterized policy OpenFridge with bindings:
+  Speed = medium
+  AskForManipulationConfirmation = 1
+Opening fridge door ...
+HLA execution failed (fatal): Could not detect handle opening poses for bottom textured fridge door
+Routing to the explanation page and stopping the executive (re-run run.py to restart).
+Executive stopping after fatal skill failure during preparation: Could not detect handle opening poses for bottom textured fridge door. Re-run run.py to restart.

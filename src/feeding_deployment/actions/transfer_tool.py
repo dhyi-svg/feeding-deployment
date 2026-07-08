@@ -70,9 +70,12 @@ class TransferToolHLA(HighLevelAction):
 
     def detect_initiate_transfer(self, initiate_transfer_interaction: str, ready_to_initiate_mode: str):
         if initiate_transfer_interaction == "button":
+            # Route the button through the webapp (robot_executing page), NOT the old
+            # /transfer_button / perception path. With no web interface, the button is
+            # simply skipped (no perception fallback).
             if self.web_interface is not None:
-                self.web_interface.fix_explanation("Please press the button to initiate transfer")
-            self.perception_interface.detect_button_press()
+                self.web_interface.fix_explanation("Waiting for button press to initiate transfer")
+                self.web_interface.detect_button_press()
         elif initiate_transfer_interaction == "open_mouth":
             if self.web_interface is not None:
                 self.web_interface.fix_explanation("Please open your mouth to initiate transfer")
@@ -105,9 +108,12 @@ class TransferToolHLA(HighLevelAction):
 
     def detect_transfer_complete(self, transfer_complete_interaction: str, ready_for_transfer_interaction: str):
         if transfer_complete_interaction == "button":
+            # Route the button through the webapp (robot_executing page), NOT the old
+            # /transfer_button / perception path. With no web interface, the button is
+            # simply skipped (no perception fallback).
             if self.web_interface is not None:
-                self.web_interface.fix_explanation("Please press the button to complete transfer")
-            self.perception_interface.detect_button_press()
+                self.web_interface.fix_explanation("Waiting for button press to complete transfer")
+                self.web_interface.detect_button_press()
         elif transfer_complete_interaction == "sense":
             if self.tool == "fork":
                 if self.web_interface is not None:
@@ -235,12 +241,19 @@ class TransferToolHLA(HighLevelAction):
         if self.robot_interface is not None:
             self.relay_ready_to_initiate_transfer(ready_to_initiate_mode, initiate_transfer_mode)
             self.detect_initiate_transfer(initiate_transfer_mode, ready_to_initiate_mode)
+        elif self.web_interface is not None and initiate_transfer_mode == "button":
+            # In simulation (no real robot) the button interaction still runs via the
+            # webapp; the physical relay + non-button sensing modes need the real robot
+            # and stay under the guard above.
+            self.detect_initiate_transfer(initiate_transfer_mode, ready_to_initiate_mode)
 
         self.transfer.set_tool(self.tool)
         self.transfer.move_to_transfer_state(outside_mouth_distance, maintain_position_at_goal)
 
         if self.robot_interface is not None:
             self.relay_ready_for_transfer(ready_to_transfer_mode)
+            self.detect_transfer_complete(transfer_complete_mode, ready_to_transfer_mode)
+        elif self.web_interface is not None and transfer_complete_mode == "button":
             self.detect_transfer_complete(transfer_complete_mode, ready_to_transfer_mode)
 
         # shutdown the head perception thread

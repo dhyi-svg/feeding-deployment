@@ -81,6 +81,14 @@ DROPOUT_FLOOR_S = 0.12     # but never trip below this (guards high-rate IMU)
 # (new stamp minus the pre-restart stamp) and poisons the max-stamp-gap column.
 STAMP_SANITY_S = 60.0
 
+# A rospy.Subscriber created before a publisher restarts does not always reconnect
+# to the new publisher, so a stream can read ~0 Hz here while it is actually live
+# (a fresh subscriber, e.g. the watchdog, sees it fine). If a stream is silent this
+# many consecutive sample windows WHILE at least one other stream is alive (so it is
+# not a global rosmaster/shutdown outage), recreate its subscriber. Sized in windows
+# (~1 s each at the default --interval), so a brief dropout does not needlessly resub.
+RESUBSCRIBE_AFTER_DEAD_WINDOWS = 5
+
 
 # Streams to monitor: key, default topic, ROS msg type, subscriber queue size,
 # nominal Hz (for the per-sensor dropout threshold), human description. Add a
@@ -237,6 +245,40 @@ def sample_gpu():
         return float(util), float(temp), float(power)
     except Exception:
         return float("nan"), float("nan"), float("nan")
+
+
+def resubscribe_stale_streams(hz_by_key, dead_windows, stream_subs, event_log):
+    """Self-heal subscribers that go silent after a mid-run driver relaunch.
+
+    A stream read at ~0 Hz here is not always really dead: a subscriber created
+    before the publisher restarted may hold a stale connection while the topic is
+    live (this is what made realsense log 0.135 Hz while the watchdog saw 30 Hz).
+    Recreate the subscriber once a stream is silent for RESUBSCRIBE_AFTER_DEAD_WINDOWS
+    consecutive windows while at least one other stream is alive -- the "others
+    alive" guard avoids churning subscribers during a genuine rosmaster/shutdown
+    outage (when reconnecting cannot help anyway)."""
+    any_alive = any(hz > 0 for hz in hz_by_key.values())
+    for key, hz in hz_by_key.items():
+        if hz > 0:
+            dead_windows[key] = 0
+            continue
+        dead_windows[key] += 1
+        if dead_windows[key] < RESUBSCRIBE_AFTER_DEAD_WINDOWS or not any_alive:
+            continue
+        info = stream_subs.get(key)
+        if info is None:
+            continue
+        try:
+            info["sub"].unregister()
+            info["sub"] = rospy.Subscriber(
+                info["topic"], info["msg_type"], info["monitor"].on_msg,
+                queue_size=info["queue"])
+            event_log.write(
+                f"RESUB  {key} silent {dead_windows[key]} windows while others live "
+                f"-> recreated subscriber to {info['topic']} (stale after relaunch?)")
+        except Exception as e:
+            event_log.write(f"RESUB  {key} FAILED: {e}")
+        dead_windows[key] = 0
 
 
 def follow_kernel_usb(event_log, stop_evt, use_dmesg):
@@ -672,13 +714,17 @@ def main():
 
     # Build a monitor per stream (with its own dropout threshold) and subscribe.
     monitors = []          # list of (key, TopicMonitor, topic, drop_gap)
+    stream_subs = {}       # key -> live subscriber + info to recreate it (self-heal)
     for key, default_topic, msg_type, queue, nominal_hz, _desc in STREAMS:
         topic = topic_overrides.get(key, default_topic)
         drop_gap = max(DROPOUT_FLOOR_S, DROPOUT_PERIODS / nominal_hz)
         mon = TopicMonitor(key, event_log, drop_gap,
                            snapshotter=snapshotter if key.startswith("zed") else None)
-        rospy.Subscriber(topic, msg_type, mon.on_msg, queue_size=queue)
+        sub = rospy.Subscriber(topic, msg_type, mon.on_msg, queue_size=queue)
         monitors.append((key, mon, topic, drop_gap))
+        stream_subs[key] = {"sub": sub, "topic": topic, "msg_type": msg_type,
+                            "queue": queue, "monitor": mon}
+    dead_windows = {key: 0 for key, _m, _t, _d in monitors}  # consecutive silent windows
 
     # Track the currently-executing skill (logged on change), so a stall can be
     # tied to whatever skill was running at the time.
@@ -725,9 +771,12 @@ def main():
             last = now
 
             row = [datetime.now().isoformat(), f"{now - t0:.1f}"]
+            hz_by_key = {}
             for _key, mon, _topic, _drop in monitors:
                 hz, gap, sgap = mon.sample(dt)
+                hz_by_key[_key] = hz
                 row += [f"{hz:.1f}", f"{gap:.3f}", f"{sgap:.3f}"]
+            resubscribe_stale_streams(hz_by_key, dead_windows, stream_subs, event_log)
             cpu_pct, load1 = cpu.sample()
             g_util, g_temp, g_power = sample_gpu()
             row += [f"{cpu_pct:.1f}", f"{load1:.2f}",

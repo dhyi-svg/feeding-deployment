@@ -142,11 +142,12 @@ class CloseDoorHLA(HighLevelAction):
         self.report_activity("Reaching for the microwave door")
         # self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
-        self.open_gripper()
+        self.close_gripper()
 
         handle_closing_poses = self.perception_interface.perceive_handle_closing_poses("microwave")
 
         self.move_to_ee_pose(handle_closing_poses["before_above_closing_waypoint"])
+        self.open_gripper()
         self.move_to_ee_pose(handle_closing_poses["above_closing_waypoint"])
         self.move_to_ee_pose(handle_closing_poses["closing_waypoint"])
 
@@ -154,9 +155,11 @@ class CloseDoorHLA(HighLevelAction):
             self.report_activity("Swinging the microwave door closed")
             self.move_to_ee_pose_trajectory(handle_closing_poses["closing_waypoints"])
             time.sleep(1.0) # wait for the door to be fully closed before moving the arm away
-            self.move_to_ee_pose(handle_closing_poses["closing_waypoints"][-2])
+            self.move_to_ee_pose(handle_closing_poses["closing_waypoints"][-3])
 
         self.close_gripper()
+        self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
         self.move_to_ee_pose(handle_closing_poses["offset_closing_waypoints"][0])
 
         with hard_push_threshold:

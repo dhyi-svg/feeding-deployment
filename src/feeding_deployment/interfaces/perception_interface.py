@@ -223,7 +223,20 @@ class PerceptionInterface:
         camera_depth_data = cam_data["depth_image"]
         camera_info = CustomCameraInfo(fx=camera_info_data.K[0], fy=camera_info_data.K[4], cx=camera_info_data.K[2], cy=camera_info_data.K[5])
         return camera_color_data, camera_info, camera_depth_data
-    
+
+    @staticmethod
+    def _no_rgbd_frames_error(tries):
+        """Error for when a perception retry loop never received a synchronized RGBD
+        frame. get_camera_data() returns all-None until the RealSenseInterface
+        TimeSynchronizer fires on color + camera_info + aligned_depth together, so a
+        dead DEPTH stream (color can still be live at 30 Hz) yields no frame at all --
+        which otherwise surfaces as a misleading "Could not detect ..." error. This
+        names the real fault instead."""
+        return RuntimeError(
+            f"RealSense delivered no synchronized RGBD frames in {tries} tries -- the "
+            f"depth stream may be down (color can still be live). Check: "
+            f"rostopic hz /camera/aligned_depth_to_color/image_raw")
+
     def set_head_perception_tool(self, tool: str) -> None:
         """Set the tool for head perception."""
         self.tool = tool
@@ -462,6 +475,7 @@ class PerceptionInterface:
         else:
             while True:
                 button_pose = None
+                got_frame = False
                 for _ in range(20):
                     cam_data = self._realsense.get_camera_data()
                     rgb_image = cam_data["rgb_image"]
@@ -469,12 +483,15 @@ class PerceptionInterface:
                     depth_image = cam_data["depth_image"]
 
                     if rgb_image is not None and camera_info is not None and depth_image is not None:
+                        got_frame = True
                         button_pose = self._appliance_perception.detect_start_button(rgb_image, camera_info, depth_image)
                         if button_pose is not None:
                             break
                     time.sleep(0.1)
 
                 if button_pose is None:
+                    if not got_frame:
+                        raise self._no_rgbd_frames_error(20)
                     raise RuntimeError("Could not detect button pressing pose")
 
                 vis_image = self._appliance_perception._last_images.get("rgb_button_pixel")
@@ -528,6 +545,7 @@ class PerceptionInterface:
         else:
             while True:
                 handle_pose = None
+                got_frame = False
                 for _ in range(20):
                     cam_data = self._realsense.get_camera_data()
                     rgb_image = cam_data["rgb_image"]
@@ -535,12 +553,15 @@ class PerceptionInterface:
                     depth_image = cam_data["depth_image"]
 
                     if rgb_image is not None and camera_info is not None and depth_image is not None:
+                        got_frame = True
                         handle_pose, hinge_pose, placement_pose, top_of_appliance_pose = self._appliance_perception.detect_handle_and_placement(handle_type, rgb_image, camera_info, depth_image)
                         if handle_pose is not None:
                             break
                     time.sleep(0.1)
 
                 if handle_pose is None:
+                    if not got_frame:
+                        raise self._no_rgbd_frames_error(20)
                     raise RuntimeError(f"Could not detect handle opening poses for {handle_type}")
 
                 vis_image = self._appliance_perception._last_images.get("handle_hinge_pixels")
@@ -1014,11 +1035,15 @@ class PerceptionInterface:
                 time.sleep(0.1)
 
             if attachment_pose is None:
-                if web_interface is None or last_rgb_image is None:
-                    # Terminal/dev mode has no color picker; and if the camera never
-                    # produced a valid frame this is a camera failure, not a color
-                    # mismatch -- the picker couldn't help (no pick image, and a
-                    # Rerun would fall back to None frames and crash).
+                if last_rgb_image is None:
+                    # The camera never produced a valid frame in 20 tries -- a camera
+                    # failure (likely a dead depth stream), not a color mismatch, so the
+                    # color picker can't help (no pick image, and a Rerun would fall back
+                    # to None frames and crash). Name the real fault.
+                    raise self._no_rgbd_frames_error(20)
+                if web_interface is None:
+                    # Terminal/dev mode has no color picker: a real detection failure
+                    # despite having a valid frame.
                     raise RuntimeError("Could not detect attachment pose")
                 # Total failure means the stored color no longer matches the scene
                 # (empty mask / no cluster) -- route the user to the color picker
@@ -1142,6 +1167,7 @@ class PerceptionInterface:
         else:
             while True:
                 sink_placement_pose = None
+                got_frame = False
                 for _ in range(20):
                     cam_data = self._realsense.get_camera_data()
                     rgb_image = cam_data["rgb_image"]
@@ -1149,12 +1175,15 @@ class PerceptionInterface:
                     depth_image = cam_data["depth_image"]
 
                     if rgb_image is not None and camera_info is not None and depth_image is not None:
+                        got_frame = True
                         sink_placement_pose = self._appliance_perception.detect_sink_placement(rgb_image, camera_info, depth_image)
                         if sink_placement_pose is not None:
                             break
                     time.sleep(0.1)
 
                 if sink_placement_pose is None:
+                    if not got_frame:
+                        raise self._no_rgbd_frames_error(20)
                     raise RuntimeError("Could not detect sink placement pose")
 
                 vis_image = self._appliance_perception._last_images.get("sink_back_pixel")
@@ -1195,6 +1224,7 @@ class PerceptionInterface:
         else:
             while True:
                 table_placement_pose = None
+                got_frame = False
                 for _ in range(20):
                     cam_data = self._realsense.get_camera_data()
                     rgb_image = cam_data["rgb_image"]
@@ -1202,12 +1232,15 @@ class PerceptionInterface:
                     depth_image = cam_data["depth_image"]
 
                     if rgb_image is not None and camera_info is not None and depth_image is not None:
+                        got_frame = True
                         table_placement_pose = self._appliance_perception.detect_table_placement(rgb_image, camera_info, depth_image)
                         if table_placement_pose is not None:
                             break
                     time.sleep(0.1)
 
                 if table_placement_pose is None:
+                    if not got_frame:
+                        raise self._no_rgbd_frames_error(20)
                     raise RuntimeError("Could not detect table placement pose")
 
                 # detect_table_placement logs the annotated frame (red dot = placement
@@ -1311,6 +1344,7 @@ class PerceptionInterface:
 
         else:
             aruco_pose_msg = None
+            got_frame = False
             for _ in range(100):
                 cam_data = self._realsense.get_camera_data()
                 rgb_image = cam_data["rgb_image"]
@@ -1318,6 +1352,7 @@ class PerceptionInterface:
                 depth_image = cam_data["depth_image"]
 
                 if rgb_image is not None and camera_info is not None and depth_image is not None:
+                    got_frame = True
                     self._drink_perception.update(rgb_image, camera_info, depth_image)
 
                 try:
@@ -1327,6 +1362,8 @@ class PerceptionInterface:
                     pass
 
             if aruco_pose_msg is None:
+                if not got_frame:
+                    raise self._no_rgbd_frames_error(100)
                 raise RuntimeError("Could not detect drink pickup pose")
 
             position = (aruco_pose_msg.position.x, aruco_pose_msg.position.y, aruco_pose_msg.position.z)

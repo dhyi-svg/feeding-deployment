@@ -1,5 +1,5 @@
 <template>
-  <div class="page">
+  <div class="page" @click="cancelAutocontinue">
     <div class="tb">
       <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
       <div>
@@ -99,6 +99,13 @@ export default {
         clearInterval(this.countdownInterval);
         this.countdownInterval = null;
       }
+    },
+    cancelAutocontinue() {
+      // Any tap on the page cancels the auto-continue countdown; the user must
+      // then confirm explicitly. userInteracted also stops a resent jump from
+      // re-arming the countdown.
+      this.userInteracted = true
+      this.stopCountdown()
     },
     initPublisher() {
 

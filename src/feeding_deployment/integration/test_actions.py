@@ -3,6 +3,7 @@
 from pathlib import Path
 import shutil
 import queue
+import time
 
 try:
     import rospy
@@ -18,6 +19,8 @@ from pybullet_helpers.link import get_relative_link_pose
 from feeding_deployment.actions.base import tool_type, table_type, plate_type, appliance_type
 from feeding_deployment.actions.pick_tool import PickToolHLA
 from feeding_deployment.actions.pick_plate import PickPlateFromApplianceHLA, PickPlateFromTableHLA
+from feeding_deployment.actions.close_door import CloseDoorHLA
+from feeding_deployment.actions.open_door import OpenDoorHLA
 from feeding_deployment.actions.stow_tool import StowToolHLA
 from feeding_deployment.interfaces.perception_interface import PerceptionInterface
 from feeding_deployment.interfaces.web_interface import WebInterface
@@ -91,8 +94,61 @@ def test_PickPlateHLA(location, sim, robot_interface, perception_interface, rviz
     high_level_action.execute_action(objects=[plate_obj, location_obj], params={})
 
 
+def test_CloseDoorHLA(location, sim, robot_interface, perception_interface, rviz_interface, web_interface, hla_hyperparams, wrist_interface, no_waits, log_dir, run_behavior_tree_dir, execution_log, gesture_detectors_dir):
+
+    assert location in ["fridge", "microwave"], f"Location {location} not recognized"
+
+    high_level_action = CloseDoorHLA(sim, robot_interface, perception_interface, rviz_interface, web_interface, hla_hyperparams, wrist_interface, None, no_waits, log_dir, run_behavior_tree_dir, execution_log, gesture_detectors_dir)
+
+    # CloseDoor requires an empty gripper.
+    sim.held_object_name = None
+
+    appliance_obj = Object(location, appliance_type)
+    # Speed comes from the behavior tree's parameter defaults.
+    high_level_action.execute_action(objects=[appliance_obj], params={})
+
+
+def test_OpenDoorHLA(location, sim, robot_interface, perception_interface, rviz_interface, web_interface, hla_hyperparams, wrist_interface, no_waits, log_dir, run_behavior_tree_dir, execution_log, gesture_detectors_dir):
+
+    assert location in ["fridge", "microwave"], f"Location {location} not recognized"
+
+    high_level_action = OpenDoorHLA(sim, robot_interface, perception_interface, rviz_interface, web_interface, hla_hyperparams, wrist_interface, None, no_waits, log_dir, run_behavior_tree_dir, execution_log, gesture_detectors_dir)
+
+    # OpenDoor requires an empty gripper.
+    sim.held_object_name = None
+
+    appliance_obj = Object(location, appliance_type)
+    # Speed comes from the behavior tree's parameter defaults.
+    high_level_action.execute_action(objects=[appliance_obj], params={})
+
+
+def _seed_handle_opening_poses(log_dir: Path, handle_poses_pkl: str | None) -> None:
+    """Copy a handle_opening_pos.pkl into this run's log dir so CloseDoorHLA can
+    run without OpenDoor first: perceive_handle_closing_poses does no perception,
+    it only loads that pickle (written by the last perceive_handle_opening_poses).
+
+    NOTE: the poses are in the arm base frame -- they only match reality if the
+    base is parked at the appliance where the opening was perceived."""
+    if handle_poses_pkl is not None:
+        src = Path(handle_poses_pkl)
+        assert src.exists(), f"Handle poses pickle not found: {src}"
+    else:
+        candidates = sorted(
+            (Path(__file__).parent / "log").glob("*/handle_opening_pos.pkl"),
+            key=lambda p: p.stat().st_mtime,
+        )
+        assert candidates, (
+            "No handle_opening_pos.pkl found under integration/log/*/ -- "
+            "run OpenDoor once or pass --handle_poses_pkl"
+        )
+        src = candidates[-1]
+    shutil.copy(src, log_dir / "handle_opening_pos.pkl")
+    mtime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(src.stat().st_mtime))
+    print(f"Seeded handle opening poses from {src} (written {mtime})")
+
+
 def _main(
-    scene_config: str, transfer_type: str, run_on_robot: bool, use_interface: bool, simulate_head_perception: bool, use_gui: bool, max_motion_planning_time: float = 10, tool: str = "utensil", no_waits: bool = False, action: str = "tool", location: str = "table"
+    scene_config: str, transfer_type: str, run_on_robot: bool, use_interface: bool, simulate_head_perception: bool, use_gui: bool, max_motion_planning_time: float = 10, tool: str = "utensil", no_waits: bool = False, action: str = "tool", location: str = "table", handle_poses_pkl: str = None
 ) -> None:
     """Testing pick and stow tool actions."""
 
@@ -157,6 +213,28 @@ def _main(
     if action == "pick_plate":
         # Pick the plate from the given location (table / fridge / microwave).
         test_PickPlateHLA(location, sim, robot_interface, perception_interface, rviz_interface, web_interface, hla_hyperparams, wrist_interface, no_waits, log_dir, run_behavior_tree_dir, execution_log, gesture_detectors_dir)
+    elif action == "close_door":
+        # Close the door of the given appliance (fridge / microwave), reusing
+        # opening poses perceived by an earlier OpenDoor run.
+        _seed_handle_opening_poses(log_dir, handle_poses_pkl)
+        test_CloseDoorHLA(location, sim, robot_interface, perception_interface, rviz_interface, web_interface, hla_hyperparams, wrist_interface, no_waits, log_dir, run_behavior_tree_dir, execution_log, gesture_detectors_dir)
+    elif action in ("open_door", "open_close_door"):
+        # Open the door of the given appliance (fridge / microwave) with real
+        # perception (terminal confirmation when --use_interface is not set).
+        test_OpenDoorHLA(location, sim, robot_interface, perception_interface, rviz_interface, web_interface, hla_hyperparams, wrist_interface, no_waits, log_dir, run_behavior_tree_dir, execution_log, gesture_detectors_dir)
+        # Preserve the perceived opening poses outside this run's log dir (which
+        # the next test run rmtree's), so a later close_door run picks them up
+        # by default (newest handle_opening_pos.pkl under integration/log/*/).
+        produced = log_dir / "handle_opening_pos.pkl"
+        if produced.exists():
+            keep_dir = log_dir.parent / "test_actions_open"
+            keep_dir.mkdir(exist_ok=True)
+            shutil.copy(produced, keep_dir / "handle_opening_pos.pkl")
+            print(f"Preserved opening poses at {keep_dir / 'handle_opening_pos.pkl'} -- a later close_door run will use them by default")
+        if action == "open_close_door":
+            # Close right after: the opening poses just written to this run's
+            # log dir are exactly what perceive_handle_closing_poses loads.
+            test_CloseDoorHLA(location, sim, robot_interface, perception_interface, rviz_interface, web_interface, hla_hyperparams, wrist_interface, no_waits, log_dir, run_behavior_tree_dir, execution_log, gesture_detectors_dir)
     else:
         # Pick the tool, then stow it.
         test_PickToolHLA(tool, sim, robot_interface, perception_interface, rviz_interface, web_interface, hla_hyperparams, wrist_interface, no_waits, log_dir, run_behavior_tree_dir, execution_log, gesture_detectors_dir)
@@ -176,8 +254,9 @@ if __name__ == "__main__":
     parser.add_argument("--max_motion_planning_time", type=float, default=10.0)
     parser.add_argument("--tool", type=str, default="utensil")
     parser.add_argument("--no_waits", action="store_true")
-    parser.add_argument("--action", type=str, default="tool", choices=["tool", "pick_plate"])
+    parser.add_argument("--action", type=str, default="tool", choices=["tool", "pick_plate", "open_door", "close_door", "open_close_door"])
     parser.add_argument("--location", type=str, default="table", choices=["table", "fridge", "microwave"])
+    parser.add_argument("--handle_poses_pkl", type=str, default=None, help="handle_opening_pos.pkl to close from (default: newest under integration/log/*/)")
     args = parser.parse_args()
 
-    _main(args.scene_config, args.transfer_type, args.run_on_robot, args.use_interface, args.simulate_head_perception, args.use_gui, args.max_motion_planning_time, args.tool, args.no_waits, args.action, args.location)
+    _main(args.scene_config, args.transfer_type, args.run_on_robot, args.use_interface, args.simulate_head_perception, args.use_gui, args.max_motion_planning_time, args.tool, args.no_waits, args.action, args.location, args.handle_poses_pkl)

@@ -17,7 +17,7 @@ import queue
 import signal
 import sys
 
-from sensor_msgs.msg import CameraInfo, LaserScan, JointState
+from sensor_msgs.msg import CameraInfo, Image, LaserScan, JointState
 from geometry_msgs.msg import WrenchStamped, Pose
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool, Float32MultiArray
@@ -35,6 +35,10 @@ from feeding_deployment.control.robot_controller.arm_interface import ArmInterfa
 
 
 CAMERA_FREQUENCY_THRESHOLD = 2 # expected is 30 Hz
+# Depth is a separate USB endpoint from color: it can stall (uvc streamer watchdog)
+# while color + camera_info stay at 30 Hz. RGBD perception needs all three synced, so
+# monitor depth independently -- a color-only check would miss a depth-only stall.
+CAMERA_DEPTH_FREQUENCY_THRESHOLD = 2 # expected is 30 Hz (aligned_depth_to_color)
 EXPECTED_CAMERA_RESOLUTION = (1280, 720) # (width, height); D435 color stream at 30 Hz
 FT_FREQUENCY_THRESHOLD = 300 # expected is 1000 Hz
 FT_THRESHOLD = [40.0, 40.0, 40.0, 2.0, 2.0, 2.0]
@@ -69,6 +73,11 @@ class WatchDog:
         queue_size = 1000
         self.camera_info_sub = rospy.Subscriber("/camera/color/camera_info", CameraInfo, self.cameraCallback, queue_size = queue_size, buff_size = 65536*queue_size)
         self.camera_timestamps = PeekableQueue()
+
+        # Depth stream is a distinct USB endpoint from color and can stall on its own;
+        # RGBD perception (RealSenseInterface's exact-time sync) needs it, so monitor it.
+        self.camera_depth_sub = rospy.Subscriber("/camera/aligned_depth_to_color/image_raw", Image, self.cameraDepthCallback, queue_size = queue_size, buff_size = 65536*queue_size)
+        self.camera_depth_timestamps = PeekableQueue()
 
         # One-time camera resolution check at launch (not monitored every loop).
         self.camera_resolution_unexpected = self._check_camera_resolution()
@@ -140,6 +149,9 @@ class WatchDog:
 
     def cameraCallback(self, msg):
         self.camera_timestamps.put(time.time())
+
+    def cameraDepthCallback(self, msg):
+        self.camera_depth_timestamps.put(time.time())
 
     def cameraUnexpectedCallback(self, msg):
         # self.camera_unexpected = msg.data
@@ -222,6 +234,7 @@ class WatchDog:
         start_time = time.time()
         frequencies = []
         for _queue, _threshold, _anomaly in [(self.camera_timestamps, CAMERA_FREQUENCY_THRESHOLD, AnomalyStatus.CAMERA_FREQUENCY),
+                                            (self.camera_depth_timestamps, CAMERA_DEPTH_FREQUENCY_THRESHOLD, AnomalyStatus.CAMERA_DEPTH_FREQUENCY),
                                             (self.ft_timestamps, FT_FREQUENCY_THRESHOLD, AnomalyStatus.FT_FREQUENCY),
                                             (self.collision_free_timestamps, COLLISION_FREE_FREQUENCY_THRESHOLD, AnomalyStatus.COLLISION_FREE_FREQUENCY),
                                             (self.lidar_l_timestamps, LIDAR_FREQUENCY_THRESHOLD, AnomalyStatus.LIDAR_L_FREQUENCY),

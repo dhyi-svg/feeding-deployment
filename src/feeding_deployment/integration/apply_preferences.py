@@ -39,7 +39,7 @@ _CONFIRM_MODE_MAP = {
 
 _RETRACT_MAP = {"yes": 1, "no": 0}
 
-_AUTOCONTINUE_MAP = {"10 sec": 10.0, "100 sec": 100.0, "1000 sec": 1000.0}
+_AUTOCONTINUE_MAP = {"15 sec": 15.0, "30 sec": 30.0, "60 sec": 60.0}
 
 _OUTSIDE_MOUTH_DISTANCE_MAP = {"near": 0.07, "medium": 0.1, "far": 0.13}
 

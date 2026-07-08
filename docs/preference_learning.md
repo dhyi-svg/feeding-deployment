@@ -4,8 +4,8 @@ This document explains the personalization ("preference learning") pipeline of t
 deployment: the problem it solves, the method, how it is implemented file-by-file, how the
 perception stack grounds it, and the corner cases / bugs we know about.
 
-Everything below was written against the current working tree. Code references are
-`path:line`.
+Everything below was verified against the working tree on 2026-07-07 (commit `e582a9b`
+plus uncommitted changes). Code references are `path:line`.
 
 ---
 
@@ -35,12 +35,12 @@ corrections over days.
 
 - A single user `u` with a fixed natural-language **physical capability description**
   `φ_u` (from `--physical_profile_file`, else `DEFAULT_PHYSICAL_PROFILE`,
-  `integration/run.py:144`). Five reference profiles live in
+  `integration/preference_session.py:104`). Five reference profiles live in
   `preference_learning/config/physical_capabilities.py` and are used by the offline
   synthetic pipeline; at deployment the profile is free text.
 - A sequence of meals ("days") `t = 1, 2, …` (deployments target ~30). Days must be run
   strictly sequentially with no gaps (`PredictionModel.validate_sequential_day`,
-  `methods/prediction_model.py:258`).
+  `methods/prediction_model.py:275`).
 - An **observable context** per meal
   `c_t = (meal, setting, time_of_day)` drawn from fixed vocabularies
   (`config/mealtime_context.py`): an 11-meal catalog (each meal lists its solid items,
@@ -126,7 +126,7 @@ per-dimension m0 accuracy, zero-correction meal counts overall and for the final
 
 ### 2.5 Method: memory-augmented LLM prediction
 
-The predictor (`PredictionModel.predict_bundle`, `methods/prediction_model.py:356`) is one
+The predictor (`PredictionModel.predict_bundle`, `methods/prediction_model.py:424`) is one
 Claude call (`claude-opus-4-8` with adaptive thinking at `medium` effort — a
 low/medium/high/xhigh sweep over the recorded 3-day stress test found quality flat
 across levels while latency scaled 23→68 s/call, so medium is the default;
@@ -191,11 +191,12 @@ history) is read-only during all rounds — it is written once at meal end (§2.
   (`PreferenceSession._read_color_seed` / `_read_nav_offset_seed`) — framed as "one piece
   of evidence among the others", decisive only when neither this meal's corrections nor
   similar prior meals bear on the dimension. Day 1 the
-  seeds are factory defaults (`DEFAULT_COLOR = {h:82,s:55,v:84,range:0.1}`,
+  seeds are factory defaults (`DEFAULT_COLOR = {h:12,s:223,v:169,range:0.1}`,
   zero offsets); later days they are the last accepted values, because the per-user BT
   YAMLs persist across days. So for continuous dims the learner is effectively a
   *carry-forward prior with LLM-proposed deltas*.
-- **Deterministic guardrails** (`prediction_model.py:427-463`):
+- **Deterministic guardrails** (validation loop `prediction_model.py:538-575`, hard rules
+  `:83-97`):
   - each categorical output is validated against its option list; invalid/missing values
     fall back to the correction if one exists, else the **first option**;
   - color / nav-offset outputs are parsed and clipped into their boxes
@@ -210,7 +211,7 @@ history) is read-only during all rounds — it is written once at meal end (§2.
 ### 2.6 Learning update
 
 Exactly one memory write per meal (`PreferenceSession.finalize_meal` →
-`PredictionModel.update`, `methods/prediction_model.py:307`): build the episode text from
+`PredictionModel.update`, `methods/prediction_model.py:324`): build the episode text from
 the finalized bundle, fold it into the LTM summary (LLM call), append it to episodic
 history, and write three per-day JSON records (working / episodic / long-term memory).
 Repredictions during the meal only *read* memory. Cross-day state is re-hydrated at process
@@ -225,7 +226,7 @@ prior episode text.
 src/feeding_deployment/
 ├─ preference_learning/
 │  ├─ config/
-│  │  ├─ preference_bundle.py      # the 25 dims + color/nav-offset codecs & bounds
+│  │  ├─ preference_bundle.py      # the 27 dims + color/nav-offset codecs & bounds
 │  │  ├─ mealtime_context.py       # meal catalog, settings, times; FLAIR food-item derivation
 │  │  ├─ physical_capabilities.py  # 5 reference capability profiles (offline pipeline)
 │  │  └─ affective_state.py        # affective vocab (synthetic data only)
@@ -270,7 +271,7 @@ Persistent per-user state (survives across days) lives under
 `src/feeding_deployment/integration/log/<user>/`:
 
 - `behavior_trees/*.yaml` — the actuated preference state (all BT params incl. colors,
-  offsets); seeded from `actions/behavior_trees/` for a new user (`run.py:234-243`).
+  offsets); seeded from `actions/behavior_trees/` for a new user (`run.py:212-221`).
 - `preference_learning/<user>/{working,episodic,long_term}_memory/day_NNNN.json` and
   `…/prediction_model_llm_calls/*.txt`, `…/long_term_memory_llm_calls/*.txt`.
 - `flair_history.txt` (FLAIR bite history + food labels + bite-ordering preference),
@@ -287,15 +288,15 @@ Entry point: `python -m feeding_deployment.integration.run --user U --day N
 for both release logging and the memory day). `--pref_mode` defaults to `interface` when
 `--use_interface` is set.
 
-1. **Start gate** — wait for "Start Meal" on the iPad home page (`run.py:809`).
+1. **Start gate** — wait for "Start Meal" on the iPad home page (`run.py:787`).
 2. **Context** — the `preference_context` page collects `(meal, setting, time_of_day)`
    (`web_interface.get_meal_context`), unless preset via `--pref_meal` (debug). Validated
    against the vocabularies.
 3. **Model build** — `PredictionModel` is constructed; `validate_sequential_day(N)` rejects
    gaps; `load_prior_memory(N)` re-hydrates LTM + episodic history from days `< N`
-   (`run.py:606-625`).
-4. **`PreferenceSession.start()`** (`preference_session.py:379`) — one LLM call predicts
-   all 25 dims (seeded from the BT YAMLs); FLAIR gets the meal's food items (derived
+   (`run.py:584-603`).
+4. **`PreferenceSession.start()`** (`preference_session.py:633`) — one LLM call predicts
+   all 27 dims (seeded from the BT YAMLs); FLAIR gets the meal's food items (derived
    deterministically from the catalog with singularization,
    `mealtime_context.food_items_for_flair`); predictions for open color/nav dims are
    **written into the BT YAMLs**; all categorical dims are applied
@@ -312,7 +313,7 @@ for both release logging and the memory day). `--pref_mode` defaults to `interfa
 6. **Prep pipeline** (`_run_meal_preparation`, fixed indices for resume):
    1. `PlacePlateOnHolder` — the fridge pickup runs inside this plan; **fridge color** is
       corrected/confirmed during the pickup, then `record_color("fridge")` finalizes the
-      dim from the YAML (`run.py:1128-1138`). Navigations run inside plans too; each
+      dim from the YAML (`run.py:1126-1136`). Navigations run inside plans too; each
       arrival offers the position-adjust prompt and then `record_nav_offset(loc)`.
    2. `CloseDoor(fridge)`.
    3. `ask(["microwave_time"])` then `apply_microwave(...)` — `"no microwave"` adds the
@@ -330,7 +331,7 @@ for both release logging and the memory day). `--pref_mode` defaults to `interfa
 8. **Finish** — "finish feeding" plans `PickPlateFromTable` (table color correction) then
    `PlacePlateInSink`; afterwards `finalize_meal(day)` performs the single memory update
    (any never-asked dims are finalized at their predicted values as implicit confirms) and
-   the settings accessor is cleared (`run.py:869-874`, `_finalize_preference_session`).
+   the settings accessor is cleared (`run.py:760-771`, `_finalize_preference_session`).
 
 **Correction semantics inside `ask()`** (`preference_session.ask`): each dim is
 shown with its prediction highlighted, under a plain-language headline (`dim.label`) and a
@@ -348,7 +349,7 @@ for its reprediction (the page must show values conditioned on it) while the bat
 correction's LLM call overlaps the following robot motion. A `bite_ordering` correction is
 first cleaned for grammar/grounding by FLAIR's meal parser (raw text kept on any failure).
 
-**Settings overlay** (`web_interface.py:337-417`, `preference_session.settings_view/edit`):
+**Settings overlay** (`web_interface.py:372-427`, `preference_session.settings_view/edit`):
 a latched topic publishes the finalized categorical dims (colors/text/nav excluded; locked
 dims non-editable). Edits arrive on a dedicated worker thread and are treated as
 corrections: the edited value is finalized and applied to the BTs **synchronously** (fast,
@@ -384,7 +385,7 @@ every completed sub-skill checkpoints the sim state + atoms + a session snapshot
 standalone pref snapshot over the embedded copy, rebuilds the prediction model (memory is
 never pickled), re-applies the bundle **without predicting or asking**, and re-enters the
 prep pipeline at the recorded step; `ask()` skips finalized dims. Profile and day
-mismatches versus the checkpoint prompt for confirmation (`run.py:512-548`).
+mismatches versus the checkpoint prompt for confirmation (`run.py:496-524`).
 
 ---
 
@@ -394,37 +395,37 @@ mismatches versus the checkpoint prompt for confirmation (`run.py:512-548`).
 translator) in `_BT_MAPPING`. `apply_bundle_to_behavior_trees` loads each affected YAML
 once, overwrites `value` entries, and writes back **atomically** (temp file + `os.replace`;
 justified because the settings worker thread may write while the executive reads,
-`apply_preferences.py:233-254`). BT YAMLs are re-read fresh at each skill execution
+`apply_preferences.py:260-281`). BT YAMLs are re-read fresh at each skill execution
 (`base.py:execute_action` → `load_behavior_tree`), and YAML parameters bind **positionally**
-to the `!hla <fn>` skill function's arguments (`base.py:789-827`) — parameter order in the
+to the `!hla <fn>` skill function's arguments (`base.py:783-831`) — parameter order in the
 YAML must match the function signature.
 
 | bundle field | BT parameter (files) | consumed by |
 |---|---|---|
-| `robot_speed` | `Speed` (all 30 YAMLs), slow/medium/fast → low/medium/high | `robot_interface.set_speed` in every skill |
+| `robot_speed` | `Speed` (all 29 YAMLs), slow/medium/fast → low/medium/high | `robot_interface.set_speed` in every skill |
 | `confirm_feeding_pickup` | `TransferAskForConfirmation` (acquire_bite), `AskForConfirmationInitiatingTransferSequence` (transfer_drink/wipe) — mode-coded 0/1/2 via `_CONFIRM_MODE_MAP` | bite/drink/wipe pickup-verification pages: 0 = skip, 1 = countdown then auto-confirm, 2 = block |
 | `confirm_navigation_arrival` | `AskForArrivalConfirmation` (navigate_to_*) — mode 0/1/2 | post-arrival "Position OK / Adjust" page (`navigate.py:_offer_position_adjustment`); 0 skips it and freezes nav-offset learning |
 | `confirm_manipulation` | `AskForManipulationConfirmation` (pick_plate_from_{fridge,microwave,table}, place_plate_{in_microwave,on_table,in_sink}, press_microwave_button, gaze_at_table, open_{fridge,microwave}) — mode 0/1/2 | detection-confirmation pages (plate handle / door handle / button / sink / plate; 0 auto-accepts successful detections and freezes color learning) + the plate-release confirms |
 | `wait_before_autocontinue_seconds` | `TimeToWaitBeforeAutocontinue` (acquire_bite, transfer_utensil, transfer_drink) | bite-selection / re-selection page countdowns; also (in memory, via the injected `get_autocontinue_seconds` provider) all correction pages and every confirmation page in autocontinue mode |
 | `outside_mouth_distance` | `OutsideMouthDistance` (3 transfer YAMLs), near/medium/far → 0.07/0.10/0.13 m; "not applicable" skips the write | outside-mouth transfer stop distance |
 | `convey_robot_ready_for_initiating_transfer` | `ReadyToInitiateTransferInteraction` → silent/voice/led/voice_led | `transfer_tool.relay_ready_to_initiate_transfer` (speech text adapts to the readiness mode; LED via serial) |
-| `detect_user_ready_for_initiating_transfer_*` | `InitiateTransferInteraction` → open_mouth/button/auto_timeout (per tool YAML) | `detect_initiate_transfer` (`transfer_tool.py:71`): mouth-open detector / physical button topic / **fixed 5 s sleep**; may also be an LLM-synthesized gesture name |
+| `detect_user_ready_for_initiating_transfer_*` | `InitiateTransferInteraction` → open_mouth/button/auto_timeout (per tool YAML) | `detect_initiate_transfer` (`transfer_tool.py:71`): mouth-open detector / physical button relayed by the webapp (`web_interface.detect_button_press`, armed only while waiting; skipped without a web interface) / **fixed 5 s sleep**; may also be an LLM-synthesized gesture name |
 | `convey_robot_ready_for_completing_transfer` | `ReadyForTransferInteraction` | `relay_ready_for_transfer` |
-| `detect_user_completed_transfer_*` | `TransferCompleteInteraction` → sense/button/auto_timeout | `detect_transfer_complete`: fork → FT bite-down trigger (|torque_x| > 0.1), drink/wipe → head nod; button; fixed 5 s |
+| `detect_user_completed_transfer_*` | `TransferCompleteInteraction` → sense/button/auto_timeout | `detect_transfer_complete`: fork → FT bite-down trigger (|torque_x| > 0.1), drink/wipe → head nod; webapp-relayed button; fixed 5 s |
 | `skewering_axis` | `SkeweringOrientation` (acquire_bite) → horizontal/vertical | `acquisition.py:264-265`: horizontal adds π/2 to the detected major-axis angle |
-| `bite_dipping_preference` | `FoodDippingDepth` (acquire_bite) → 0.01/0.03 m; "do not dip" skips the write | dip skill depth; suppression is done separately via `flair.set_allow_dip(False)` which strips any LLM-planned dip (`inference_class.py:1054-1056`) |
+| `bite_dipping_preference` | `FoodDippingDepth` (acquire_bite) → 0.01/0.03 m; "do not dip" skips the write | dip skill depth; suppression is done separately via `flair.set_allow_dip(False)` which strips any LLM-planned dip (`inference_class.py:1066-1068`) |
 | `microwave_time` | `MicrowaveDuration` (press_microwave_button) → 60/120/180 s | microwave button skill; "no microwave" is handled at the *planner* level via the `FoodHeated` atom (`apply_microwave_preference`) |
 | `retract_between_bites` | `RetractAfterTransfer` (transfer_utensil) | retract move after bite transfer |
-| `transfer_mode` | (no BT param) | `scene_description.transfer_type` + reconstruction of the `TransferToolHLA.transfer` object (Inside/OutsideMouthTransfer, `apply_preferences.py:327-380`) |
+| `transfer_mode` | (no BT param) | `scene_description.transfer_type` + reconstruction of the `TransferToolHLA.transfer` object (Inside/OutsideMouthTransfer, `apply_preferences.py:416-468`) |
 | `bite_ordering` | (no BT param) | `flair.set_preference(text)` → pasted into the FLAIR preference-planner prompt |
 | `plate_color_*` | `HandleColor` `[h,s,v]` + `ColorRange` (pick_plate_from_*) | attachment perception (§7.2) |
 | `nav_offset_*` | `PositionOffset` `[dx,dy,dyaw]` (navigate_to_*) | goal composition (§7.4) |
 
 Write-backs in the *other* direction (perception/action → bundle) go through
-`process_behavior_tree_parameter_update` (`base.py:270-303`), which validates the value
+`process_behavior_tree_parameter_update` (`base.py:274-307`), which validates the value
 against the parameter's declared space (`EnumSpace`/`Box`) — the `PositionOffset` Box in the
-navigate YAMLs must match `NAV_OFFSET_BOUNDS` (`preference_bundle.py:317`), and both match
-`NavigateHLA._MAX_OFFSET_*` (`navigate.py:91-92`).
+navigate YAMLs must match `NAV_OFFSET_BOUNDS` (`preference_bundle.py:353`), and both match
+`NavigateHLA._MAX_OFFSET_*` (`navigate.py:95-96`).
 
 ---
 
@@ -443,7 +444,7 @@ interactions into the same finalize/repredict/learn cycle as a button press.
   gizmo) and chooses **Confirm / Redo / Correct Color**. Correct Color opens the live
   picker: tap a pixel → RGB → HSV, adjust the tolerance slider, **Rerun** re-detects on a
   fresh frame (fresh TF stamp), **Confirm** locks the pose *from the exact frame the user
-  approved* (`perception_interface.py:815-1013`). The page itself is gated by
+  approved* (`_interactive_color_correction`, `perception_interface.py:830`). The page itself is gated by
   `confirm_manipulation`: "no" auto-accepts a successful detection (picker unreachable →
   color learning frozen), "yes (with auto-continue countdown)" adds a countdown that auto-confirms.
 - If detection fails outright (all 20 attempts return `None`, typically a stale stored
@@ -463,22 +464,26 @@ interactions into the same finalize/repredict/learn cycle as a button press.
 ### 6.2 Navigation offsets
 
 - `NavigateHLA` composes the learned `PositionOffset` onto the nominal mapped goal in the
-  goal's local frame, clamped to ±0.5 m / ±45° (`navigate.py:530-554`).
-- After a successful arrival (not after a recovery-teleop rescue), the iPad asks
-  **"Position OK / Adjust"**, gated by `confirm_navigation_arrival`: "no" skips the page
+  goal's local frame, clamped to ±0.5 m / ±45° (`navigate.py:626-650`).
+- After a successful arrival, the iPad asks **"Position OK / Adjust"** — except after a
+  recovery-teleop rescue, and except when the user completed the leg themselves by parking
+  the base and pressing **Done** in teleop: a human park is final, so that leg skips the
+  goal-confirm replan, the refinement window, and the adjust prompt entirely and records no
+  offset event (`_last_leg_human_completed`, `navigate.py:402-425,566,1059-1067`). When
+  shown, the prompt is gated by `confirm_navigation_arrival`: "no" skips the page
   entirely (offsets frozen at the learned totals), "yes (with auto-continue countdown)" shows it with the
   user's autocontinue wait (timeout ⇒ OK), "yes (without any auto-continue)" shows it with no countdown
   (`web_interface.get_nav_position_adjust_choice`; `autocontinue_seconds <= 0` = no
   countdown). On Adjust, the base is handed to the
   webapp joystick (no active move_base goal), the user parks it, presses Done; after a 10 s
   localization settle the new **total** offset is measured as the user's final localized
-  pose expressed in the *nominal* goal frame (`navigate.py:1026-1027`) — accumulation is by
+  pose expressed in the *nominal* goal frame (`navigate.py:1152-1153`) — accumulation is by
   construction, and nav parking noise the user just drove out is not double-counted. A
   movement gate (2 cm / 2°, measured on the user's actual motion) keeps TEB parking scatter
   out of the learned offset. The clamped total is written into the YAML and logged to
   `nav_offset_log.jsonl`; `record_nav_offset(loc)` then finalizes the dim (re-finalizing on
   later navigations in the same meal — the latest total is the meal's ground truth,
-  `preference_session.py:503-535`).
+  `preference_session.py:803-841`).
 
 ---
 
@@ -489,7 +494,9 @@ The perception stack is what grounds half the bundle. Hub:
 `RealSenseInterface` (RGB + 32FC1 depth in **millimeters** + `CameraInfo`), a shared
 `GroundedSAM`, `HeadPerceptionROSWrapper` (DECA), `AppliancePerception`,
 `AttachmentPerception`, `DrinkPerception`, the FT sensor subscriber
-(`/forque/forqueSensor`), the transfer button (`/transfer_button`), speech (`/speak`), and
+(`/forque/forqueSensor`), the legacy transfer-button subscriber (`/transfer_button` — no
+longer used by the transfer skills; the physical button is now relayed by the webapp, §7.3),
+speech (`/speak`), and
 the LED (serial). With `robot_interface=None` it runs in simulation mode and replays
 pickled perception results from the user log dir.
 
@@ -515,7 +522,7 @@ pickled perception results from the user log dir.
    default `range = 0.1` that's ±9 hue units ≈ ±18°), S/V half-widths `= range·255`
    (±25.5). Hue is circular: bands straddling 0/179 are split into two `inRange` calls and
    OR-ed (red handles work); `h_tol ≥ 90` degenerates to S/V-only matching. The factory
-   default `[82, 55, 84]` matches `DEFAULT_COLOR` in the bundle. (`clean_mask` -
+   default `[12, 223, 169]` matches `DEFAULT_COLOR` in the bundle. (`clean_mask` -
    morphological open/close - exists but its call is commented out, line 78.)
 2. **3D lift + clustering**: every mask pixel with valid depth → 3D; DBSCAN
    (eps = 7 cm, min_samples = 5) and the **largest** cluster wins — a larger
@@ -532,9 +539,9 @@ pickled perception results from the user log dir.
    (`_perceived_face_yaw:311-352`).
 5. **Grasp poses**: fixed per-handle-type offsets in the attachment frame produce
    `pickup / pre_pickup / above_pickup / post_pickup` poses
-   (`perception_interface.py:1015-1046`); results are pickled for sim replay.
+   (`perception_interface.py:1088-1127`); results are pickled for sim replay.
 
-Detection loop robustness (`perceive_attachment_poses:924-1013`): 5 s auto-exposure settle,
+Detection loop robustness (`perceive_attachment_poses`, `perception_interface.py:952`): 5 s auto-exposure settle,
 then up to 20 frames at 10 Hz; **if all 20 fail it raises `RuntimeError`**, which the
 executive converts into a `FatalSkillFailure` (meal over, operator restart) — see corner
 case C1.
@@ -550,7 +557,12 @@ case C1.
   `(‖p51−p59‖+‖p53−p57‖)/(2‖p49−p55‖) > 0.45`, polled at 10 Hz, timeout 600 s.
 - **Head nod** (`head_nod`): pitch swings — 3 direction changes of > 15° — timeout 600 s.
 - **Force "sense"** for the fork: `|torque_x| > 0.1` on the FT sensor
-  (`perception_interface.ft_callback:191-197`). Button: `/transfer_button` topic.
+  (`perception_interface.ft_callback:191-197`). Button: the physical button is detected in
+  the browser (App.vue) and relayed by the webapp's `robot_executing` page **only while the
+  robot has armed it** (`WebInterface.detect_button_press`, `web_interface.py:533-569`;
+  `button_arm`/`button_press` messages — stray presses while unarmed are dropped). The old
+  `/transfer_button` perception path is no longer used by the transfer skills; with no web
+  interface the button wait is skipped entirely.
 - **Synthesized gestures**: the personalization "gesture" flow records positive/negative
   landmark examples, asks the LLM to synthesize a detector function, appends it to the
   per-user `gesture_detectors/synthesized_gesture_detectors.py`, registers the function
@@ -563,9 +575,10 @@ case C1.
 ### 7.4 Navigation localization — grounds `nav_offset_*`
 
 Offset measurement is closed-loop on the map→base TF (Cartographer/ZED chain), never on
-integrated teleop cmd_vel (`navigate.py:876-892`); staleness checks
+integrated teleop cmd_vel (`navigate.py:972-1009`); staleness checks
 (`_localization_fresh`) skip the prompt/measurement rather than record garbage. Settle
-times: 25 s goal-confirm, 10 s post-adjustment.
+times: 15 s goal-confirm, 10 s post-adjustment (`navigate.py:87,109` — goal-confirm was
+retuned 25 → 10 → 15 s to guarantee at least one Cartographer optimization epoch).
 
 ### 7.5 FLAIR food perception — grounds `bite_ordering` / dipping
 
@@ -576,7 +589,7 @@ times: 25 s goal-confirm, 10 s post-adjustment.
   masks/portions/bounding boxes, "blue plate" detections removed, labels mapped back to
   catalog categories (unknown labels default to `solid`), per-food-type mask groups and a
   skill per category (Skewer / Scoop / Dip / Twirl).
-- `get_autonomous_action` (`inference_class.py:1017-1067`): picks a random instance mask
+- `get_autonomous_action` (`inference_class.py:1029-1079`): picks a random instance mask
   per solid, computes skewer/dip keypoints, then asks the **preference planner**
   (`preference_planner.py`, Claude via `GPTInterface`) for the next bite given items,
   rounded portions, efficiencies, the user's `bite_ordering` sentence, dips, and the bite
@@ -584,7 +597,11 @@ times: 25 s goal-confirm, 10 s post-adjustment.
   `allow_dip=False` any planned dip is stripped deterministically.
 - The webapp bite-selection page shows the predicted bite (+ dip options) with the user's
   autocontinue timeout; the user can accept, pick another item, or manually point
-  (`acquisition.py:203-331`).
+  (`acquisition.py:210-331`). If FLAIR finds no actionable bite (nothing detected, only
+  dips, or the planner can't match one), detection is silently retried; after 3 consecutive
+  failures (`MAX_CONSECUTIVE_FAILED_DETECTIONS`, `acquisition.py:38,213-232`) the page is
+  shown in no-detection mode offering **manual skills only** (manual_skewering /
+  manual_dipping), with no autocontinue countdown.
 
 ### 7.6 Appliance perception (context)
 
@@ -678,16 +695,16 @@ broken), **C** = corner case / sharp edge (works as coded, but surprising or fra
   every meal and deflating `acc@m0` by a constant. Together with B2 this means the offline
   pipeline is effectively categorical-only in its current state.
 - **B4 — `bite_mask_idx` indexes the wrong food (and off-by-one on the no-web path).** In
-  `get_autonomous_action` (`inference_class.py:1026-1028`) `bite_mask_idx` is overwritten
+  `get_autonomous_action` (`inference_class.py:1036-1042`) `bite_mask_idx` is overwritten
   inside the loop over solids, so it ends up being a random instance index for the *last*
   solid category — not for the item the planner actually chose. On the no-interface path
-  `acquisition.py:245` passes it as `skill_params[1]` and line 254 computes
+  `acquisition.py:277` passes it as `skill_params[1]` and line 286 computes
   `item_id = skill_params[1] - 1` (the webapp path is 1-based, this value is 0-based), so
   `bite_mask_idx = 0` selects `masks[-1]`. Both errors only affect *which instance* of a
   food is skewered (or crash with IndexError if the chosen food has fewer instances), and
   only the non-interface/autonomous path for the off-by-one.
 - **B5 — FLAIR bite history is polluted.** `update_bite_history` is called **before**
-  skill execution (`acquisition.py:256-257`, the `Rajat Imp ToDo` acknowledges it), so
+  skill execution (`acquisition.py:288-289`, the `Rajat Imp ToDo` acknowledges it), so
   failed acquisitions count as eaten bites; and `bite_history` is loaded from
   `flair_history.txt` at startup and **never reset per meal** (`flair.py:24-51`; no caller
   clears it), so the preference planner's "bites taken so far" accumulates across meals
@@ -704,9 +721,9 @@ broken), **C** = corner case / sharp edge (works as coded, but surprising or fra
   `scripts/evaluate_memory_model.py` and `methods/evaluate_memory_model.py`; the actual
   module is `methods/evaluate_prediction_model.py`, and no `scripts/` variant exists.
   `run.py`'s `--pref_meal` help says "Required with --pref_mode=interface"
-  (`run.py:1423`), but it is optional (context is collected on the web page when absent).
+  (`run.py:1408-1413`), but it is optional (context is collected on the web page when absent).
   `apply_microwave_preference`'s docstring claims the duration wiring "is not yet
-  implemented" (`apply_preferences.py:405-408`), but `_BT_MAPPING` does write
+  implemented" (`apply_preferences.py:496`), but `_BT_MAPPING` does write
   `MicrowaveDuration`.
 
 ### Corner cases / sharp edges
@@ -716,7 +733,7 @@ broken), **C** = corner case / sharp edge (works as coded, but surprising or fra
   pickup YAML (`_write_open_colors_to_bt`). If that color matches ~zero pixels, detection
   returns `None` for all 20 attempts and `perceive_attachment_poses` routes the user
   straight into the live color picker (see §6.1) rather than raising `RuntimeError` →
-  `FatalSkillFailure` (`run.py:1096-1105`); the fatal path remains only in terminal mode
+  `FatalSkillFailure` (`run.py:1088-1106`); the fatal path remains only in terminal mode
   or when the camera never produced a valid frame. The opposite failure is
   silent: a similar-colored larger blob wins DBSCAN and the robot confidently grasps the
   wrong thing (mitigated by the user-facing overlay + confirm gate). Note this risk grew
@@ -731,7 +748,7 @@ broken), **C** = corner case / sharp edge (works as coded, but surprising or fra
   step other than the post-arrival adjust prompt. Same seed-carry mitigation as C1.
 - **C3 — Silent first-option fallback.** For a categorical dim with invalid/missing LLM
   output and no correction, the value silently becomes `options[0]`
-  (`prediction_model.py:443,462`). A whole-response JSON parse failure yields a complete
+  (`prediction_model.py:554,574`). A whole-response JSON parse failure yields a complete
   "first-option bundle" (`no microwave`, `slow`, `parallel…`, `yes`, `outside…`, …) that
   is actuated and shown as the prediction; the only trace is the raw-response dump in
   `prediction_model_llm_calls/`. There is no retry on malformed JSON (only rate-limit
@@ -753,10 +770,10 @@ broken), **C** = corner case / sharp edge (works as coded, but surprising or fra
   sip, or mouth wiping", but (a) `transfer_wipe.yaml` deliberately has no
   `TimeToWaitBeforeAutocontinue` (wipe never auto-continues — see its description), and
   (b) the `autocontinue` *readiness/completion* options are hardcoded 5 s sleeps
-  (`transfer_tool.py:80-83,124-127`), unrelated to this dim. The `10/100/1000 sec` option
+  (`transfer_tool.py:83-86,130-133`), unrelated to this dim. The `10/100/1000 sec` option
   list is also oddly log-scaled — 1000 s ≈ 17 minutes.
 - **C7 — Gesture timeouts are ignored.** `mouth_open`/`head_nod` return `False` after
-  600 s, but every caller discards the return value (`transfer_tool.py:79,119-123`), so
+  600 s, but every caller discards the return value (`transfer_tool.py:82,125-129`), so
   after 10 minutes the transfer proceeds exactly as if the gesture had been detected —
   potentially moving a fork toward a user who never signalled readiness. The detectors
   also busy-spin without sleeping while head data is `None`
@@ -768,12 +785,12 @@ broken), **C** = corner case / sharp edge (works as coded, but surprising or fra
   the next `_apply_non_planning`, and the settings overlay can never select it back.
 - **C9 — Day re-runs overwrite memory; resume needs matching flags.** A fresh run with an
   existing `--day N` overwrites that day's memory records (warned at finalize,
-  `run.py:788-791`). Resuming a personalized meal requires the same
+  `run.py:768-771`). Resuming a personalized meal requires the same
   `--physical_profile_file`/`--day` (mismatches prompt y/n); resuming a prep-phase
   checkpoint whose pref snapshot *and* embedded session are both missing dies on an
-  `assert` (`run.py:684`) rather than a clean message. Preference **context** is not
+  `assert` (`run.py:662`) rather than a clean message. Preference **context** is not
   persisted at all — after a crash the operator must supply it again
-  (`ensure_preference_context`, `run.py:554-563`).
+  (`ensure_preference_context`, `run.py:532-541`).
 - **C10 — Retrieval text spaces are inconsistent.** The episodic query renders corrected
   color/nav values with `str(dict)` (`episodic_memory.py:15`) while stored episodes use
   the compact `format_color`/`format_nav_offset` encoding — cosine similarity compares
@@ -782,12 +799,12 @@ broken), **C** = corner case / sharp edge (works as coded, but surprising or fra
   blob rather than a list (`episodic_memory.py:102-118`).
 - **C11 — `record_color` only finalizes a location once per meal.** A second pickup at the
   same location in one meal (e.g. after a redo path) skips re-finalization
-  (`preference_session.py:481-482`), unlike nav offsets which deliberately re-finalize.
+  (`preference_session.py:769`), unlike nav offsets which deliberately re-finalize.
   A second user correction at the same location in the same meal would update the YAML
   (used next pickup) but not this meal's learned ground truth.
 - **C12 — Two YAML writers, one atomic.** Preference applies use the atomic temp-file +
   `os.replace` writer (`apply_preferences._save_yaml`), but the perception/nav write-back
-  path uses `save_behavior_tree`'s plain `open("w")` (`base.py:1018`) — a settings-thread
+  path uses `save_behavior_tree`'s plain `open("w")` (`base.py:1084`) — a settings-thread
   reader could in principle observe a partially-written pickup/navigate YAML during a
   write-back. Low likelihood (write-backs happen on the executive thread during a skill,
   when the settings overlay stall usually holds), but the asymmetry is real.
@@ -804,7 +821,7 @@ broken), **C** = corner case / sharp edge (works as coded, but surprising or fra
   (`_DEFAULT_AUTOCONTINUE_SECONDS`) until `wait_before_autocontinue_seconds` itself is
   finalized — i.e., the wait-preference page uses a wait the user hasn't chosen yet.
   Unavoidable bootstrap, but worth knowing when reading logs.
-- **C15 — `PYTHONHASHSEED=0` is asserted at import** (`run.py:198`) — plan/grounding
+- **C15 — `PYTHONHASHSEED=0` is asserted at import** (`run.py:176`) — plan/grounding
   determinism depends on it; running the module without it fails immediately.
 - **C16 — `_apply_hard_rules` only fires for catalog meals** (`known_meal`); a preset
   `--pref_meal` outside the catalog is rejected earlier by context validation, so this is

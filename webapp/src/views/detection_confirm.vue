@@ -1,5 +1,5 @@
 <template>
-  <div class="page">
+  <div class="page" @click="cancelAutocontinue">
     <div class="tb">
       <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
       <div>
@@ -29,12 +29,12 @@
         <div v-else class="cam-placeholder">Waiting for detection image...</div>
       </div>
 
+      <p v-if="!userInteracted && countdown !== null" class="cdown">Auto-confirming in <span>{{ countdown }}s</span></p>
       <div class="det-actions">
         <button class="btn md amber" @click="confirmDetection">Looks Correct</button>
         <button class="btn md ghost" @click="redoDetection">Redo</button>
         <button v-if="detectionType === 'attachment'" class="btn md teal" @click="correctColor">Correct Color</button>
       </div>
-      <p v-if="!userInteracted && countdown !== null" class="cdown">Auto-confirming in <span>{{ countdown }}s</span></p>
     </div>
   </div>
 </template>
@@ -226,6 +226,13 @@ export default {
         clearInterval(this.countdownInterval);
         this.countdownInterval = null;
       }
+    },
+    cancelAutocontinue () {
+      // Any tap on the page cancels the auto-confirm countdown; the user must
+      // then explicitly confirm/redo. userInteracted also stops a resent "info"
+      // from re-arming the countdown.
+      this.userInteracted = true
+      this.stopCountdown()
     },
     confirmDetection () {
       this.userInteracted = true

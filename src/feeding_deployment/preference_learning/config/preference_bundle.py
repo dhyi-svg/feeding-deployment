@@ -159,7 +159,7 @@ PREFERENCE_BUNDLE: List[PreferenceDim] = [
     PreferenceDim(
         field="wait_before_autocontinue_seconds",
         label="How long should the robot wait before continuing automatically?",
-        options=["10 sec", "100 sec", "1000 sec"],
+        options=["15 sec", "30 sec", "60 sec"],
         short_description="How long pages wait for your answer before continuing on their own.",
         description="How long the robot waits before automatically continuing if the user does not intervene — on the next-bite/sip/wipe pages and on every confirmation page set to 'yes (with auto-continue countdown)' (navigation arrivals, manipulation detections and plate releases, feeding pickups). Some users may prefer a shorter wait time to reduce meal time, while others may prefer a longer wait time to give themselves more time to intervene if needed, especially in contexts where they might be more distracted (e.g., when eating in a social setting with a partner or when watching TV)."
     ),
