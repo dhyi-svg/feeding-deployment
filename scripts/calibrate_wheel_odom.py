@@ -108,6 +108,38 @@ class Driver:
         final = self.wait_valid()
         return base, final
 
+    def run_to_diff(self, a, b, target_diff, max_s):
+        """Spin until the differential wheel travel (|right_mean - left_mean|,
+        counts) reaches target_diff, then stop. Used to hit a target ANGLE from
+        an existing calibration and check it against a physical measurement.
+        Polls finely (0.1 s) so overshoot is only the post-stop decel; re-sends
+        ~1 Hz to feed the firmware watchdog. max_s is a runaway cap."""
+        base = self.wait_valid()
+        if base is None:
+            print("ERROR: no valid (ok=1) encoder frame -- is motor power on?")
+            return None, None
+        if self.send_confirmed(a, b) is None:
+            print("ERROR: drive command not confirmed; aborting.")
+            self.send_confirmed(0, 0)
+            return None, None
+        last_send = time.time()
+        start = time.time()
+        while time.time() - start < max_s:
+            self.pump(0.1)
+            if time.time() - last_send > 0.8:
+                self.send(a, b)
+                last_send = time.time()
+            cur = self.last_valid
+            if cur is not None:
+                rm = (wrap_delta_u32(cur[1], base[1]) + wrap_delta_u32(cur[2], base[2])) / 2.0
+                lm = (wrap_delta_u32(cur[3], base[3]) + wrap_delta_u32(cur[4], base[4])) / 2.0
+                if abs(rm - lm) >= target_diff:
+                    break
+        self.send_confirmed(0, 0)
+        self.pump(0.6)
+        final = self.wait_valid()
+        return base, final
+
 
 def main():
     p = argparse.ArgumentParser(description=__doc__,
@@ -117,18 +149,32 @@ def main():
     p.add_argument("--baud", type=int, default=115200)
     p.add_argument("--speed", type=int, default=400, help="counts/s per motor")
     p.add_argument("--duration", type=float, default=8.0, help="drive seconds")
-    p.add_argument("--counts-per-meter", type=float, default=6610.0,
-                   help="for rotate: the value from a prior straight run")
+    p.add_argument("--counts-per-meter", type=float, default=4874.0,
+                   help="calibrated counts/m (for rotate math + target-deg)")
+    p.add_argument("--track-width", type=float, default=0.766,
+                   help="calibrated effective track width (m), for --target-deg")
+    p.add_argument("--target-deg", type=float, default=0.0,
+                   help="rotate mode: spin to this many degrees (count-targeted "
+                        "using --track-width/--counts-per-meter) instead of a "
+                        "fixed --duration; then report predicted vs your measured")
     p.add_argument("--yes", action="store_true", help="skip the confirm prompt")
     args = p.parse_args()
 
     a = args.speed
     b = args.speed if args.mode == "straight" else -args.speed
-    approx_m = args.speed * args.duration / 6610.0
+    targeting = args.mode == "rotate" and args.target_deg > 0
+    # Differential-count target for the requested angle, and a runaway cap.
+    target_diff = math.radians(args.target_deg) * args.track_width * args.counts_per_meter
+    max_s = min(120.0, target_diff / (1.5 * abs(args.speed)) + 6.0) if targeting else 0.0
+    approx_m = args.speed * args.duration / 4874.0
     print(f"\n*** {args.mode.upper()} CALIBRATION -- THE BASE WILL MOVE ***")
     if args.mode == "straight":
-        print(f"Forward ~{approx_m*100:.0f} cm at ~{args.speed/6610.0*100:.1f} cm/s "
+        print(f"Forward ~{approx_m*100:.0f} cm at ~{args.speed/4874.0*100:.1f} cm/s "
               f"(A={a} B={b} for {args.duration:.0f} s).")
+    elif targeting:
+        print(f"Spin in place to a PREDICTED {args.target_deg:.0f} deg "
+              f"(A={a} B={b}, ~{target_diff:.0f} diff counts, cap {max_s:.0f} s). "
+              f"Watch footprint clearance.")
     else:
         print(f"Spin in place for {args.duration:.0f} s (A={a} B={b}). "
               f"Watch footprint clearance.")
@@ -140,7 +186,10 @@ def main():
     drv = Driver(args.port, args.baud)
     try:
         drv.pump(3.0)  # boot / banner
-        base, final = drv.run(a, b, args.duration)
+        if targeting:
+            base, final = drv.run_to_diff(a, b, target_diff, max_s)
+        else:
+            base, final = drv.run(a, b, args.duration)
     finally:
         drv.send_confirmed(0, 0)
         drv.close()
@@ -170,12 +219,23 @@ def main():
         print(f"\nright_mean = {right_mean:+.1f}  left_mean = {left_mean:+.1f} counts")
         diff = right_mean - left_mean
         print(f"(right_mean - left_mean) = {diff:+.1f} counts")
-        print(f"\n>>> Measure the angle turned (A, degrees; note direction).")
-        print(">>> track_width_m = (right_mean - left_mean)/counts_per_meter / radians(A)")
-        print(f">>> using counts_per_meter = {args.counts_per_meter:.0f}:")
-        for A in (360.0, 720.0):
-            tw = (diff / args.counts_per_meter) / math.radians(A)
-            print(f"      if |A| = {A:.0f} deg  ->  track_width_m = {abs(tw):.3f}")
+        if targeting:
+            pred = math.degrees(abs(diff) / args.counts_per_meter / args.track_width)
+            print(f"\n>>> PREDICTED angle (from calibration): {pred:.1f} deg")
+            print(">>> Report the ACTUAL physical angle you measured.")
+            print(">>> If actual ~= predicted, track_width is confirmed. Otherwise")
+            print(">>> corrected track_width_m = predicted/actual * "
+                  f"{args.track_width:.3f}:")
+            for act in (350.0, 360.0, 370.0):
+                print(f"      if actual = {act:.0f} deg  ->  track_width_m = "
+                      f"{abs(diff)/args.counts_per_meter/math.radians(act):.3f}")
+        else:
+            print(f"\n>>> Measure the angle turned (A, degrees; note direction).")
+            print(">>> track_width_m = (right_mean - left_mean)/counts_per_meter / radians(A)")
+            print(f">>> using counts_per_meter = {args.counts_per_meter:.0f}:")
+            for A in (360.0, 720.0):
+                tw = (diff / args.counts_per_meter) / math.radians(A)
+                print(f"      if |A| = {A:.0f} deg  ->  track_width_m = {abs(tw):.3f}")
     return 0
 
 

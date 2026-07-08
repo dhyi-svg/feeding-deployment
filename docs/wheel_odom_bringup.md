@@ -65,9 +65,12 @@ Powered validation + calibration DONE (2026-07-08, driven over ssh):
 - **`counts_per_meter` = 4874** — from an 8271-count drive tape-measured at
   1.697 m (26% below the 6610 parts-list estimate; the BOM over-estimated
   encoder/gear resolution or under-estimated effective rolling diameter).
-- **`track_width_m` = 0.766** — from a compass-verified 192° CCW in-place spin
-  (12510 differential counts); ~1.9x the geometric wheelbase, rest is scrub.
-  Both baked in as node defaults.
+- **`track_width_m` = 0.85** — refined from three in-place spins. A 192° spin
+  implied 0.766, but two clean near-full ~325° spins both implied ~0.85 (wheels
+  repeatable to 0.05%, physical angle to 3°). Effective track grows with turn
+  size (scrub), so no single value is exact; 0.85 fits substantial turns. The
+  ~35° full-turn shortfall is real under-rotation, not compass error (a fixed
+  bias cancels over a full turn since start==end heading). Baked as node default.
 - Spin direction (CCW → +yaw) confirms the A=right/B=left mapping and that
   wheel-odom yaw matches the ZED/Cartographer (REP-103) convention.
 

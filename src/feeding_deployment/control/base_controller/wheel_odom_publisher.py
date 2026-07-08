@@ -86,12 +86,15 @@ class WheelOdomPublisher:
         # real encoder/gear resolution or effective rolling diameter differs
         # from nominal; the measured value is authoritative.
         self.counts_per_meter = float(rospy.get_param("~counts_per_meter", 4874.0))
-        # EFFECTIVE track width for skid-steer yaw. Measured 2026-07-08: a
-        # compass-verified 192 deg CCW in-place spin gave 12510 differential
-        # counts -> 0.766 m, ~1.9x the ~0.41 m geometric wheelbase. The gap is
-        # wheel scrub (4 grippy wheels grinding sideways in a turn); it is
-        # surface-dependent, so yaw stays advisory (high covariance below).
-        self.track_width_m = float(rospy.get_param("~track_width_m", 0.766))
+        # EFFECTIVE track width for skid-steer yaw. Measured 2026-07-08 over
+        # three in-place spins: a 192 deg spin implied 0.766, but two clean
+        # ~325 deg (near-full) spins both implied ~0.85 (wheels repeatable to
+        # 0.05%, physical angle to 3 deg). Effective track GROWS with turn size
+        # (more accumulated scrub), so no single value is exact; 0.85 fits the
+        # substantial turns that matter and is ~2.1x the ~0.41 m geometric
+        # wheelbase. Yaw stays advisory -- high covariance below -- and is
+        # surface-dependent (will differ on rug vs this floor).
+        self.track_width_m = float(rospy.get_param("~track_width_m", 0.85))
         # Empirical (2026-07-08 spin test): driver A = RIGHT pair, driver B =
         # LEFT pair -- A=+/B=- spun the base COUNTERCLOCKWISE (positive yaw in
         # the z-up ROS/REP-103 frame ZED & Cartographer use), consistent with
