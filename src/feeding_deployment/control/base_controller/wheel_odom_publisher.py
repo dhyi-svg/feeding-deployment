@@ -80,16 +80,25 @@ class WheelOdomPublisher:
 
         # ---- params ----
         self.poll_rate_hz = float(rospy.get_param("~poll_rate_hz", 20.0))
-        # counts -> meters (see module docstring; calibrate on the robot).
-        self.counts_per_meter = float(rospy.get_param("~counts_per_meter", 6610.0))
-        # EFFECTIVE track width for skid-steer yaw (calibrate by rotating
-        # 2x360 deg in place on the target floor surface). Geometric spacing
-        # is a placeholder start value only.
-        self.track_width_m = float(rospy.get_param("~track_width_m", 0.55))
-        # Expected +1/+1 (closed-loop drive would run away if encoder polarity
-        # opposed command polarity), but keep the knobs for the bench check.
-        self.side_a_sign = float(rospy.get_param("~side_a_sign", 1.0))  # A = right pair
-        self.side_b_sign = float(rospy.get_param("~side_b_sign", 1.0))  # B = left pair
+        # counts -> meters. Measured 2026-07-08 by a tape-measured 1.697 m
+        # straight drive (8271 counts): 4874. This is ~26% below the parts-list
+        # estimate of 6610 (28 counts/motor-rev x 71.2 / 0.3016 m/rev) -- the
+        # real encoder/gear resolution or effective rolling diameter differs
+        # from nominal; the measured value is authoritative.
+        self.counts_per_meter = float(rospy.get_param("~counts_per_meter", 4874.0))
+        # EFFECTIVE track width for skid-steer yaw. Measured 2026-07-08: a
+        # compass-verified 192 deg CCW in-place spin gave 12510 differential
+        # counts -> 0.766 m, ~1.9x the ~0.41 m geometric wheelbase. The gap is
+        # wheel scrub (4 grippy wheels grinding sideways in a turn); it is
+        # surface-dependent, so yaw stays advisory (high covariance below).
+        self.track_width_m = float(rospy.get_param("~track_width_m", 0.766))
+        # Empirical (2026-07-08 spin test): driver A = RIGHT pair, driver B =
+        # LEFT pair -- A=+/B=- spun the base COUNTERCLOCKWISE (positive yaw in
+        # the z-up ROS/REP-103 frame ZED & Cartographer use), consistent with
+        # A=right/B=left and dyaw=(d_right-d_left)/track. Signs +1/+1: both
+        # sides count positive driving forward (confirmed by the creep test).
+        self.side_a_sign = float(rospy.get_param("~side_a_sign", 1.0))  # A = RIGHT pair
+        self.side_b_sign = float(rospy.get_param("~side_b_sign", 1.0))  # B = LEFT pair
         self.odom_topic = rospy.get_param("~odom_topic", "/wheel_odom")
         self.odom_frame = rospy.get_param("~odom_frame", "wheel_odom")
         self.base_frame = rospy.get_param("~base_frame", "vention_base_link")
@@ -226,6 +235,8 @@ class WheelOdomPublisher:
         db1 = _wrap_delta_u32(snap["b1"], base["b1"])
         db2 = _wrap_delta_u32(snap["b2"], base["b2"])
 
+        # Driver A = RIGHT pair, driver B = LEFT pair (see __init__). dyaw =
+        # (d_right - d_left)/track is positive for CCW, matching ZED/Cartographer.
         d_right = self.side_a_sign * (da1 + da2) / 2.0 / self.counts_per_meter
         d_left = self.side_b_sign * (db1 + db2) / 2.0 / self.counts_per_meter
 

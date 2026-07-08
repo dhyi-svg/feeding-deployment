@@ -55,8 +55,26 @@ artifact — powered controllers ack immediately and don't storm. Rerun the gate
 with motor power ON for the real (low) figure; the final-delivery PASS is valid
 either way.
 
-Remaining — needs you + motor power ON (each step below marked ⚑). Ping me if
-you'd like me to drive any of the powered checks over ssh once power is on.
+Powered validation + calibration DONE (2026-07-08, driven over ssh):
+
+- Powered bench: E-rate 8.8 Hz, `ok`=1.00 both sides, **0% command mangling**
+  (the motors-off 68% was purely the dead-controller retry artifact), final
+  stop delivery PASS.
+- Creep sign test: all four motors count positive → `side_a_sign=side_b_sign=+1`
+  (node defaults), rate ≈ commanded → units are counts/sec.
+- **`counts_per_meter` = 4874** — from an 8271-count drive tape-measured at
+  1.697 m (26% below the 6610 parts-list estimate; the BOM over-estimated
+  encoder/gear resolution or under-estimated effective rolling diameter).
+- **`track_width_m` = 0.766** — from a compass-verified 192° CCW in-place spin
+  (12510 differential counts); ~1.9x the geometric wheelbase, rest is scrub.
+  Both baked in as node defaults.
+- Spin direction (CCW → +yaw) confirms the A=right/B=left mapping and that
+  wheel-odom yaw matches the ZED/Cartographer (REP-103) convention.
+
+Remaining — needs motors on (marked ⚑): only the live `/wheel_odom` node check
+after a stack restart. x-forward and yaw signs are set to REP-103 from the
+compass test but worth a glance against ZED on the first live run (a
+world-frame cross-check the standalone calibration couldn't do).
 
 ## Key design facts (why things look the way they do)
 
@@ -160,6 +178,7 @@ Set the calibrated values as node params (or bake new defaults into
 | Firmware v7 | `src/feeding_deployment/control/base_controller/PacketSerialSetSpeed/PacketSerialSetSpeed.ino` |
 | Flasher (no avrdude needed — NUC can't run the 32-bit one) | `scripts/flash_optiboot.py` |
 | Bench tool | `scripts/bench_test_encoders.py` |
+| Calibration tool (straight/rotate drive) | `scripts/calibrate_wheel_odom.py` |
 | Host bridge (reader thread, echo-confirm) | `.../base_controller/vention_arduino_control.py` |
 | RPC | `.../base_controller/base_interface.py`, `base_client.py` |
 | ROS node | `.../base_controller/wheel_odom_publisher.py` |
