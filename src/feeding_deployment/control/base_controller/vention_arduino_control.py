@@ -25,8 +25,9 @@ import time
 import logging
 import argparse
 import errno
+import threading
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import serial
 import serial.tools.list_ports
@@ -59,13 +60,41 @@ class ArduinoSerialBridge:
     - connect/disconnect/reconnect
     - safe_call() wrapper for robust retry on EIO / timeouts
     - send_ab(a, b)
+    - a passive reader thread consuming the firmware's output stream:
+        * "E <millis> <a1> <a2> <b1> <b2> <okA> <okB>"  -- encoder snapshot
+          (firmware v7+; get_encoders() serves the latest one)
+        * "Parsed A=<a> B=<b>"  -- per-accepted-command echo, used by
+          VentionBase's echo-confirm re-send (a SoftwareSerial encoder read
+          on the Arduino can mangle an inbound command line; the missing echo
+          is how we detect that and re-send)
+        * "WARN ..."/"ERROR ..." -- firmware diagnostics, logged (throttled)
+          and counted. With v6 these were silently discarded.
+      The reader NEVER reconnects -- on any serial error it backs off and
+      re-attaches to whatever self.ser currently is; reconnects belong to
+      safe_call() alone (two reconnecting threads would fight over the port
+      and DTR-reset the Arduino twice).
     """
 
     def __init__(self, port_id: str, baud: int = 115200):
         self.port_id = port_id
         self.baud = baud
         self.ser: Optional[serial.Serial] = None
+
+        # Reader-thread state (all guarded by _state_lock).
+        self._state_lock = threading.Lock()
+        self._enc: Optional[Dict[str, Any]] = None  # latest E-line snapshot
+        self._enc_prev_millis: Optional[int] = None
+        self._resets = 0  # banner sightings + firmware-millis regressions
+        self._last_echo: Optional[Tuple[int, int]] = None
+        self._warn_unparseable = 0
+        self._warn_send_fail = 0
+        self._last_warn_log_wall = 0.0
+
         self.connection_status = self.connect()
+        self._reader_thread = threading.Thread(
+            target=self._reader_loop, name="arduino-reader", daemon=True
+        )
+        self._reader_thread.start()
 
     def _open(self) -> serial.Serial:
         s = serial.Serial(
@@ -145,13 +174,121 @@ class ArduinoSerialBridge:
                 raise
         raise last_exc
 
+    # ---- reader thread (passive; never reconnects) ----
+    def _reader_loop(self):
+        while True:
+            ser = self.ser
+            if ser is None:
+                time.sleep(0.2)
+                continue
+            try:
+                line = ser.readline()  # blocks up to the port timeout (0.2 s)
+            except Exception:
+                # Port closed/swapped mid-read (reconnect owns recovery).
+                time.sleep(0.2)
+                continue
+            if not line:
+                continue
+            if not line.endswith(b"\n"):
+                # readline() returns partial fragments on timeout; a truncated
+                # numeric field can still parse "successfully" -- drop it.
+                continue
+            text = line.decode("utf-8", errors="replace").strip()
+            if text:
+                try:
+                    self._handle_line(text)
+                except Exception as e:
+                    logger.debug(f"Arduino reader: bad line {text!r}: {e}")
+
+    def _handle_line(self, text: str):
+        if text.startswith("E "):
+            parts = text.split()
+            if len(parts) != 8:
+                return
+            try:
+                millis = int(parts[1])
+                a1, a2, b1, b2 = (int(p) for p in parts[2:6])
+                ok_a, ok_b = parts[6] == "1", parts[7] == "1"
+            except ValueError:
+                return
+            with self._state_lock:
+                # Firmware millis going backward == Arduino rebooted (DTR reset
+                # or power cycle): counts restarted at 0, consumers must
+                # re-baseline instead of integrating the jump as motion.
+                if self._enc_prev_millis is not None and millis < self._enc_prev_millis:
+                    self._resets += 1
+                self._enc_prev_millis = millis
+                self._enc = {
+                    "millis": millis,
+                    "a1": a1, "a2": a2, "b1": b1, "b2": b2,
+                    "ok_a": ok_a, "ok_b": ok_b,
+                    "wall": time.time(),
+                }
+        elif text.startswith("Parsed A="):
+            try:
+                a = int(text.split("A=", 1)[1].split()[0])
+                b = int(text.split("B=", 1)[1].split()[0])
+            except (IndexError, ValueError):
+                return
+            with self._state_lock:
+                self._last_echo = (a, b)
+        elif text.startswith("Ready"):
+            with self._state_lock:
+                self._resets += 1
+                self._enc_prev_millis = None
+                self._last_echo = None
+            logger.info(f"[{self.port_id}] Arduino banner: {text}")
+        elif text.startswith("WARN unparseable"):
+            with self._state_lock:
+                self._warn_unparseable += 1
+                n = self._warn_unparseable
+            self._log_firmware_warn(f"{text} (unparseable total={n})")
+        elif text.startswith("WARN") or text.startswith("ERROR"):
+            with self._state_lock:
+                self._warn_send_fail += 1
+                n = self._warn_send_fail
+            self._log_firmware_warn(f"{text} (send-fail total={n})")
+        else:
+            logger.debug(f"[{self.port_id}] Arduino: {text}")
+
+    def _log_firmware_warn(self, msg: str):
+        """Throttled: at most one firmware WARN/ERROR log per 2 s (a dead
+        controller emits several per send attempt); counters keep the truth."""
+        now = time.time()
+        if now - self._last_warn_log_wall >= 2.0:
+            self._last_warn_log_wall = now
+            logger.warning(f"[{self.port_id}] firmware: {msg}")
+
+    def get_encoders(self, max_age_s: float = 1.0) -> Optional[Dict[str, Any]]:
+        """Latest encoder snapshot, or None if never seen / older than
+        max_age_s (v6 firmware, serial down, or stream stalled)."""
+        with self._state_lock:
+            if self._enc is None:
+                return None
+            snap = dict(self._enc)
+            snap["resets"] = self._resets
+            snap["warn_unparseable"] = self._warn_unparseable
+            snap["warn_send_fail"] = self._warn_send_fail
+        age = time.time() - snap.pop("wall")
+        if age > max_age_s:
+            return None
+        snap["age_s"] = max(0.0, age)
+        return snap
+
+    def encoders_fresh(self, max_age_s: float = 1.0) -> bool:
+        with self._state_lock:
+            return self._enc is not None and (time.time() - self._enc["wall"]) <= max_age_s
+
+    def get_last_echo(self) -> Optional[Tuple[int, int]]:
+        with self._state_lock:
+            return self._last_echo
+
     # ---- low-level send ----
     def _write_line(self, payload: bytes):
         if self.ser is None:
             raise RuntimeError("Arduino serial not connected")
-        # Drop pending Arduino USB-serial prints to prevent host-side buffer buildup.
-        if self.ser.in_waiting:
-            self.ser.reset_input_buffer()
+        # NOTE: no reset_input_buffer() here anymore -- the reader thread
+        # consumes the firmware's output stream (E lines, echoes, WARNs).
         self.ser.write(payload)
         self.ser.flush()
 
@@ -184,11 +321,15 @@ class VentionMotorDriverChannel:
         self.set_speed(motor1_speed)
 
     def set_speed(self, speed: int):
-        if self.channel == "A":
-            self.base._setpoints.a = int(speed)
-        else:
-            self.base._setpoints.b = int(speed)
-        self.base._send_setpoints()
+        # Mutate + send under the base's send lock (see VentionBase motion
+        # commands) so this single-field update can't tear against a full
+        # (a, b) write from another thread.
+        with self.base._send_lock:
+            if self.channel == "A":
+                self.base._setpoints.a = int(speed)
+            else:
+                self.base._setpoints.b = int(speed)
+            self.base._send_setpoints()
 
     def stop(self):
         self.set_speed(0)
@@ -206,6 +347,13 @@ class VentionBase:
         self.bridge = ArduinoSerialBridge(port_id, baud)
         self._setpoints = ABCommand(a=0, b=0)
 
+        # Sends arrive from several threads (RPC per-connection threads,
+        # BaseInterface._cmd_monitor, bulldog): serialize the check-then-act on
+        # _last_sent, the (a, b) setpoint mutation, and the serial write.
+        # Created before anything that could touch it (incl. the channels'
+        # set_speed) so it always exists even on a failed connection.
+        self._send_lock = threading.RLock()
+
         # Keep your naming: base_r/base_l
         # Here: base_r -> Driver A, base_l -> Driver B
         self.base_r = VentionMotorDriverChannel("A", self)
@@ -219,53 +367,90 @@ class VentionBase:
         self._last_sent = None
         self._last_sent_time = 0.0
         self._min_send_period = 1.0 / 20.0  # 20 Hz
-        self._min_same_send_period = 1.0 / 1.0 # 1 Hz
+        # Same-setpoint refresh. 0.2 s (was 1.0 s): an encoder read on the
+        # Arduino (v7) can mangle an inbound command line -- SoftwareSerial RX
+        # masks interrupts and the USART FIFO is ~3 bytes -- and a mangled
+        # CHANGED value (including a stop) would otherwise not be repeated for
+        # a full second. Echo-confirm below is the primary fix; this bounds the
+        # worst case even without it.
+        self._min_same_send_period = 1.0 / 5.0  # 5 Hz
+        # If the firmware hasn't echoed ("Parsed A=.. B=..") our last send
+        # within this window, assume the line was mangled and re-send.
+        self._echo_resend_after = 0.1  # s
         # Start stopped
         self._send_setpoints()
 
     def _send_setpoints(self):
-        now = time.time()
-        ab = (self._setpoints.a, self._setpoints.b)
+        with self._send_lock:
+            now = time.time()
+            ab = (self._setpoints.a, self._setpoints.b)
 
-        # only send if changed
-        if self._last_sent == ab and (now - self._last_sent_time) < self._min_same_send_period:
-            return
+            # Echo-confirm (only meaningful when the v7 firmware is streaming,
+            # i.e. encoder lines are fresh): if our last send was never
+            # acknowledged with a "Parsed" echo, the line was likely mangled by
+            # a concurrent SoftwareSerial transaction -- re-send the current
+            # setpoints now, bypassing the dedup/rate gates (bounded to 10 Hz
+            # by _echo_resend_after since every re-send restamps
+            # _last_sent_time).
+            resend = False
+            if (
+                self._last_sent is not None
+                and (now - self._last_sent_time) > self._echo_resend_after
+                and self.bridge.encoders_fresh(1.0)
+                and self.bridge.get_last_echo() != self._last_sent
+            ):
+                resend = True
+                logger.warning(
+                    f"[Arduino] echo missing for A={self._last_sent[0]} "
+                    f"B={self._last_sent[1]} -- re-sending A={ab[0]} B={ab[1]}"
+                )
 
-        # rate limit
-        if (now - self._last_sent_time) < self._min_send_period:
-            return
+            if not resend:
+                # only send if changed
+                if self._last_sent == ab and (now - self._last_sent_time) < self._min_same_send_period:
+                    return
+                # rate limit
+                if (now - self._last_sent_time) < self._min_send_period:
+                    return
 
-        logger.debug(f"[Arduino] -- Send A={ab[0]} B={ab[1]}")
-        self.bridge.send_ab(ab[0], ab[1])
+            logger.debug(f"[Arduino] -- Send A={ab[0]} B={ab[1]}")
+            self.bridge.send_ab(ab[0], ab[1])
 
-        self._last_sent = ab
-        self._last_sent_time = now
+            self._last_sent = ab
+            self._last_sent_time = now
     # --- motion commands (same idea as your old code) ---
+    # The (a, b) pair is mutated UNDER _send_lock so a concurrent writer
+    # (e.g. an RPC set_speeds racing BaseInterface._cmd_monitor's stop) cannot
+    # observe or send a torn half-and-half pair (a pivot). _send_setpoints
+    # re-acquires the same RLock, so nesting is fine.
     def translate(self, linear_speed: int):
         """
         '+' forward, '-' backward.
         Both drivers same sign for translation.
         """
-        self._setpoints.a = int(linear_speed)
-        self._setpoints.b = int(linear_speed)
-        self._send_setpoints()
+        with self._send_lock:
+            self._setpoints.a = int(linear_speed)
+            self._setpoints.b = int(linear_speed)
+            self._send_setpoints()
 
     def rotate(self, angular_speed: int):
         """
         '+' CCW, '-' CW (in-place).
         Driver A gets +w, Driver B gets -w (matches your old logic).
         """
-        self._setpoints.a = int(angular_speed)
-        self._setpoints.b = int(-angular_speed)
-        self._send_setpoints()
+        with self._send_lock:
+            self._setpoints.a = int(angular_speed)
+            self._setpoints.b = int(-angular_speed)
+            self._send_setpoints()
 
     def set_speeds(self, speed_a: int, speed_b: int):
         """
         Directly set different speeds to the two motor drivers.
         """
-        self._setpoints.a = int(speed_a)
-        self._setpoints.b = int(speed_b)
-        self._send_setpoints()
+        with self._send_lock:
+            self._setpoints.a = int(speed_a)
+            self._setpoints.b = int(speed_b)
+            self._send_setpoints()
 
     def stop(self):
         try:
@@ -280,12 +465,21 @@ class VentionBase:
     def reconnect(self):
         return self.bridge.reconnect()
 
-    def read_encoders(self) -> Tuple[None, None]:
+    def read_encoders(self) -> Optional[Dict[str, Any]]:
         """
-        Not supported here (Arduino-only send bridge).
-        Keeping method to preserve class interface.
+        Latest encoder snapshot streamed by firmware v7 ("E ..." lines), or
+        None if there is no fresh data (v6 firmware, serial down, or stream
+        stalled >1 s).
+
+        Dict keys: millis (firmware clock, ms), a1/a2/b1/b2 (uint32 counts,
+        driver A = right pair, driver B = left pair; wrap-aware deltas are the
+        consumer's job), ok_a/ok_b (that side's last read succeeded -- False
+        also while a dead controller is being retried at 1 Hz), age_s
+        (NUC-side staleness; never compare millis across machines), resets
+        (Arduino reboot counter -- on change, re-baseline counts), and
+        warn_unparseable / warn_send_fail firmware diagnostics counters.
         """
-        return None, None
+        return self.bridge.get_encoders(max_age_s=1.0)
 
 
 def list_serial_ports():
