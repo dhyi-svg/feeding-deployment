@@ -311,97 +311,103 @@ observed overshoot cause (§8 bug #8, §11).
 
 ## 7. Parameter catalog
 
-Every exposed knob with its current value and location. **★ = tune this for the
+Every exposed knob with its current value, location, and **what it does**. **★ = tune this for the
 current symptoms.** "inherited" = not set in-repo, takes the upstream default (verify
 against the installed package version).
 
 ### 7.1 Cartographer — `config/vention_2lidar_localization.lua`
-| Param | Value | Line | Note |
+| Param | Value | Line | What it does |
 |---|---|---|---|
-| ★ `POSE_GRAPH.optimize_every_n_nodes` | 25 | :62 | correction cadence (nodes, not seconds); 90 in mapping lua |
-| ★ `motion_filter.max_distance_meters` | 0.05 | :50 | node emitted every 5 cm driving |
-| ★ `motion_filter.max_time_seconds` | 0.5 | :49 | node every 0.5 s parked |
-| ★ `motion_filter.max_angle_radians` | rad(0.5) | :51 | |
-| ★ `use_online_correlative_scan_matching` | **false** (inherited) | — | no CSM to seed Ceres at speed |
-| ★ `constraint_builder.fast_correlative_scan_matcher.linear_search_window` | **7.0 m** (inherited) | — | the "7 m search radius" (`navigation_debug.md:7`) |
-| `max_range` / `missing_data_ray_length` | 12.0 / 12.0 | :41-42 | trimmed from 30 |
-| `min_range` | 0.15 | :40 | |
-| `ceres_scan_matcher.translation_weight` / `rotation_weight` | 10 / 40 | :53-54 | |
-| `pure_localization_trimmer.max_submaps_to_keep` | 3 | :45-47 | localization-only |
-| `use_imu_data` | false | :39 | |
-| `pose_publish_period_sec` | 0.01 (100 Hz) | :27 | |
-| `submap_publish_period_sec` | 0.3 | :26 | |
-| `lookup_transform_timeout_sec` | 0.2 | :25 | |
-| `global_constraint_search_after_n_seconds` | 10 (inherited) | — | delays first global relocalization |
-| `constraint_builder.min_score` / `global_localization_min_score` | 0.55 / 0.6 (inherited) | — | |
-| `MAP_BUILDER.num_background_threads` | 4 (inherited) | — | |
+| ★ `POSE_GRAPH.optimize_every_n_nodes` | 25 | :62 | Runs the pose-graph optimization that recomputes `map→odom` every N inserted scan nodes — the *only* moment localization corrections are applied. Lower = more frequent corrections (counts **nodes**, not seconds; 90 in the mapping lua). |
+| ★ `motion_filter.max_distance_meters` | 0.05 | :50 | A new scan node is inserted once the robot has moved this far — throttles node rate by distance (a node every 5 cm driving). |
+| ★ `motion_filter.max_time_seconds` | 0.5 | :49 | …or once this much time passes, so nodes keep forming while parked (every 0.5 s stationary). |
+| ★ `motion_filter.max_angle_radians` | rad(0.5) | :51 | …or once the robot has rotated this much; whichever of distance/time/angle trips first makes a node. |
+| ★ `use_online_correlative_scan_matching` | **false** (inherited) | — | Coarse brute-force scan matcher that seeds Ceres so matching survives a poor odom prior. Off ⇒ Ceres leans on the odom prior alone — fragile at speed. |
+| ★ `constraint_builder.fast_correlative_scan_matcher.linear_search_window` | **7.0 m** (inherited) | — | Half-width of the box the loop-closure/relocalization matcher searches around the prior. Larger tolerates bigger error but is slower and more alias-prone (the "7 m search radius"). |
+| `max_range` / `missing_data_ray_length` | 12.0 / 12.0 | :41-42 | Farthest lidar return used / range at which a no-return ray is painted as free space (trimmed from 30). |
+| `min_range` | 0.15 | :40 | Returns closer than this are discarded (self-hits / too near). |
+| `ceres_scan_matcher.translation_weight` / `rotation_weight` | 10 / 40 | :53-54 | How hard the local Ceres match pulls toward the scan vs the odom prior, in translation / rotation (higher = trust the scan more). |
+| `pure_localization_trimmer.max_submaps_to_keep` | 3 | :45-47 | In localization mode, keep only the N most recent submaps — bounds memory/compute (localization-only). |
+| `use_imu_data` | false | :39 | Whether the 2D trajectory builder fuses IMU for orientation/gravity; off ⇒ lidar + odom only (Cartographer then has no gravity reference and cannot see pitch/roll). |
+| `pose_publish_period_sec` | 0.01 (100 Hz) | :27 | How often the estimated pose / `map→odom` TF is published. |
+| `submap_publish_period_sec` | 0.3 | :26 | How often submaps are published (visualization / constraint building). |
+| `lookup_transform_timeout_sec` | 0.2 | :25 | How long Cartographer blocks waiting for a required TF before abandoning that lookup. |
+| `global_constraint_search_after_n_seconds` | 10 (inherited) | — | Delay after startup before the first *global* (full-map) relocalization search runs. |
+| `constraint_builder.min_score` / `global_localization_min_score` | 0.55 / 0.6 (inherited) | — | Match-score thresholds to accept a local / global loop-closure constraint; higher = stricter, fewer false matches. |
+| `MAP_BUILDER.num_background_threads` | 4 (inherited) | — | Worker threads for pose-graph optimization and constraint building. |
 
 ### 7.2 ZED wrapper — `zed_wrapper` defaults (overridden bits in `sensors.launch:84-88`)
-| Param | Value | Note |
+| Param | Value | What it does |
 |---|---|---|
-| ★ `pos_tracking/area_memory` | **true** (default) | loop closure = relocalization jump source (bug #1) |
-| ★ `general/pub_frame_rate` | 15.0 | published odom/image rate; USB-bandwidth lever |
-| ★ `pos_tracking/two_d_mode` | false | commented-out attempt in `base_sensors.launch:101-103` |
-| `general/grab_resolution` / `grab_frame_rate` | HD720 / 30 | |
-| `depth/depth_mode` | ULTRA | heavy; consider PERFORMANCE for USB headroom |
-| `pos_tracking/imu_fusion` | true | VIO |
-| `pos_tracking/publish_tf` / `publish_map_tf` | true / **false** | ZED owns odom→base only (`sensors.launch:84-85`) |
-| `pos_tracking/base_frame` | `zed_mini_base_link` | ⚠ wrapper's own `general/base_frame` stays `base_link` (latent) |
+| ★ `pos_tracking/area_memory` | **true** (default) | Enables the ZED's spatial memory (loop closure / relocalization) — lets VIO snap back to remembered places, but each snap is a discrete pose jump (bug #1). |
+| ★ `general/pub_frame_rate` | 15.0 | Rate the wrapper publishes images/odom at (may be below the grab rate); lowering it cuts USB/CPU load. |
+| ★ `pos_tracking/two_d_mode` | false | Constrains VIO to SE(2), pinning z / pitch / roll to fixed values. On ⇒ no vertical or tilt drift — the right choice for a ground robot (commented-out in `base_sensors.launch:101-103`). |
+| `general/grab_resolution` / `grab_frame_rate` | HD720 / 30 | Resolution / FPS the SDK captures from the camera sensor. |
+| `depth/depth_mode` | ULTRA | Depth-computation quality preset; higher = more GPU/USB. Not needed for VIO/nav (consider PERFORMANCE for USB headroom). |
+| `pos_tracking/imu_fusion` | true | Fuse the built-in IMU with visual tracking (true VIO) and derive the gravity/vertical reference from it. |
+| `pos_tracking/publish_tf` / `publish_map_tf` | true / **false** | Whether the wrapper broadcasts `odom→base` / `map→odom` TF. map_tf is off so Cartographer owns `map→odom` (`sensors.launch:84-85`). |
+| `pos_tracking/base_frame` | `zed_mini_base_link` | The child frame the ZED tracks and publishes odom for (⚠ the wrapper's own `general/base_frame` stays `base_link` — latent mismatch). |
 
 ### 7.3 odom sanitizer — `config/nav/odom_pipeline.yaml`
-| Param | Value | Note |
+| Param | Value | What it does |
 |---|---|---|
-| ★ `jump_accept_frames` | 5 | adopt-after-N; the leak lever (bug #2) |
-| `enable_sanitizer` / `enable_windowed_diff` | true / true | ablation off = original behavior |
-| `max_lin_vel` / `max_ang_vel` | 0.5 / 1.5 | teleport gate |
-| `vel_diff_window` | 0.08 s | TEB velocity noise floor |
+| ★ `jump_accept_frames` | 5 | Consecutive self-consistent raw frames required before a *sustained* pose shift is accepted as a real relocalization instead of rejected as a teleport — the leak lever behind bug #2. |
+| `enable_sanitizer` / `enable_windowed_diff` | true / true | Master switches: gate single-frame teleports before republishing / compute the TEB twist by windowed differencing. Off = original pass-through. |
+| `max_lin_vel` / `max_ang_vel` | 0.5 / 1.5 | Teleport gate: a frame-to-frame pose jump implying speed above this (m/s / rad/s) is dropped and the last good pose is held. |
+| `vel_diff_window` | 0.08 s | Time span over which the sanitized pose is differenced to make the velocity feedback; larger = smoother but laggier twist. |
 
 ### 7.4 TEB — `config/nav/teb_local_planner.yaml`
-| Param | Value | Line | Note |
+| Param | Value | Line | What it does |
 |---|---|---|---|
-| ★ `min_obstacle_dist` | 0.01 | :54 | **below one 0.05 costmap cell** → grazing/infeasible (bug #5) |
-| ★ `weight_viapoint` | 1.0 | :93 | pull to (jittery) plan; was 5.0 |
-| ★ `weight_obstacle` | 100.0 | :89 | |
-| ★ `max_global_plan_lookahead_dist` | 1.0 | :15 | longer band averages over yaw jitter |
-| `max_vel_x` / `_backwards` | 0.4 / 0.4 | :25-26 | (was 0.2 in the mined runs) |
-| `max_vel_theta` | 0.5 | :28 | |
-| `acc_lim_x` / `acc_lim_theta` | 0.7 / 1.5 | :29-30 | **planner-model only; actuator has no ramp** |
-| `dt_ref` / `dt_hysteresis` | 0.2 / 0.1 | :10-11 | |
-| `xy_goal_tolerance` / `yaw_goal_tolerance` | 0.05 / 0.05 | :42-43 | |
-| `enable_homotopy_class_planning` | true | :101 | multi-route; `max_number_classes=2` |
-| `oscillation_recovery` (+ v/omega eps, durations) | true / 0.1 / 0.1 / 10 s | :126-130 | |
-| `feasibility_check_no_poses` | 1 | :19 | (2/4 in mined runs) |
+| ★ `min_obstacle_dist` | 0.01 | :54 | Minimum distance the optimizer keeps the footprint from any obstacle. At 0.01 m (below one 0.05 m costmap cell) trajectories graze cells the feasibility check calls collision ⇒ grazing/infeasible (bug #5). |
+| ★ `weight_viapoint` | 1.0 | :93 | How hard the trajectory is pulled onto the global plan's via-points; higher = hug the plan (and its jitter) more tightly (was 5.0). |
+| ★ `weight_obstacle` | 100.0 | :89 | Penalty weight for approaching obstacles; higher = stronger standoff/avoidance. |
+| ★ `max_global_plan_lookahead_dist` | 1.0 | :15 | How far along the global plan TEB optimizes at once; longer averages over plan/yaw jitter but costs more compute. |
+| `max_vel_x` / `_backwards` | 0.4 / 0.4 | :25-26 | Max forward / reverse linear speed the optimizer will command (was 0.2 in the mined runs). |
+| `max_vel_theta` | 0.5 | :28 | Max angular (yaw) rate the optimizer will command. |
+| `acc_lim_x` / `acc_lim_theta` | 0.7 / 1.5 | :29-30 | Linear / angular acceleration limits used to shape the trajectory (planner-model only — the actuator has no ramp). |
+| `dt_ref` / `dt_hysteresis` | 0.2 / 0.1 | :10-11 | Target time spacing between trajectory poses / hysteresis before the elastic band is resized. |
+| `xy_goal_tolerance` / `yaw_goal_tolerance` | 0.05 / 0.05 | :42-43 | Position / heading error at which the goal is declared reached. |
+| `enable_homotopy_class_planning` | true | :101 | Explore multiple distinct routes (e.g. left vs right around an obstacle) in parallel and pick the best (`max_number_classes=2`). |
+| `oscillation_recovery` (+ v/omega eps, durations) | true / 0.1 / 0.1 / 10 s | :126-130 | Detect back-and-forth non-progress (speed below the eps for the duration) and trigger a recovery. |
+| `feasibility_check_no_poses` | 1 | :19 | How many poses along the candidate trajectory are collision-checked before it is accepted (2/4 in the mined runs). |
 
 ### 7.5 Costmaps — `config/nav/{costmap_common,global_costmap,local_costmap}.yaml`
-| Param | Value | Note |
+| Param | Value | What it does |
 |---|---|---|
-| `footprint` | [[0.37,0.295],[0.37,−0.295],[−0.37,−0.295],[−0.37,0.295]] | 0.74×0.59 m |
-| ★ `inflation_layer.inflation_radius` | **0.05 in common, overridden to 0.5** by local/global | the 0.05 is dead config (bug #13) |
-| `inflation_layer.cost_scaling_factor` | 5.0 | local/global |
-| `obstacle_range` / `raytrace_range` | 8.0 / 10.0 | common |
-| `local_costmap` size / res / update / publish | 8×8 m / 0.05 / 10 Hz / 5 Hz | rolling, `odom` frame |
-| `global_costmap` update / publish | 2 Hz / 1 Hz | static, `map` frame |
-| `transform_tolerance` | 0.5 | both |
+| `footprint` | [[0.37,0.295],[0.37,−0.295],[−0.37,−0.295],[−0.37,0.295]] | Robot outline (polygon in the base frame) used for collision checking and inflation (0.74×0.59 m). |
+| ★ `inflation_layer.inflation_radius` | **0.05 in common, overridden to 0.5** by local/global | Distance obstacles are grown with a decaying cost cushion so the planner keeps clear of them (the 0.05 in common is dead config — bug #13). |
+| `inflation_layer.cost_scaling_factor` | 5.0 | Exponential rate at which the inflated cost decays with distance; higher = cost falls off faster (thinner effective cushion). |
+| `obstacle_range` / `raytrace_range` | 8.0 / 10.0 | Max sensor range at which to *mark* obstacles / to *clear* free space along a ray. |
+| `local_costmap` size / res / update / publish | 8×8 m / 0.05 / 10 Hz / 5 Hz | Rolling-window costmap extent, cell size, and refresh / publish rates (`odom` frame). |
+| `global_costmap` update / publish | 2 Hz / 1 Hz | Refresh / publish rates of the static map-frame costmap. |
+| `transform_tolerance` | 0.5 | How stale a TF may be before the costmap treats it as invalid and stops updating. |
 
 ### 7.6 cmd_vel bridge — `launch/navigation.launch:46-51`
-| Param | Value | Note |
+| Param | Value | What it does |
 |---|---|---|
-| ★ `min_move_units` | 250 | stiction floor; = 0.417 rad/s / 0.3125 m/s min (bug #4) |
-| `linear_scale` / `angular_scale` | 800 / 600 | m/s, rad/s → counts/s |
-| `w_deadband` | 0.03 (default) | angular deadband |
-| `max_speed_units` | 2500 | wheel clamp |
+| ★ `min_move_units` | 250 | Ratio-preserving stiction floor: if the dominant wheel command is below this, both wheels are scaled up to it so slow commands still move — but this floors in-place turns to ~0.417 rad/s and forward creep to ~0.3125 m/s (bug #4). |
+| `linear_scale` / `angular_scale` | 800 / 600 | Conversion gain from m/s / rad/s into motor "speed units". |
+| `w_deadband` | 0.03 (default) | Angular commands whose magnitude is below this are zeroed, to avoid sign-flip jitter near zero. |
+| `max_speed_units` | 2500 | Per-wheel command clamp (hardware/safety ceiling). |
 
 ### 7.7 move_base — `launch/navigation.launch:21-28`
-| Param | Value | Note |
+| Param | Value | What it does |
 |---|---|---|
-| ★ `planner_frequency` | 1 | global replan Hz; comment intends 0.2 (bug #3) |
-| `controller_frequency` | 10 | TEB Hz |
-| `planner_patience` / `controller_patience` | 15 / 15 | |
+| ★ `planner_frequency` | 1 | How often the global planner replans, in Hz (0 = only on a new goal). Each replan re-expresses the plan's orientation from the current estimate, re-injecting Cartographer yaw jitter (bug #3; comment intends 0.2). |
+| `controller_frequency` | 10 | How often the local planner (TEB) runs and publishes `/cmd_vel`, in Hz. |
+| `planner_patience` / `controller_patience` | 15 / 15 | How long move_base waits for a valid global plan / valid control before invoking recovery behaviors (s). |
 
 ### 7.8 zed_health_monitor — `launch/navigation.launch:62-89`
-`max_lin_vel=0.5`, `max_ang_vel=1.5`, `recovery_stable_s=2.0`, `enable_yank_channel=true`,
-`yank_lin_m=0.5`, `yank_ang_rad=0.4`, `yank_settle_s=5.0`, `release_mo_rate_rad_s=0.03`,
-`max_hold_s=45.0`.
+| Param | Value | What it does |
+|---|---|---|
+| `max_lin_vel` / `max_ang_vel` | 0.5 / 1.5 | Jump channel: raw ZED odom implying a speed above this (m/s / rad/s) is flagged as VIO divergence and holds the base. |
+| `recovery_stable_s` | 2.0 | How long tracking must be continuously healthy again before a hold is released. |
+| `enable_yank_channel` | true | Enable the `map→odom` "yank" detector for Cartographer relocalization/alias jumps. |
+| `yank_lin_m` / `yank_ang_rad` | 0.5 / 0.4 | A `map→odom` step larger than this (m / rad) counts as a yank ⇒ hold the base + clear move_base costmaps. |
+| `yank_settle_s` | 5.0 | Settle time after a yank before release is considered (pose-graph snaps ping-pong). |
+| `release_mo_rate_rad_s` | 0.03 | Don't release while `map→odom` yaw is still moving faster than this (rad/s). |
+| `max_hold_s` | 45.0 | Escape hatch: maximum hold duration before release is forced. |
 
 ---
 
