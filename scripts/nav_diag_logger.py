@@ -40,8 +40,11 @@ Writes to system_logs/navlog_<stamp>/:
                         (quantifies TEB path overshoot instead of inferring it)
   usb_dmesg.log         kernel USB/xHCI/Thunderbolt/reset lines (best-effort;
                         the open ZED corrupted-frame cause)
-  trigger_<t>_<r>.bag   short rosbag of raw odom/imu/tf/scan auto-recorded when a
-                        hold/yank/tilt/infeasible/reset fires (full-fidelity)
+  trigger_<t>_<r>.bag   short rosbag of raw odom/imu/tf(/scan) auto-recorded when a
+                        hold/yank/tilt/infeasible/reset fires (full-fidelity; scans
+                        via ~bag_include_scans, default true; cap 6 x 15 s)
+  map.pgm / map.yaml    the /map grid this run localized against (map_server
+                        format) -- makes the log self-describing about its map
 
 Orientation is now logged everywhere it was previously yaw-only: odom.csv and
 sanitized.csv carry roll,pitch (+ odom cov_trace); tf.csv carries ob_roll,ob_pitch
@@ -89,14 +92,18 @@ ORIGIN_RESET_M = 0.50     # prev pose this far out, now ~origin = ZED/odom resta
 RPC_SLOW_S = 0.05         # set_speeds RPC round-trip above this = flagged
 GPU_SAMPLE_EVERY = 5      # sample nvidia-smi every Nth cb_slow tick (~5 s)
 NODE_CHECK_EVERY = 15     # diff the ros node set every Nth cb_slow tick (~15 s)
-TRIGGER_BAG_DURATION_S = 20
+TRIGGER_BAG_DURATION_S = 15
 TRIGGER_BAG_MIN_INTERVAL_S = 45.0
-TRIGGER_BAG_MAX = 12      # cap triggered bags per run (disk guard)
+TRIGGER_BAG_MAX = 6       # cap triggered bags per run (disk guard)
 TRIGGER_BAG_ON = ("hold_assert", "map_odom_yank", "odom_tilt", "teb_infeasible",
                   "odom_origin_reset")
+# Base topics (small) always in a triggered bag. Lidar scans are the size hog
+# (~2-5 MB/bag), appended only when ~bag_include_scans (default true) -- drop
+# them when the concern is tilt/gravity (odom+imu+tf suffice).
 TRIGGER_BAG_TOPICS = ("/zed_mini/zed_node/odom /zed_mini/zed_node/imu/data /tf /tf_static "
                       "/nav_safety_hold /nav_safety_hold_reason /cmd_vel /cmd_vel_teleop "
-                      "/wheel_odom /lidar_l/scan /lidar_r/scan")
+                      "/wheel_odom")
+TRIGGER_BAG_SCAN_TOPICS = "/lidar_l/scan /lidar_r/scan"
 
 # "zed" also matches zed_health_monitor + zed_pose_to_odom_feedback (sanitizer);
 # shared_autonomy/cmd_vel_bridge carry the hold pause/resume + gating lines.
@@ -211,6 +218,8 @@ class NavDiagLogger:
         self.bag_procs = []              # in-flight triggered rosbag record procs
         self.bag_count = 0
         self.last_bag = 0.0
+        self.bag_include_scans = bool(rospy.get_param("~bag_include_scans", True))
+        self.map_saved = False           # /map -> map.pgm/map.yaml written once
 
         rospy.Subscriber("/zed_mini/zed_node/odom", Odometry, self.cb_odom, queue_size=100)
         rospy.Subscriber("/zed_mini/zed_node/odom_sanitized", Odometry, self.cb_san,
@@ -232,6 +241,9 @@ class NavDiagLogger:
         rospy.Subscriber("/move_base/local_costmap/costmap_updates", OccupancyGridUpdate,
                          self.cb_grid_update, queue_size=10)
         rospy.Subscriber("/move_base/NavfnROS/plan", Path, self.cb_plan, queue_size=5)
+        # Latched occupancy grid the run localized against -> saved once as
+        # map.pgm/map.yaml so the log is self-describing about its map.
+        rospy.Subscriber("/map", OccupancyGrid, self.cb_map, queue_size=1)
         rospy.Subscriber("/zed_mini/zed_node/imu/data", Imu, self.cb_imu, queue_size=200)
         rospy.Subscriber("/lidar_l/scan", LaserScan,
                          lambda m: self.scan_n.__setitem__(0, self.scan_n[0] + 1),
@@ -290,6 +302,21 @@ class NavDiagLogger:
             except Exception:
                 snap[ns] = "unavailable"
                 complete = False
+        # Which map cartographer localized against (load_state_filename is a
+        # cartographer_node command-line arg, not a rosparam) -- backup identity
+        # for the offline plotter if the live /map wasn't captured.
+        mapfile = ""
+        try:
+            out = subprocess.check_output(["pgrep", "-af", "cartographer_node"],
+                                          stderr=subprocess.DEVNULL).decode()
+            for line in out.splitlines():
+                toks = line.replace("=", " ").split()
+                for i, t in enumerate(toks):
+                    if t == "-load_state_filename" and i + 1 < len(toks):
+                        mapfile = toks[i + 1]
+        except Exception:
+            pass
+        snap["_meta"]["cartographer_load_state_filename"] = mapfile
         with open(os.path.join(self.outdir, "params_snapshot.json"), "w") as f:
             json.dump(snap, f, indent=1, default=str)
         # Configs not on the param server (cartographer lua, nav yamls, launch)
@@ -464,10 +491,13 @@ class NavDiagLogger:
         self.bag_count += 1
         prefix = os.path.join(self.outdir, "trigger_%d_%s" %
                               (int(now), reason.replace("/", "_")[:20]))
+        topics = TRIGGER_BAG_TOPICS
+        if self.bag_include_scans:
+            topics = topics + " " + TRIGGER_BAG_SCAN_TOPICS
         try:
             p = subprocess.Popen(
                 "rosbag record -O %s --duration=%d %s" %
-                (prefix, TRIGGER_BAG_DURATION_S, TRIGGER_BAG_TOPICS),
+                (prefix, TRIGGER_BAG_DURATION_S, topics),
                 shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.bag_procs.append(p)
             self.f_ev.write("%.3f,trigger_bag,%d,%s\n" %
@@ -661,6 +691,41 @@ class NavDiagLogger:
             "%.3f" % ob_age if ob_age is not None else "",
             "%.4f,%.4f,%.4f" % mb if mb else ",,",
             "%.4f,%.4f" % ob_rp if ob_rp else ","))
+
+    # ---- localization map: capture the grid this run localized against -------
+    def cb_map(self, msg):
+        if self.map_saved:
+            return
+        try:
+            self._save_occupancy_grid(msg)
+            self.map_saved = True
+            rospy.loginfo("nav_diag_logger: saved map.pgm/map.yaml (%dx%d @ %.3fm)",
+                          msg.info.width, msg.info.height, msg.info.resolution)
+        except Exception as e:  # noqa: BLE001
+            rospy.logwarn("nav_diag_logger: failed to save /map: %s", e)
+
+    def _save_occupancy_grid(self, msg):
+        """Write the OccupancyGrid as a map_server pgm+yaml (trinary: occupied=0,
+        free=254, unknown=205). PGM rows run top=+y down, so y is flipped."""
+        W, H = msg.info.width, msg.info.height
+        res = msg.info.resolution
+        ox, oy = msg.info.origin.position.x, msg.info.origin.position.y
+        oyaw = yaw_from_quat(msg.info.origin.orientation)
+        data = msg.data
+        lut = {v: (0 if v >= 65 else (254 if 0 <= v <= 20 else 205))
+               for v in range(-1, 101)}
+        px = bytearray(W * H)
+        for r in range(H):
+            my = H - 1 - r  # PGM top row = highest map y
+            row = data[my * W:(my + 1) * W]
+            px[r * W:(r + 1) * W] = bytes(lut.get(v, 205) for v in row)
+        with open(os.path.join(self.outdir, "map.pgm"), "wb") as f:
+            f.write(("P5\n%d %d\n255\n" % (W, H)).encode())
+            f.write(bytes(px))
+        with open(os.path.join(self.outdir, "map.yaml"), "w") as f:
+            f.write("image: map.pgm\nresolution: %.6f\n" % res)
+            f.write("origin: [%.6f, %.6f, %.6f]\n" % (ox, oy, oyaw))
+            f.write("negate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.196\n")
 
     # ---- local costmap: phantom-obstacle evidence ---------------------------
     def cb_grid(self, msg):
