@@ -7,12 +7,12 @@ TebLocalPlannerROS:
   # Trajectory
   # =====================================================================
   teb_autosize: true
-  dt_ref: 0.3
+  dt_ref: 0.15 # changed from 0.3 -> 0.2 (Bohan: Jul 8, 2026)
   dt_hysteresis: 0.1
   max_samples: 500
   global_plan_overwrite_orientation: true
   allow_init_with_backwards_motion: true
-  max_global_plan_lookahead_dist: 1.5 # was 1.0; longer band averages over map->odom yaw jitter instead of chasing it (2.0 walked back to keep the 10 Hz control loop cheap)
+  max_global_plan_lookahead_dist: 1.0 # was 1.0; longer band averages over map->odom yaw jitter instead of chasing it (2.0 walked back to keep the 10 Hz control loop cheap)
   global_plan_viapoint_sep: 0.3
   global_plan_prune_distance: 1.0
   exact_arc_length: false
@@ -22,8 +22,8 @@ TebLocalPlannerROS:
   # =====================================================================
   # Robot kinematics (must match your physical limits + diff-drive model)
   # =====================================================================
-  max_vel_x: 0.3
-  max_vel_x_backwards: 0.3
+  max_vel_x: 0.4
+  max_vel_x_backwards: 0.4
   max_vel_y: 0.0
   max_vel_theta: 0.5
   acc_lim_x: 0.7
@@ -90,7 +90,7 @@ TebLocalPlannerROS:
   weight_inflation: 0.2
   weight_dynamic_obstacle: 10.0
   weight_dynamic_obstacle_inflation: 0.2
-  weight_viapoint: 1.0 # was 5.0; strong pull to the jittering global plan drove left/right hunting. Side effect: more corner-cutting near obstacles (companion fix if resets increase: min_obstacle_dist 0.01 -> 0.05)
+  weight_viapoint: 5.0 # was 5.0; strong pull to the jittering global plan drove left/right hunting. Side effect: more corner-cutting near obstacles (companion fix if resets increase: min_obstacle_dist 0.01 -> 0.05)
   weight_adapt_factor: 2.0
 
   # =====================================================================
@@ -98,7 +98,7 @@ TebLocalPlannerROS:
   # Lets TEB consider multiple distinct routes (left/right around obstacle)
   # in parallel. Big win for cluttered/narrow environments.
   # =====================================================================
-  enable_homotopy_class_planning: false
+  enable_homotopy_class_planning: true # chagned from false -> true (Jul 8, 2026)
   enable_multithreading: true
   max_number_classes: 2
   selection_cost_hysteresis: 1.0

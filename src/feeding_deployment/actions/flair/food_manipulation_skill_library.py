@@ -167,7 +167,8 @@ class FoodManipulationSkillLibrary:
         food_base = base_to_camera_transform @ food_base
         print("Depth to skewer: ", food_base[2,3] - skewering_depth)
         print("Plate height: ", self.plate_height)
-        food_base[2,3] = max(food_base[2,3] - skewering_depth, self.plate_height) 
+        # food_base[2,3] = max(food_base[2,3] - skewering_depth, self.plate_height) 
+        food_base[2,3] = self.plate_height
         # magic number for skewering offset
         food_base[0,3] += 0.01 # positive moves away from the robot
         food_base[1,3] += 0.005 # positive moves left from the robot

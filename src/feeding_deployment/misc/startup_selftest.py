@@ -120,7 +120,10 @@ def test_transfer_button(timeout_s):
     print("  and showing the 'Waiting for button press' prompt (as the real transfer does).")
     print(f"  >>> The iPad should show 'Waiting for button press'; press the button (timeout {timeout_s:.0f}s) ...")
 
-    to_robot = rospy.Publisher(ROBOT_TO_WEBAPP_TOPIC, String, queue_size=1)
+    # queue_size must cover the jump+arm+expl burst below: at 1, rospy's outbound
+    # queue drops the older messages and only 'explanation' reaches subscribers
+    # (the arm then only gets through by luck). WebInterface uses 10 for this topic.
+    to_robot = rospy.Publisher(ROBOT_TO_WEBAPP_TOPIC, String, queue_size=10)
     pressed = {"ok": False}
 
     def on_msg(msg):
