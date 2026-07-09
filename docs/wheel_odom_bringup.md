@@ -203,8 +203,10 @@ rosrun feeding_deployment drift_lock.py
 Watching the health monitor (included by default, `monitor:=false` to omit):
 
 ```bash
-rostopic echo /nav_safety_hold_reason   # every currently-firing channel,
-                                        # " + "-joined; empty string = clear
+rosrun feeding_deployment hold_reason_watch.py   # timestamped TRANSITIONS only:
+                                                 # HOLD <why> / CHANGE <why> /
+                                                 # CLEAR (held N s)
+# (raw firehose, 10 Hz incl. empty strings: rostopic echo /nav_safety_hold_reason)
 ```
 
 The monitor's own log in the launch terminal narrates with timestamps:
