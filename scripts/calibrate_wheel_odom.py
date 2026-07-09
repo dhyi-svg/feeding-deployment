@@ -11,7 +11,9 @@ supervised with the physical e-stop in reach. Talks straight to the Arduino
   straight  drive forward, then STOP. Tape-measure the start->stop distance D.
             counts_per_meter = mean4_counts / D
   reverse   same as straight but BACKWARD (so you don't pass a negative --speed).
-  rotate    spin in place, then STOP. Measure the turned angle A (deg).
+  rotate_left / rotate_right
+            spin in place CCW (left) / CW (right), then STOP. Measure the turned
+            angle A (deg).
             track_width_m = (right_mean - left_mean)_counts / counts_per_meter
                             / radians(A)
 
@@ -176,7 +178,7 @@ class Driver:
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("mode", choices=["straight", "reverse", "rotate"])
+    p.add_argument("mode", choices=["straight", "reverse", "rotate_left", "rotate_right"])
     p.add_argument("--port", default=DEFAULT_PORT)
     p.add_argument("--baud", type=int, default=115200)
     p.add_argument("--speed", type=int, default=400, help="counts/s per motor")
@@ -197,17 +199,20 @@ def main():
     args = p.parse_args()
 
     # --speed is a positive magnitude; direction comes from the mode.
-    if args.mode == "rotate":
-        a, b = args.speed, -args.speed          # spin in place
+    # A = RIGHT pair, B = LEFT pair.
+    if args.mode == "rotate_left":
+        a, b = args.speed, -args.speed          # CCW / heading left
+    elif args.mode == "rotate_right":
+        a, b = -args.speed, args.speed          # CW / heading right
     elif args.mode == "reverse":
         a, b = -args.speed, -args.speed         # both wheels backward
     else:  # straight
         a, b = args.speed, args.speed           # both wheels forward
     if args.target_m < 0 or args.target_deg < 0:
-        print("--target-m / --target-deg are magnitudes; use mode 'reverse' to go "
-              "backward, not a negative target.")
+        print("--target-m / --target-deg are magnitudes; pick the direction with "
+              "the mode (reverse / rotate_right), not a negative target.")
         return 2
-    rot_targeting = args.mode == "rotate" and args.target_deg > 0
+    rot_targeting = args.mode in ("rotate_left", "rotate_right") and args.target_deg > 0
     str_targeting = args.mode in ("straight", "reverse") and args.target_m > 0
     # Count targets for the requested angle / distance, and a runaway cap.
     target_diff = math.radians(args.target_deg) * args.track_width * args.counts_per_meter
@@ -220,6 +225,7 @@ def main():
         max_s = 0.0
     approx_m = args.speed * args.duration / 4874.0
     dir_word = "Backward" if args.mode == "reverse" else "Forward"
+    spin_word = "left / CCW" if args.mode == "rotate_left" else "right / CW"
     print(f"\n*** {args.mode.upper()} CALIBRATION -- THE BASE WILL MOVE ***")
     if str_targeting:
         print(f"{dir_word} to a PREDICTED {args.target_m:.2f} m at "
@@ -229,11 +235,11 @@ def main():
         print(f"{dir_word} ~{approx_m*100:.0f} cm at ~{args.speed/4874.0*100:.1f} cm/s "
               f"(A={a} B={b} for {args.duration:.0f} s).")
     elif rot_targeting:
-        print(f"Spin in place to a PREDICTED {args.target_deg:.0f} deg "
+        print(f"Spin {spin_word} to a PREDICTED {args.target_deg:.0f} deg "
               f"(A={a} B={b}, ~{target_diff:.0f} diff counts, cap {max_s:.0f} s). "
               f"Watch footprint clearance.")
     else:
-        print(f"Spin in place for {args.duration:.0f} s (A={a} B={b}). "
+        print(f"Spin {spin_word} for {args.duration:.0f} s (A={a} B={b}). "
               f"Watch footprint clearance.")
     print("Motor power ON, area clear, physical e-stop in reach.")
     if not args.yes and input("Type YES to proceed: ").strip() != "YES":
