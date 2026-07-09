@@ -353,6 +353,7 @@ class VentionBase:
         # Created before anything that could touch it (incl. the channels'
         # set_speed) so it always exists even on a failed connection.
         self._send_lock = threading.RLock()
+        self._running = False   # keepalive-loop guard; set True after connect
 
         # Keep your naming: base_r/base_l
         # Here: base_r -> Driver A, base_l -> Driver B
@@ -366,58 +367,71 @@ class VentionBase:
 
         self._last_sent = None
         self._last_sent_time = 0.0
-        self._min_send_period = 1.0 / 20.0  # 20 Hz
-        # Same-setpoint refresh. 0.2 s (was 1.0 s): an encoder read on the
-        # Arduino (v7) can mangle an inbound command line -- SoftwareSerial RX
-        # masks interrupts and the USART FIFO is ~3 bytes -- and a mangled
-        # CHANGED value (including a stop) would otherwise not be repeated for
-        # a full second. Echo-confirm below is the primary fix; this bounds the
-        # worst case even without it.
+        # Confirmed + unchanged: slow keepalive (feeds the firmware CMD_STALE_MS
+        # watchdog) -- see _send_setpoints.
         self._min_same_send_period = 1.0 / 5.0  # 5 Hz
-        # If the firmware hasn't echoed ("Parsed A=.. B=..") our last send
-        # within this window, assume the line was mangled and re-send.
-        self._echo_resend_after = 0.1  # s
-        # Start stopped
+        # Unconfirmed (v7 mangled the command during a SoftwareSerial encoder
+        # read): re-send this fast until the firmware echoes it.
+        self._echo_resend_after = 0.03  # s
+        self._resend_warned_at = 0.0    # throttle the echo-missing log
+        # Send the initial (stopped) setpoint, then start the persistent-retry
+        # keepalive loop (drives _send_setpoints so a mangled start/stop is
+        # re-sent until echoed even with no incoming command stream).
         self._send_setpoints()
+        self._running = True
+        self._keepalive_thread = threading.Thread(
+            target=self._keepalive_loop, name="arduino-keepalive", daemon=True)
+        self._keepalive_thread.start()
 
     def _send_setpoints(self):
+        """Send the current setpoint, with persistent echo-confirm retry.
+
+        The v7 firmware mangles inbound commands during its SoftwareSerial
+        encoder reads, so a single send (start OR stop) is often dropped. Called
+        by set_speeds/translate/rotate AND by the background keepalive loop, this:
+          * sends a CHANGED setpoint immediately (no rate-limit drop);
+          * if the firmware hasn't echoed the current setpoint (mangled),
+            re-sends every _echo_resend_after until it does;
+          * once echoed (or if the v7 echo stream isn't fresh), sends a slow
+            same-setpoint keepalive to feed the firmware CMD_STALE_MS watchdog.
+        """
         with self._send_lock:
             now = time.time()
             ab = (self._setpoints.a, self._setpoints.b)
+            changed = ab != self._last_sent
+            # Echo-confirm is only meaningful while the v7 "Parsed" echoes are
+            # streaming; if not fresh, treat as confirmed (fall to keepalive).
+            confirmed = (not self.bridge.encoders_fresh(1.0)
+                         or self.bridge.get_last_echo() == ab)
 
-            # Echo-confirm (only meaningful when the v7 firmware is streaming,
-            # i.e. encoder lines are fresh): if our last send was never
-            # acknowledged with a "Parsed" echo, the line was likely mangled by
-            # a concurrent SoftwareSerial transaction -- re-send the current
-            # setpoints now, bypassing the dedup/rate gates (bounded to 10 Hz
-            # by _echo_resend_after since every re-send restamps
-            # _last_sent_time).
-            resend = False
-            if (
-                self._last_sent is not None
-                and (now - self._last_sent_time) > self._echo_resend_after
-                and self.bridge.encoders_fresh(1.0)
-                and self.bridge.get_last_echo() != self._last_sent
-            ):
-                resend = True
-                logger.warning(
-                    f"[Arduino] echo missing for A={self._last_sent[0]} "
-                    f"B={self._last_sent[1]} -- re-sending A={ab[0]} B={ab[1]}"
-                )
+            if changed:
+                pass                                    # always send a change now
+            elif not confirmed:
+                if now - self._last_sent_time < self._echo_resend_after:
+                    return                              # retrying, bounded
+                if now - self._resend_warned_at >= 1.0:
+                    self._resend_warned_at = now
+                    logger.warning("[Arduino] echo missing for A=%d B=%d -- "
+                                   "re-sending until echoed", ab[0], ab[1])
+            else:
+                if now - self._last_sent_time < self._min_same_send_period:
+                    return                              # confirmed: slow keepalive
 
-            if not resend:
-                # only send if changed
-                if self._last_sent == ab and (now - self._last_sent_time) < self._min_same_send_period:
-                    return
-                # rate limit
-                if (now - self._last_sent_time) < self._min_send_period:
-                    return
-
-            logger.debug(f"[Arduino] -- Send A={ab[0]} B={ab[1]}")
             self.bridge.send_ab(ab[0], ab[1])
-
             self._last_sent = ab
             self._last_sent_time = now
+
+    def _keepalive_loop(self):
+        """Drive _send_setpoints continuously (~50 Hz) so a mangled start/stop
+        is re-sent until echoed, then held at the keepalive rate -- independent
+        of any incoming command stream. _send_setpoints self-limits the actual
+        serial rate; this only ticks it."""
+        while self._running:
+            time.sleep(1.0 / 50.0)
+            try:
+                self._send_setpoints()
+            except Exception:
+                pass   # transient serial errors handled in safe_call/reader
     # --- motion commands (same idea as your old code) ---
     # The (a, b) pair is mutated UNDER _send_lock so a concurrent writer
     # (e.g. an RPC set_speeds racing BaseInterface._cmd_monitor's stop) cannot
@@ -459,6 +473,7 @@ class VentionBase:
             logger.warning(f"Stop failed (ignored): {e}")
 
     def disconnect(self):
+        self._running = False   # stop the keepalive loop before closing the port
         self.stop()
         self.bridge.disconnect()
 
