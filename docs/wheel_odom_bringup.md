@@ -217,9 +217,28 @@ and the `jump` channel only auto-pauses for **Xbox** teleop — keyboard
 driving above ~0.5 m/s (`--max_translation` ≳ 2400) will false-trigger it
 (at the suggested 1500 ≈ 0.31 m/s all gates clear).
 
+### Traces during REAL runs (full nav stack)
+
+The observers are split into `launch/drift_traces.launch`, which is safe to
+run ALONGSIDE the full stack (no node/topic overlap):
+
+```bash
+# full stack up as usual (sensors, cartographer pane, navigation.launch,
+# shared_autonomy.launch), then:
+roslaunch feeding_deployment drift_traces.launch          # record:=true for a bag
+rosrun feeding_deployment drift_lock.py                   # ENTER to lock/re-lock
+```
+
+Traces render in the normal `vention.rviz` view under the **"Drift traces"**
+group (empty until you lock; harmless when the tracer isn't running). Unlike
+the teleop-only test, holds from the health monitor DO gate autonomy here —
+that's the real navigation behavior, and the traces let you see what the pose
+sources were doing when a hold fires.
+
 Caveats:
 - **Do NOT run alongside navigation.launch / shared_autonomy.launch** — same
-  node names, ROS silently kills the older instances.
+  node names, ROS silently kills the older instances. (This applies to
+  `zed_drift_test.launch`; `drift_traces.launch` is the alongside-safe one.)
 - Open-loop traces are baked with the anchor-time `map→odom`; post-lock
   Cartographer yanks move only the green trace (by design).
 - A full ZED restart re-zeroes its odom origin → red/orange teleport; re-lock.

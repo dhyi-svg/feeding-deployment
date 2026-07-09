@@ -63,18 +63,14 @@
     <param name="min_move_units" value="250"/>
   </node>
 
-  <!-- Wheel-encoder odometry (calibrated defaults baked into the node). -->
-  <node pkg="feeding_deployment"
-        type="wheel_odom_publisher.py"
-        name="wheel_odom_publisher"
-        output="screen"/>
-
-  <!-- The tracer: /drift_test/{carto,zed,zed_sanitized,wheel}_path + anchor.
-       Draws nothing until /drift_test/lock (see drift_lock.py). -->
-  <node pkg="feeding_deployment"
-        type="drift_trace_compare.py"
-        name="drift_trace_compare"
-        output="screen"/>
+  <!-- Observers (wheel odom + tracer + optional rviz/rosbag) live in
+       drift_traces.launch so they can also run alongside the full nav stack;
+       this test passes its own rviz/record args through. -->
+  <include file="$(find feeding_deployment)/launch/drift_traces.launch">
+    <arg name="rviz" value="$(arg rviz)"/>
+    <arg name="record" value="$(arg record)"/>
+    <arg name="log_dir" value="$(arg log_dir)"/>
+  </include>
 
   <!-- ZED health monitor, OBSERVATIONAL here: it asserts /nav_safety_hold +
        /nav_safety_hold_reason so you can see WHICH channels (status/silence/
@@ -104,17 +100,4 @@
     <param name="max_hold_s" value="45.0"/>
   </node>
 
-  <node if="$(arg rviz)" pkg="rviz" type="rviz" name="drift_test_rviz"
-        args="-d $(find feeding_deployment)/rviz/drift_test.rviz"/>
-
-  <!-- Optional bag for post-analysis (no images, no Path topics; traces are
-       reconstructable from the odoms + tf + anchor). -->
-  <node if="$(arg record)" pkg="rosbag" type="record" name="drift_test_record"
-        args="record -o $(arg log_dir)/drift_test
-              /tf /tf_static /cmd_vel_teleop
-              /zed_mini/zed_node/odom /zed_mini/zed_node/odom_sanitized
-              /zed_mini/zed_node/pose/status
-              /wheel_odom /wheel_odom/counts /wheel_odom/side_disagreement
-              /nav_safety_hold /nav_safety_hold_reason
-              /drift_test/anchor /lidar_r/scan /lidar_l/scan"/>
 </launch>

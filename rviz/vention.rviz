@@ -576,6 +576,122 @@ Visualization Manager:
       Transport Hint: raw
       Unreliable: false
       Value: true
+    - Class: rviz/Group
+      Displays:
+        - Alpha: 0.4
+          Buffer Length: 1
+          Class: rviz/Path
+          Color: 37; 212; 18
+          Enabled: true
+          Head Diameter: 0.3
+          Head Length: 0.2
+          Length: 0.3
+          Line Style: Billboards
+          Line Width: 0.08
+          Name: Carto (reference)
+          Offset:
+            X: 0
+            Y: 0
+            Z: 0
+          Pose Color: 255; 85; 255
+          Pose Style: None
+          Queue Size: 10
+          Radius: 0.03
+          Shaft Diameter: 0.1
+          Shaft Length: 0.1
+          Topic: /drift_test/carto_path
+          Unreliable: false
+          Value: true
+        - Alpha: 0.55
+          Buffer Length: 1
+          Class: rviz/Path
+          Color: 255; 0; 0
+          Enabled: true
+          Head Diameter: 0.3
+          Head Length: 0.2
+          Length: 0.3
+          Line Style: Billboards
+          Line Width: 0.05
+          Name: ZED raw (open loop)
+          Offset:
+            X: 0
+            Y: 0
+            Z: 0.01
+          Pose Color: 255; 85; 255
+          Pose Style: None
+          Queue Size: 10
+          Radius: 0.03
+          Shaft Diameter: 0.1
+          Shaft Length: 0.1
+          Topic: /drift_test/zed_path
+          Unreliable: false
+          Value: true
+        - Alpha: 1
+          Buffer Length: 1
+          Class: rviz/Path
+          Color: 255; 170; 0
+          Enabled: true
+          Head Diameter: 0.3
+          Head Length: 0.2
+          Length: 0.3
+          Line Style: Billboards
+          Line Width: 0.022
+          Name: ZED sanitized (open loop)
+          Offset:
+            X: 0
+            Y: 0
+            Z: 0.02
+          Pose Color: 255; 85; 255
+          Pose Style: None
+          Queue Size: 10
+          Radius: 0.03
+          Shaft Diameter: 0.1
+          Shaft Length: 0.1
+          Topic: /drift_test/zed_sanitized_path
+          Unreliable: false
+          Value: true
+        - Alpha: 1
+          Buffer Length: 1
+          Class: rviz/Path
+          Color: 0; 85; 255
+          Enabled: true
+          Head Diameter: 0.3
+          Head Length: 0.2
+          Length: 0.3
+          Line Style: Billboards
+          Line Width: 0.022
+          Name: Wheel odom (open loop)
+          Offset:
+            X: 0
+            Y: 0
+            Z: 0.03
+          Pose Color: 255; 85; 255
+          Pose Style: None
+          Queue Size: 10
+          Radius: 0.03
+          Shaft Diameter: 0.1
+          Shaft Length: 0.1
+          Topic: /drift_test/wheel_path
+          Unreliable: false
+          Value: true
+        - Alpha: 1
+          Axes Length: 1
+          Axes Radius: 0.1
+          Class: rviz/Pose
+          Color: 170; 0; 255
+          Enabled: true
+          Head Length: 0.12
+          Head Radius: 0.08
+          Name: Anchor (lock point)
+          Queue Size: 10
+          Shaft Length: 0.35
+          Shaft Radius: 0.03
+          Shape: Arrow
+          Topic: /drift_test/anchor
+          Unreliable: false
+          Value: true
+      Enabled: true
+      Name: Drift traces
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48

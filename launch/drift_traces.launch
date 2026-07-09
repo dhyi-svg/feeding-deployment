@@ -1,0 +1,48 @@
+<launch>
+  <!-- Drift-trace OBSERVERS only: wheel odometry + the map-anchored trace
+       comparator (+ optional dedicated RViz window and rosbag).
+
+       Safe to run ALONGSIDE the full production stack (sensors +
+       cartographer + navigation.launch + shared_autonomy.launch): no node
+       names or topics overlap; these nodes only observe. Lock/re-lock the
+       anchor anytime with:
+         rosrun feeding_deployment drift_lock.py
+       Traces appear in vention.rviz under the "Drift traces" group (or pass
+       rviz:=true for the dedicated top-down window from the drift test).
+
+       zed_drift_test.launch includes this file and adds its own drive
+       pieces (teleop/bridge/monitor/cartographer) for the standalone
+       teleop-only test. -->
+
+  <arg name="rviz"    default="false"/>
+  <arg name="record"  default="false"/>
+  <arg name="log_dir"
+       default="$(find feeding_deployment)/src/feeding_deployment/integration/log/system_logs"/>
+
+  <!-- Wheel-encoder odometry (calibrated defaults baked into the node). -->
+  <node pkg="feeding_deployment"
+        type="wheel_odom_publisher.py"
+        name="wheel_odom_publisher"
+        output="screen"/>
+
+  <!-- The tracer: /drift_test/{carto,zed,zed_sanitized,wheel}_path + anchor.
+       Draws nothing until /drift_test/lock (see drift_lock.py). -->
+  <node pkg="feeding_deployment"
+        type="drift_trace_compare.py"
+        name="drift_trace_compare"
+        output="screen"/>
+
+  <node if="$(arg rviz)" pkg="rviz" type="rviz" name="drift_test_rviz"
+        args="-d $(find feeding_deployment)/rviz/drift_test.rviz"/>
+
+  <!-- Optional bag for post-analysis (no images, no Path topics; traces are
+       reconstructable from the odoms + tf + anchor). -->
+  <node if="$(arg record)" pkg="rosbag" type="record" name="drift_test_record"
+        args="record -o $(arg log_dir)/drift_test
+              /tf /tf_static /cmd_vel_teleop
+              /zed_mini/zed_node/odom /zed_mini/zed_node/odom_sanitized
+              /zed_mini/zed_node/pose/status
+              /wheel_odom /wheel_odom/counts /wheel_odom/side_disagreement
+              /nav_safety_hold /nav_safety_hold_reason
+              /drift_test/anchor /lidar_r/scan /lidar_l/scan"/>
+</launch>
