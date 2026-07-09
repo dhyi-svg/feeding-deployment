@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import os
 import select
 import sys
 import termios
@@ -19,6 +20,12 @@ TURN_IN_PLACE_THRESHOLD = 0.20
 # within the last DECAY_SECONDS. Terminals don't deliver key-up, so we
 # simulate hold via repeated key-repeat presses + this timeout.
 DECAY_SECONDS = 0.30
+
+# ANSI arrow-key escape sequences ("\x1b[A".."\x1b[D") mapped to WASD. Arrows
+# must be parsed BEFORE the quit-on-ESC check: they start with the ESC byte,
+# so naive handling quits the tool on every arrow press (the natural driving
+# keys -- this bit ssh/VNC users).
+ARROW_KEYS = {"A": "w", "B": "s", "D": "a", "C": "d"}
 
 
 def clamp(value: float, lo: float, hi: float) -> float:
@@ -46,15 +53,55 @@ def compute_wheel_speeds(
     return speed_a, speed_b
 
 
-def drain_stdin() -> list[str]:
-    """Non-blocking read of all currently-available bytes from stdin."""
-    chars: list[str] = []
-    while select.select([sys.stdin], [], [], 0)[0]:
-        ch = sys.stdin.read(1)
-        if not ch:
+def drain_stdin() -> str:
+    """Non-blocking read of all currently-available bytes from stdin.
+
+    Reads the RAW fd with os.read: sys.stdin.read(1) pulls everything into
+    Python's internal buffer (making select() on the fd report empty), which
+    split arrow-key escape sequences across drain calls -- the bare leading
+    ESC then read as a quit.
+    """
+    fd = sys.stdin.fileno()
+    data = b""
+    while select.select([fd], [], [], 0)[0]:
+        chunk = os.read(fd, 64)
+        if not chunk:
             break
-        chars.append(ch)
-    return chars
+        data += chunk
+    return data.decode("utf-8", errors="ignore")
+
+
+def parse_pending(s: str):
+    """Consume complete key tokens from s.
+
+    Returns (keys, remainder, quit): keys are logical presses ('w'/'a'/'s'/
+    'd'/' '), remainder is an incomplete trailing escape sequence to retry
+    next tick (caller times it out into a bare-ESC quit), quit means ESC/q.
+    """
+    keys: list[str] = []
+    i = 0
+    n = len(s)
+    while i < n:
+        ch = s[i]
+        if ch == "\x1b":
+            # Possibly an arrow sequence "\x1b[X"; keep if incomplete.
+            if i + 1 >= n or (s[i + 1] == "[" and i + 2 >= n):
+                return keys, s[i:], False
+            if s[i + 1] == "[":
+                if s[i + 2] in ARROW_KEYS:
+                    keys.append(ARROW_KEYS[s[i + 2]])
+                i += 3  # consume the sequence either way
+                continue
+            return keys, "", True  # ESC followed by a non-sequence: quit
+        lower = ch.lower()
+        if lower == "q":
+            return keys, "", True
+        if ch == " ":
+            keys.append(" ")
+        elif lower in ("w", "a", "s", "d"):
+            keys.append(lower)
+        i += 1
+    return keys, "", False
 
 
 def main() -> None:
@@ -83,11 +130,24 @@ def main() -> None:
 
     base = BaseInterfaceClient()
 
-    print("WASD to drive, space=stop, q or ESC to quit. Hold a key to keep moving.")
+    # Fail loudly up front (readable message beats a mid-drive traceback):
+    # set_speeds is gated on bulldog being registered on the NUC.
+    try:
+        base.set_speeds(0, 0)
+    except Exception as e:
+        print(f"[!] Base refused commands: {e}")
+        print("[!] Is the NUC 'robot' stack up (base_server AND bulldog)?")
+        return
+
+    print("WASD or arrow keys to drive, space=stop, q or ESC to quit. "
+          "Hold a key to keep moving.")
 
     period = 1.0 / COMMAND_HZ
     last_sent: tuple[int, int] | None = None
     last_press: dict[str, float] = {}  # key -> monotonic timestamp
+    pending = ""          # incomplete escape sequence awaiting continuation
+    pending_since = 0.0
+    ESC_TIMEOUT = 0.15    # bare ESC (no continuation) quits after this
 
     fd = sys.stdin.fileno()
     old_termios = termios.tcgetattr(fd)
@@ -98,18 +158,22 @@ def main() -> None:
         while running:
             now = time.monotonic()
 
-            for ch in drain_stdin():
-                lower = ch.lower()
-                if ch == "\x1b" or lower == "q":
-                    running = False
-                    break
-                if ch == " ":
+            new = drain_stdin()
+            if new:
+                if not pending:
+                    pending_since = now
+                pending += new
+            keys, pending, quit_requested = parse_pending(pending)
+            if pending and now - pending_since > ESC_TIMEOUT:
+                # Partial escape never completed: it was a bare ESC press.
+                pending = ""
+                quit_requested = True
+            for key in keys:
+                if key == " ":
                     last_press.clear()
-                    continue
-                if lower in ("w", "a", "s", "d"):
-                    last_press[lower] = now
-
-            if not running:
+                else:
+                    last_press[key] = now
+            if quit_requested:
                 break
 
             x_axis = 0.0
@@ -132,10 +196,15 @@ def main() -> None:
 
             cmd = (speed_a, speed_b)
             if cmd != last_sent:
-                print(f"[→] A={speed_a} B={speed_b}\r")
+                print(f"[->] A={speed_a} B={speed_b}\r")
                 last_sent = cmd
 
-            base.set_speeds(speed_a, speed_b)
+            try:
+                base.set_speeds(speed_a, speed_b)
+            except Exception as e:
+                print(f"\r\n[!] set_speeds failed: {e}\r")
+                print("[!] Base link lost (base_server/bulldog down?). Exiting.\r")
+                break
 
             time.sleep(period)
 
