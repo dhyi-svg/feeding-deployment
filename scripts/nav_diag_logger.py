@@ -32,6 +32,23 @@ Writes to system_logs/navlog_<stamp>/:
   events.csv            auto-flagged anomalies (thresholds below)
   rosout_warn.log       WARN+ from nav stack, plus keyword INFO lines
                         (constraint divergences, corrupted frames, recoveries)
+  cmd_latency.csv       actual set_speeds RPC round-trip (compute->NUC->serial),
+                        published by the cmd_vel bridge (the leg ~applied misses)
+  wheel_odom.csv        wheel-encoder odometry + side disagreement (independent
+                        motion witness for a wheel-vs-ZED-vs-carto compare)
+  plan_tracking.csv     10 Hz base cross-track + heading error vs the global plan
+                        (quantifies TEB path overshoot instead of inferring it)
+  usb_dmesg.log         kernel USB/xHCI/Thunderbolt/reset lines (best-effort;
+                        the open ZED corrupted-frame cause)
+  trigger_<t>_<r>.bag   short rosbag of raw odom/imu/tf/scan auto-recorded when a
+                        hold/yank/tilt/infeasible/reset fires (full-fidelity)
+
+Orientation is now logged everywhere it was previously yaw-only: odom.csv and
+sanitized.csv carry roll,pitch (+ odom cov_trace); tf.csv carries ob_roll,ob_pitch
+(odom->base tilt). imu_1hz.csv carries the gravity vector + derived/ fused
+roll,pitch. sys_1hz.csv carries per-core CPU, RAM/swap, GPU, governor, freq.
+New events: odom_tilt, odom_origin_reset, odom_stamp_regression, plan_deviation,
+rpc_slow, node_gone/node_new, dmesg_unavailable, trigger_bag.
 """
 
 import glob
@@ -51,7 +68,7 @@ from map_msgs.msg import OccupancyGridUpdate
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from rosgraph_msgs.msg import Log
 from sensor_msgs.msg import Imu, LaserScan
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, Float64, String
 
 # ---- EVENT THRESHOLDS -------------------------------------------------------
 ODOM_JUMP_M = 0.05        # single-frame pose delta (m); ~0.75 m/s implied @15 Hz
@@ -66,6 +83,20 @@ EVENT_THROTTLE_S = 1.0    # min interval between identical event types
 COSTMAP_DUMP_THROTTLE_S = 30.0
 FOOTPRINT_RADIUS_M = 0.47  # circumscribed radius of 0.74 x 0.59 footprint
 SETTLE_S = 30.0           # re-measure goal residual this long after success
+ODOM_TILT_RAD = 0.05      # |roll|/|pitch| of odom above this = tilt (gravity-init bug)
+PLAN_DEV_M = 0.30         # base cross-track vs global plan above this = off-path
+ORIGIN_RESET_M = 0.50     # prev pose this far out, now ~origin = ZED/odom restart
+RPC_SLOW_S = 0.05         # set_speeds RPC round-trip above this = flagged
+GPU_SAMPLE_EVERY = 5      # sample nvidia-smi every Nth cb_slow tick (~5 s)
+NODE_CHECK_EVERY = 15     # diff the ros node set every Nth cb_slow tick (~15 s)
+TRIGGER_BAG_DURATION_S = 20
+TRIGGER_BAG_MIN_INTERVAL_S = 45.0
+TRIGGER_BAG_MAX = 12      # cap triggered bags per run (disk guard)
+TRIGGER_BAG_ON = ("hold_assert", "map_odom_yank", "odom_tilt", "teb_infeasible",
+                  "odom_origin_reset")
+TRIGGER_BAG_TOPICS = ("/zed_mini/zed_node/odom /zed_mini/zed_node/imu/data /tf /tf_static "
+                      "/nav_safety_hold /nav_safety_hold_reason /cmd_vel /cmd_vel_teleop "
+                      "/wheel_odom /lidar_l/scan /lidar_r/scan")
 
 # "zed" also matches zed_health_monitor + zed_pose_to_odom_feedback (sanitizer);
 # shared_autonomy/cmd_vel_bridge carry the hold pause/resume + gating lines.
@@ -92,6 +123,20 @@ def angle_diff(a, b):
     return math.atan2(math.sin(a - b), math.cos(a - b))
 
 
+def rpy_from_quat(q):
+    """(roll, pitch, yaw) from a geometry_msgs Quaternion. Pitch/roll are the
+    tilt axes that were invisible in the 2026-07-08 gravity-init failure."""
+    sinr_cosp = 2.0 * (q.w * q.x + q.y * q.z)
+    cosr_cosp = 1.0 - 2.0 * (q.x * q.x + q.y * q.y)
+    roll = math.atan2(sinr_cosp, cosr_cosp)
+    sinp = max(-1.0, min(1.0, 2.0 * (q.w * q.y - q.z * q.x)))
+    pitch = math.asin(sinp)
+    siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+    cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+    return roll, pitch, yaw
+
+
 class NavDiagLogger:
     def __init__(self):
         default_dir = os.path.join(LOG_BASE, "system_logs",
@@ -100,17 +145,29 @@ class NavDiagLogger:
         os.makedirs(self.outdir, exist_ok=True)
 
         self.f_odom = self._open("odom.csv",
-                                 "t_stamp,x,y,z,yaw,dstep_m,dyaw,dt_s,zvx,zvy,zwz")
-        self.f_san = self._open("sanitized.csv", "t_stamp,x,y,yaw")
+                                 "t_stamp,x,y,z,yaw,dstep_m,dyaw,dt_s,zvx,zvy,zwz,"
+                                 "roll,pitch,cov_trace")
+        self.f_san = self._open("sanitized.csv", "t_stamp,x,y,yaw,roll,pitch")
         self.f_hold = self._open("hold.csv", "t_wall,held,reason")
         self.f_fb = self._open("odom_feedback.csv", "t_stamp,vx,vy,wz")
         self.f_cmd = self._open("cmd_vel.csv", "t_wall,vx,wz")
         self.f_app = self._open("applied_vel.csv", "t_wall,vx,wz")
-        self.f_tf = self._open("tf.csv", "t_wall,mo_x,mo_y,mo_yaw,ob_age_s,mb_x,mb_y,mb_yaw")
+        self.f_lat = self._open("cmd_latency.csv", "t_wall,rpc_latency_s")
+        self.f_tf = self._open("tf.csv",
+                               "t_wall,mo_x,mo_y,mo_yaw,ob_age_s,mb_x,mb_y,mb_yaw,"
+                               "ob_roll,ob_pitch")
+        self.f_wheel = self._open("wheel_odom.csv", "t_stamp,x,y,yaw,side_disagree_m")
+        self.f_track = self._open("plan_tracking.csv",
+                                  "t_wall,cross_track_m,heading_err_rad,plan_n")
         self.f_cost = self._open("costmap.csv", "t_wall,robot_cost,max_footprint_cost")
         self.f_plan = self._open("plan.csv", "t_wall,n_poses,length_m")
-        self.f_imu = self._open("imu_1hz.csv", "t_wall,rms_gyro,rms_accel_dev,n")
-        self.f_sys = self._open("sys_1hz.csv", "t_wall,n_scan_l,n_scan_r,load1,cpu_temp_c")
+        self.f_imu = self._open("imu_1hz.csv",
+                                "t_wall,rms_gyro,rms_accel_dev,n,"
+                                "grav_roll,grav_pitch,ori_roll,ori_pitch,ax,ay,az")
+        self.f_sys = self._open("sys_1hz.csv",
+                                "t_wall,n_scan_l,n_scan_r,load1,cpu_temp_c,"
+                                "cpu_pct,cpu_max_core_pct,mem_used_pct,swap_used_pct,"
+                                "gpu_util_pct,gpu_mem_mb,governor,cpu_mhz")
         self.f_goal = self._open("goals.csv", "t_wall,event,goal_x,goal_y,goal_yaw,"
                                               "duration_s,residual_xy_m,residual_yaw_rad")
         self.f_bt = self._open("bt_timeline.csv", "t_wall,line")
@@ -144,6 +201,16 @@ class NavDiagLogger:
         self.hold_state = None           # None until first /nav_safety_hold msg
         self.hold_reason = ""            # latest reason-topic payload
         self.hold_reason_logged = ""     # last reason written to hold.csv
+        self.last_side_disagree = float("nan")  # latest /wheel_odom/side_disagreement
+        self.plan_pts = []               # latest global plan [(x, y), ...]
+        self.plan_yaws = []              # per-pose heading along the plan
+        self.cpu_prev = None             # /proc/stat per-core (idle, total) snapshot
+        self.gpu_cache = ("", "")        # (util_pct, mem_mb), refreshed periodically
+        self.node_set = None             # watched ros node names (restart detection)
+        self.dmesg_proc = None           # USB/xhci/thunderbolt dmesg tail
+        self.bag_procs = []              # in-flight triggered rosbag record procs
+        self.bag_count = 0
+        self.last_bag = 0.0
 
         rospy.Subscriber("/zed_mini/zed_node/odom", Odometry, self.cb_odom, queue_size=100)
         rospy.Subscriber("/zed_mini/zed_node/odom_sanitized", Odometry, self.cb_san,
@@ -173,6 +240,16 @@ class NavDiagLogger:
                          lambda m: self.scan_n.__setitem__(1, self.scan_n[1] + 1),
                          queue_size=20)
         rospy.Subscriber("/rosout_agg", Log, self.cb_rosout, queue_size=200)
+        # Independent motion witness (wheel encoders): gives a wheel-vs-ZED-vs-
+        # cartographer three-way comparison in EVERY run, not just drift traces.
+        rospy.Subscriber("/wheel_odom", Odometry, self.cb_wheel, queue_size=50)
+        rospy.Subscriber("/wheel_odom/side_disagreement", Float64,
+                         lambda m: setattr(self, "last_side_disagree", m.data),
+                         queue_size=10)
+        # Actual command round-trip (compute->NUC->serial), published by the
+        # cmd_vel bridge. This is the leg the ~applied echo does NOT capture.
+        rospy.Subscriber("/cmd_vel_bridge_basicmicro/rpc_latency_s", Float64,
+                         self.cb_latency, queue_size=50)
 
         rospy.Timer(rospy.Duration(0.1), self.cb_tf_sample)
         rospy.Timer(rospy.Duration(0.5), self.cb_costmap_sample)
@@ -185,6 +262,7 @@ class NavDiagLogger:
                               ("/zed_mini/zed_node/pose/status", "zed_status_pose.csv"))
         self.status_procs = {t: self._spawn_status_echo(t, f)
                              for t, f in self.status_topics}
+        self.dmesg_proc = self._spawn_dmesg_tail()
         rospy.on_shutdown(self._shutdown)
 
         rospy.loginfo("nav_diag_logger writing to %s", self.outdir)
@@ -257,10 +335,153 @@ class NavDiagLogger:
         except OSError:
             return 0
 
+    # ---- system-resource samplers (all best-effort; never raise) -------------
+    def _sample_cpu(self):
+        """(overall %, busiest-core %) since the previous call, from /proc/stat."""
+        try:
+            cur = {}
+            with open("/proc/stat") as f:
+                for line in f:
+                    if not line.startswith("cpu"):
+                        break
+                    parts = line.split()
+                    name = parts[0]
+                    if name == "cpu" or name[3:].isdigit():
+                        vals = [int(v) for v in parts[1:]]
+                        idle = vals[3] + (vals[4] if len(vals) > 4 else 0)
+                        cur[name] = (idle, sum(vals))
+            if self.cpu_prev is None:
+                self.cpu_prev = cur
+                return (0.0, 0.0)
+            overall = maxcore = 0.0
+            for name, (idle, total) in cur.items():
+                pidle, ptotal = self.cpu_prev.get(name, (idle, total))
+                dt = total - ptotal
+                pct = 100.0 * (1.0 - (idle - pidle) / dt) if dt > 0 else 0.0
+                if name == "cpu":
+                    overall = pct
+                else:
+                    maxcore = max(maxcore, pct)
+            self.cpu_prev = cur
+            return (overall, maxcore)
+        except Exception:
+            return (-1.0, -1.0)
+
+    def _sample_mem(self):
+        """(RAM used %, swap used %) from /proc/meminfo."""
+        try:
+            mem = {}
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    k, v = line.split(":", 1)
+                    mem[k] = float(v.strip().split()[0])
+            mt, ma = mem.get("MemTotal", 0.0), mem.get("MemAvailable", 0.0)
+            st, sf = mem.get("SwapTotal", 0.0), mem.get("SwapFree", 0.0)
+            return (100.0 * (1.0 - ma / mt) if mt > 0 else -1.0,
+                    100.0 * (1.0 - sf / st) if st > 0 else 0.0)
+        except Exception:
+            return (-1.0, -1.0)
+
+    def _sample_gpu(self):
+        """(util %, mem used MB) of GPU 0 via nvidia-smi, ('','') if unavailable."""
+        try:
+            out = subprocess.check_output(
+                ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used",
+                 "--format=csv,noheader,nounits"],
+                stderr=subprocess.DEVNULL, timeout=2.0).decode().splitlines()
+            util, mem = (x.strip() for x in out[0].split(","))
+            return (util, mem)
+        except Exception:
+            return ("", "")
+
+    def _read_gov_freq(self):
+        gov = mhz = "?"
+        try:
+            gov = open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor").read().strip()
+        except Exception:
+            pass
+        try:
+            mhz = str(int(open(
+                "/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq").read().strip()) // 1000)
+        except Exception:
+            pass
+        return (gov, mhz)
+
+    def _check_nodes(self):
+        """Diff the set of watched nav nodes; flag one vanishing/appearing (a
+        relaunch window). Same-name respawns are caught by odom_origin_reset."""
+        try:
+            import rosnode
+            names = rosnode.get_node_names()
+        except Exception:
+            return
+        watched = ("cartographer", "zed", "move_base", "rplidar",
+                   "cmd_vel_bridge", "shared_autonomy", "base_server")
+        cur = {n for n in names if any(w in n for w in watched)}
+        if self.node_set is not None:
+            gone = self.node_set - cur
+            new = cur - self.node_set
+            if gone:
+                self.event("node_gone", len(gone), ";".join(sorted(gone))[:100])
+            if new:
+                self.event("node_new", len(new), ";".join(sorted(new))[:100])
+        self.node_set = cur
+
+    def _spawn_dmesg_tail(self):
+        """Best-effort follow of kernel USB/xHCI/Thunderbolt/reset lines (the
+        open ZED corrupted-frame cause). No-op if dmesg is denied."""
+        path = os.path.join(self.outdir, "usb_dmesg.log")
+        try:
+            back = subprocess.check_output(
+                "dmesg -T 2>/dev/null | grep -iE 'usb|xhci|thunderbolt|reset' | tail -50",
+                shell=True, stderr=subprocess.DEVNULL).decode()
+            with open(path, "w") as f:
+                f.write(back)
+            if not back.strip():
+                self.event("dmesg_unavailable", 0,
+                           "dmesg empty/denied (kernel.dmesg_restrict?)")
+        except Exception:
+            pass
+        try:
+            f = open(path, "a")
+            return subprocess.Popen(
+                "dmesg -T -w 2>/dev/null | stdbuf -oL grep -iE "
+                "'usb|xhci|thunderbolt|reset'",
+                shell=True, stdout=f, stderr=subprocess.DEVNULL)
+        except Exception:
+            return None
+
+    def _trigger_bag(self, reason):
+        """Record a short rosbag of raw topics around an anomaly, so the next
+        incident is recoverable at full fidelity (quaternions, scans, IMU)."""
+        now = time.time()
+        self.bag_procs = [p for p in self.bag_procs if p.poll() is None]
+        if self.bag_procs or self.bag_count >= TRIGGER_BAG_MAX:
+            return
+        if now - self.last_bag < TRIGGER_BAG_MIN_INTERVAL_S:
+            return
+        self.last_bag = now
+        self.bag_count += 1
+        prefix = os.path.join(self.outdir, "trigger_%d_%s" %
+                              (int(now), reason.replace("/", "_")[:20]))
+        try:
+            p = subprocess.Popen(
+                "rosbag record -O %s --duration=%d %s" %
+                (prefix, TRIGGER_BAG_DURATION_S, TRIGGER_BAG_TOPICS),
+                shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.bag_procs.append(p)
+            self.f_ev.write("%.3f,trigger_bag,%d,%s\n" %
+                            (now, self.bag_count, prefix + ".bag"))
+        except Exception:
+            pass
+
     def _shutdown(self):
-        for p in self.status_procs.values():
+        for p in list(self.status_procs.values()) + [self.dmesg_proc] + self.bag_procs:
             if p:
-                p.terminate()
+                try:
+                    p.terminate()
+                except Exception:
+                    pass
 
     def event(self, etype, value, detail=""):
         now = time.time()
@@ -268,12 +489,16 @@ class NavDiagLogger:
             return
         self.last_event[etype] = now
         self.f_ev.write("%.3f,%s,%.4f,%s\n" % (now, etype, value, detail))
+        if etype in TRIGGER_BAG_ON:
+            self._trigger_bag(etype)
 
     # ---- raw ZED odom: jumps / gaps / drift ---------------------------------
     def cb_odom(self, msg):
         t = msg.header.stamp.to_sec()
         p = msg.pose.pose.position
-        yaw = yaw_from_quat(msg.pose.pose.orientation)
+        roll, pitch, yaw = rpy_from_quat(msg.pose.pose.orientation)
+        cov = msg.pose.covariance
+        cov_trace = cov[0] + cov[7] + cov[14] + cov[21] + cov[28] + cov[35]
         dstep = dyaw = dt = 0.0
         if self.prev_odom is not None:
             pt, px, py, pz, pyaw = self.prev_odom
@@ -282,24 +507,55 @@ class NavDiagLogger:
             dyaw = abs(angle_diff(yaw, pyaw))
             if dt > ODOM_GAP_S:
                 self.event("odom_gap", dt, "stamp gap")
+            if dt <= 0.0:
+                self.event("odom_stamp_regression", dt, "stamp went backward (restart?)")
             if dstep > ODOM_JUMP_M or dyaw > ODOM_JUMP_RAD:
                 self.event("odom_jump", dstep,
                            "dyaw=%.3f dt=%.3f implied=%.2fm/s" %
                            (dyaw, dt, dstep / dt if dt > 0 else -1))
+            # was well away from origin, now snapped to ~0 == ZED/odom re-init
+            prev_norm = math.sqrt(px * px + py * py + pz * pz)
+            cur_norm = math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z)
+            if prev_norm > ORIGIN_RESET_M and cur_norm < 0.05:
+                self.event("odom_origin_reset", prev_norm,
+                           "odom reset to origin (ZED/odom node restart)")
+        # Pitch/roll tilt of the odom frame: invisible in yaw-only logs; this is
+        # the 2026-07-08 gravity-init failure signature.
+        if abs(roll) > ODOM_TILT_RAD or abs(pitch) > ODOM_TILT_RAD:
+            self.event("odom_tilt", max(abs(roll), abs(pitch)),
+                       "roll=%.1fdeg pitch=%.1fdeg" %
+                       (math.degrees(roll), math.degrees(pitch)))
         # ZED's native twist alongside the pose: whether the SDK's own velocity
         # stays sane through a re-init teleport is exactly the open question.
         tw = msg.twist.twist
-        self.f_odom.write("%.3f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.3f,%.4f,%.4f,%.4f\n" %
+        self.f_odom.write("%.3f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.3f,%.4f,%.4f,%.4f,"
+                          "%.4f,%.4f,%.5f\n" %
                           (t, p.x, p.y, p.z, yaw, dstep, dyaw, dt,
-                           tw.linear.x, tw.linear.y, tw.angular.z))
+                           tw.linear.x, tw.linear.y, tw.angular.z,
+                           roll, pitch, cov_trace))
         self.prev_odom = (t, p.x, p.y, p.z, yaw)
 
     # ---- sanitizer output (what Cartographer consumes) -----------------------
     def cb_san(self, msg):
         p = msg.pose.pose.position
-        self.f_san.write("%.3f,%.4f,%.4f,%.4f\n" %
-                         (msg.header.stamp.to_sec(), p.x, p.y,
-                          yaw_from_quat(msg.pose.pose.orientation)))
+        roll, pitch, yaw = rpy_from_quat(msg.pose.pose.orientation)
+        self.f_san.write("%.3f,%.4f,%.4f,%.4f,%.4f,%.4f\n" %
+                         (msg.header.stamp.to_sec(), p.x, p.y, yaw, roll, pitch))
+
+    # ---- wheel odometry: independent motion witness --------------------------
+    def cb_wheel(self, msg):
+        p = msg.pose.pose.position
+        self.f_wheel.write("%.3f,%.4f,%.4f,%.4f,%.4f\n" %
+                           (msg.header.stamp.to_sec(), p.x, p.y,
+                            yaw_from_quat(msg.pose.pose.orientation),
+                            self.last_side_disagree))
+
+    # ---- actual command round-trip latency (from the bridge) -----------------
+    def cb_latency(self, msg):
+        self.f_lat.write("%.3f,%.5f\n" % (time.time(), msg.data))
+        if msg.data > RPC_SLOW_S:
+            self.event("rpc_slow", msg.data,
+                       "set_speeds RPC round-trip %.1fms" % (msg.data * 1000.0))
 
     # ---- safety-hold interlock timeline --------------------------------------
     def cb_hold(self, msg):
@@ -356,9 +612,12 @@ class NavDiagLogger:
             mo = (t.x, t.y, yaw_from_quat(tr.transform.rotation))
         except Exception:
             pass
+        ob_rp = None
         try:
             tr = self.buf.lookup_transform("odom", "base_link", rospy.Time(0))
             ob_age = (rospy.Time.now() - tr.header.stamp).to_sec()
+            r, pch, _ = rpy_from_quat(tr.transform.rotation)
+            ob_rp = (r, pch)
         except Exception:
             pass
         try:
@@ -378,11 +637,30 @@ class NavDiagLogger:
         if ob_age is not None and ob_age > TF_STALE_S:
             self.event("tf_stale", ob_age, "odom->base_link age")
 
-        self.f_tf.write("%.3f,%s,%s,%s\n" % (
+        # Continuous plan-tracking: how far / off-heading the base is from the
+        # global plan. Quantifies "TEB overshoots the path" instead of inferring
+        # it from cmd_vel sign flips.
+        if mb is not None and self.plan_pts:
+            bx, by, byaw = mb
+            best_i, best_d = 0, float("inf")
+            for i, (qx, qy) in enumerate(self.plan_pts):
+                d = (bx - qx) ** 2 + (by - qy) ** 2
+                if d < best_d:
+                    best_d, best_i = d, i
+            cross = math.sqrt(best_d)
+            seg_yaw = self.plan_yaws[best_i] if best_i < len(self.plan_yaws) else byaw
+            herr = abs(angle_diff(byaw, seg_yaw))
+            self.f_track.write("%.3f,%.4f,%.4f,%d\n" %
+                               (now, cross, herr, len(self.plan_pts)))
+            if cross > PLAN_DEV_M:
+                self.event("plan_deviation", cross, "base %.2fm off global plan" % cross)
+
+        self.f_tf.write("%.3f,%s,%s,%s,%s\n" % (
             now,
             "%.4f,%.4f,%.4f" % mo if mo else ",,",
             "%.3f" % ob_age if ob_age is not None else "",
-            "%.4f,%.4f,%.4f" % mb if mb else ",,"))
+            "%.4f,%.4f,%.4f" % mb if mb else ",,",
+            "%.4f,%.4f" % ob_rp if ob_rp else ","))
 
     # ---- local costmap: phantom-obstacle evidence ---------------------------
     def cb_grid(self, msg):
@@ -443,6 +721,14 @@ class NavDiagLogger:
             length += math.hypot(b.pose.position.x - a.pose.position.x,
                                  b.pose.position.y - a.pose.position.y)
         self.f_plan.write("%.3f,%d,%.3f\n" % (time.time(), len(pts), length))
+        # Cache the plan geometry for continuous cross-track/heading error (cb_tf_sample).
+        self.plan_pts = [(ps.pose.position.x, ps.pose.position.y) for ps in pts]
+        yaws = [math.atan2(b.pose.position.y - a.pose.position.y,
+                           b.pose.position.x - a.pose.position.x)
+                for a, b in zip(pts, pts[1:])]
+        if yaws:
+            yaws.append(yaws[-1])
+        self.plan_yaws = yaws
 
     # ---- IMU vibration aggregate (1 Hz) --------------------------------------
     def cb_imu(self, msg):
@@ -450,16 +736,35 @@ class NavDiagLogger:
         a = msg.linear_acceleration
         gyro = math.sqrt(g.x ** 2 + g.y ** 2 + g.z ** 2)
         accel_dev = abs(math.sqrt(a.x ** 2 + a.y ** 2 + a.z ** 2) - 9.81)
-        self.imu_acc.append((gyro, accel_dev))
+        # Keep the raw accel vector (gravity direction) + fused orientation so a
+        # gravity/vertical-init error is directly visible, not just its RMS.
+        o = msg.orientation
+        if msg.orientation_covariance[0] >= 0.0 and (o.x or o.y or o.z or o.w):
+            ori_roll, ori_pitch, _ = rpy_from_quat(o)
+        else:
+            ori_roll = ori_pitch = float("nan")
+        self.imu_acc.append((gyro, accel_dev, a.x, a.y, a.z, ori_roll, ori_pitch))
 
     def cb_slow(self, _):
         now = time.time()
         # IMU 1 Hz flush
         if self.imu_acc:
             n = len(self.imu_acc)
-            rg = math.sqrt(sum(x * x for x, _ in self.imu_acc) / n)
-            ra = math.sqrt(sum(y * y for _, y in self.imu_acc) / n)
-            self.f_imu.write("%.3f,%.4f,%.4f,%d\n" % (now, rg, ra, n))
+            rg = math.sqrt(sum(s[0] * s[0] for s in self.imu_acc) / n)
+            ra = math.sqrt(sum(s[1] * s[1] for s in self.imu_acc) / n)
+            ax = sum(s[2] for s in self.imu_acc) / n
+            ay = sum(s[3] for s in self.imu_acc) / n
+            az = sum(s[4] for s in self.imu_acc) / n
+            # gravity-derived tilt (accel opposes gravity when ~static)
+            grav_roll = math.atan2(ay, az)
+            grav_pitch = math.atan2(-ax, math.sqrt(ay * ay + az * az))
+            oris = [s[5] for s in self.imu_acc if not math.isnan(s[5])]
+            opis = [s[6] for s in self.imu_acc if not math.isnan(s[6])]
+            ori_roll = sum(oris) / len(oris) if oris else float("nan")
+            ori_pitch = sum(opis) / len(opis) if opis else float("nan")
+            self.f_imu.write("%.3f,%.4f,%.4f,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n" %
+                             (now, rg, ra, n, grav_roll, grav_pitch,
+                              ori_roll, ori_pitch, ax, ay, az))
             self.imu_acc = []
         # scan rates + system load/thermal (USB failures, throttling)
         nl, nr = self.scan_n
@@ -471,10 +776,21 @@ class NavDiagLogger:
             temp = max(temps) if temps else -1.0
         except Exception:
             pass
-        self.f_sys.write("%.3f,%d,%d,%.2f,%.1f\n" %
-                         (now, nl, nr, os.getloadavg()[0], temp))
+        cpu_pct, cpu_max = self._sample_cpu()
+        mem_pct, swap_pct = self._sample_mem()
+        if self.heartbeat % GPU_SAMPLE_EVERY == 0:
+            self.gpu_cache = self._sample_gpu()
+        gpu_util, gpu_mem = self.gpu_cache
+        gov, mhz = self._read_gov_freq()
+        self.f_sys.write("%.3f,%d,%d,%.2f,%.1f,%.1f,%.1f,%.1f,%.1f,%s,%s,%s,%s\n" %
+                         (now, nl, nr, os.getloadavg()[0], temp,
+                          cpu_pct, cpu_max, mem_pct, swap_pct,
+                          gpu_util, gpu_mem, gov, mhz))
         if nl == 0 or nr == 0:
             self.event("scan_gap", nl + nr, "lidar_l=%d lidar_r=%d msgs/s" % (nl, nr))
+        # watched-node set diff (catches a node vanishing/appearing in a relaunch)
+        if self.heartbeat % NODE_CHECK_EVERY == 0:
+            self._check_nodes()
         # BT timeline tail
         path = os.path.join(LOG_BASE, "execution_log.txt")
         try:

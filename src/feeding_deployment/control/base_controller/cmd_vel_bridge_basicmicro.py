@@ -43,11 +43,12 @@ import math
 import os
 import sys
 import threading
+import time
 import traceback
 
 import rospy
 from geometry_msgs.msg import Twist
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float64
 
 def add_ros_vention_src_to_path():
     try:
@@ -145,6 +146,12 @@ class CmdVelBridgeBasicmicro:
         # stiction floor and clamp), converted back to m/s / rad/s so it can
         # be overlaid against the incoming /cmd_vel.
         self.applied_pub = rospy.Publisher("~applied", Twist, queue_size=10)
+
+        # Diagnostics: measured wall time of the set_speeds RPC round-trip
+        # (compute -> NUC -> serial write/flush -> return). This is the command
+        # latency the ~applied echo does NOT capture. Published, not written to
+        # disk, so the hot path stays free of I/O; nav_diag_logger records it.
+        self.rpc_latency_pub = rospy.Publisher("~rpc_latency_s", Float64, queue_size=10)
 
         rospy.loginfo("cmd_vel bridge running. Waiting for %s (autonomous, hold-gated) "
                       "and %s (teleop, priority, mute %.2fs)...",
@@ -260,7 +267,11 @@ class CmdVelBridgeBasicmicro:
                 # NOTE: BaseInterface.set_speeds(speed_a, speed_b) over RPC.
                 # If speed_a maps to right and speed_b maps to left in your hardware, this is correct.
                 # If reversed, set ~swap_left_right:=true.
+                # Time the RPC (two perf_counter reads + one async publish; no
+                # added blocking, no disk I/O -- does not affect command timing).
+                _t0 = time.perf_counter()
                 self.base.set_speeds(right, left)
+                self.rpc_latency_pub.publish(Float64(time.perf_counter() - _t0))
             except Exception:
                 rospy.logerr("Motor command failed:\n%s", traceback.format_exc())
 
