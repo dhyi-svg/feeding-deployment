@@ -473,8 +473,11 @@ class VentionBase:
             logger.warning(f"Stop failed (ignored): {e}")
 
     def disconnect(self):
-        self._running = False   # stop the keepalive loop before closing the port
+        # Land the stop FIRST: keep the keepalive loop retrying 0,0 briefly so a
+        # mangled shutdown-stop still gets through, THEN stop the loop + close.
         self.stop()
+        time.sleep(0.3)
+        self._running = False
         self.bridge.disconnect()
 
     def reconnect(self):
