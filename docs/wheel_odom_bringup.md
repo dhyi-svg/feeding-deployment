@@ -200,6 +200,23 @@ rosrun feeding_deployment drift_lock.py
 # 5. drive with the Xbox X-deadman; watch the traces.
 ```
 
+Watching the health monitor (included by default, `monitor:=false` to omit):
+
+```bash
+rostopic echo /nav_safety_hold_reason   # every currently-firing channel,
+                                        # " + "-joined; empty string = clear
+```
+
+The monitor's own log in the launch terminal narrates with timestamps:
+`HOLD asserted [...]`, `HOLD now [...]` (mid-hold escalations), and
+`HOLD released after Ns -- recovered (fired: ...)`. It is purely
+observational here — holds never stop your driving (teleop is hold-exempt,
+and the keyboard tool bypasses the bridge entirely). Two expected quirks:
+`clear_costmaps failed` warnings when `yank` fires (no move_base running),
+and the `jump` channel only auto-pauses for **Xbox** teleop — keyboard
+driving above ~0.5 m/s (`--max_translation` ≳ 2400) will false-trigger it
+(at the suggested 1500 ≈ 0.31 m/s all gates clear).
+
 Caveats:
 - **Do NOT run alongside navigation.launch / shared_autonomy.launch** — same
   node names, ROS silently kills the older instances.

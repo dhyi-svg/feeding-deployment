@@ -18,9 +18,10 @@
 
   <arg name="load_state_filename"
        default="$(find feeding_deployment)/maps/aimee-7-3.pbstream"/>
-  <arg name="carto"  default="true"/>
-  <arg name="rviz"   default="true"/>
-  <arg name="record" default="false"/>
+  <arg name="carto"   default="true"/>
+  <arg name="rviz"    default="true"/>
+  <arg name="record"  default="false"/>
+  <arg name="monitor" default="true"/>
   <arg name="log_dir"
        default="$(find feeding_deployment)/src/feeding_deployment/integration/log/system_logs"/>
 
@@ -75,6 +76,34 @@
         name="drift_trace_compare"
         output="screen"/>
 
+  <!-- ZED health monitor, OBSERVATIONAL here: it asserts /nav_safety_hold +
+       /nav_safety_hold_reason so you can see WHICH channels (status/silence/
+       gap/jump/yank) engage while driving; watch with
+         rostopic echo /nav_safety_hold_reason
+       Holds never stop driving in this test (teleop is hold-exempt; the
+       keyboard tool bypasses the bridge entirely). Expected noise: "clear
+       costmaps failed" warnings on yank (no move_base here), and the jump
+       channel only auto-pauses for Xbox teleop, so keyboard driving above
+       ~0.5 m/s (max_translation over ~2400) will false-trigger it.
+       Params verbatim from navigation.launch. -->
+  <node if="$(arg monitor)"
+        pkg="feeding_deployment"
+        type="zed_health_monitor.py"
+        name="zed_health_monitor"
+        output="screen">
+    <param name="odom_topic" value="/zed_mini/zed_node/odom"/>
+    <param name="hold_topic" value="/nav_safety_hold"/>
+    <param name="max_lin_vel" value="0.5"/>
+    <param name="max_ang_vel" value="1.5"/>
+    <param name="recovery_stable_s" value="2.0"/>
+    <param name="enable_yank_channel" value="true"/>
+    <param name="yank_lin_m" value="0.5"/>
+    <param name="yank_ang_rad" value="0.4"/>
+    <param name="yank_settle_s" value="5.0"/>
+    <param name="release_mo_rate_rad_s" value="0.03"/>
+    <param name="max_hold_s" value="45.0"/>
+  </node>
+
   <node if="$(arg rviz)" pkg="rviz" type="rviz" name="drift_test_rviz"
         args="-d $(find feeding_deployment)/rviz/drift_test.rviz"/>
 
@@ -86,5 +115,6 @@
               /zed_mini/zed_node/odom /zed_mini/zed_node/odom_sanitized
               /zed_mini/zed_node/pose/status
               /wheel_odom /wheel_odom/counts /wheel_odom/side_disagreement
+              /nav_safety_hold /nav_safety_hold_reason
               /drift_test/anchor /lidar_r/scan /lidar_l/scan"/>
 </launch>
