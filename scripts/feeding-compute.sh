@@ -57,6 +57,12 @@ CMD6="roslaunch feeding_deployment cartographer_localization.launch load_state_f
 CMD7='roslaunch feeding_deployment shared_autonomy.launch'
 CMD8='python run.py --user bohan_jun27 --run_on_robot --use_interface --resume_from_state 21_stow_utensil --no_waits --day 1'
 
+# Drift-trace tooling, PRE-TYPED (never auto-run) in a separate 'trace' window
+# (see build_trace_window). Two panes because drift_lock.py needs its own stdin
+# (roslaunch gives nodes none) and drift_traces.launch runs continuously.
+TRACE_CMD_LAUNCH='roslaunch feeding_deployment drift_traces.launch'
+TRACE_CMD_LOCK='rosrun feeding_deployment drift_lock.py'
+
 # ----- 'logger' tmux session (separate from 'feeding') ---------------------- #
 # Two stacked panes: top = system near-hang watchdog, bottom = ROS sensor logger.
 # Both keep a 3 h ROLLING window and stream/flush to disk (negligible RAM).
@@ -126,6 +132,28 @@ build_logger_session() {
   tmux send-keys -t "${lpanes[1]}" "$CMD_SENSORLOG" Enter
   tmux send-keys -t "${lpanes[2]}" "$CMD_NAVLOG" Enter
   echo "Built tmux session '$LOGGER_SESSION' (health / sensors / nav_diag; ${LOGGER_CYCLE}s rolling)."
+}
+
+# Build a separate 'trace' window in the feeding session with the drift-trace
+# commands PRE-TYPED (no Enter). It's a distinct window so it never disturbs the
+# 2x4 bringup grid or the 'prefix + r' restart (both scoped to the main window).
+# Idempotent: leaves an existing 'trace' window alone.
+build_trace_window() {
+  tmux has-session -t "$SESSION" 2>/dev/null || return 0
+  if tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qx trace; then
+    return 0
+  fi
+  local top bot
+  top="$(tmux new-window -d -t "$SESSION:" -n trace -P -F '#{pane_id}')"
+  bot="$(tmux split-window -v -t "$top" -P -F '#{pane_id}')"
+  tmux select-layout -t "$SESSION:trace" even-vertical
+  tmux set-option -w -t "$SESSION:trace" pane-border-status top
+  tmux set-option -w -t "$SESSION:trace" pane-border-format ' #{pane_title} '
+  tmux select-pane -t "$top" -T 'drift_traces.launch'
+  tmux send-keys   -t "$top" "$TRACE_CMD_LAUNCH"          # pre-typed, NO Enter
+  tmux select-pane -t "$bot" -T 'drift_lock.py'
+  tmux send-keys   -t "$bot" "$TRACE_CMD_LOCK"            # pre-typed, NO Enter
+  echo "Built 'trace' window (drift_traces.launch + drift_lock.py pre-typed; nothing run)."
 }
 
 # ----- session-logging helpers ---------------------------------------------- #
@@ -373,6 +401,7 @@ do_build() {
 
   if (( ! fresh )); then
     echo "session '$SESSION' already exists -- attaching."
+    build_trace_window
     attach_or_switch
   fi
 
@@ -423,6 +452,7 @@ do_build() {
 
   echo "Built tmux session '$SESSION' (2x4 grid; commands pre-typed, no Enter)."
   echo "Restart bottom row (5-8) anytime with 'prefix + r'."
+  build_trace_window
   attach_or_switch
 }
 
