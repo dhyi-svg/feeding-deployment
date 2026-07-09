@@ -133,7 +133,9 @@ build_logger_session() {
 new_bundle() {
   local stamp bundle
   stamp="$(printf '%(%Y%m%d_%H%M%S)T' -1)"
-  bundle="$SESS_ROOT/session_$stamp"
+  # Optional run label (set via SESSION_LABEL env, e.g. from the feeding_start
+  # alias) appended to the bundle name for easy identification later.
+  bundle="$SESS_ROOT/session_${stamp}${SESSION_LABEL:+_$SESSION_LABEL}"
   mkdir -p "$bundle/compute/tmux" "$bundle/compute/ros" "$bundle/nuc"
   printf '%(%Y-%m-%dT%H:%M:%S)T' -1 > "$bundle/.started_iso"
   # Point current_session at the new bundle. If a stray REAL dir sits there,
