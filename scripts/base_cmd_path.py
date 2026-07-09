@@ -15,10 +15,12 @@ It logs, per tick:
   * wheel_odom pose  (advisory dead-reckoning, /wheel_odom)
   * map->base pose   (closed-loop truth from TF, if Cartographer is up)
 
-Shapes:
-  straight   --v <m/s>  --distance <m>
-  rotate     --w <rad/s> --angle <deg>
-  arc        --v <m/s>  --w <rad/s>  --duration <s>
+Shapes (direction from the mode name; --v/--w are positive magnitudes):
+  straight      --v <m/s>   --distance <m>              forward
+  reverse       --v <m/s>   --distance <m>              backward
+  rotate_left   --w <rad/s> --angle <deg>               CCW / left
+  rotate_right  --w <rad/s> --angle <deg>               CW / right
+  arc           --v <m/s>   --w <rad/s>  --duration <s> general curve (signed v/w)
 
 Safety:
   * velocities are clamped to --max-v / --max-w
@@ -34,9 +36,11 @@ command mutes autonomous /cmd_vel for ~teleop_mute_s — fine here (no autonomy 
 during the test), but don't run this against a live move_base goal.
 
 Examples:
-  rosrun feeding_deployment base_cmd_path.py rotate --w 0.4 --angle 90
-  rosrun feeding_deployment base_cmd_path.py straight --v 0.2 --distance 1.0
-  rosrun feeding_deployment base_cmd_path.py arc --v 0.2 --w 0.3 --duration 5
+  rosrun feeding_deployment base_cmd_path.py straight     --v 0.2 --distance 1.0
+  rosrun feeding_deployment base_cmd_path.py reverse      --v 0.2 --distance 1.0
+  rosrun feeding_deployment base_cmd_path.py rotate_left  --w 0.4 --angle 90
+  rosrun feeding_deployment base_cmd_path.py rotate_right --w 0.4 --angle 90
+  rosrun feeding_deployment base_cmd_path.py arc          --v 0.2 --w 0.3 --duration 5
 """
 
 import argparse
@@ -52,20 +56,30 @@ def _parse_args():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="mode", required=True)
 
-    s = sub.add_parser("straight", help="drive straight a fixed distance")
-    s.add_argument("--v", type=float, required=True, help="linear vel (m/s, sign = direction)")
-    s.add_argument("--distance", type=float, required=True, help="target distance (m, >0)")
+    # Direction comes from the mode name (like calibrate_wheel_odom); --v/--w are
+    # positive magnitudes in these four. `arc` stays the general signed case.
+    st = sub.add_parser("straight", help="drive forward a fixed distance")
+    st.add_argument("--v", type=float, required=True, help="linear speed magnitude (m/s)")
+    st.add_argument("--distance", type=float, required=True, help="target distance (m, >0)")
 
-    r = sub.add_parser("rotate", help="rotate in place a fixed angle")
-    r.add_argument("--w", type=float, required=True, help="angular vel (rad/s, sign = direction)")
-    r.add_argument("--angle", type=float, required=True, help="target angle (deg, >0)")
+    rv = sub.add_parser("reverse", help="drive backward a fixed distance")
+    rv.add_argument("--v", type=float, required=True, help="linear speed magnitude (m/s)")
+    rv.add_argument("--distance", type=float, required=True, help="target distance (m, >0)")
 
-    a = sub.add_parser("arc", help="drive an arc for a fixed duration")
-    a.add_argument("--v", type=float, required=True, help="linear vel (m/s)")
-    a.add_argument("--w", type=float, required=True, help="angular vel (rad/s)")
+    rl = sub.add_parser("rotate_left", help="rotate in place CCW / left a fixed angle")
+    rl.add_argument("--w", type=float, required=True, help="angular speed magnitude (rad/s)")
+    rl.add_argument("--angle", type=float, required=True, help="target angle (deg, >0)")
+
+    rr = sub.add_parser("rotate_right", help="rotate in place CW / right a fixed angle")
+    rr.add_argument("--w", type=float, required=True, help="angular speed magnitude (rad/s)")
+    rr.add_argument("--angle", type=float, required=True, help="target angle (deg, >0)")
+
+    a = sub.add_parser("arc", help="drive an arc for a fixed duration (signed --v/--w)")
+    a.add_argument("--v", type=float, required=True, help="linear vel (m/s, signed)")
+    a.add_argument("--w", type=float, required=True, help="angular vel (rad/s, signed)")
     a.add_argument("--duration", type=float, required=True, help="drive duration (s, >0)")
 
-    for sp in (s, r, a):
+    for sp in (st, rv, rl, rr, a):
         sp.add_argument("--rate", type=float, default=10.0, help="publish rate Hz (default 10, match controller_frequency)")
         sp.add_argument("--topic", default="/cmd_vel_teleop", help="Twist topic (default /cmd_vel_teleop, hold-exempt)")
         sp.add_argument("--settle", type=float, default=3.0, help="post-stop observation window (s)")
@@ -146,19 +160,27 @@ def main():
         return t.x, t.y, _yaw_from_quat(tf.transform.rotation)
 
     # ---- build the commanded twist + progress target ----
-    if args.mode == "straight":
-        cmd_v = _clamp(args.v, -args.max_v, args.max_v)
+    # --v/--w are positive magnitudes for the directional modes; sign = mode.
+    if args.mode in ("straight", "reverse", "rotate_left", "rotate_right") and (
+            getattr(args, "v", 0.0) < 0 or getattr(args, "w", 0.0) < 0):
+        sys.stderr.write("--v/--w are magnitudes for this mode; pick direction via the "
+                         "mode (reverse / rotate_right), not a negative value.\n")
+        return 3
+    if args.mode in ("straight", "reverse"):
+        speed = _clamp(args.v, 0.0, args.max_v)
+        cmd_v = speed if args.mode == "straight" else -speed
         cmd_w = 0.0
         target = abs(args.distance)
         nominal_t = target / max(abs(cmd_v), 1e-6)
         kind = "dist"
-    elif args.mode == "rotate":
+    elif args.mode in ("rotate_left", "rotate_right"):
+        rate = _clamp(args.w, 0.0, args.max_w)
         cmd_v = 0.0
-        cmd_w = _clamp(args.w, -args.max_w, args.max_w)
+        cmd_w = rate if args.mode == "rotate_left" else -rate
         target = math.radians(abs(args.angle))
         nominal_t = target / max(abs(cmd_w), 1e-6)
         kind = "yaw"
-    else:  # arc
+    else:  # arc (signed)
         cmd_v = _clamp(args.v, -args.max_v, args.max_v)
         cmd_w = _clamp(args.w, -args.max_w, args.max_w)
         target = None
