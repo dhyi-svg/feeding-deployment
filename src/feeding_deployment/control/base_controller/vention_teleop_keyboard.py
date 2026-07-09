@@ -17,9 +17,16 @@ DEFAULT_MAX_ROTATION_SPEED = 400
 TURN_IN_PLACE_THRESHOLD = 0.20
 
 # A direction is considered "held" as long as a press for it has arrived
-# within the last DECAY_SECONDS. Terminals don't deliver key-up, so we
-# simulate hold via repeated key-repeat presses + this timeout.
-DECAY_SECONDS = 0.30
+# recently. Terminals don't deliver key-up, so hold is inferred from OS
+# key-repeat presses -- which only START after the keyboard's initial repeat
+# delay (~0.5 s on macOS, more over VNC). Hence TWO timeouts: a generous
+# grace after the FIRST press (bridges the repeat delay; a single 0.3 s decay
+# caused a spurious (0,0) between first press and first repeat), and a short
+# decay once repeats are streaming (snappy stop on release).
+INITIAL_GRACE_SECONDS = 0.65
+DECAY_SECONDS = 0.25
+# A follow-up press within this window means auto-repeat is active.
+REPEAT_DETECT_SECONDS = 0.45
 
 # ANSI arrow-key escape sequences ("\x1b[A".."\x1b[D") mapped to WASD. Arrows
 # must be parsed BEFORE the quit-on-ESC check: they start with the ESC byte,
@@ -124,7 +131,16 @@ def main() -> None:
         "--decay",
         type=float,
         default=DECAY_SECONDS,
-        help="Seconds without a repeat keypress before a direction is released",
+        help="Seconds without a repeat keypress before a direction is "
+             "released (applies once auto-repeat is streaming)",
+    )
+    parser.add_argument(
+        "--initial_grace",
+        type=float,
+        default=INITIAL_GRACE_SECONDS,
+        help="Hold grace after the FIRST press of a key, bridging the OS "
+             "keyboard initial repeat delay (raise if you see a (0,0) blip "
+             "at the start of a hold)",
     )
     args = parser.parse_args()
 
@@ -144,7 +160,13 @@ def main() -> None:
 
     period = 1.0 / COMMAND_HZ
     last_sent: tuple[int, int] | None = None
-    last_press: dict[str, float] = {}  # key -> monotonic timestamp
+    # key -> (last press timestamp, auto-repeat confirmed)
+    last_press: dict[str, tuple[float, bool]] = {}
+
+    def held(key: str, now: float) -> bool:
+        t, repeating = last_press.get(key, (0.0, False))
+        limit = args.decay if repeating else args.initial_grace
+        return now - t < limit
     pending = ""          # incomplete escape sequence awaiting continuation
     pending_since = 0.0
     ESC_TIMEOUT = 0.15    # bare ESC (no continuation) quits after this
@@ -172,19 +194,21 @@ def main() -> None:
                 if key == " ":
                     last_press.clear()
                 else:
-                    last_press[key] = now
+                    prev_t, _ = last_press.get(key, (0.0, False))
+                    repeating = (now - prev_t) < REPEAT_DETECT_SECONDS
+                    last_press[key] = (now, repeating)
             if quit_requested:
                 break
 
             x_axis = 0.0
             y_axis = 0.0
-            if now - last_press.get("w", 0.0) < args.decay:
+            if held("w", now):
                 y_axis -= 1.0
-            if now - last_press.get("s", 0.0) < args.decay:
+            if held("s", now):
                 y_axis += 1.0
-            if now - last_press.get("a", 0.0) < args.decay:
+            if held("a", now):
                 x_axis -= 1.0
-            if now - last_press.get("d", 0.0) < args.decay:
+            if held("d", now):
                 x_axis += 1.0
 
             speed_a, speed_b = compute_wheel_speeds(
