@@ -1,12 +1,13 @@
 Panels:
   - Class: rviz/Displays
-    Help Height: 70
+    Help Height: 138
     Name: Displays
     Property Tree Widget:
       Expanded:
         - /Paths1
-      Splitter Ratio: 0.55
-    Tree Height: 500
+        - /TF (base)1/Frames1
+      Splitter Ratio: 0.598802387714386
+    Tree Height: 820
   - Class: rviz/Views
     Expanded:
       - /Current View1
@@ -25,7 +26,7 @@ Visualization Manager:
       Color: 160; 160; 164
       Enabled: true
       Line Style:
-        Line Width: 0.03
+        Line Width: 0.029999999329447746
         Value: Lines
       Name: Grid
       Normal Cell Count: 0
@@ -37,7 +38,7 @@ Visualization Manager:
       Plane Cell Count: 20
       Reference Frame: <Fixed Frame>
       Value: true
-    - Alpha: 0.7
+    - Alpha: 0.699999988079071
       Class: rviz/Map
       Color Scheme: map
       Draw Behind: true
@@ -49,16 +50,16 @@ Visualization Manager:
       Value: true
     - Class: rviz/Group
       Displays:
-        - Alpha: 1
+        - Alpha: 0.4
           Buffer Length: 1
           Class: rviz/Path
           Color: 37; 212; 18
           Enabled: true
-          Head Diameter: 0.3
-          Head Length: 0.2
-          Length: 0.3
+          Head Diameter: 0.30000001192092896
+          Head Length: 0.20000000298023224
+          Length: 0.30000001192092896
           Line Style: Billboards
-          Line Width: 0.035
+          Line Width: 0.08
           Name: Carto (reference)
           Offset:
             X: 0
@@ -66,32 +67,34 @@ Visualization Manager:
             Z: 0
           Pose Color: 255; 85; 255
           Pose Style: None
-          Radius: 0.03
-          Shaft Diameter: 0.1
-          Shaft Length: 0.1
+          Queue Size: 10
+          Radius: 0.029999999329447746
+          Shaft Diameter: 0.10000000149011612
+          Shaft Length: 0.10000000149011612
           Topic: /drift_test/carto_path
           Unreliable: false
           Value: true
-        - Alpha: 1
+        - Alpha: 0.55
           Buffer Length: 1
           Class: rviz/Path
           Color: 255; 0; 0
           Enabled: true
-          Head Diameter: 0.3
-          Head Length: 0.2
-          Length: 0.3
+          Head Diameter: 0.30000001192092896
+          Head Length: 0.20000000298023224
+          Length: 0.30000001192092896
           Line Style: Billboards
-          Line Width: 0.035
+          Line Width: 0.05
           Name: ZED raw (open loop)
           Offset:
             X: 0
             Y: 0
-            Z: 0
+            Z: 0.01
           Pose Color: 255; 85; 255
           Pose Style: None
-          Radius: 0.03
-          Shaft Diameter: 0.1
-          Shaft Length: 0.1
+          Queue Size: 10
+          Radius: 0.029999999329447746
+          Shaft Diameter: 0.10000000149011612
+          Shaft Length: 0.10000000149011612
           Topic: /drift_test/zed_path
           Unreliable: false
           Value: true
@@ -100,21 +103,22 @@ Visualization Manager:
           Class: rviz/Path
           Color: 255; 170; 0
           Enabled: true
-          Head Diameter: 0.3
-          Head Length: 0.2
-          Length: 0.3
+          Head Diameter: 0.30000001192092896
+          Head Length: 0.20000000298023224
+          Length: 0.30000001192092896
           Line Style: Billboards
-          Line Width: 0.035
+          Line Width: 0.022
           Name: ZED sanitized (open loop)
           Offset:
             X: 0
             Y: 0
-            Z: 0
+            Z: 0.02
           Pose Color: 255; 85; 255
           Pose Style: None
-          Radius: 0.03
-          Shaft Diameter: 0.1
-          Shaft Length: 0.1
+          Queue Size: 10
+          Radius: 0.029999999329447746
+          Shaft Diameter: 0.10000000149011612
+          Shaft Length: 0.10000000149011612
           Topic: /drift_test/zed_sanitized_path
           Unreliable: false
           Value: true
@@ -123,21 +127,22 @@ Visualization Manager:
           Class: rviz/Path
           Color: 0; 85; 255
           Enabled: true
-          Head Diameter: 0.3
-          Head Length: 0.2
-          Length: 0.3
+          Head Diameter: 0.30000001192092896
+          Head Length: 0.20000000298023224
+          Length: 0.30000001192092896
           Line Style: Billboards
-          Line Width: 0.035
+          Line Width: 0.022
           Name: Wheel odom (open loop)
           Offset:
             X: 0
             Y: 0
-            Z: 0
+            Z: 0.03
           Pose Color: 255; 85; 255
           Pose Style: None
-          Radius: 0.03
-          Shaft Diameter: 0.1
-          Shaft Length: 0.1
+          Queue Size: 10
+          Radius: 0.029999999329447746
+          Shaft Diameter: 0.10000000149011612
+          Shaft Length: 0.10000000149011612
           Topic: /drift_test/wheel_path
           Unreliable: false
           Value: true
@@ -145,16 +150,16 @@ Visualization Manager:
       Name: Paths
     - Alpha: 1
       Axes Length: 1
-      Axes Radius: 0.1
+      Axes Radius: 0.10000000149011612
       Class: rviz/Pose
       Color: 170; 0; 255
       Enabled: true
-      Head Length: 0.12
-      Head Radius: 0.08
+      Head Length: 0.11999999731779099
+      Head Radius: 0.07999999821186066
       Name: Anchor (lock point)
       Queue Size: 10
-      Shaft Length: 0.35
-      Shaft Radius: 0.03
+      Shaft Length: 0.3499999940395355
+      Shaft Radius: 0.029999999329447746
       Shape: Arrow
       Topic: /drift_test/anchor
       Unreliable: false
@@ -180,7 +185,7 @@ Visualization Manager:
       Queue Size: 10
       Selectable: true
       Size (Pixels): 2
-      Size (m): 0.02
+      Size (m): 0.019999999552965164
       Style: Points
       Topic: /lidar_r/scan
       Unreliable: false
@@ -208,7 +213,7 @@ Visualization Manager:
       Queue Size: 10
       Selectable: true
       Size (Pixels): 2
-      Size (m): 0.02
+      Size (m): 0.019999999552965164
       Style: Points
       Topic: /lidar_l/scan
       Unreliable: false
@@ -222,8 +227,114 @@ Visualization Manager:
       Frame Timeout: 15
       Frames:
         All Enabled: false
-        vention_base_link:
+        arm_base_link:
+          Value: false
+        arm_bracelet_link:
+          Value: false
+        arm_drink_tip:
+          Value: false
+        arm_drinkbase:
+          Value: false
+        arm_end_effector_link:
+          Value: false
+        arm_feeding_tool_tip:
+          Value: false
+        arm_finger_tip:
+          Value: false
+        arm_forearm_link:
+          Value: false
+        arm_fork_tip:
+          Value: false
+        arm_forkbase:
+          Value: false
+        arm_forkpitch:
+          Value: false
+        arm_forkroll:
+          Value: false
+        arm_half_arm_1_link:
+          Value: false
+        arm_half_arm_2_link:
+          Value: false
+        arm_inertia_link:
+          Value: false
+        arm_left_inner_finger:
+          Value: false
+        arm_left_inner_finger_pad:
+          Value: false
+        arm_left_inner_knuckle:
+          Value: false
+        arm_left_outer_finger:
+          Value: false
+        arm_left_outer_knuckle:
+          Value: false
+        arm_right_inner_finger:
+          Value: false
+        arm_right_inner_finger_pad:
+          Value: false
+        arm_right_inner_knuckle:
+          Value: false
+        arm_right_outer_finger:
+          Value: false
+        arm_right_outer_knuckle:
+          Value: false
+        arm_robotiq_arg2f_base_link:
+          Value: false
+        arm_shoulder_link:
+          Value: false
+        arm_spherical_wrist_1_link:
+          Value: false
+        arm_spherical_wrist_2_link:
+          Value: false
+        arm_tool_frame:
+          Value: false
+        arm_wipe_tip:
+          Value: false
+        arm_wipebase:
+          Value: false
+        base_link:
+          Value: false
+        camera_aligned_depth_to_color_frame:
+          Value: false
+        camera_color_frame:
+          Value: false
+        camera_color_optical_frame:
+          Value: false
+        camera_depth_frame:
+          Value: false
+        camera_depth_optical_frame:
+          Value: false
+        camera_link:
+          Value: false
+        dummy_frame:
+          Value: false
+        lidar_l:
+          Value: false
+        lidar_r:
+          Value: false
+        map:
           Value: true
+        odom:
+          Value: true
+        vention_base_cam_1_link:
+          Value: false
+        vention_base_link:
+          Value: false
+        world:
+          Value: false
+        zed_mini_base_link:
+          Value: false
+        zed_mini_camera_center:
+          Value: false
+        zed_mini_imu_link:
+          Value: false
+        zed_mini_left_camera_frame:
+          Value: false
+        zed_mini_left_camera_optical_frame:
+          Value: false
+        zed_mini_right_camera_frame:
+          Value: false
+        zed_mini_right_camera_optical_frame:
+          Value: false
       Marker Alpha: 1
       Marker Scale: 1.5
       Name: TF (base)
@@ -231,9 +342,270 @@ Visualization Manager:
       Show Axes: true
       Show Names: true
       Tree:
-        {}
+        map:
+          odom:
+            base_link:
+              zed_mini_base_link:
+                vention_base_link:
+                  dummy_frame:
+                    {}
+                  lidar_l:
+                    {}
+                  lidar_r:
+                    {}
+                  vention_base_cam_1_link:
+                    {}
+                  world:
+                    arm_base_link:
+                      arm_shoulder_link:
+                        arm_half_arm_1_link:
+                          arm_half_arm_2_link:
+                            arm_forearm_link:
+                              arm_spherical_wrist_1_link:
+                                arm_spherical_wrist_2_link:
+                                  arm_bracelet_link:
+                                    arm_end_effector_link:
+                                      arm_finger_tip:
+                                        arm_drinkbase:
+                                          arm_drink_tip:
+                                            {}
+                                        arm_forkbase:
+                                          arm_forkpitch:
+                                            arm_forkroll:
+                                              arm_feeding_tool_tip:
+                                                arm_fork_tip:
+                                                  {}
+                                        arm_wipebase:
+                                          arm_wipe_tip:
+                                            {}
+                                      arm_inertia_link:
+                                        {}
+                                      arm_robotiq_arg2f_base_link:
+                                        arm_left_inner_knuckle:
+                                          {}
+                                        arm_left_outer_knuckle:
+                                          arm_left_outer_finger:
+                                            arm_left_inner_finger:
+                                              arm_left_inner_finger_pad:
+                                                {}
+                                        arm_right_inner_knuckle:
+                                          {}
+                                        arm_right_outer_knuckle:
+                                          arm_right_outer_finger:
+                                            arm_right_inner_finger:
+                                              arm_right_inner_finger_pad:
+                                                {}
+                                      arm_tool_frame:
+                                        {}
+                                      camera_link:
+                                        camera_aligned_depth_to_color_frame:
+                                          camera_color_optical_frame:
+                                            {}
+                                        camera_color_frame:
+                                          {}
+                                        camera_depth_frame:
+                                          camera_depth_optical_frame:
+                                            {}
+                zed_mini_camera_center:
+                  zed_mini_left_camera_frame:
+                    zed_mini_imu_link:
+                      {}
+                    zed_mini_left_camera_optical_frame:
+                      {}
+                  zed_mini_right_camera_frame:
+                    zed_mini_right_camera_optical_frame:
+                      {}
       Update Interval: 0
       Value: true
+    - Alpha: 1
+      Class: rviz/RobotModel
+      Collision Enabled: false
+      Enabled: true
+      Links:
+        All Links Enabled: true
+        Expand Joint Details: false
+        Expand Link Details: false
+        Expand Tree: false
+        Link Tree Style: Links in Alphabetic Order
+        arm_base_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        arm_bracelet_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        arm_drink_tip:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        arm_drinkbase:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        arm_end_effector_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        arm_feeding_tool_tip:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        arm_finger_tip:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        arm_forearm_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        arm_fork_tip:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        arm_forkbase:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        arm_forkpitch:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        arm_forkroll:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        arm_half_arm_1_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        arm_half_arm_2_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        arm_inertia_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        arm_left_inner_finger:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        arm_left_inner_finger_pad:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        arm_left_inner_knuckle:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        arm_left_outer_finger:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        arm_left_outer_knuckle:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        arm_right_inner_finger:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        arm_right_inner_finger_pad:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        arm_right_inner_knuckle:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        arm_right_outer_finger:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        arm_right_outer_knuckle:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        arm_robotiq_arg2f_base_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        arm_shoulder_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        arm_spherical_wrist_1_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        arm_spherical_wrist_2_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        arm_tool_frame:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        arm_wipe_tip:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        arm_wipebase:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        dummy_frame:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        vention_base_cam_1_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        vention_base_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        world:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        zed_mini_base_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+      Name: RobotModel
+      Robot Description: robot_description
+      TF Prefix: ""
+      Update Interval: 0
+      Value: true
+      Visual Enabled: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -249,17 +621,17 @@ Visualization Manager:
   Value: true
   Views:
     Current:
-      Angle: 0
+      Angle: -0.29999998211860657
       Class: rviz/TopDownOrtho
       Enable Stereo Rendering:
-        Stereo Eye Separation: 0.06
+        Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Invert Z Axis: false
       Name: Current View
-      Near Clip Distance: 0.01
-      Scale: 60
+      Near Clip Distance: 0.009999999776482582
+      Scale: 128.15219116210938
       Target Frame: <Fixed Frame>
       X: 0
       Y: 0
@@ -267,7 +639,12 @@ Visualization Manager:
 Window Geometry:
   Displays:
     collapsed: false
-  Height: 900
-  Width: 1400
-  X: 60
-  Y: 60
+  Height: 1224
+  Hide Left Dock: false
+  Hide Right Dock: false
+  QMainWindow State: 000000ff00000000fd0000000100000000000001f70000042cfc0200000002fb000000100044006900730070006c006100790073010000006e0000042c0000018200fffffffb0000000a0056006900650077007300000002de000001bc0000013200ffffff000005db0000042c00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  Views:
+    collapsed: false
+  Width: 2014
+  X: 96
+  Y: 54
