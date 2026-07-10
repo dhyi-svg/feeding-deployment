@@ -36,8 +36,8 @@ COMMAND_HZ = 20.0
 
 DEFAULT_PORT = ("/dev/serial/by-id/"
                 "usb-Arduino__www.arduino.cc__0043_03536383236351603052-if00")
-DEFAULT_MAX_TRANSLATION_SPEED = 125   # counts/s
-DEFAULT_MAX_ROTATION_SPEED = 100      # counts/s
+DEFAULT_MAX_TRANSLATION_SPEED = 487   # counts/s ≈ 0.10 m/s @ 4874 counts/m
+DEFAULT_MAX_ROTATION_SPEED = 433      # counts/s ≈ 0.1667 rad/s @ 2600 counts/(rad/s)
 TURN_IN_PLACE_THRESHOLD = 0.20
 
 # Terminals deliver no key-up, so "held" is inferred from OS key-repeat presses,

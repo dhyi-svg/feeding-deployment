@@ -25,6 +25,7 @@
 9. [Is the compute laptop a bottleneck?](#9-is-the-compute-laptop-a-bottleneck)
 10. [Diagnostic & tuning runbook](#10-diagnostic--tuning-runbook)
 11. [Appendix: run-log evidence](#11-appendix-run-log-evidence)
+12. [Base command calibration & measured kinematics](#12-base-command-calibration--measured-kinematics)
 
 ---
 
@@ -363,8 +364,8 @@ against the installed package version).
 | ★ `weight_viapoint` | 1.0 | :93 | How hard the trajectory is pulled onto the global plan's via-points; higher = hug the plan (and its jitter) more tightly (was 5.0). |
 | ★ `weight_obstacle` | 100.0 | :89 | Penalty weight for approaching obstacles; higher = stronger standoff/avoidance. |
 | ★ `max_global_plan_lookahead_dist` | 1.0 | :15 | How far along the global plan TEB optimizes at once; longer averages over plan/yaw jitter but costs more compute. |
-| `max_vel_x` / `_backwards` | 0.4 / 0.4 | :25-26 | Max forward / reverse linear speed the optimizer will command (was 0.2 in the mined runs). |
-| `max_vel_theta` | 0.5 | :28 | Max angular (yaw) rate the optimizer will command. |
+| `max_vel_x` / `_backwards` | 0.075 / 0.075 | :25-26 | Max forward / reverse linear speed the optimizer commands. **Autonomy tier, tuned 2026-07-10 — see §12** (was 0.4). |
+| `max_vel_theta` | 0.125 | :28 | Max angular (yaw) rate. Set to 5/3 × `max_vel_x` (matches the teleop ratio, §12); was 0.5. |
 | `acc_lim_x` / `acc_lim_theta` | 0.7 / 1.5 | :29-30 | Linear / angular acceleration limits used to shape the trajectory (planner-model only — the actuator has no ramp). |
 | `dt_ref` / `dt_hysteresis` | 0.2 / 0.1 | :10-11 | Target time spacing between trajectory poses / hysteresis before the elastic band is resized. |
 | `xy_goal_tolerance` / `yaw_goal_tolerance` | 0.05 / 0.05 | :42-43 | Position / heading error at which the goal is declared reached. |
@@ -386,8 +387,8 @@ against the installed package version).
 ### 7.6 cmd_vel bridge — `launch/navigation.launch:46-51`
 | Param | Value | What it does |
 |---|---|---|
-| ★ `min_move_units` | 250 | Ratio-preserving stiction floor: if the dominant wheel command is below this, both wheels are scaled up to it so slow commands still move — but this floors in-place turns to ~0.417 rad/s and forward creep to ~0.3125 m/s (bug #4). |
-| `linear_scale` / `angular_scale` | 800 / 600 | Conversion gain from m/s / rad/s into motor "speed units". |
+| ★ `min_move_units` | 100 | Ratio-preserving **per-wheel** stiction floor: commands below it are scaled up so slow commands still move. At the calibrated scales this floors motion to **0.0205 m/s / 0.0385 rad/s** (§12). Breakaway sweep shows reliable motion to ~40 counts, so 100 keeps margin + fine control (was 250 ⇒ the old bang-bang, bug #4, resolved). |
+| `linear_scale` / `angular_scale` | 4874 / 2600 | m/s / rad/s → motor counts. **Physically calibrated (§12):** `linear_scale` = `counts_per_meter` so commanded m/s == actual; `angular_scale` from measured rotation (was 800 / 600 — ~6× / ~4× low). |
 | `w_deadband` | 0.03 (default) | Angular commands whose magnitude is below this are zeroed, to avoid sign-flip jitter near zero. |
 | `max_speed_units` | 2500 | Per-wheel command clamp (hardware/safety ceiling). |
 
@@ -580,3 +581,65 @@ snapshots show `max_vel_x=0.2`, `dt_ref=0.3`; current disk is 0.4 / 0.2):
 > Reproduce any row with the CSVs under
 > `src/feeding_deployment/integration/log/system_logs/<navlog_dir>/` — see
 > `scripts/nav_diag_logger.py` for the column schemas.
+
+---
+
+## 12. Base command calibration & measured kinematics
+
+*Direct-serial characterization on the NUC (base_server stopped, exclusive port), compass as ground truth, 2026-07-09/10. Authoritative record of the tuned numbers so they can be revisited/reverted. Tools: `scripts/base_cmd_path.py` + NUC-side `/tmp/{breakaway_step,straight_step,ab_step}.py`.*
+
+### 12.1 Measured constants
+| Const | Value | Meaning | How derived |
+|---|---|---|---|
+| `linear_scale` | 4874 | v [m/s] → wheel counts | set = `counts_per_meter` so commanded m/s == actual |
+| `angular_scale` | 2600 | w [rad/s] → wheel counts | measured rotation: 250 counts/s → 0.096 rad/s |
+| `counts_per_meter` | 4874 | odom counts → m | **confirmed**: 300 counts/s ×3 s = 16.3 cm enc vs 17 cm measured |
+| `track_width_m` | 0.85 | odom counts → yaw | nominal; effective skid track is wider (rotation slips ~20%) |
+| `min_move_units` | 100 | per-wheel stiction floor (counts) | breakaway sweep: reliable to ~40 counts ⇒ 100 = margin + fine control |
+| `max_speed_units` | 2500 | per-wheel output clamp | safety ceiling (~0.51 m/s/wheel) |
+| `w_deadband` | 0.03 rad/s | **angular anti-sign-flip ("non-jerk") threshold** | \|w\|<0.03 ⇒ go straight, so near-zero noise can't wiggle the heading. **No linear deadband** — slow forward creep is wanted for docking. |
+
+### 12.2 Minimum executable speeds (the floor)
+From `min_move_units=100` and the scales:
+- **Translational: 0.0205 m/s** (100/4874, ~2 cm/s). Smaller commands snap *up* to this; never zeroed.
+- **Rotational: 0.0385 rad/s ≈ 2.2°/s** (100/2600). Plus the 0.03 rad/s deadband: \|w\|<0.03 → 0; 0.03–0.0385 → snapped to 0.0385; above → as commanded.
+
+### 12.3 Slip by motion type
+Straight ≈ 0%, gentle arc ≈ 0%, **in-place rotation ≈ 20%**. In-place rotation is worst-case (max lateral scrub); arcs slip less. The drivetrain traces arcs faithfully, so arc mis-tracking is a config-ratio issue (scale ratio), not slip.
+
+### 12.4 Tuned speed set (cautious tier, 2026-07-10)
+Both slow; autonomy < teleop; 5/3 angular:linear ratio; floor kept at 100 (20–31% of these maxes ⇒ smooth control without touching the floor).
+
+| | linear | angular | where |
+|---|---|---|---|
+| Teleop (Xbox / webapp / drift) | 0.10 m/s | 0.1667 rad/s | `shared_autonomy.launch`, `webapp/.../navigation_teleop.vue`, `zed_drift_test.launch` |
+| Teleop (direct-serial, counts) | 487 | 433 | `teleop_keyboard_direct.py`, `vention_teleop_{keyboard,controller}.py` |
+| Autonomy (TEB) | 0.075 m/s | 0.125 rad/s | `config/nav/teb_local_planner.yaml` |
+
+Autonomy is conservative: only ~0.066 m/s is proven reliable for localization; faster is untested until Phase 2/3.
+
+### 12.5 Raw tuning-run data
+**Breakaway sweep (rotate-left, compass truth, slip-prone patch) → `min_move_units`:**
+| cmd (counts/s) | dur (s) | actual° | actual °/s |
+|---|---|---|---|
+| 250 | 2 | 11 | 5.5 |
+| 200 | 2 | 7 | 3.5 |
+| 150 | 2 | 6 | 3.0 |
+| 120 | 2 | 6 | 3.0 |
+| 100 | 3 | 7 | 2.3 |
+| 80 | 3 | 5 | 1.7 |
+| 60 | 4 | 5 | 1.25 |
+| 40 | 5 | 4 | 0.8 |
+
+⇒ no stiction stall down to 40 counts (the RoboClaw velocity loop keeps the wheels turning); ~20% slip vs encoders. So 250 was ~3–6× higher than needed.
+
+**Straight-line → `counts_per_meter` / `linear_scale`:** 300 counts/s × 3 s → encoder 16.3 cm, measured **17 cm** (≈0% slip) ⇒ `counts_per_meter` ≈ 4874 confirmed; 300 counts/s = 0.057 m/s actual ⇒ `linear_scale` ≈ 4874.
+
+**Arc (right 300 / left 150 × 5 s) → arc fidelity:** encoder 19.5 cm / 5.4°; measured **18 cm / 6°** (compass 114→108). Arc slip ≈ 0%, smooth even with the slow wheel at 150 counts.
+
+**Rotation → `angular_scale`:** 250 counts/s → 5.5°/s = 0.096 rad/s ⇒ `angular_scale` ≈ 250 / 0.096 ≈ 2600.
+
+### 12.6 Reverting / re-tuning
+- **Faster:** raise the teleop / TEB `max_vel_*` (and the direct-serial count defaults). The scales are physical, so `max_vel_x` values are true m/s — pick the actual speed you want.
+- **Min speed / granularity:** adjust the single `min_move_units` — do **not** split it per-axis (it's one per-wheel stiction limit). Don't go below ~40–60 counts (breakaway / jerk).
+- `angular_scale=2600` was measured on a slip-prone patch; re-verify on the deployment floor (less slip ⇒ the effective value is lower).

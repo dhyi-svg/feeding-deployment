@@ -53,11 +53,10 @@
          priority over /cmd_vel and WITHOUT the ZED-divergence hold gate (the
          human is supervising). Autonomous nav stays on /cmd_vel. -->
     <param name="cmd_vel_topic" value="/cmd_vel_teleop"/>
-    <!-- Quartered 2026-07-09 after the physical scale calibration (the bridge now
-         runs the full commanded speed). Still above the autonomy's TEB limits
-         (teb_local_planner.yaml: 0.1 m/s / 0.125 rad/s); deadman-gated, supervised. -->
-    <param name="max_vel_x" value="0.15"/>
-    <param name="max_vel_theta" value="0.25"/>
+    <!-- Teleop cap 0.10 m/s / 0.1667 rad/s (2026-07-10, 5/3 ratio). Kept above the
+         autonomy's TEB limits (see teb_local_planner.yaml); deadman-gated, supervised. -->
+    <param name="max_vel_x" value="0.10"/>
+    <param name="max_vel_theta" value="0.1667"/>
     <param name="deadband" value="0.12"/>
   </node>
 </launch>
