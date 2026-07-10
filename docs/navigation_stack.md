@@ -488,6 +488,32 @@ Tools: `scripts/base_cmd_path.py` (new), `calibrate_wheel_odom.py`, `bench_test_
   "never drop a changed setpoint" changes are **defensive only** (lag ≈ 0 ms in logs).
 - **Metric:** commanded-vs-applied overshoot on a fixed rotate ≤ target; smooth arcs.
 
+### Phase 1 — RESULTS (2026-07-09)
+*Direct-serial characterization on the NUC (base_server stopped, exclusive port), compass as ground truth. Tools: `base_cmd_path.py` (rotate_left/right/straight/reverse/arc); NUC-side `/tmp/{breakaway_step,straight_step,ab_step}.py`.*
+
+**Root cause of the intermittent 20–30° rotation overshoot: v7 firmware command-mangling.** The Arduino v7 firmware reads encoders over SoftwareSerial with interrupts masked, dropping bytes of inbound `A= B=` commands — **~5/s under active commanding** (the counter reached 121 in a ~2.5 min run; the base pane throttles WARN logs to 1 per 2 s, so counting log *lines* undercounts — read `unparseable total=`). A mangled **STOP** let the base coast to the firmware `CMD_STALE_MS=5000` watchdog → up to ~5 s × ~5.5°/s ≈ **27° overshoot** (the "20–30°"); a mangled **START** = commanded but no motion.
+- **Fix applied (host-side, no reflash):** persistent echo-confirm retry in `vention_arduino_control.py` — a ~50 Hz background keepalive re-sends the current setpoint until the firmware echoes `Parsed A=…`. Deployed to the NUC and **validated under load** (`session_202009_phase_1_scond`): the retry fired 4× on real mangled starts/stops, each resolved in <~1 s, and the mangle rate stayed ~5/s (no vicious-cycle hammer). Missed-stop coast is now ~0.1 s ≈ 0.5° instead of 27°. **This was the primary overshoot fix**, not the floor/scale tuning below.
+- **Band-aid, not a cure.** The ~5/s mangling is firmware-level and persists. Durable fix deferred (not needed yet): raise `ENC_POLL_MAX_MS` (300 → ≤500 ms; keep it **<1 s** or it defeats the retry's `encoders_fresh(1.0)` gate), or move to hardware UART / a checksum+ACK protocol. (memory: `v7-encoder-streaming-mangles-commands`)
+
+**Kinematics — revises the plan's assumptions:**
+- **No stiction floor exists down to 40 counts/s.** The RoboClaw velocity loop turns the wheels at every commanded speed 250→40; the base rotated reliably throughout. The plan's "min executable ω ≈ 0.417 rad/s" was a **config artifact** (`min_move_units=250 / angular_scale=600`), not a physical limit.
+- **Slip is motion-dependent:** straight ≈ 0%, gentle arc ≈ 0%, in-place rotation ≈ **20%**. **In-place rotation is the worst case; arcs slip *less*** (little lateral scrub) — the drivetrain traces blended arcs faithfully and smoothly. (Corrects the earlier worry that blends slip more.)
+- **Scale calibration (ground-truth measured):**
+  - `counts_per_meter ≈ 4874` **confirmed** (17 cm actual vs 16.3 cm encoder, straight).
+  - `linear_scale` should be **≈ 4874** (= counts_per_meter) but is **800 → ~6× low** (base moves ~16% of commanded m/s; deliberate "slow for localization").
+  - `angular_scale` should be **≈ 2600** (250 counts/s → 0.096 rad/s actual) but is **600 → ~4× low**.
+  - **Arc over-turn:** physical `linear:angular` ≈ 4874:2600 ≈ **1.87** vs configured 800:600 = **1.33** → blended arcs **over-turn ~40%** (tighter than TEB plans → wiggle on curves). A config-ratio bug, independent of slip.
+
+**Recommended `navigation.launch` changes — NOT yet applied:**
+1. `min_move_units`: 250 → **100** (finer near-goal; secondary now the retry killed the big overshoot).
+2. `linear_scale`: 800 → **~4874**.
+3. `angular_scale`: 600 → **~2600**.
+- **Mandatory coupling:** these set the gain from TEB command → actual motion; raising them 4–6× means re-setting TEB `max_vel_x` / `max_vel_theta` / `acc_lim_*` to the actual slow speeds wanted (~0.15 m/s, ~0.3 rad/s) **in the same edit**, or rotations/arcs turn aggressive and overshoot returns. Speed policy belongs in TEB limits, not in detuned scales. (memory: `base-command-calibration-jul9`)
+
+**Operational note:** "base won't move + `/cmd_vel_teleop` has traffic" in a manual bringup = the `cmd_vel_bridge` node isn't running (it lives in `navigation.launch`; a manual bringup that starts move_base alone omits it). Signature: base_server sends only `0,0`, `cmd_latency.csv` empty, no bridge in the rosmaster `+SUB` list — NOT the mangling/retry. (memory: `cmd-vel-bridge-missing-in-manual-bringup`)
+
+**Status:** overshoot root-caused and mitigated (retry deployed + validated under load); kinematics characterized; three param changes + a TEB-limit re-check queued but not applied.
+
 ### Phase 2 — Odometry / ZED (HIGHEST SEVERITY — gates 3–5)
 Tools: `drift_traces.launch record:=true` + `drift_trace_compare.py` + `drift_lock.py`.
 - Drive a fixed loop; watch raw(red)/sanitized(orange) vs carto(green) vs wheel(blue).

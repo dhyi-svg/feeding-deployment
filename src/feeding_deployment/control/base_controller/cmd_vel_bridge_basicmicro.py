@@ -79,11 +79,13 @@ class CmdVelBridgeBasicmicro:
         self.cmd_vel_topic = rospy.get_param("~cmd_vel_topic", "/cmd_vel")
 
         # Convert m/s and rad/s into "speed units" used by your motor controller.
-        # Start with these, then tune:
-        # - If robot is too slow: increase linear_scale
-        # - If steering is too weak/strong: adjust angular_scale
-        self.linear_scale = float(rospy.get_param("~linear_scale", 1000.0))
-        self.angular_scale = float(rospy.get_param("~angular_scale", 800.0))
+        # Defaults physically calibrated 2026-07-09 (direct-serial sweeps):
+        # linear_scale == counts_per_meter (4874) so commanded m/s == actual;
+        # angular_scale (2600) from measured rotation (250 counts/s -> 0.096 rad/s).
+        # Govern speed via TEB max_vel_*, NOT by detuning these. (launch files
+        # override; angular measured on a slip-prone patch -- verify on real floor.)
+        self.linear_scale = float(rospy.get_param("~linear_scale", 4874.0))
+        self.angular_scale = float(rospy.get_param("~angular_scale", 2600.0))
 
         # Deadband on angular velocity (rad/s) to avoid sign-flip jitter.
         self.w_deadband = float(rospy.get_param("~w_deadband", 0.03))
@@ -99,7 +101,7 @@ class CmdVelBridgeBasicmicro:
         # IMPORTANT: do NOT reintroduce a per-wheel minimum here -- forcing each
         # wheel up independently snaps gentle arcs to pure-straight/pure-spin,
         # which is the "translate OR rotate, never both" bug this replaced.
-        self.min_move_units = int(rospy.get_param("~min_move_units", 250))
+        self.min_move_units = int(rospy.get_param("~min_move_units", 100))
 
         # If your wiring is flipped, you can invert left/right or swap outputs:
         self.invert_left = bool(rospy.get_param("~invert_left", False))

@@ -57,10 +57,13 @@
         name="cmd_vel_bridge_basicmicro"
         output="screen"
         cwd="node">
-    <param name="linear_scale" value="800.0"/>
-    <param name="angular_scale" value="600.0"/>
+    <!-- Physically calibrated 2026-07-09 (see navigation.launch). ~4-6x higher than
+         before, so the base now runs the full commanded speed; lower the teleop
+         max_vel_x/theta above and TEB max_vel_* before fast autonomous runs. -->
+    <param name="linear_scale" value="4874.0"/>
+    <param name="angular_scale" value="2600.0"/>
     <param name="max_speed_units" value="2500"/>
-    <param name="min_move_units" value="250"/>
+    <param name="min_move_units" value="100"/>
   </node>
 
   <!-- Observers (wheel odom + tracer + optional rviz/rosbag) live in

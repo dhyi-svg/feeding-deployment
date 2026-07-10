@@ -41,14 +41,19 @@
         output="screen"
         cwd="node">
 
-    <!-- conservative defaults; tune these. linear_scale is kept low on purpose:
-         autonomous nav stays slow, which helps localization. -->
-    <param name="linear_scale" value="800.0"/>
-    <param name="angular_scale" value="600.0"/>
+    <!-- Physically calibrated 2026-07-09 (direct-serial sweeps): linear_scale ==
+         counts_per_meter (4874) so commanded m/s == actual; angular_scale (2600)
+         from measured rotation (250 counts/s -> 0.096 rad/s). Speed is governed by
+         TEB max_vel_*, NOT by detuning these. WARNING: ~4-6x higher than before, so
+         the base now runs the full TEB-commanded speed (0.4 m/s / 0.5 rad/s), for
+         teleop AND autonomy; lower TEB max_vel_* before autonomous runs. angular_scale
+         measured on a slip-prone patch; verify/re-tune on the deployment floor. -->
+    <param name="linear_scale" value="4874.0"/>
+    <param name="angular_scale" value="2600.0"/>
     <param name="max_speed_units" value="2500"/>
     <!-- Ratio-preserving stiction floor (units); scales both wheels together so
          slow commands still move without flattening arcs. 0 disables. -->
-    <param name="min_move_units" value="250"/>
+    <param name="min_move_units" value="100"/>
   </node>
 
   <!-- ZED-divergence safety interlock: asserts /nav_safety_hold when the ZED VIO
