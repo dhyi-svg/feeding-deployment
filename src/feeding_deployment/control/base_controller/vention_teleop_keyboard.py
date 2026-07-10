@@ -12,8 +12,8 @@ from base_client import BaseInterfaceClient
 
 COMMAND_HZ = 20.0
 
-DEFAULT_MAX_TRANSLATION_SPEED = 500
-DEFAULT_MAX_ROTATION_SPEED = 400
+DEFAULT_MAX_TRANSLATION_SPEED = 125
+DEFAULT_MAX_ROTATION_SPEED = 100
 TURN_IN_PLACE_THRESHOLD = 0.20
 
 # A direction is considered "held" as long as a press for it has arrived

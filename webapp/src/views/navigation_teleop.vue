@@ -54,10 +54,11 @@ import { skillLabel } from '@/config/skillLabels'
 import { categoryOf } from '@/config/skillCategories'
 
 // Takeover driving is human-supervised, so these are intentionally faster than
-// the autonomy's TEB limits (0.2 m/s / 0.5 rad/s). Published on /cmd_vel_teleop,
-// which the cmd_vel bridge executes with priority and without the ZED hold gate.
-const MAX_LIN = 0.6
-const MAX_ANG = 1.0
+// the autonomy's TEB limits (0.1 m/s / 0.125 rad/s). Quartered 2026-07-09 after the
+// physical scale calibration (the bridge now runs the full commanded speed).
+// Published on /cmd_vel_teleop, executed with priority and without the ZED hold gate.
+const MAX_LIN = 0.15
+const MAX_ANG = 0.25
 const SEND_HZ = 10
 const R = 96
 const KCENTER = 96

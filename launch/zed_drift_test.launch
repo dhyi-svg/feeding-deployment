@@ -44,8 +44,8 @@
     <param name="axis_linear" value="1"/>
     <param name="axis_angular" value="0"/>
     <param name="cmd_vel_topic" value="/cmd_vel_teleop"/>
-    <param name="max_vel_x" value="0.6"/>
-    <param name="max_vel_theta" value="1.0"/>
+    <param name="max_vel_x" value="0.15"/>
+    <param name="max_vel_theta" value="0.25"/>
     <param name="deadband" value="0.12"/>
   </node>
 
