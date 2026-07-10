@@ -3,13 +3,16 @@
 drift_trace_compare.py
 
 Map-anchored live comparison of independent motion witnesses, for localizing
-WHERE the ZED VIO misbehaves in the home. Four traces, all in `map`:
+WHERE the ZED VIO misbehaves in the home. Five traces, all in `map`:
 
   /drift_test/carto_path          green   live map->vention_base_link (lidar-
                                           corrected reference, closed loop)
   /drift_test/zed_path            red     RAW ZED odom, OPEN LOOP after lock
   /drift_test/zed_sanitized_path  orange  sanitized ZED odom, open loop
   /drift_test/wheel_path          blue    /wheel_odom, open loop
+  /drift_test/fused_path          purple  /odometry/fused (EKF: sanitized-ZED +
+                                          wheel), open loop -- present only when
+                                          fused_odom_observer.launch's EKF runs
 
 Nothing is published until the anchor is LOCKED via the std_srvs/Trigger
 service /drift_test/lock (use scripts/drift_lock.py for press-Enter UX; call
@@ -21,7 +24,11 @@ current wheel-odom pose. Open-loop samples are then baked into map AT CAPTURE
 TIME:
 
     ZED (raw/sanitized):  P(t) = M0 . Z(t) . E
-    wheel:                P(t) = T0 . W0^-1 . W(t)
+    wheel / fused:        P(t) = T0 . W0^-1 . W(t)
+
+The fused trace is baked exactly like the wheel trace: /odometry/fused is a
+dead-reckoning odometry in its own frame, so its first post-lock sample latches
+an anchor paired with the fresh carto pose and it runs open-loop from there.
 
 where Z(t) is the odom->zed_mini_base_link pose in the ZED message and E is
 the static zed_mini_base_link->vention_base_link URDF transform. Baking with
@@ -134,6 +141,11 @@ class DriftTraceCompare:
         # (An Arduino/RoboClaw reset does NOT do this -- the publisher holds
         # pose across those; only a node restart re-zeroes.)
         self.wheel_jump_m = float(rospy.get_param("~wheel_jump_m", 1.0))
+        # Fused odometry (EKF from fused_odom_observer.launch). OPTIONAL: absent
+        # unless that EKF is running, so it never gates the lock. Baked open-loop
+        # exactly like the wheel trace; same one-sample-jump freeze on a restart.
+        self.fused_topic = rospy.get_param("~fused_odom_topic", "/odometry/fused")
+        self.fused_jump_m = float(rospy.get_param("~fused_jump_m", 1.0))
 
         self.tf_buffer = tf2_ros.Buffer(rospy.Duration(30.0))
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
@@ -142,18 +154,28 @@ class DriftTraceCompare:
         self.locked = False
         self.M0 = None            # map->odom at lock
         self.T0 = None            # map->base at lock (published anchor)
-        self.W0_inv = None        # inverse of wheel pose at wheel-anchor latch
-        self.wheel_T0 = None      # map->base at wheel-anchor latch (see _cb_wheel)
         self.E = None             # zed_mini_base_link->vention_base_link (static)
-        self.last_wheel_mat = None    # latest wheel_odom pose (pre-lock cache)
-        self.last_wheel_baked = None  # last baked wheel point (jump detection)
-        self.wheel_frozen = False
+        # Per-source open-loop (dead-reckoning) baking state, shared by the wheel
+        # and fused traces: each integrates in its OWN frame, so its first
+        # post-lock sample latches an anchor (T0 . W0^-1) paired with the fresh
+        # carto pose, then runs open-loop. 'require_for_lock' gates the lock only
+        # on the wheel (always present); fused is optional.
+        def _dr_state(topic, jump_m, require_for_lock):
+            return {"topic": topic, "jump_m": jump_m,
+                    "require_for_lock": require_for_lock,
+                    "W0_inv": None, "T0": None, "last_mat": None,
+                    "last_baked": None, "frozen": False}
+        self._dr = {
+            "wheel": _dr_state(self.wheel_topic, self.wheel_jump_m, True),
+            "fused": _dr_state(self.fused_topic, self.fused_jump_m, False),
+        }
 
         self.traces = {
             "carto": Trace(min_step_m, min_step_rad, max_poses),
             "zed": Trace(min_step_m, min_step_rad, max_poses),
             "zed_sanitized": Trace(min_step_m, min_step_rad, max_poses),
             "wheel": Trace(min_step_m, min_step_rad, max_poses),
+            "fused": Trace(min_step_m, min_step_rad, max_poses),
         }
         self.path_pubs = {
             "carto": rospy.Publisher("/drift_test/carto_path", Path, queue_size=2),
@@ -161,13 +183,16 @@ class DriftTraceCompare:
             "zed_sanitized": rospy.Publisher("/drift_test/zed_sanitized_path",
                                              Path, queue_size=2),
             "wheel": rospy.Publisher("/drift_test/wheel_path", Path, queue_size=2),
+            "fused": rospy.Publisher("/drift_test/fused_path", Path, queue_size=2),
         }
         self.anchor_pub = rospy.Publisher("/drift_test/anchor", PoseStamped,
                                           queue_size=1, latch=True)
 
         rospy.Subscriber(self.raw_topic, Odometry, self._cb_zed_raw, queue_size=20)
         rospy.Subscriber(self.san_topic, Odometry, self._cb_zed_san, queue_size=20)
-        rospy.Subscriber(self.wheel_topic, Odometry, self._cb_wheel, queue_size=20)
+        for key, st in self._dr.items():
+            rospy.Subscriber(st["topic"], Odometry,
+                             lambda m, k=key: self._cb_dr(m, k), queue_size=20)
         rospy.Service("/drift_test/lock", Trigger, self._srv_lock)
 
         rospy.Timer(rospy.Duration(1.0 / self.carto_rate), self._tick_carto)
@@ -205,25 +230,26 @@ class DriftTraceCompare:
             return TriggerResponse(success=False,
                                    message="static zed->base TF missing (sensors up?)")
         with self.lock:
-            if self.last_wheel_mat is None:
+            if self._dr["wheel"]["last_mat"] is None:
                 return TriggerResponse(
                     success=False,
                     message="no /wheel_odom yet (wheel_odom_publisher up? "
                             "base_server on the NUC?)")
             self.M0 = m0
             self.T0 = t0
-            # Wheel anchor is deliberately NOT latched here: the cached wheel
-            # sample can be ~100-200 ms staler than the TF snapshot (10 Hz +
-            # RPC age), which would bake a constant offset into the whole blue
-            # trace if the operator locks while moving. Instead the first
-            # post-lock wheel message latches (fresh TF, fresh wheel pose) at
-            # the same instant -- see _cb_wheel.
-            self.W0_inv = None
-            self.wheel_T0 = None
+            # Dead-reckoning anchors (wheel, fused) are deliberately NOT latched
+            # here: the cached sample can be ~100-200 ms staler than the TF
+            # snapshot, which would bake a constant offset into the whole trace
+            # if the operator locks while moving. Instead the first post-lock
+            # message of each source latches (fresh TF, fresh pose) at the same
+            # instant -- see _cb_dr.
+            for st in self._dr.values():
+                st["W0_inv"] = None
+                st["T0"] = None
+                st["frozen"] = False
+                st["last_baked"] = None
             for t in self.traces.values():
                 t.clear()
-            self.wheel_frozen = False
-            self.last_wheel_baked = None
             self.locked = True
         stamp = rospy.Time.now()
         self.anchor_pub.publish(mat_to_pose_stamped(t0, stamp))
@@ -248,40 +274,43 @@ class DriftTraceCompare:
             baked = self.M0 @ z @ E
             self.traces[key].append(baked, msg.header.stamp)
 
-    def _cb_wheel(self, msg):
+    def _cb_dr(self, msg, key):
+        """Bake an open-loop dead-reckoning odometry (wheel or fused) into map,
+        anchored at its first post-lock sample; freeze on a one-sample restart
+        jump. Both sources integrate in their own frame, so the math is
+        identical -- only the per-source state self._dr[key] differs."""
+        st = self._dr[key]
         w = pose_to_mat(msg.pose.pose)
         with self.lock:
-            self.last_wheel_mat = w
-            if not self.locked or self.wheel_frozen:
+            st["last_mat"] = w
+            if not self.locked or st["frozen"]:
                 return
-            if self.W0_inv is None:
-                # First post-lock wheel message: latch the wheel anchor NOW,
-                # pairing this wheel pose with the CURRENT carto pose. Both
-                # are fresh, so no stale-sample bias; the first baked point is
-                # the anchor itself, so the jump check below is meaningful
-                # from the second sample onward.
+            if st["W0_inv"] is None:
+                # First post-lock message: latch this source's anchor NOW,
+                # pairing its pose with the CURRENT carto pose. Both are fresh,
+                # so no stale-sample bias; the first baked point is the anchor
+                # itself, so the jump check is meaningful from the 2nd sample.
                 try:
                     tr = self.tf_buffer.lookup_transform(
                         self.map_frame, self.base_frame, rospy.Time(0))
                 except Exception:
-                    return  # TF hiccup; try again on the next wheel message
-                self.wheel_T0 = transform_to_mat(tr.transform)
-                self.W0_inv = np.linalg.inv(w)
-            baked = self.wheel_T0 @ self.W0_inv @ w
-            if self.last_wheel_baked is not None:
-                px, py, _ = mat_xy_yaw(self.last_wheel_baked)
+                    return  # TF hiccup; try again on the next message
+                st["T0"] = transform_to_mat(tr.transform)
+                st["W0_inv"] = np.linalg.inv(w)
+            baked = st["T0"] @ st["W0_inv"] @ w
+            if st["last_baked"] is not None:
+                px, py, _ = mat_xy_yaw(st["last_baked"])
                 x, y, _ = mat_xy_yaw(baked)
-                if math.hypot(x - px, y - py) > self.wheel_jump_m:
-                    self.wheel_frozen = True
+                if math.hypot(x - px, y - py) > st["jump_m"]:
+                    st["frozen"] = True
                     rospy.logerr(
-                        "drift_trace_compare: wheel trace jumped %.1f m in one "
-                        "sample -- wheel_odom_publisher restarted (pose "
-                        "re-zeroed)? Wheel trace FROZEN; re-lock "
-                        "(/drift_test/lock) to resume.",
-                        math.hypot(x - px, y - py))
+                        "drift_trace_compare: %s trace jumped %.1f m in one "
+                        "sample -- source restarted (pose re-zeroed)? '%s' trace "
+                        "FROZEN; re-lock (/drift_test/lock) to resume.",
+                        key, math.hypot(x - px, y - py), key)
                     return
-            self.last_wheel_baked = baked
-            self.traces["wheel"].append(baked, msg.header.stamp)
+            st["last_baked"] = baked
+            self.traces[key].append(baked, msg.header.stamp)
 
     # ---- timers ----
     def _tick_carto(self, _evt):

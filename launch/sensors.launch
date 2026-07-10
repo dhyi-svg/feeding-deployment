@@ -86,6 +86,26 @@
   <param name="/$(arg camera_name)/zed_node/pos_tracking/odometry_frame" value="$(arg odom_frame)"/>
   <param name="/$(arg camera_name)/zed_node/pos_tracking/map_frame"      value="$(arg map_frame)"/>
   <param name="/$(arg camera_name)/zed_node/pos_tracking/base_frame"     value="$(arg camera_base_frame)"/>
+  <!-- Disable ZED spatial memory / loop closure. With area_memory on, the SDK
+       detects previously-visited areas and applies discrete pose corrections.
+       Those corrections land in the map/pose output (map->odom), NOT the odom
+       topic; since publish_map_tf=false and we consume /zed_node/odom, they are
+       mostly unused anyway, but keeping it off guarantees no loop-closure
+       machinery runs and saves SDK compute. Also ensure no saved map is
+       loaded/re-saved (both already default off in common.yaml). -->
+  <param name="/$(arg camera_name)/zed_node/pos_tracking/area_memory"              value="false"/>
+  <param name="/$(arg camera_name)/zed_node/pos_tracking/save_area_memory_db_on_exit" value="false"/>
+  <param name="/$(arg camera_name)/zed_node/pos_tracking/area_memory_db_path"      value=""/>
+  <param name="/$(arg camera_name)/zed_node/pos_tracking/floor_alignment"          value="false"/>
+  <!-- Constrain VIO to the ground plane: fix z=0, roll=pitch=0. Under bright
+       light (sunlight/flashlight) the ZED loses visual features and its 6-DOF
+       pose drifts OUT OF PLANE (observed: z->-0.77 m, pitch ~-52 deg, frame
+       flips), which Cartographer then absorbs into map->odom. This clamps the
+       out-of-plane DOF so odom stays planar. NOTE: does NOT constrain yaw;
+       in-plane yaw can still drift with no visual features (needs wheel+IMU or
+       a yaw vs gyro gate). See navlog_20260709_144001. -->
+  <param name="/$(arg camera_name)/zed_node/pos_tracking/two_d_mode"     value="true"/>
+  <param name="/$(arg camera_name)/zed_node/pos_tracking/fixed_z_value"  value="0.0"/>
 
   <!-- Convert ZED odom pose deltas into odom feedback for move_base (from base_sensors.launch) -->
   <node pkg="feeding_deployment"

@@ -1,0 +1,92 @@
+# ekf_zed_wheel.yaml -- robot_localization EKF, Stage 1 fused-odometry OBSERVER.
+#
+# Fuses the SANITIZED ZED velocity with the wheel-encoder velocity into a single
+# dead-reckoning "fused odometry" (/odometry/fused), for the drift-trace test.
+#
+#   odom0 = /move_base/odom_feedback_cov  -- the SANITIZED ZED velocity (windowed
+#           derivative of the teleport-gated ZED pose; see
+#           zed_pose_to_odom_feedback.py) with the raw ZED SDK covariance stamped
+#           on by zed_feedback_cov_relay.py, so the EKF trusts ZED less when VIO
+#           is uncertain. Sanitized, so VIO teleports never enter the fusion.
+#   odom1 = /wheel_odom               -- encoder velocity (body-frame twist;
+#           forward good, yaw advisory: skid-steer scrub, ~35 deg full-turn
+#           under-rotation -- hence low weight / not over-trusted below).
+#
+# TWIST-ONLY fusion of both (no absolute pose/orientation), so /odometry/fused
+# is a pure dead-reckoning estimate directly comparable to the pure-ZED (red)
+# and pure-wheel (blue) open-loop traces in drift_trace_compare.py.
+#
+# publish_tf: false  -- Stage 1 is OBSERVE-ONLY. The ZED still owns odom->base
+# and Cartographer keeps its own prior; this node ONLY publishes the
+# /odometry/fused TOPIC (remapped from odometry/filtered in
+# fused_odom_observer.launch). Nothing downstream consumes it. Flipping this to
+# publish odom->base is Stage 2, and only after the traces show fusion helps.
+#
+# Frames: base_link_frame = vention_base_link matches /wheel_odom's child frame
+# (no transform). /move_base/odom_feedback has child_frame_id
+# zed_mini_base_link; robot_localization transforms its twist into
+# vention_base_link over the static URDF TF (identity rotation, pure
+# translation), so the lever-arm term is handled -- sensors.launch must be up
+# for that TF.
+
+frequency: 20.0
+sensor_timeout: 0.2
+two_d_mode: true
+publish_tf: false
+publish_acceleration: false
+
+map_frame: map
+odom_frame: odom
+base_link_frame: vention_base_link
+world_frame: odom
+
+# --- odom0: sanitized ZED velocity + propagated ZED SDK covariance ---
+odom0: /move_base/odom_feedback_cov
+#              x      y      z      roll   pitch  yaw    vx     vy     vz     vr     vp     vyaw   ax     ay     az
+odom0_config: [false, false, false, false, false, false, true,  true,  false, false, false, true,  false, false, false]
+odom0_differential: false
+odom0_relative: false
+odom0_queue_size: 10
+
+# --- odom1: wheel-encoder velocity (body-frame twist; yaw advisory) ---
+odom1: /wheel_odom
+#              x      y      z      roll   pitch  yaw    vx     vy     vz     vr     vp     vyaw   ax     ay     az
+odom1_config: [false, false, false, false, false, false, true,  false, false, false, false, true,  false, false, false]
+odom1_differential: false
+odom1_relative: false
+odom1_queue_size: 10
+
+# Standard robot_localization template diagonals. Tune the vx (index 6) /
+# vyaw (index 11) entries if the fused line is too jerky (raise) or too sluggish
+# to follow real motion (lower). Sensor covariances come from each message.
+process_noise_covariance: [0.05, 0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    0,
+                           0,    0.05, 0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    0,
+                           0,    0,    0.06, 0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    0,
+                           0,    0,    0,    0.03, 0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    0,
+                           0,    0,    0,    0,    0.03, 0,    0,     0,     0,    0,    0,    0,    0,    0,    0,
+                           0,    0,    0,    0,    0,    0.06, 0,     0,     0,    0,    0,    0,    0,    0,    0,
+                           0,    0,    0,    0,    0,    0,    0.025, 0,     0,    0,    0,    0,    0,    0,    0,
+                           0,    0,    0,    0,    0,    0,    0,     0.025, 0,    0,    0,    0,    0,    0,    0,
+                           0,    0,    0,    0,    0,    0,    0,     0,     0.04, 0,    0,    0,    0,    0,    0,
+                           0,    0,    0,    0,    0,    0,    0,     0,     0,    0.01, 0,    0,    0,    0,    0,
+                           0,    0,    0,    0,    0,    0,    0,     0,     0,    0,    0.01, 0,    0,    0,    0,
+                           0,    0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    0.02, 0,    0,    0,
+                           0,    0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    0.01, 0,    0,
+                           0,    0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    0.01, 0,
+                           0,    0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    0.015]
+
+initial_estimate_covariance: [1e-9, 0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
+                              0,    1e-9, 0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
+                              0,    0,    1e-9, 0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
+                              0,    0,    0,    1e-9, 0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
+                              0,    0,    0,    0,    1e-9, 0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
+                              0,    0,    0,    0,    0,    1e-9, 0,    0,    0,    0,    0,    0,    0,    0,    0,
+                              0,    0,    0,    0,    0,    0,    1e-9, 0,    0,    0,    0,    0,    0,    0,    0,
+                              0,    0,    0,    0,    0,    0,    0,    1e-9, 0,    0,    0,    0,    0,    0,    0,
+                              0,    0,    0,    0,    0,    0,    0,    0,    1e-9, 0,    0,    0,    0,    0,    0,
+                              0,    0,    0,    0,    0,    0,    0,    0,    0,    1e-9, 0,    0,    0,    0,    0,
+                              0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    1e-9, 0,    0,    0,    0,
+                              0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    1e-9, 0,    0,    0,
+                              0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    1e-9, 0,    0,
+                              0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    1e-9, 0,
+                              0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    1e-9]

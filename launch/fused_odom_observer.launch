@@ -1,0 +1,72 @@
+<launch>
+  <!-- Stage 1 fused-odometry OBSERVER.
+
+       A robot_localization EKF fuses the SANITIZED ZED velocity
+       (/move_base/odom_feedback) with the wheel velocity (/wheel_odom) into
+       /odometry/fused, alongside the drift-trace observers. The tracer then
+       draws five map-anchored lines (drive with teleop, watch/record):
+
+         green  carto          map->base  (lidar-corrected reference)
+         red    zed            raw ZED odom            (open loop)
+         orange zed_sanitized  sanitized ZED odom      (open loop)
+         blue   wheel          /wheel_odom             (open loop)
+         purple fused          /odometry/fused (EKF)   (open loop)
+
+       OBSERVE-ONLY: the EKF's publish_tf is false (see ekf_zed_wheel.yaml), so
+       the ZED still owns odom->base and Cartographer keeps its own prior;
+       NOTHING downstream consumes /odometry/fused. This is the zero-risk Stage
+       1; feeding the fusion into Cartographer is Stage 2.
+
+       Bring-up (teleop drift test; do NOT run navigation.launch):
+         # NUC: base_server up.  compute: sensors.launch + cartographer pane.
+         roslaunch feeding_deployment fused_odom_observer.launch record:=true rviz:=true
+         rosrun feeding_deployment drift_lock.py   # let localization settle,
+                                                   # ENTER to lock, then drive.
+       Offline PNG afterward (optionally pass your map yaml for a background):
+         python scripts/plot_drift_bag.py
+  -->
+
+  <arg name="rviz"    default="false"/>
+  <arg name="record"  default="false"/>
+  <arg name="log_dir"
+       default="$(find feeding_deployment)/src/feeding_deployment/integration/log/system_logs"/>
+
+  <!-- Stamp the raw ZED SDK covariance onto the sanitized velocity (the
+       sanitizer drops it) -> /move_base/odom_feedback_cov, the EKF's odom0. -->
+  <node pkg="feeding_deployment" type="zed_feedback_cov_relay.py"
+        name="zed_feedback_cov_relay" output="screen"/>
+
+  <!-- The fused-odometry EKF. publish_tf:=false lives in the yaml; here we only
+       remap the default output topic to /odometry/fused. -->
+  <node pkg="robot_localization" type="ekf_localization_node"
+        name="ekf_zed_wheel" clear_params="true" output="screen">
+    <rosparam command="load"
+              file="$(find feeding_deployment)/config/nav/ekf_zed_wheel.yaml"/>
+    <remap from="odometry/filtered" to="/odometry/fused"/>
+  </node>
+
+  <!-- Drift-trace observers (wheel_odom_publisher + drift_trace_compare, now
+       with the purple /drift_test/fused_path). record:=false here; we own one
+       superset bag below so it also captures the fused topics + baked Paths. -->
+  <include file="$(find feeding_deployment)/launch/drift_traces.launch">
+    <arg name="rviz"   value="$(arg rviz)"/>
+    <arg name="record" value="false"/>
+  </include>
+
+  <!-- One bag: the drift_traces set PLUS the fused inputs/output and the baked
+       /drift_test/*_path topics, so plot_drift_bag.py needs no offline TF math.
+       (Recording the growing Paths costs some MB on a long run; fine for a
+       short drift loop.) -->
+  <node if="$(arg record)" pkg="rosbag" type="record" name="fused_drift_record"
+        args="record -o $(arg log_dir)/fused_drift
+              /tf /tf_static /cmd_vel_teleop
+              /zed_mini/zed_node/odom /zed_mini/zed_node/odom_sanitized
+              /move_base/odom_feedback /move_base/odom_feedback_cov /odometry/fused
+              /wheel_odom /wheel_odom/counts /wheel_odom/side_disagreement
+              /nav_safety_hold /nav_safety_hold_reason
+              /drift_test/anchor
+              /drift_test/carto_path /drift_test/zed_path
+              /drift_test/zed_sanitized_path /drift_test/wheel_path
+              /drift_test/fused_path
+              /lidar_r/scan /lidar_l/scan"/>
+</launch>

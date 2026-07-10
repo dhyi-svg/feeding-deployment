@@ -253,7 +253,9 @@ class NavigateHLA(HighLevelAction):
         a human rescue can take arbitrarily long and must not trip it. The
         shared_autonomy_manager owns the AUTONOMOUS/TELEOP state machine; we
         mirror it here by watching the same takeover/resume intents the webapp
-        and Xbox node publish. (done ends the action, so it needs no handling.)
+        and Xbox node publish. We also latch "done" directly (see
+        _done_pressed_this_leg) so "the human parked it" never depends on the
+        manager's state or the action's status text.
         """
         if getattr(self, "_teleop_subs_ready", False):
             return
@@ -263,6 +265,13 @@ class NavigateHLA(HighLevelAction):
         # they want (measure), "resume" = user handed back without finishing
         # (abort, no update).
         self._adjust_end_reason = None
+        # Reliable per-leg record of a Done press: set the instant
+        # /shared_autonomy/done arrives (native ROS subscription -- no dependency
+        # on the manager reaching TELEOP or on actionlib status-text propagation,
+        # both of which can race/drop). Reset at the start of each drive leg;
+        # consulted when the leg succeeds to decide "human parked it" -> skip the
+        # confirm re-drive.
+        self._done_pressed_this_leg = False
         rospy.Subscriber(
             "/shared_autonomy/takeover", Empty, self._on_teleop_takeover, queue_size=1
         )
@@ -316,10 +325,15 @@ class NavigateHLA(HighLevelAction):
         self._adjust_end_reason = "resume"
 
     def _on_teleop_done(self, _msg: "Empty") -> None:
-        # During goal-driven navigation "done" terminates the action via the
-        # manager; this flag only matters for the goal-less adjust flow.
+        # "done" = the human parked the base and is finished. Two consumers:
+        #   - goal-driven navigation: the manager reports SUCCEEDED; we also latch
+        #     _done_pressed_this_leg here so the "human parked it" decision never
+        #     depends on the manager reaching TELEOP or on the action's status
+        #     text (both can race/drop -- see _drive_to_pose's success branch).
+        #   - goal-less post-arrival adjust flow: driven by _adjust_end_reason.
         self._teleop_active = False
         self._adjust_end_reason = "done"
+        self._done_pressed_this_leg = True
 
     def _publish_base_takeover(self) -> None:
         """Assert a shared-autonomy takeover from the backend so the manager
@@ -537,6 +551,9 @@ class NavigateHLA(HighLevelAction):
         # reports a blind SUCCEEDED). The caller treats such a park as final:
         # no confirm replan, no refinement, no adjustment prompt.
         self._last_leg_human_completed = False
+        # Clear any Done latched before this leg started; _on_teleop_done sets it
+        # if the user presses Done at any point during this drive.
+        self._done_pressed_this_leg = False
         while True:
             goal.target_pose.header.stamp = rospy.Time.now()
             client.send_goal(goal)
@@ -560,11 +577,17 @@ class NavigateHLA(HighLevelAction):
 
             if outcome == "succeeded":
                 self._last_leg_used_recovery = attempts > 0
-                # The manager's only two success texts are "Goal completed by
-                # human teleoperation." (Done) and "move_base reached the
-                # goal."; a direct move_base client never matches.
+                # "Human parked it" -> skip the confirm re-drive/refinement/prompt.
+                # Prefer the direct signal (did a /shared_autonomy/done land during
+                # this leg?), which is robust to the takeover/done race and to
+                # status-text propagation quirks that previously left this False
+                # and triggered a spurious confirm re-drive. Fall back to the
+                # manager's success text ("Goal completed by human teleoperation."
+                # vs "move_base reached the goal."; a direct move_base client never
+                # matches either).
                 self._last_leg_human_completed = (
-                    "human teleoperation" in (client.get_goal_status_text() or "")
+                    self._done_pressed_this_leg
+                    or "human teleoperation" in (client.get_goal_status_text() or "")
                 )
                 print(f"Reached {location_name}."
                       + (" (human parked via Done)"
