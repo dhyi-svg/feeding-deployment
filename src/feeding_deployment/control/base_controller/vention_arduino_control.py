@@ -367,12 +367,19 @@ class VentionBase:
 
         self._last_sent = None
         self._last_sent_time = 0.0
+        self._last_change_time = 0.0    # wall time the setpoint VALUE last changed
         # Confirmed + unchanged: slow keepalive (feeds the firmware CMD_STALE_MS
         # watchdog) -- see _send_setpoints.
         self._min_same_send_period = 1.0 / 5.0  # 5 Hz
-        # Unconfirmed (v7 mangled the command during a SoftwareSerial encoder
-        # read): re-send this fast until the firmware echoes it.
-        self._echo_resend_after = 0.03  # s
+        # Unconfirmed (v7 mangled the command): re-send until the firmware echoes
+        # it -- but ONLY once the setpoint has been STABLE for _retry_stable_s, so a
+        # continuously-changing stream (teleop/TEB) is NOT hammered. A moving stream
+        # self-heals a dropped frame on its own; hammering it floods the serial link
+        # and triggers far more mangling -> violent thrash (jul10 incident). Stops
+        # and one-shot commands settle -> get retried -> land (no 5 s watchdog coast).
+        self._echo_resend_after = 0.06  # s  (~15 Hz retry, gentle)
+        self._retry_stable_s = 0.15     # setpoint must be unchanged this long to retry
+        self._retry_give_up_s = 2.0     # after this, stop hammering; keepalive only
         self._resend_warned_at = 0.0    # throttle the echo-missing log
         # Send the initial (stopped) setpoint, then start the persistent-retry
         # keepalive loop (drives _send_setpoints so a mangled start/stop is
@@ -390,10 +397,13 @@ class VentionBase:
         encoder reads, so a single send (start OR stop) is often dropped. Called
         by set_speeds/translate/rotate AND by the background keepalive loop, this:
           * sends a CHANGED setpoint immediately (no rate-limit drop);
-          * if the firmware hasn't echoed the current setpoint (mangled),
-            re-sends every _echo_resend_after until it does;
-          * once echoed (or if the v7 echo stream isn't fresh), sends a slow
-            same-setpoint keepalive to feed the firmware CMD_STALE_MS watchdog.
+          * if a SETTLED setpoint (unchanged >= _retry_stable_s) is still
+            unconfirmed (v7 mangled it), re-sends every _echo_resend_after until
+            echoed -- a still-changing stream never settles, so teleop/TEB is
+            NEVER hammered (it self-heals dropped frames frame-to-frame);
+          * once echoed (or the v7 echo stream isn't fresh, or after
+            _retry_give_up_s), sends a slow same-setpoint keepalive to feed the
+            firmware CMD_STALE_MS watchdog.
         """
         with self._send_lock:
             now = time.time()
@@ -405,17 +415,25 @@ class VentionBase:
                          or self.bridge.get_last_echo() == ab)
 
             if changed:
-                pass                                    # always send a change now
-            elif not confirmed:
-                if now - self._last_sent_time < self._echo_resend_after:
-                    return                              # retrying, bounded
-                if now - self._resend_warned_at >= 1.0:
-                    self._resend_warned_at = now
-                    logger.warning("[Arduino] echo missing for A=%d B=%d -- "
-                                   "re-sending until echoed", ab[0], ab[1])
+                self._last_change_time = now            # always send a change now
             else:
-                if now - self._last_sent_time < self._min_same_send_period:
-                    return                              # confirmed: slow keepalive
+                # Aggressive echo-retry ONLY for a setpoint that has SETTLED
+                # (unchanged for _retry_stable_s) and is still unconfirmed, and
+                # only up to _retry_give_up_s. A still-changing stream never
+                # settles -> never hammered; a stop/one-shot settles -> retried.
+                stable_for = now - self._last_change_time
+                aggressive = (not confirmed and
+                              self._retry_stable_s <= stable_for <= self._retry_give_up_s)
+                if aggressive:
+                    if now - self._last_sent_time < self._echo_resend_after:
+                        return                          # retrying, rate-bounded
+                    if now - self._resend_warned_at >= 1.0:
+                        self._resend_warned_at = now
+                        logger.warning("[Arduino] echo missing for A=%d B=%d -- "
+                                       "re-sending until echoed", ab[0], ab[1])
+                else:
+                    if now - self._last_sent_time < self._min_same_send_period:
+                        return                          # slow keepalive (5 Hz)
 
             self.bridge.send_ab(ab[0], ab[1])
             self._last_sent = ab
