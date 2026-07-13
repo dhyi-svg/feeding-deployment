@@ -4,7 +4,9 @@
 
        Bring-up order:
          1. NUC: base_server up (tmux 'robot', launch_base)
-         2. compute: sensors.launch
+         2. compute: sensors.launch  (REQUIRED: it owns wheel_odom_publisher,
+            gyro_bias_estimator, and ekf_fused_imu_wheel, the odom->base
+            TF source and cartographer's odom topic since Jul 2026)
          3. compute: THIS file
          4. your terminal: rosrun feeding_deployment drift_lock.py
             -> let localization settle, press ENTER to lock the anchor,
@@ -66,9 +68,9 @@
     <param name="min_move_units" value="100"/>
   </node>
 
-  <!-- Observers (wheel odom + tracer + optional rviz/rosbag) live in
-       drift_traces.launch so they can also run alongside the full nav stack;
-       this test passes its own rviz/record args through. -->
+  <!-- The tracer (+ optional rviz/rosbag) lives in drift_traces.launch so it
+       can also run alongside the full nav stack; /wheel_odom comes from
+       sensors.launch. This test passes its own rviz/record args through. -->
   <include file="$(find feeding_deployment)/launch/drift_traces.launch">
     <arg name="rviz" value="$(arg rviz)"/>
     <arg name="record" value="$(arg record)"/>

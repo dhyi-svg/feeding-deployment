@@ -1,6 +1,6 @@
 <launch>
-  <!-- Drift-trace OBSERVERS only: wheel odometry + the map-anchored trace
-       comparator (+ optional dedicated RViz window and rosbag).
+  <!-- Drift-trace OBSERVER only: the map-anchored trace comparator
+       (+ optional dedicated RViz window and rosbag).
 
        Safe to run ALONGSIDE the full production stack (sensors +
        cartographer + navigation.launch + shared_autonomy.launch): no node
@@ -10,6 +10,10 @@
        Traces appear in vention.rviz under the "Drift traces" group (or pass
        rviz:=true for the dedicated top-down window from the drift test).
 
+       NOTE: /wheel_odom comes from sensors.launch (wheel_odom_publisher is
+       part of the authoritative fused-odometry stack there since Jul 2026;
+       do NOT start a second copy here).
+
        zed_drift_test.launch includes this file and adds its own drive
        pieces (teleop/bridge/monitor/cartographer) for the standalone
        teleop-only test. -->
@@ -18,12 +22,6 @@
   <arg name="record"  default="false"/>
   <arg name="log_dir"
        default="$(find feeding_deployment)/src/feeding_deployment/integration/log/system_logs"/>
-
-  <!-- Wheel-encoder odometry (calibrated defaults baked into the node). -->
-  <node pkg="feeding_deployment"
-        type="wheel_odom_publisher.py"
-        name="wheel_odom_publisher"
-        output="screen"/>
 
   <!-- The tracer: /drift_test/{carto,zed,zed_sanitized,wheel}_path + anchor.
        Draws nothing until /drift_test/lock (see drift_lock.py). -->

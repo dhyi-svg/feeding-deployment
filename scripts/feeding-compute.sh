@@ -59,8 +59,11 @@ CMD8='python run.py --user bohan_jun27 --run_on_robot --use_interface --resume_f
 
 # Drift-trace tooling, PRE-TYPED (never auto-run) in a separate 'trace' window
 # (see build_trace_window). Two panes because drift_lock.py needs its own stdin
-# (roslaunch gives nodes none) and drift_traces.launch runs continuously.
-TRACE_CMD_LAUNCH='roslaunch feeding_deployment drift_traces.launch'
+# (roslaunch gives nodes none) and the observer launch runs continuously.
+# The OBSERVER, never drift_traces.launch standalone: running both name-kills
+# nodes/recorders (jul13). NOTE: an already-running tmux server keeps the OLD
+# pre-typed text -- kill the trace window and rebuild after changing this.
+TRACE_CMD_LAUNCH='roslaunch feeding_deployment fused_odom_observer.launch ablate:=true record:=true'
 TRACE_CMD_LOCK='rosrun feeding_deployment drift_lock.py'
 
 # ----- 'logger' tmux session (separate from 'feeding') ---------------------- #

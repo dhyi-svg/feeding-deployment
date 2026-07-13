@@ -13,10 +13,12 @@
               -load_frozen_state $(arg load_frozen_state)">
     <remap from="scan_2" to="/lidar_l/scan"/>
     <remap from="scan_1" to="/lidar_r/scan"/>
-    <!-- Sanitized odom (zed_pose_to_odom_feedback.py drops single-frame VIO
-         teleports). Was /zed_mini/zed_node/odom; a raw teleport frame corrupted
-         the extrapolator for 86 s (navlog_20260702_141316). -->
-    <remap from="odom" to="/zed_mini/zed_node/odom_sanitized"/>
+    <!-- Fused wheel+IMU odometry (ekf_fused_imu_wheel in sensors.launch, which
+         also owns the odom->vention_base_link TF). child_frame_id equals the
+         tracking_frame, so no TF hop. Was the sanitized ZED VIO
+         (/zed_mini/zed_node/odom_sanitized) until Jul 2026; VIO jumps kept
+         dragging localization (e.g. 31.5 m excursion, session jul10-6). -->
+    <remap from="odom" to="/odometry/fused_imu_wheel"/>
   </node>
 
   <!-- Publish occupancy grid as /map. -->

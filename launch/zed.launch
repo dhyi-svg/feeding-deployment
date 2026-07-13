@@ -1,4 +1,7 @@
 <launch>
+  <!-- LEGACY standalone ZED bringup: still sets pos_tracking/publish_tf=true
+       (ZED-owned odom). NEVER run alongside sensors.launch, where the fused
+       EKF owns odom->base since Jul 2026. -->
   <!-- ===================== -->
   <!-- Args -->
   <!-- ===================== -->

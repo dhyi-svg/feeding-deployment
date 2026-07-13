@@ -162,6 +162,10 @@ class DriftTraceCompare:
                 "~fused_improved_topic", "/odometry/fused_improved"),
             "fused_novio": rospy.get_param(
                 "~fused_novio_topic", "/odometry/fused_novio"),
+            # The LIVE authoritative estimator (sensors.launch), not an
+            # ablation variant -- still baked open-loop like the others.
+            "fused_imu_wheel": rospy.get_param(
+                "~fused_imu_wheel_topic", "/odometry/fused_imu_wheel"),
         }
 
         self.tf_buffer = tf2_ros.Buffer(rospy.Duration(30.0))

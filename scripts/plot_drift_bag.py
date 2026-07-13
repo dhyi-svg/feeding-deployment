@@ -47,6 +47,11 @@ TRACES = [
     ("/drift_test/fused_zupt_path", "fused +ZUPT", "brown"),
     ("/drift_test/fused_improved_path", "fused improved (all)", "black"),
     ("/drift_test/fused_novio_path", "fused no-VIO (wheel+IMU)", "teal"),
+    # Live authoritative estimator (post-Jul-13 bags)...
+    ("/drift_test/fused_imu_wheel_path", "fused imu+wheel (live odom)", "gold"),
+    # ...and its ablation-era name (pre-cutover bags); absent topics are
+    # skipped, so both entries coexist harmlessly.
+    ("/drift_test/fused_novio_cal_path", "fused no-VIO debiased (legacy)", "gold"),
     ("/drift_test/carto_path", "carto (reference)", "green"),
 ]
 LOG_BASE = os.path.expanduser(

@@ -12,10 +12,12 @@
          blue   wheel          /wheel_odom             (open loop)
          purple fused          /odometry/fused (EKF)   (open loop)
 
-       OBSERVE-ONLY: the EKF's publish_tf is false (see ekf_zed_wheel.yaml), so
-       the ZED still owns odom->base and Cartographer keeps its own prior;
-       NOTHING downstream consumes /odometry/fused. This is the zero-risk Stage
-       1; feeding the fusion into Cartographer is Stage 2.
+       OBSERVE-ONLY: every EKF here has publish_tf false (ekf_zed_wheel.yaml);
+       NOTHING downstream consumes these /odometry/fused* variants. Since Jul
+       2026 the PROMOTED estimator (wheel + debiased gyro) runs in
+       sensors.launch as ekf_fused_imu_wheel -> /odometry/fused_imu_wheel and
+       owns odom->base (Stage 2 done); this launch remains the ablation /
+       trace harness around it.
 
        Bring-up (teleop drift test; do NOT run navigation.launch):
          # NUC: base_server up.  compute: sensors.launch + cartographer pane.
@@ -135,6 +137,12 @@
       <remap from="odometry/filtered" to="/odometry/fused_novio"/>
     </node>
 
+    <!-- NOTE: the debiased-gyro estimator (gyro_bias_estimator) and the
+         wheel+debiased-IMU EKF now run LIVE in sensors.launch as the
+         authoritative odom source (ekf_fused_imu_wheel ->
+         /odometry/fused_imu_wheel, the GOLD trace). They are no longer
+         started here; the tracer/bag pick the live topics up directly. -->
+
   </group>
 
   <!-- Drift-trace observers (wheel_odom_publisher + drift_trace_compare, now
@@ -157,15 +165,17 @@
               /wheel_odom /wheel_odom/counts /wheel_odom/side_disagreement
               /nav_safety_hold /nav_safety_hold_reason
               /zed_mini/zed_node/imu/data
+              /zed_mini/zed_node/imu/data_debiased /gyro_bias_estimate
               /odometry/zupt
               /odometry/fused_gyro /odometry/fused_gate /odometry/fused_zupt
               /odometry/fused_improved /odometry/fused_novio
+              /odometry/fused_imu_wheel
               /drift_test/anchor
               /drift_test/carto_path /drift_test/zed_path
               /drift_test/zed_sanitized_path /drift_test/wheel_path
               /drift_test/fused_path
               /drift_test/fused_gyro_path /drift_test/fused_gate_path
               /drift_test/fused_zupt_path /drift_test/fused_improved_path
-              /drift_test/fused_novio_path
+              /drift_test/fused_novio_path /drift_test/fused_imu_wheel_path
               /lidar_r/scan /lidar_l/scan"/>
 </launch>

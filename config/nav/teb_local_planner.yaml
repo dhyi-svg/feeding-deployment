@@ -1,6 +1,8 @@
 TebLocalPlannerROS:
 
-  odom_topic: /move_base/odom_feedback
+  # Fused wheel+IMU odometry (same source as the odom->base TF and
+  # cartographer). Was /move_base/odom_feedback (sanitized-ZED velocity).
+  odom_topic: /odometry/fused_imu_wheel
   map_frame: map
 
   # =====================================================================
