@@ -184,7 +184,8 @@ class NavigateHLA(HighLevelAction):
         """True if map->base is still publishing recent transforms.
 
         Looks up the latest available map->base transform. If the chain
-        (map->odom from Cartographer, odom->base from VIO) has stalled, the
+        (map->odom from Cartographer, odom->base from the fused wheel+IMU
+        EKF) has stalled, the
         newest common timestamp falls behind now() and we report it stale. A
         failed lookup (no common transform at all) also counts as stale.
         """
