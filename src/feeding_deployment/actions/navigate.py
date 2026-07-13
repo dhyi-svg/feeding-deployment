@@ -128,7 +128,7 @@ class NavigateHLA(HighLevelAction):
         "divergence_margin_rad": 0.02,
         "cmd_vel_topic": "/cmd_vel",
         "k_ang": 1.2,
-        "max_ang_rps": 0.4,
+        "max_ang_rps": 0.1667,  # == teleop max_vel_theta (shared_autonomy.launch)
     }
 
     # Hardcoded ("logged") navigation mode (run.py --logged-navigation /

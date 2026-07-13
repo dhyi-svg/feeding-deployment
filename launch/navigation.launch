@@ -21,6 +21,25 @@
     <param name="planner_patience" value="15.0"/>
     <param name="controller_patience" value="15.0"/>
 
+    <!-- Drop rotate_recovery from the default recovery chain (leaves
+         conservative_reset -> aggressive_reset -> abort). Its speed limits come
+         from ~/TrajectoryPlannerROS, which doesn't exist under TEB, so it spins
+         at the 0.4-1.0 rad/s defaults  ~8x TEB's max_vel_theta now that
+         angular_scale is calibrated (2026-07-09) and a fast in-place spin is
+         the prime trigger for the 180-deg table alias. -->
+    <param name="clearing_rotation_allowed" value="false"/>
+
+    <!-- Belt-and-suspenders for the line above: rotate_recovery reads its speed
+         limits from ~/TrajectoryPlannerROS regardless of the active local
+         planner, so if it is ever re-enabled it would again default to
+         0.4-1.0 rad/s. Pin that namespace to the supervised teleop caps
+         (shared_autonomy.launch: 0.10 m/s / 0.1667 rad/s) so no recovery
+         rotation can out-drive a human operator; acc matches TEB's
+         acc_lim_theta. -->
+    <param name="TrajectoryPlannerROS/max_rotational_vel" value="0.1667"/>
+    <param name="TrajectoryPlannerROS/min_in_place_rotational_vel" value="0.05"/>
+    <param name="TrajectoryPlannerROS/acc_lim_th" value="1.5"/>
+
     <!-- 0.2 Hz: global replans re-inject Cartographer yaw jitter into TEB via the
          plan; at 1.0 Hz this drove ~1 Hz left/right hunting (navlog_20260706_131121).
          TEB still avoids obstacles locally between replans. -->
@@ -50,7 +69,14 @@
          measured on a slip-prone patch; verify/re-tune on the deployment floor. -->
     <param name="linear_scale" value="4874.0"/>
     <param name="angular_scale" value="2600.0"/>
-    <param name="max_speed_units" value="2500"/>
+    <!-- Per-wheel ceiling = teleop worst case: max_vel_x*linear_scale +
+         max_vel_theta*angular_scale = 0.10*4874 + 0.1667*2600 = 920 units
+         (shared_autonomy.launch caps). Everything legitimate fits under it
+         (TEB 0.075/0.125 mixes to 691), but a rogue full-rate command — like
+         rotate_recovery's 1.0 rad/s spin on Jul 13, which the old 2500 passed
+         through at 0.96 rad/s — is now clipped at the choke point to teleop's
+         own wheel speed. Raise together with teleop/TEB max_vel_*. -->
+    <param name="max_speed_units" value="920"/>
     <!-- Ratio-preserving stiction floor (units); scales both wheels together so
          slow commands still move without flattening arcs. 0 disables. -->
     <param name="min_move_units" value="100"/>
