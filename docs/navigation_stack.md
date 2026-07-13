@@ -72,9 +72,12 @@ Two side-channels wrap this:
 - **Teleop / shared autonomy:** Xbox / webapp publish `/shared_autonomy/{takeover,done,resume,cancel}`; the manager cancels move_base and can itself report `SUCCEEDED` for a human-completed goal (an actionlib client only trusts its own server — that is *why* the manager exists, `shared_autonomy_manager.py:40-43`). Human teleop drives `/cmd_vel_teleop` with priority (bypasses the ZED hold).
 - **Safety interlock:** `zed_health_monitor.py` asserts `/nav_safety_hold` (+ `_reason`) on VIO divergence or a map→odom "yank"; the cmd_vel bridge zeros the motors while held, and the manager pauses & re-sends the goal on recovery.
 
-### Localization TF ownership
-Cartographer owns `map→odom`; the ZED VIO owns `odom→zed_mini_base_link`; the URDF
-chains that to `vention_base_link`. Nobody else publishes those edges (see §3).
+### Localization TF ownership (rewired 2026-07-13, Phase-2 cutover)
+Cartographer owns `map→odom`; the **fused wheel+IMU EKF** (`ekf_fused_imu_wheel` in
+`sensors.launch`) owns `odom→vention_base_link` and publishes
+`/odometry/fused_imu_wheel` (also Cartographer's + TEB's odometry topic). The ZED
+publishes **no TF at all** (`pos_tracking/publish_tf=false`) — its VIO odom topic
+lives on purely as a monitored witness. Nobody else publishes those edges (see §3).
 
 ---
 
@@ -157,32 +160,42 @@ TLS **9090**.
 
 ```
 map                          ← Cartographer (localization mode) publishes map→odom
- └─ odom                     ← ZED VIO publishes odom→zed_mini_base_link
-     └─ zed_mini_base_link
-         └─ vention_base_link   ← URDF INVERTED fixed joint (robot_state_publisher)
-             ├─ lidar_r          ← static_transform_publisher
-             ├─ lidar_l          ← static_transform_publisher
-             ├─ vention_base_cam_1_link   ← URDF joint (nav D435)
-             └─ world → arm_base_link → …  ← Kinova arm chain (combined.urdf only)
+ └─ odom                     ← ekf_fused_imu_wheel publishes odom→vention_base_link (20 Hz)
+     └─ vention_base_link       (URDF root since 2026-07-13)
+         ├─ lidar_r           ← static_transform_publisher
+         ├─ lidar_l           ← static_transform_publisher
+         ├─ vention_base_cam_1_link      ← URDF joint (nav D435)
+         ├─ zed_mini_base_link → camera/imu frames  ← ZED's own description publisher
+         └─ world → arm_base_link → …    ← Kinova arm chain (combined.urdf only)
 ```
 
 Cartographer config: `tracking_frame="vention_base_link"`, `published_frame="odom"`,
 `provide_odom_frame=false`, `publish_frame_projected_to_2d=true`
 (`vention_2lidar_localization.lua:9-14`).
 
-**The inverted ZED joint (important quirk).** In the URDF, `vention_base_link` is a
-*child* of `zed_mini_base_link`, so `robot_state_publisher` provides
-`zed_mini_base_link → vention_base_link` while the ZED provides
-`odom → zed_mini_base_link`, chaining to a full `odom → vention_base_link`
-(`zed.launch:11-22`, `urdf/combined.urdf.xacro:40-47`). ZED `publish_map_tf=false`
-so Cartographer owns `map→odom` uncontested.
+**Frame-ownership rules (hard-won 2026-07-13; violate = "two unconnected trees"):**
+- The ZED **mount edge** (`vention_base_link → zed_mini_base_link`, +0.3176/0/+0.386)
+  is owned by the ZED wrapper's own description publisher via the `base_frame` +
+  `cam_pos_*` args on the `zedm.launch` include — deliberately NOT in
+  `combined.urdf.xacro`. Two static publishers of the same child frame fight
+  (per-listener last-writer-wins). The wrapper's default `base_frame:=base_link`
+  roots the camera under an orphan frame; historically that orphan was masked by
+  the ZED's dynamic `odom→base_link` TF re-asserting the parent 15×/s.
+- The nodelet reads **`general/base_frame`** (a `pos_tracking/base_frame` param is
+  silently ignored — a no-op override shipped for weeks). It stays
+  `zed_mini_base_link` so the ZED odom topic's `child_frame_id` semantics are
+  unchanged.
+- Pre-cutover, the URDF held an INVERTED joint (`zed_mini_base_link` parent of
+  `vention_base_link`) because the ZED owned odom. `vention.urdf` (legacy standalone
+  launches only) still has that direction — never run those alongside
+  `sensors.launch`.
 
 ### Static transforms (translation m; rpy rad; parent `vention_base_link`)
 | Child | xyz | rpy | Publisher |
 |---|---|---|---|
 | `lidar_r` | (0.2575, −0.135, 0.415) | (π, 0, 0) | `static_transform_publisher` (`sensors.launch:47-49`) |
 | `lidar_l` | (0.2575, +0.135, 0.415) | (π, 0, 0) | `static_transform_publisher` (`sensors.launch:50-51`) |
-| `zed_mini_base_link`→`vention_base_link` | (−0.3176, 0, −0.386) | (0,0,0) | URDF (`combined.urdf.xacro:43-47`) |
+| `zed_mini_base_link` | (0.3176, 0, 0.386) | (0,0,0) | ZED description publisher (`sensors.launch` zedm include, `base_frame`+`cam_pos_*`) |
 | `vention_base_cam_1_link` | (0.3176, 0, 0.386) | (0,0,0) | URDF ("TODO measured") |
 | `world` (arm root) | (0.212, 0, 0.39) | (0,0,−π/2) | URDF (combined only) |
 
@@ -201,29 +214,43 @@ with `num_laser_scans=2`. **`merge_laserscans.py` / `/scan_merged` is dead code*
 launched by nothing (grep-verified). move_base costmaps also read the two raw scans
 (`costmap_common.yaml:26-42`).
 
-### ZED odom → sanitizer/differentiator (`zed_pose_to_odom_feedback.py`)
-The raw ZED odom is *never* consumed directly by the planner or SLAM. This node
-produces two derived streams:
-- **`/zed_mini/zed_node/odom_sanitized`** — full pose with single-frame VIO teleports
-  gated; **this is what Cartographer consumes** (`cartographer_localization.launch:19`).
-  A physically-impossible frame-to-frame jump is held at the last good pose; a
-  *sustained* shift is **adopted after `jump_accept_frames=5` consistent raw frames**
-  as a relocalization (`zed_pose_to_odom_feedback.py:147-154`) — see bug #2.
-- **`/move_base/odom_feedback`** — a twist obtained by differencing the sanitized pose
-  over `vel_diff_window=0.08 s`; **this is what TEB uses as its velocity feedback**
-  (`teb_local_planner.yaml:3`). Gates: `max_lin_vel=0.5`, `max_ang_vel=1.5`
-  (`odom_pipeline.yaml`).
+### Fused odometry — the authoritative source (`sensors.launch`, since 2026-07-13)
+Three nodes, all in `sensors.launch` so they outlive `prefix+r` restarts:
+- **`wheel_odom_publisher`** — encoder odometry over the NUC base RPC
+  (`counts_per_meter=4874`, `track_width=0.85`); trustworthy `vx`, advisory yaw.
+- **`gyro_bias_estimator`** — republishes the ZED IMU with the gyro bias subtracted
+  (`/zed_mini/zed_node/imu/data_debiased` + diag `/gyro_bias_estimate` in deg/s).
+  Bias is estimated only during PROVEN stillness (wheel vx ~0 AND gyro ~0 — the dual
+  gate rejects in-place spins that fool a wheels-only check) with a running-mean →
+  EMA. The raw bias is a **per-boot lottery** (−131 deg/h Jul 10; ~0 wandering to
+  −25 deg/h within a session) — never hard-code it. Wait for the
+  "first calibration complete" log (≥15 s stillness) before driving.
+- **`ekf_fused_imu_wheel`** (robot_localization) — fuses wheel `vx`(+advisory `vyaw`)
+  + debiased gyro `vyaw`; ZED VIO **excluded**. `publish_tf=true` → owns
+  `odom→vention_base_link` at 20 Hz and publishes **`/odometry/fused_imu_wheel`**,
+  consumed by Cartographer (`cartographer_localization.launch` `odom` remap) and TEB
+  (`odom_topic`). Deliberately **no respawn**: an auto-restarted EKF resumes at the
+  odom origin — a silent teleport into Cartographer; a dead EKF instead stalls the
+  stack loudly (restart sensors, then `prefix+r`).
 
-Ablation switches live in `config/nav/odom_pipeline.yaml` (`enable_sanitizer`,
-`enable_windowed_diff`) — false = original pass-through behavior; they change only
-the math, not the wiring.
+### ZED odom → sanitizer/differentiator (`zed_pose_to_odom_feedback.py`) — WITNESS ONLY
+Since the 2026-07-13 cutover **nothing authoritative consumes any ZED-derived
+stream**; the chain is kept for observability (drift traces, health monitor,
+nav logs):
+- **`/zed_mini/zed_node/odom_sanitized`** — teleport-gated full pose (was
+  Cartographer's input). Note the sanitizer misses sub-0.5 m/s creep — measured
+  byte-identical to raw through 6–17 m creep divergences (Jul 10/13) — bug #2.
+- **`/move_base/odom_feedback`** — windowed-difference twist (was TEB's feedback;
+  still referenced by the disabled DWA yaml and the observer's stock-EKF `odom0`).
 
 ### Cartographer (localization mode)
 Runs against a **frozen `.pbstream`** (`load_frozen_state=true`), publishing `map→odom`
 **only at pose-graph optimizations**, which are counted in **nodes**, and node
 insertion is motion-filter-gated. So corrections arrive as **discrete jumps**, not a
 smooth stream — the robot's map-frame pose = `map→odom` (jumpy) ∘ `odom→base` (smooth
-VIO). This is the structural reason heading corrections can look like overshoot (§8).
+EKF, 20 Hz). With the fused odom the observed correction stream is ~5–8 cm / ~1.3°
+during driving (session_20260713_152341). This is the structural reason heading
+corrections can look like overshoot (§8).
 
 ### ZED health interlock (`zed_health_monitor.py`)
 Five detector channels — **status, silence, gap, jump, yank** — assert
@@ -346,8 +373,8 @@ against the installed package version).
 | `general/grab_resolution` / `grab_frame_rate` | HD720 / 30 | Resolution / FPS the SDK captures from the camera sensor. |
 | `depth/depth_mode` | ULTRA | Depth-computation quality preset; higher = more GPU/USB. Not needed for VIO/nav (consider PERFORMANCE for USB headroom). |
 | `pos_tracking/imu_fusion` | true | Fuse the built-in IMU with visual tracking (true VIO) and derive the gravity/vertical reference from it. |
-| `pos_tracking/publish_tf` / `publish_map_tf` | true / **false** | Whether the wrapper broadcasts `odom→base` / `map→odom` TF. map_tf is off so Cartographer owns `map→odom` (`sensors.launch:84-85`). |
-| `pos_tracking/base_frame` | `zed_mini_base_link` | The child frame the ZED tracks and publishes odom for (⚠ the wrapper's own `general/base_frame` stays `base_link` — latent mismatch). |
+| `pos_tracking/publish_tf` / `publish_map_tf` | **false** / **false** | The ZED broadcasts NO TF since the 2026-07-13 cutover (`ekf_fused_imu_wheel` owns `odom→base`; Cartographer owns `map→odom`). Verified in wrapper source: one gated call site, no force-publish path; `sensors/publish_imu_tf` is independent and stays on. |
+| `general/base_frame` | `zed_mini_base_link` | The frame the ZED tracks/publishes odom for. ⚠ This is the REAL param — `pos_tracking/base_frame` is silently ignored (was a no-op override for weeks). Must stay `zed_mini_base_link` (odom-topic child semantics + the wrapper's camera→base startup lookup). |
 
 ### 7.3 odom sanitizer — `config/nav/odom_pipeline.yaml`
 | Param | Value | What it does |
@@ -360,6 +387,7 @@ against the installed package version).
 ### 7.4 TEB — `config/nav/teb_local_planner.yaml`
 | Param | Value | Line | What it does |
 |---|---|---|---|
+| `odom_topic` | `/odometry/fused_imu_wheel` | :5 | Velocity feedback source — the fused wheel+IMU EKF since 2026-07-13 (was the ZED-derived `/move_base/odom_feedback`). |
 | ★ `min_obstacle_dist` | 0.01 | :54 | Minimum distance the optimizer keeps the footprint from any obstacle. At 0.01 m (below one 0.05 m costmap cell) trajectories graze cells the feasibility check calls collision ⇒ grazing/infeasible (bug #5). |
 | ★ `weight_viapoint` | 1.0 | :93 | How hard the trajectory is pulled onto the global plan's via-points; higher = hug the plan (and its jitter) more tightly (was 5.0). |
 | ★ `weight_obstacle` | 100.0 | :89 | Penalty weight for approaching obstacles; higher = stronger standoff/avoidance. |
@@ -465,10 +493,11 @@ harnesses (§ scripts) complement the existing tools (`nav_diag_logger.py`,
 `drift_traces.launch`, `measure_localization.py`, `nav_residual.py`,
 `calibrate_wheel_odom.py`).
 
-**Priority:** ZED integrity (Phase 2) is the dominant, everything-cascades-from-here
-problem — you cannot tune any higher layer over a teleporting ZED. Phase 1 (actuation)
-is independent and fast; do it in parallel. Because the mined logs predate the current
-config, Phase 0 ends with a **fresh baseline**.
+**Priority (updated 2026-07-13):** Phase 2 (odometry) is **DONE** — resolved by
+replacing ZED VIO with the fused wheel+IMU EKF (see Phase 2 RESULTS). The dominant
+open work moves up the stack: Phase 3 (cartographer over the new trustworthy prior,
+speed-ceiling re-test) then 4–5. Because the mined logs predate the current config,
+any fresh comparison still starts from a **fresh baseline**.
 
 ### Phase 0 — Environment + fresh baseline (no tuning yet)
 - `scripts/perf_env.sh` → CPU governor `performance`; check temp headroom; verify
@@ -527,6 +556,89 @@ Tools: `drift_traces.launch record:=true` + `drift_trace_compare.py` + `drift_lo
   never be re-accepted as a relocalization.
 - **Metric:** zero leaked sanitized steps > (say) 0.3 m over a loop; raw jump rate down.
 
+### Phase 2 — RESULTS (2026-07-10 → 2026-07-13) — **DONE, resolved by replacement**
+*The plan above assumed "fix the ZED". The measured answer was stronger: replace ZED
+VIO as the odometry source entirely. Tools built: `fused_odom_observer.launch
+ablate:=true` (parallel observe-only EKF ablation variants), `zupt_publisher.py`,
+`gyro_bias_estimator.py`, `plot_drift_bag.py`; five→eleven map-anchored traces.*
+
+**Failure characterization (why VIO lost):**
+- ZED VIO's dominant real-world failure is **slow confident creep** (<0.5 m/s), not
+  just teleports: 17 m (jul10-6), 5.9 m (jul13 runs) divergences with the sanitizer
+  passing them **byte-identical** — the 0.5 m/s gate never sees them (bug #2 is
+  unfixable at that layer for this mode). Sunlight/exposure is the usual trigger.
+- Ablation verdict (jul10-6 run, carto reference invalid — both it and ZED blew up):
+  the **Mahalanobis reject-gate is the anti-jump hero** (survivors: gate/improved/
+  no-VIO at ~1 m vs dragged variants at 17 m) but the gate does NOT catch creep
+  (jul13: gate dragged 2.1 m by a creep while no-VIO variants sat at 0.26 m). ZUPT
+  and gyro-yaw alone don't protect against translational error at all.
+- Loop-closure benchmark (jul10-6, return-to-start): open-loop wheel+IMU closed
+  16.3 m / 14 min / 1100° of turning to **0.57 m / −34°**, and counterfactual replay
+  showed −31° of that yaw was ONE number: the **uncorrected ZED gyro z bias**
+  (measured −0.036°/s ≈ −131°/h, stable within a run, wandering across it, different
+  every boot). Wheel-only yaw scrubbed −49°; ZED VIO 17 m.
+
+**The fix (two stages):**
+1. **`gyro_bias_estimator.py`** — stillness-calibrated debiasing (dual wheel+gyro
+   still gate; running-mean→EMA, τ=30 s; calibrates in ~11 s of stillness; tracks
+   thermal wander). Replay-validated on recorded runs: −35° → −3.6° yaw. Field
+   A/B (jul13 pre-cutover): gold (debiased) 0.64 m / −5.5° vs teal (raw gyro)
+   0.75 m / −10.1° over 28 m — on a lucky low-bias boot; the fix makes boot luck
+   irrelevant.
+2. **Stage-2 cutover (2026-07-13):** `ekf_fused_imu_wheel` (wheel vx + debiased gyro
+   vyaw, no VIO) owns `odom→vention_base_link` + feeds Cartographer and TEB
+   (`/odometry/fused_imu_wheel`). ZED TF fully off; URDF un-inverted; ZED mount edge
+   owned by the wrapper's description publisher (see §3 frame-ownership rules — the
+   orphan-`base_link` two-trees trap and the `general/base_frame` no-op are documented
+   there). Rollback = git revert.
+
+**Cutover validation (session_20260713_152341, 168 s / 11.6 m / 768° drive):**
+- **ZED VIO diverged 5.9 m (creep) during the run → localization did not care.**
+  Carto's corrections stayed at the 5–8 cm / ~1.3° routine level while driving; zero
+  discontinuities; the run before the cutover with the same class of ZED failure
+  mislocalized carto by 4 m / 78°.
+- All open-loop traces scored against carto (position error at drive end / final yaw
+  error / RMS / max over the drive):
+
+| Trace | End err | End yaw err | RMS | Max |
+|---|---|---|---|---|
+| **fused_imu_wheel (live odom, gold)** | **0.26 m** | **−3.1°** | **0.17 m** | 0.28 m |
+| no-VIO raw gyro (teal) | 0.26 m | −3.7° | 0.17 m | 0.29 m |
+| wheel only (blue) | 0.30 m | +2.3° | 0.16 m | 0.31 m |
+| +gyro-yaw | 0.32 m | −3.6° | 0.39 m | 0.75 m |
+| improved (gate+ZUPT+gyro) | 0.47 m | −3.8° | 0.32 m | 0.49 m |
+| stock fused (sanitized ZED + wheel) | 1.56 m | +22.1° | 0.69 m | 1.62 m |
+| +ZUPT | 1.84 m | +28.6° | 0.79 m | 1.91 m |
+| +reject-gate | 2.06 m | +27.1° | 1.10 m | 2.20 m |
+| ZED raw (red) | 5.87 m | +16.5° | 4.23 m | 6.42 m |
+| ZED sanitized (orange) | 5.87 m | +16.5° | 4.32 m | 6.42 m |
+
+  Readings: every variant still fusing ZED velocity (stock/ZUPT/gate) was dragged
+  1.5–2.2 m by the creep — the Mahalanobis gate is jump-armor, not creep-armor;
+  `improved` survived only because its gyro+ZUPT sides dominated. The three
+  ZED-velocity-free rows cluster at ~0.3 m. Raw gyro ≈ debiased this boot (low-bias
+  lottery draw); the estimator exists for the −131 deg/h days. Wheel-only yaw did
+  well here (gentle arcs, ~770° cumulative) — do not extrapolate; it scrubbed −49°
+  on the jul10 spin-heavy loop.
+- Authoritative odom vs carto: **RMS 0.17 m, end 0.26 m / −3.1°** (that difference
+  IS the total map→odom correction — i.e., odometry good enough that Cartographer
+  barely works).
+- Trace-reading note: gold (fused_imu_wheel) is now carto's own odom component —
+  gold-vs-green shows pure map→odom corrections; red/orange remain the independent
+  ZED witnesses.
+
+**Metric verdict:** the Phase-2 metric ("zero leaked sanitized steps > 0.3 m") was
+made moot — leaked ZED steps no longer reach anything. Effective new metric, met:
+localization unaffected by a multi-meter VIO divergence.
+
+**Residuals / deferred:** per-run gyro-bias wander (~±0.01°/s) leaves a ~2–5° open-
+loop yaw floor (fine under carto correction); wheel translation floor ~0.3–0.4 m per
+15 min from spin scrub (unobservable to wheels+gyro; a healthy gated VIO could see
+it — not currently worth the complexity); nothing yet monitors the NEW chain
+(wheel-odom silence / EKF death) — Phase 3 item. ZED hardware stays for its IMU
+(the only gyro on the robot) + traces; its depth is idle (future obstacle layer?).
+(memories: `phase2-odom-fusion-ablation`)
+
 ### Phase 3 — Localization / Cartographer
 Tool: `measure_localization.py` (static + moving).
 - Measure map→odom jitter, first-fix time, and **max speed before divergence**.
@@ -535,6 +647,31 @@ Tool: `measure_localization.py` (static + moving).
 - *Can't-keep-up-at-speed:* enable `use_online_correlative_scan_matching=true`, relax
   `motion_filter`, revisit the 7 m search window.
 - **Metric:** first fix < N s; map→base jitter within goal tolerance at target speed.
+
+**Updated starting points post-Phase-2 (2026-07-13):** the odom prior is now smooth,
+teleport-free, and ~0.2 m RMS over a loop — every historical carto symptom should be
+re-measured before tuning, since most were ZED-caused:
+1. **Speed ceiling re-test first.** "Carto can't keep up at speed" was measured over
+   a teleporting ZED; the cautious tiers (TEB 0.075 / teleop 0.10 m/s) may be far
+   below the real ceiling now. Walk speeds up on a fixed loop and find the true
+   divergence point before touching lua params.
+2. **Raise carto's odometry trust.** The lua odometry weights were implicitly tuned
+   against ZED behavior; with a trustworthy prior, higher odometry weight directly
+   attacks the **180° table alias** (the alias must now fight a confident prior)
+   and featureless-corridor drift.
+3. **Guard the new chain** (the one unmonitored failure mode): a wheel-odom-silence
+   / EKF-death channel in the health monitor (mid-run RPC loss = EKF holds last vx
+   and glides smoothly; only the yank channel would notice, late). Also re-scope the
+   ZED channels: VIO faults no longer corrupt localization, so status/jump/silence
+   holds are now advisory-grade — consider demoting them from base-stopping to
+   logging, keeping yank (carto self-consistency) as the hard channel.
+4. **Tool label debt:** `measure_localization.py` labels `odom→base` "ZED VIO
+   odometry"; `nav_diag_logger` tf.csv `ob_age_s` now measures the EKF edge (~20 Hz,
+   not ZED ~15 Hz); `navigate.py:187` comment says "odom→base from VIO". Update
+   before trusting their printed interpretations.
+5. **Alias tripwire (cheap, optional):** the once-rejected magnetometer idea has one
+   honest job — a coarse heading consistency check to break the 180° alias
+   (±40° accuracy suffices); survey field sanity near the table first.
 
 ### Phase 4 — Local planning / TEB
 Tool: `scripts/teb_shape_test.py` (new).
