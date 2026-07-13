@@ -143,8 +143,9 @@ class NavigateHLA(HighLevelAction):
     # unexpected (odom missing/stale, timeout) stops the base and raises.
     _SCRIPTED_CMD_VEL_TOPIC = "/cmd_vel"   # autonomous stream (teleop-muted at the bridge)
     _SCRIPTED_RATE_HZ = 10.0               # match controller_frequency
-    _SCRIPTED_LIN_MPS = 0.075              # == TEB auto-tier max_vel_x
-    _SCRIPTED_ANG_RPS = 0.125              # == TEB auto-tier max_vel_theta
+    # Segment speeds are NOT constants: _scripted_speeds() reads max_vel_x /
+    # max_vel_theta fresh from config/nav/teb_local_planner.yaml at every leg,
+    # so the scripted motions always match the autonomous speed tier.
     _SCRIPTED_TIME_MARGIN = 1.5            # drive-time cap = nominal time * margin
     _SCRIPTED_ODOM_TOPIC = "/odometry/fused_imu_wheel"  # fused EKF (owns odom->base)
     _SCRIPTED_ODOM_FRESH_S = 1.0           # sample older than this == stale
@@ -1036,6 +1037,28 @@ class NavigateHLA(HighLevelAction):
         --logged-navigation sets the env var; standalone harnesses can too)."""
         return os.environ.get("FEEDING_LOGGED_NAV", "").strip() == "1"
 
+    def _scripted_speeds(self) -> "tuple[float, float]":
+        """(linear m/s, angular rad/s) for scripted segments, read fresh from
+        config/nav/teb_local_planner.yaml (max_vel_x / max_vel_theta) at every
+        leg -- edit the TEB config and the scripted motions follow, no code
+        change. Fail-loud on a missing file/key: driving at a guessed speed is
+        exactly the silent drift this mode exists to avoid. (The nominal-time
+        cap scales with the speed automatically.)"""
+        path = (
+            Path(__file__).resolve().parents[3]
+            / "config" / "nav" / "teb_local_planner.yaml"
+        )
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+            teb = cfg["TebLocalPlannerROS"]
+            return float(teb["max_vel_x"]), float(teb["max_vel_theta"])
+        except Exception as exc:
+            raise RuntimeError(
+                "cannot read scripted-segment speeds (max_vel_x / "
+                f"max_vel_theta) from {path}: {exc}"
+            ) from exc
+
     def _ensure_scripted_odom_subscriber(self) -> None:
         """Mirror the latest fused-odom pose (the segment progress source) and
         the teleop command stream (any nonzero /cmd_vel_teleop mid-segment is a
@@ -1326,14 +1349,15 @@ class NavigateHLA(HighLevelAction):
         (commanded == nominal); the adjust flow still measures, logs, and
         updates the learned offset exactly as today."""
         self._prepare_for_navigation(speed, need_move_base=False)
+        v_mps, _ = self._scripted_speeds()
         self.report_activity("Driving to the microwave")
         print(
             "[logged-nav] fridge->microwave: scripted "
-            f"{self._FRIDGE_TO_MICROWAVE_FWD_M:.2f} m forward drive "
-            "(learned offset not applied to the motion)."
+            f"{self._FRIDGE_TO_MICROWAVE_FWD_M:.2f} m forward drive at "
+            f"{v_mps:.3f} m/s (learned offset not applied to the motion)."
         )
         outcome = self._run_scripted_motion("fridge_to_microwave", [
-            {"label": "forward", "v_mps": self._SCRIPTED_LIN_MPS, "w_rps": 0.0,
+            {"label": "forward", "v_mps": v_mps, "w_rps": 0.0,
              "dist_m": self._FRIDGE_TO_MICROWAVE_FWD_M},
         ])
         if outcome == "teleop_fallback":
@@ -1754,17 +1778,19 @@ class NavigateHLA(HighLevelAction):
         reverse_m = self._SCRIPTED_TABLE_EGRESS_REVERSE_M.get(origin)
         if self._logged_nav_enabled() and reverse_m is not None:
             self._prepare_for_navigation(speed, need_move_base=False)
+            v_mps, w_rps = self._scripted_speeds()
             self.report_activity("Backing out of the kitchen")
             print(
                 f"[logged-nav] {origin}->table: scripted egress "
-                f"(reverse {reverse_m:.2f} m, rotate 90 deg CW), then "
-                "autonomous navigation to the table."
+                f"(reverse {reverse_m:.2f} m at {v_mps:.3f} m/s, rotate 90 deg "
+                f"CW at {w_rps:.3f} rad/s), then autonomous navigation to the "
+                "table."
             )
             outcome = self._run_scripted_motion(f"{origin}_to_table_egress", [
-                {"label": "reverse", "v_mps": -self._SCRIPTED_LIN_MPS,
+                {"label": "reverse", "v_mps": -v_mps,
                  "w_rps": 0.0, "dist_m": reverse_m},
                 {"label": "rotate_right", "v_mps": 0.0,
-                 "w_rps": -self._SCRIPTED_ANG_RPS,
+                 "w_rps": -w_rps,
                  "yaw_rad": self._EGRESS_ROTATE_RAD},
             ])
             if outcome == "human_done":
