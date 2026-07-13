@@ -15,6 +15,7 @@ try:
     from actionlib_msgs.msg import GoalStatus
     from geometry_msgs.msg import Twist
     from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
+    from nav_msgs.msg import Odometry
     from std_msgs.msg import Bool, Empty
 
     ROS_NAV_IMPORTED = True
@@ -129,6 +130,33 @@ class NavigateHLA(HighLevelAction):
         "k_ang": 1.2,
         "max_ang_rps": 0.4,
     }
+
+    # Hardcoded ("logged") navigation mode (run.py --logged-navigation /
+    # FEEDING_LOGGED_NAV=1). Scripted open-loop-ish segments replace move_base
+    # on specific kitchen legs, keyed by the true PDDL origin (execute_action
+    # stashes it): fridge->microwave is a straight forward drive ending at the
+    # normal confirmation/adjust page; the *->table legs first back out of the
+    # kitchen and rotate, then continue with normal autonomous navigation.
+    # Progress is measured from fused odometry, deliberately NOT map->base TF
+    # -- Cartographer aliasing near the microwave is the reason this mode
+    # exists. No fallback odom sources and no hold handling: anything
+    # unexpected (odom missing/stale, timeout) stops the base and raises.
+    _SCRIPTED_CMD_VEL_TOPIC = "/cmd_vel"   # autonomous stream (teleop-muted at the bridge)
+    _SCRIPTED_RATE_HZ = 10.0               # match controller_frequency
+    _SCRIPTED_LIN_MPS = 0.075              # == TEB auto-tier max_vel_x
+    _SCRIPTED_ANG_RPS = 0.125              # == TEB auto-tier max_vel_theta
+    _SCRIPTED_TIME_MARGIN = 1.5            # drive-time cap = nominal time * margin
+    _SCRIPTED_ODOM_TOPIC = "/odometry/fused_imu_wheel"  # fused EKF (owns odom->base)
+    _SCRIPTED_ODOM_FRESH_S = 1.0           # sample older than this == stale
+    _SCRIPTED_ODOM_WAIT_S = 3.0            # wait for a first fresh sample, then fail
+    _FRIDGE_TO_MICROWAVE_FWD_M = 1.4
+    _EGRESS_ROTATE_RAD = math.pi / 2.0     # magnitude; driven CW (w < 0)
+    # Kitchen-egress reverse distance before the rotate, by the leg's origin.
+    _SCRIPTED_TABLE_EGRESS_REVERSE_M = {"microwave": 1.75, "fridge": 0.35}
+    # After a mid-segment teleop abort, the leg falls back to autonomous
+    # navigation once the teleop stream has been quiet this long (unless the
+    # user pressed Done first -- then the park is final).
+    _SCRIPTED_TELEOP_QUIET_S = 2.0
 
     def _default_location_yaml(self) -> Path:
         return Path(__file__).resolve().parents[3] / "config" / "nav_named_locations.yaml"
@@ -354,17 +382,15 @@ class NavigateHLA(HighLevelAction):
                 return
             rate.sleep()
 
-    def _navigate_to_target(
-        self, location_name: str, speed: str, via: list = None, position_offset=None,
-        arrival_confirm_mode=None,
-    ) -> None:
-        # if self.robot_interface is None:
-        #     print(f"[SIM] Would navigate to {location_name} (speed={speed}).")
-        #     return
+    def _prepare_for_navigation(self, speed: str, need_move_base: bool = True) -> None:
+        """Common pre-drive setup for both autonomous and scripted legs.
 
-        # Tuck the arm into the left-back retract config before driving the base,
-        # so the arm is in a safe, compact pose for the whole navigation (all
-        # via waypoints + destination). No-op visualization in sim.
+        Tuck the arm into the left-back retract config before driving the base,
+        so the arm is in a safe, compact pose for the whole navigation (all
+        via waypoints + destination). No-op visualization in sim. Scripted legs
+        pass need_move_base=False: they drive /cmd_vel directly and must not
+        block on the "navigate" action server.
+        """
         if self.robot_interface is not None:
             self.robot_interface.set_speed(speed)
         self.report_activity("Tucking the arm in before driving")
@@ -378,8 +404,19 @@ class NavigateHLA(HighLevelAction):
             )
 
         self._ensure_teleop_subscribers()
-        self._get_move_base_client()
+        if need_move_base:
+            self._get_move_base_client()
         self._get_tf_buffer()  # warm the TF listener (used by the stall watchdog)
+
+    def _navigate_to_target(
+        self, location_name: str, speed: str, via: list = None, position_offset=None,
+        arrival_confirm_mode=None,
+    ) -> None:
+        # if self.robot_interface is None:
+        #     print(f"[SIM] Would navigate to {location_name} (speed={speed}).")
+        #     return
+
+        self._prepare_for_navigation(speed)
 
         # Drive any (usable) intermediate staging waypoints first, then the
         # destination. `via` is set only by the legs that need it -- e.g.
@@ -991,6 +1028,333 @@ class NavigateHLA(HighLevelAction):
             print(f"Could not signal base-control availability: {e}")
 
     # ------------------------------------------------------------------ #
+    # Scripted kitchen legs (logged-navigation mode)
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _logged_nav_enabled() -> bool:
+        """Master switch for the hardcoded navigation mode (run.py
+        --logged-navigation sets the env var; standalone harnesses can too)."""
+        return os.environ.get("FEEDING_LOGGED_NAV", "").strip() == "1"
+
+    def _ensure_scripted_odom_subscriber(self) -> None:
+        """Mirror the latest fused-odom pose (the segment progress source) and
+        the teleop command stream (any nonzero /cmd_vel_teleop mid-segment is a
+        human intervention, even if no takeover intent was asserted)."""
+        if getattr(self, "_scripted_subs_ready", False):
+            return
+        self._scripted_odom = None      # (x, y, yaw, receipt time)
+        self._last_teleop_cmd_t = None  # receipt time of the last NONZERO teleop cmd
+        rospy.Subscriber(
+            self._SCRIPTED_ODOM_TOPIC, Odometry, self._on_scripted_odom, queue_size=5
+        )
+        rospy.Subscriber(
+            "/cmd_vel_teleop", Twist, self._on_teleop_cmd, queue_size=5
+        )
+        self._scripted_subs_ready = True
+
+    def _on_scripted_odom(self, msg: "Odometry") -> None:
+        p = msg.pose.pose.position
+        q = msg.pose.pose.orientation
+        self._scripted_odom = (
+            p.x, p.y, self._yaw_from_quat(q.x, q.y, q.z, q.w), rospy.get_time(),
+        )
+
+    def _on_teleop_cmd(self, msg: "Twist") -> None:
+        if msg.linear.x != 0.0 or msg.angular.z != 0.0:
+            self._last_teleop_cmd_t = rospy.get_time()
+
+    def _fresh_odom_sample(self):
+        """(x, y, yaw) of the latest fused-odom sample if younger than
+        _SCRIPTED_ODOM_FRESH_S, else None."""
+        sample = getattr(self, "_scripted_odom", None)
+        if sample is None:
+            return None
+        x, y, yaw, recv_t = sample
+        if rospy.get_time() - recv_t > self._SCRIPTED_ODOM_FRESH_S:
+            return None
+        return x, y, yaw
+
+    def _get_scripted_cmd_pub(self):
+        if getattr(self, "_scripted_cmd_pub", None) is None:
+            self._scripted_cmd_pub = rospy.Publisher(
+                self._SCRIPTED_CMD_VEL_TOPIC, Twist, queue_size=1
+            )
+            rospy.sleep(0.3)  # let connections settle before the first command
+        return self._scripted_cmd_pub
+
+    def _scripted_segment(
+        self, purpose: str, label: str, v_mps: float, w_rps: float,
+        dist_m: float = None, yaw_rad: float = None,
+    ) -> dict:
+        """Drive one scripted segment on /cmd_vel until fused odometry says the
+        target distance/angle is reached.
+
+        Fail-fast by design: no fallback odom sources, no waiting out holds.
+        If fused odom is missing or goes stale, or the drive hits its time cap
+        without reaching the target, the base is stopped and RuntimeError is
+        raised (the executive's fatal path) -- a fixed-policy motion that isn't
+        going as scripted is a problem a human should look at, not something to
+        absorb. A human teleop command mid-segment ABORTS the segment (returns
+        stop_reason="teleop"); it is never paused-and-resumed, because the
+        remaining scripted distance is only meaningful from the assumed start
+        pose. Zero twists are published on every exit path. The segment record
+        is appended to scripted_nav_log.jsonl before any raise.
+
+        FEEDING_LOGGED_NAV_DRY_RUN=1 runs the full loop and logging without
+        publishing any motion.
+        """
+        pub = self._get_scripted_cmd_pub()
+        dry_run = os.environ.get("FEEDING_LOGGED_NAV_DRY_RUN", "").strip() == "1"
+        if dist_m is not None:
+            kind, target = "dist", abs(dist_m)
+            nominal_t = target / max(abs(v_mps), 1e-6)
+        else:
+            assert yaw_rad is not None, "segment needs dist_m or yaw_rad"
+            kind, target = "yaw", abs(yaw_rad)
+            nominal_t = target / max(abs(w_rps), 1e-6)
+        time_cap = nominal_t * self._SCRIPTED_TIME_MARGIN
+
+        record = {
+            "t": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "purpose": purpose,
+            "label": label,
+            "cmd_v_mps": float(v_mps),
+            "cmd_w_rps": float(w_rps),
+            "target_kind": kind,
+            "target": float(target),
+            "nominal_s": round(nominal_t, 2),
+            "time_cap_s": round(time_cap, 2),
+            "dry_run": dry_run,
+            "progress": None,
+            "driven_s": None,
+            "stop_reason": None,
+            "odom_origin": None,
+            "odom_final": None,
+            "map_pose_before": self._se2_record(self._read_base_pose_se2()),
+            "map_pose_after": None,
+        }
+
+        def _fail(reason: str, message: str) -> None:
+            # Stop the base FIRST -- the TF read and file write below can take
+            # up to ~1s and the wheels must not keep rolling through them.
+            for _ in range(5):
+                try:
+                    if not dry_run:
+                        pub.publish(Twist())
+                    rospy.sleep(0.02)
+                except Exception:
+                    break
+            record["stop_reason"] = reason
+            record["map_pose_after"] = self._se2_record(self._read_base_pose_se2())
+            self._log_scripted_event(record)
+            print(f"[logged-nav] {label}: FAILED ({reason}) -- {message}")
+            raise RuntimeError(f"scripted {label} segment failed: {message}")
+
+        # Origin latch, fail-fast: without fresh fused odom there is no way to
+        # measure progress and we refuse to drive blind.
+        wait_deadline = rospy.get_time() + self._SCRIPTED_ODOM_WAIT_S
+        origin = self._fresh_odom_sample()
+        while origin is None and rospy.get_time() < wait_deadline and not rospy.is_shutdown():
+            rospy.sleep(0.1)
+            origin = self._fresh_odom_sample()
+        if origin is None:
+            _fail(
+                "odom_unavailable",
+                f"no fresh {self._SCRIPTED_ODOM_TOPIC} sample within "
+                f"{self._SCRIPTED_ODOM_WAIT_S:.0f}s -- cannot measure progress",
+            )
+        record["odom_origin"] = self._se2_record(origin)
+
+        cmd = Twist()
+        cmd.linear.x = float(v_mps)
+        cmd.angular.z = float(w_rps)
+        rate = rospy.Rate(self._SCRIPTED_RATE_HZ)
+        progress = 0.0
+        start_t = rospy.get_time()
+        seg_start_t = start_t
+        stop_reason = None
+        print(
+            f"[logged-nav] {label}: driving v={v_mps:+.3f} m/s w={w_rps:+.3f} rad/s "
+            f"until {target:.2f} {'m' if kind == 'dist' else 'rad'} "
+            f"(nominal {nominal_t:.1f}s, cap {time_cap:.1f}s"
+            f"{', DRY RUN' if dry_run else ''})"
+        )
+        try:
+            while not rospy.is_shutdown():
+                now = rospy.get_time()
+                # Human intervention: takeover intent (webapp/Xbox both publish
+                # it) or any nonzero teleop command since this segment started.
+                teleop_cmd_t = getattr(self, "_last_teleop_cmd_t", None)
+                if self._teleop_active or (
+                    teleop_cmd_t is not None and teleop_cmd_t >= seg_start_t
+                ):
+                    stop_reason = "teleop"
+                    print(f"[logged-nav] {label}: human teleop detected -- "
+                          "aborting the scripted segment.")
+                    break
+                sample = self._fresh_odom_sample()
+                if sample is not None:
+                    record["odom_final"] = self._se2_record(sample)
+                    if kind == "dist":
+                        progress = math.hypot(
+                            sample[0] - origin[0], sample[1] - origin[1]
+                        )
+                    else:
+                        progress = abs(self._wrap(sample[2] - origin[2]))
+                    record["progress"] = round(progress, 4)
+                    if progress >= target:
+                        stop_reason = "target"
+                        break
+                else:
+                    # Grace of 2x the freshness window before declaring the
+                    # odom dead (a single dropped message must not abort a run).
+                    odom = getattr(self, "_scripted_odom", None)
+                    if odom is None or now - odom[3] > 2.0 * self._SCRIPTED_ODOM_FRESH_S:
+                        record["driven_s"] = round(now - start_t, 2)
+                        _fail(
+                            "odom_stale",
+                            f"{self._SCRIPTED_ODOM_TOPIC} went stale mid-segment "
+                            f"after {progress:.2f}/{target:.2f} "
+                            f"{'m' if kind == 'dist' else 'rad'}",
+                        )
+                if now - start_t >= time_cap:
+                    record["driven_s"] = round(now - start_t, 2)
+                    _fail(
+                        "time_cap",
+                        f"hit the {time_cap:.1f}s cap at {progress:.2f}/{target:.2f} "
+                        f"{'m' if kind == 'dist' else 'rad'} -- wheels stalled or "
+                        "odometry not tracking",
+                    )
+                if not dry_run:
+                    pub.publish(cmd)
+                rate.sleep()
+            if rospy.is_shutdown() and stop_reason is None:
+                stop_reason = "shutdown"
+        finally:
+            # Zero twists on EVERY exit path (target, teleop, failure raise,
+            # shutdown, unexpected exception). publish() can raise after
+            # shutdown -> best-effort.
+            for _ in range(5):
+                try:
+                    if not dry_run:
+                        pub.publish(Twist())
+                    rospy.sleep(0.02)
+                except Exception:
+                    break
+
+        record["driven_s"] = round(rospy.get_time() - start_t, 2)
+        record["stop_reason"] = stop_reason
+        record["map_pose_after"] = self._se2_record(self._read_base_pose_se2())
+        self._log_scripted_event(record)
+        if stop_reason == "shutdown":
+            raise RuntimeError(f"ROS shutdown during the scripted {label} segment")
+        print(
+            f"[logged-nav] {label}: {stop_reason} at "
+            f"{progress:.2f}/{target:.2f} {'m' if kind == 'dist' else 'rad'} "
+            f"in {record['driven_s']:.1f}s"
+        )
+        return record
+
+    def _run_scripted_motion(self, purpose: str, segments: list) -> str:
+        """Run scripted segments in order. Returns "completed", "human_done"
+        (the user teleoped in and pressed Done -- the park is final), or
+        "teleop_fallback" (the user intervened and handed back -- the caller
+        must fall back to autonomous navigation). Segment failures raise."""
+        self._ensure_scripted_odom_subscriber()
+        self._done_pressed_this_leg = False
+        self._set_base_control_available(True)
+        try:
+            for i, seg in enumerate(segments):
+                rec = self._scripted_segment(purpose, **seg)
+                if rec["stop_reason"] == "teleop":
+                    return self._await_teleop_resolution(purpose)
+                if i < len(segments) - 1:
+                    rospy.sleep(0.5)  # settle between direction changes
+        finally:
+            self._set_base_control_available(False)
+        return "completed"
+
+    def _await_teleop_resolution(self, purpose: str) -> str:
+        """After a mid-segment teleop abort, wait for the human to finish:
+        Done -> the park is final; Resume (or the teleop stream quiet for
+        _SCRIPTED_TELEOP_QUIET_S with no takeover asserted) -> hand back for
+        an autonomous fallback."""
+        print(
+            f"[logged-nav] {purpose}: waiting for the human to finish "
+            "(Done = park is final; Resume / release = autonomous fallback)..."
+        )
+        rate = rospy.Rate(5.0)
+        while not rospy.is_shutdown():
+            if self._done_pressed_this_leg:
+                print(f"[logged-nav] {purpose}: human pressed Done -- park is final.")
+                return "human_done"
+            teleop_cmd_t = getattr(self, "_last_teleop_cmd_t", None)
+            quiet = (
+                teleop_cmd_t is None
+                or rospy.get_time() - teleop_cmd_t >= self._SCRIPTED_TELEOP_QUIET_S
+            )
+            if not self._teleop_active and quiet:
+                print(f"[logged-nav] {purpose}: teleop released -- "
+                      "falling back to autonomous navigation.")
+                return "teleop_fallback"
+            rate.sleep()
+        raise RuntimeError(f"ROS shutdown while waiting out a teleop takeover ({purpose})")
+
+    def _log_scripted_event(self, record: dict) -> None:
+        """Append one scripted-segment record to the per-user log
+        (log/<user>/scripted_nav_log.jsonl). Best-effort: a logging failure
+        must never break navigation."""
+        log_dir = getattr(self, "log_dir", None)
+        if log_dir is None:
+            return
+        try:
+            log_dir = Path(log_dir)
+            log_dir.mkdir(parents=True, exist_ok=True)
+            with open(log_dir / "scripted_nav_log.jsonl", "a", encoding="utf-8") as f:
+                f.write(json.dumps(record) + "\n")
+        except Exception as exc:  # noqa: BLE001 - logging must never break nav
+            print(f"[logged-nav] could not write scripted log: {exc}")
+
+    def _hardcoded_microwave_approach(
+        self, speed: str, position_offset, arrival_confirm_mode,
+    ) -> None:
+        """Logged-nav fridge->microwave: a scripted forward drive instead of
+        move_base. Skips the goal-confirm settle/replan and the refinement
+        window (both are map-frame closed-loop -- meaningless under the
+        aliasing this mode sidesteps) and goes straight to the confirmation/
+        adjustment page. The learned offset is NOT applied to the motion
+        (commanded == nominal); the adjust flow still measures, logs, and
+        updates the learned offset exactly as today."""
+        self._prepare_for_navigation(speed, need_move_base=False)
+        self.report_activity("Driving to the microwave")
+        print(
+            "[logged-nav] fridge->microwave: scripted "
+            f"{self._FRIDGE_TO_MICROWAVE_FWD_M:.2f} m forward drive "
+            "(learned offset not applied to the motion)."
+        )
+        outcome = self._run_scripted_motion("fridge_to_microwave", [
+            {"label": "forward", "v_mps": self._SCRIPTED_LIN_MPS, "w_rps": 0.0,
+             "dist_m": self._FRIDGE_TO_MICROWAVE_FWD_M},
+        ])
+        if outcome == "teleop_fallback":
+            # The human moved the base mid-drive: the scripted assumption is
+            # void, so drive the leg autonomously (offset applies as on any
+            # autonomous leg, full arrival flow).
+            self._navigate_to_target(
+                "microwave", speed, position_offset=position_offset,
+                arrival_confirm_mode=arrival_confirm_mode,
+            )
+            return
+        self.report_activity("Arriving at the microwave")
+        nominal_pose = self._load_target_pose("microwave")
+        self._offer_position_adjustment(
+            "microwave", nominal_pose, dict(nominal_pose), position_offset,
+            leg_used_recovery=False,
+            arrival_confirm_mode=arrival_confirm_mode,
+            human_parked=(outcome == "human_done"),
+        )
+
+    # ------------------------------------------------------------------ #
     # Post-arrival position adjustment (learned per-location nav offset)
     # ------------------------------------------------------------------ #
     def _read_base_pose_se2(self):
@@ -1323,6 +1687,23 @@ class NavigateHLA(HighLevelAction):
         assert dst.name in self._VALID_TARGETS
         return f"navigate_to_{dst.name}.yaml"
 
+    def execute_action(
+        self,
+        objects: Tuple[Object, ...],
+        params: dict[str, Any],
+    ) -> None:
+        # Stash the true PDDL origin (?from) for the duration of the skill: the
+        # behavior tree only carries the destination, but the logged-nav
+        # scripted legs are origin-specific (fridge->microwave vs a table->
+        # microwave re-heat leg must not run the same hardcoded motion). Not a
+        # BT parameter on purpose -- per-user trees are copies seeded at first
+        # run and never receive new parameters.
+        self._nav_origin = objects[0].name if len(objects) == 2 else None
+        try:
+            super().execute_action(objects, params)
+        finally:
+            self._nav_origin = None
+
     # position_offset / arrival_confirm_mode default to None so per-user
     # behavior trees that predate those parameters still execute (zero offset;
     # today's autocontinue arrival page).
@@ -1333,6 +1714,20 @@ class NavigateHLA(HighLevelAction):
         )
 
     def navigate_to_microwave(self, speed: str, position_offset=None, arrival_confirm_mode=None) -> None:
+        # Logged-nav mode, fridge->microwave only: scripted forward drive. Any
+        # other origin (table->microwave re-heat leg, unknown after a resume)
+        # stays fully autonomous.
+        if self._logged_nav_enabled():
+            if getattr(self, "_nav_origin", None) == "fridge":
+                self._hardcoded_microwave_approach(
+                    speed, position_offset, arrival_confirm_mode
+                )
+                return
+            print(
+                "[logged-nav] microwave: origin is "
+                f"{getattr(self, '_nav_origin', None)!r}, not 'fridge' -- "
+                "using normal autonomous navigation."
+            )
         self._navigate_to_target(
             "microwave", speed, position_offset=position_offset,
             arrival_confirm_mode=arrival_confirm_mode,
@@ -1350,6 +1745,47 @@ class NavigateHLA(HighLevelAction):
         # Routing via the staging waypoint stops TEB from oscillating as it tries
         # to turn inside the corridor. (Auto-skipped while the staging pose is an
         # unset placeholder.)
+        #
+        # Logged-nav mode: the egress is scripted instead -- reverse a fixed
+        # origin-specific distance, rotate 90 deg CW, then drive autonomously
+        # DIRECT to the table (the scripted egress replaces the staging
+        # waypoint). Unknown origins keep the fully autonomous route.
+        origin = getattr(self, "_nav_origin", None)
+        reverse_m = self._SCRIPTED_TABLE_EGRESS_REVERSE_M.get(origin)
+        if self._logged_nav_enabled() and reverse_m is not None:
+            self._prepare_for_navigation(speed, need_move_base=False)
+            self.report_activity("Backing out of the kitchen")
+            print(
+                f"[logged-nav] {origin}->table: scripted egress "
+                f"(reverse {reverse_m:.2f} m, rotate 90 deg CW), then "
+                "autonomous navigation to the table."
+            )
+            outcome = self._run_scripted_motion(f"{origin}_to_table_egress", [
+                {"label": "reverse", "v_mps": -self._SCRIPTED_LIN_MPS,
+                 "w_rps": 0.0, "dist_m": reverse_m},
+                {"label": "rotate_right", "v_mps": 0.0,
+                 "w_rps": -self._SCRIPTED_ANG_RPS,
+                 "yaw_rad": self._EGRESS_ROTATE_RAD},
+            ])
+            if outcome == "human_done":
+                # System-wide Done contract: the human parked the base and the
+                # park is final -- the leg ends here.
+                print("[logged-nav] table: human parked via Done; leg ends.")
+                return
+            # completed: the egress replaced kitchen_exit -> go direct.
+            # teleop_fallback: the egress was interrupted and the base may
+            # still be inside the corridor -> full normal route incl. staging.
+            via = [] if outcome == "completed" else [self._STAGING_WAYPOINT]
+            self._navigate_to_target(
+                "table", speed, via=via, position_offset=position_offset,
+                arrival_confirm_mode=arrival_confirm_mode,
+            )
+            return
+        if self._logged_nav_enabled():
+            print(
+                f"[logged-nav] table: origin is {origin!r} (no scripted egress "
+                "defined) -- using normal autonomous navigation."
+            )
         self._navigate_to_target(
             "table", speed, via=[self._STAGING_WAYPOINT], position_offset=position_offset,
             arrival_confirm_mode=arrival_confirm_mode,

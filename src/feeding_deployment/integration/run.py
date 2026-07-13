@@ -1394,6 +1394,15 @@ if __name__ == "__main__":
     parser.add_argument("--resume_from_state", type=str, default="")
     parser.add_argument("--no_waits", action="store_true")
     parser.add_argument(
+        "--logged-navigation", action="store_true",
+        help="Hardcoded navigation mode: fridge->microwave is a scripted 1.4 m "
+             "forward drive (no move_base; the arrival confirm/adjust page "
+             "still runs and the position learning still logs), and the "
+             "*->table legs first back out of the kitchen with a scripted "
+             "reverse + 90 deg CW rotate before navigating autonomously "
+             "direct to the table. All other legs stay fully autonomous.",
+    )
+    parser.add_argument(
         "--pref_mode",
         type=str,
         choices=["none", "terminal", "interface"],
@@ -1432,6 +1441,13 @@ if __name__ == "__main__":
              "while --resume_from_state continues a crashed meal of the same day.",
     )
     args = parser.parse_args()
+
+    # Logged-navigation mode travels as an env var (like FEEDING_NAV_ACTION /
+    # FEEDING_NAV_LOCATIONS_FILE) so only NavigateHLA needs to know about it --
+    # the shared HLA constructor signature stays untouched.
+    if args.logged_navigation:
+        os.environ["FEEDING_LOGGED_NAV"] = "1"
+        print("[logged-nav] Hardcoded navigation mode ENABLED (FEEDING_LOGGED_NAV=1).")
 
     # Resolve pref_mode when not passed explicitly: interface runs personalize via
     # the web interface; everything else defaults to no personalization. Terminal

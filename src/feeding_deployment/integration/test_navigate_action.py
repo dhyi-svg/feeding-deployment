@@ -151,6 +151,7 @@ def test_navigate_action(
     adjust: bool,
     use_interface: bool,
     no_waits: bool,
+    assume_from: str | None = None,
 ) -> None:
     """Instantiate NavigateHLA and navigate to a named location."""
     rospy_mod = None
@@ -261,14 +262,32 @@ def test_navigate_action(
             f"dyaw={math.degrees(position_offset[2]):+.1f}deg"
         )
 
+    scripted_terminal_leg = False
     try:
-        navigate_hla._navigate_to_target(location, speed, position_offset=position_offset)
+        if navigate_hla._logged_nav_enabled():
+            # Logged-nav mode: go through the PUBLIC entry point so the exact
+            # deployment code path runs (origin gate, scripted branch, teleop
+            # fallback). The harness has no PDDL executive, so --assume_from
+            # substitutes the origin execute_action() would have stashed.
+            navigate_hla._nav_origin = assume_from
+            print(f"[logged-nav] harness: assumed origin = {assume_from!r}")
+            getattr(navigate_hla, f"navigate_to_{location}")(
+                speed, position_offset=position_offset
+            )
+            scripted_terminal_leg = location == "microwave" and assume_from == "fridge"
+        else:
+            navigate_hla._navigate_to_target(location, speed, position_offset=position_offset)
 
         # With the interface, the HLA's own iPad adjust prompt already ran
         # inside _navigate_to_target; without it, offer the terminal-driven
         # equivalent so the offset loop works standalone.
         if adjust and run_on_robot and web_interface is None and not no_waits:
-            commanded_pose = navigate_hla._apply_offset_to_pose(nominal_pose, position_offset)
+            # A scripted terminal leg never applied the offset to the motion,
+            # so the adjustment measures against commanded == nominal.
+            commanded_pose = (
+                dict(nominal_pose) if scripted_terminal_leg
+                else navigate_hla._apply_offset_to_pose(nominal_pose, position_offset)
+            )
             _terminal_adjustment(
                 navigate_hla, location, nominal_pose, commanded_pose, position_offset
             )
@@ -340,6 +359,28 @@ if __name__ == "__main__":
             "prompts are skipped)."
         ),
     )
+    parser.add_argument(
+        "--logged_nav",
+        action="store_true",
+        help=(
+            "Mirror run.py's --logged-navigation (sets FEEDING_LOGGED_NAV=1): "
+            "scripted kitchen legs instead of move_base. Routes through the "
+            "public navigate_to_<location> entry point; combine with "
+            "--assume_from to pick which scripted leg fires."
+        ),
+    )
+    parser.add_argument(
+        "--assume_from",
+        type=str,
+        default="",
+        help=(
+            "Origin location to assume for --logged_nav (the harness has no "
+            "PDDL executive to provide ?from). E.g. --assume_from fridge "
+            "--location microwave drives the scripted 1.4 m approach; "
+            "--assume_from microwave --location table drives the scripted "
+            "kitchen egress."
+        ),
+    )
     args = parser.parse_args()
 
     if args.speed not in {"low", "medium", "high"}:
@@ -349,6 +390,10 @@ if __name__ == "__main__":
 
     if args.locations_file:
         os.environ["FEEDING_NAV_LOCATIONS_FILE"] = args.locations_file
+
+    if args.logged_nav:
+        os.environ["FEEDING_LOGGED_NAV"] = "1"
+        print("[logged-nav] Hardcoded navigation mode ENABLED (FEEDING_LOGGED_NAV=1).")
 
     try:
         test_navigate_action(
@@ -367,6 +412,7 @@ if __name__ == "__main__":
             adjust=not args.no_adjust,
             use_interface=args.use_interface,
             no_waits=args.no_waits,
+            assume_from=args.assume_from or None,
         )
     except KeyboardInterrupt:
         # disable_signals=True keeps Ctrl+C as a plain KeyboardInterrupt; the
