@@ -70,9 +70,14 @@ PY=$HOME/feeding-deployment/.venv/bin/python
 | grab color+depth | `pyrealsense2` direct (`rs.align`) | no ROS camera interface needed |
 | detect microwave | GroundedSAM / GroundingDINO (**CPU**) | `microwave` box 0.59–0.81; open-vocab. ~34 s CPU. |
 | box → 3D | deproject depth + intrinsics | control panel → valid 3D; glass door → no depth |
-| **handle in arm-base frame** | faithful mimic of `detect_handle_and_placement` | box → point cloud → `segment_plane` → protruding cluster (DBSCAN) → centroid → **camera→arm_base via static extrinsic + live EE pose** (replaces `tf2`). Hinge-consistent result, no rospy. |
+| **handle in arm-base frame** | faithful mimic of `detect_handle_and_placement` | box → point cloud → `segment_plane` → protruding cluster (DBSCAN) → centroid → **camera→arm_base via the hand-eye calib + live EE pose** (replaces `tf2`). No rospy. |
+| gripper | `open_gripper()`/`close_gripper()` over RPC | works: 0.009 open ↔ 1.0 closed |
 
 > **YOLO doesn't work for the microwave here:** nano COCO models (`yolov8n`→"bus", `yolo11n-seg`→missed, `yolo26n-seg`→"train") mis-ID or miss it. `-seg` models need a warmup pass. GroundingDINO is the one that gets it. Seg is **not needed** anyway (appliance path is boxes only).
+
+> **Camera→arm calibration — use the saved easy_handeye2 one:** `~/.ros2/easy_handeye2/calibrations/wrist_camera_calib.calib` (eye_in_hand, `end_effector_link`→`camera_color_optical_frame`, ~180° about Z), chained with the live `get_state` EE pose. **Do NOT use the lab `sensors.launch` extrinsic** — it's for a different mount and drives the arm the *wrong way*.
+
+> **⚠️ Depth bias (~16 cm):** perception **overestimates depth by ~16 cm** (lateral accurate ~5 mm, height ~4 cm). Teleop ground-truth: real handle `[0.713,-0.099,0.465]` (0.86 m, **reachable**) vs perceived `[0.874,-0.104,0.428]` (0.98 m). This one bias caused grasp overshoot (pushed the microwave) *and* false "out of reach" aborts. **Correct depth before trusting close grasps.** Reach note: handle sits near the Gen3 ~0.9 m limit — keep the microwave ~0.6 m from the base.
 
 ---
 
@@ -82,7 +87,7 @@ PY=$HOME/feeding-deployment/.venv/bin/python
 |---|---|---|---|
 | IKFast (repo sim IK) | hangs indefinitely | IKFast build fails on this custom Gen3 URDF (aarch64) | PyBullet native `calculateInverseKinematics` |
 | `plan_to_ee_pose` (sim cartesian) | never converges | needs a stepping/real-time loop + IKFast | native IK + `resetJointState` for kinematic playback |
-| `rospy` (bulldog, PerceptionInterface, tf2) | not installed | **ROS 1 Noetic repo vs ROS 2 Humble / Ubuntu 22.04 box** — Noetic only targets 20.04 | bulldog → **bypass**; camera → `pyrealsense2`; **tf2 → static extrinsic + arm FK** |
+| `rospy` (bulldog, PerceptionInterface, tf2) | not installed | **ROS 1 Noetic repo vs ROS 2 Humble / Ubuntu 22.04 box** — Noetic only targets 20.04 | bulldog → **bypass**; camera → `pyrealsense2`; **tf2 → easy_handeye2 calib + arm FK** |
 | bulldog | won't start | needs arm **and** base RPC servers up | stub base server + (real bulldog still needs rospy) |
 | ViT-H on GPU | CUDA OOM (`NvMap error 12`) | 2.5 GB model + double-copy on 8 GB shared RAM | lazy SAM; use lighter SAM / bigger Jetson for the food path |
 | GroundingDINO on GPU | `NVML_SUCCESS==r ASSERT` in torch allocator | Tegra iGPU lacks NVML/PCI interface torch expects | run detection on **CPU** (`CUDA_VISIBLE_DEVICES=""`), ~34 s/frame. (YOLO via `yolo_env`'s Jetson torch runs GPU fine.) |
