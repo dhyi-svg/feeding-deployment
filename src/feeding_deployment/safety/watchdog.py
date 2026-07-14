@@ -233,9 +233,9 @@ class WatchDog:
         anomaly = AnomalyStatus.NO_ANOMALY
         start_time = time.time()
         frequencies = []
-        for _queue, _threshold, _anomaly in [(self.camera_timestamps, CAMERA_FREQUENCY_THRESHOLD, AnomalyStatus.CAMERA_FREQUENCY),
-                                            (self.camera_depth_timestamps, CAMERA_DEPTH_FREQUENCY_THRESHOLD, AnomalyStatus.CAMERA_DEPTH_FREQUENCY),
-                                            (self.ft_timestamps, FT_FREQUENCY_THRESHOLD, AnomalyStatus.FT_FREQUENCY),
+        for _queue, _threshold, _anomaly in [(self.ft_timestamps, FT_FREQUENCY_THRESHOLD, AnomalyStatus.FT_FREQUENCY),
+                                            # (self.camera_timestamps, CAMERA_FREQUENCY_THRESHOLD, AnomalyStatus.CAMERA_FREQUENCY),
+                                            # (self.camera_depth_timestamps, CAMERA_DEPTH_FREQUENCY_THRESHOLD, AnomalyStatus.CAMERA_DEPTH_FREQUENCY),
                                             (self.collision_free_timestamps, COLLISION_FREE_FREQUENCY_THRESHOLD, AnomalyStatus.COLLISION_FREE_FREQUENCY),
                                             (self.lidar_l_timestamps, LIDAR_FREQUENCY_THRESHOLD, AnomalyStatus.LIDAR_L_FREQUENCY),
                                             (self.lidar_r_timestamps, LIDAR_FREQUENCY_THRESHOLD, AnomalyStatus.LIDAR_R_FREQUENCY),
