@@ -158,6 +158,16 @@ class NavigateHLA(HighLevelAction):
     # navigation once the teleop stream has been quiet this long (unless the
     # user pressed Done first -- then the park is final).
     _SCRIPTED_TELEOP_QUIET_S = 2.0
+    # Straight-segment slip detector: wheel slip rotates the base while the
+    # encoders read "straight"; the fused yaw (gyro-informed -- the EKF fuses
+    # the debiased ZED gyro vyaw) sees the true rotation. Drift past the
+    # threshold, persisting a few ticks, aborts the scripted leg -> autonomous
+    # fallback to the leg's destination. Threshold sits ~3x above the
+    # residual-gyro-bias + heading-wobble floor (~3-5 deg over a 28 s drive).
+    # Rotate segments are exempt (slip there just slows the rotation; the
+    # time cap covers it).
+    _SCRIPTED_YAW_DRIFT_RAD = math.radians(15.0)
+    _SCRIPTED_YAW_DRIFT_TICKS = 3   # consecutive 10 Hz ticks before triggering
 
     def _default_location_yaml(self) -> Path:
         return Path(__file__).resolve().parents[3] / "config" / "nav_named_locations.yaml"
@@ -1120,8 +1130,13 @@ class NavigateHLA(HighLevelAction):
         absorb. A human teleop command mid-segment ABORTS the segment (returns
         stop_reason="teleop"); it is never paused-and-resumed, because the
         remaining scripted distance is only meaningful from the assumed start
-        pose. Zero twists are published on every exit path. The segment record
-        is appended to scripted_nav_log.jsonl before any raise.
+        pose. Likewise, yaw drifting past _SCRIPTED_YAW_DRIFT_RAD on a
+        STRAIGHT segment means wheel slip rotated the base off its heading
+        (the gyro-informed fused yaw sees what the encoders miss) -- the
+        segment aborts with stop_reason="yaw_drift" so the caller can fall
+        back to autonomous navigation. Zero twists are published on every
+        exit path. The segment record is appended to scripted_nav_log.jsonl
+        before any raise.
 
         FEEDING_LOGGED_NAV_DRY_RUN=1 runs the full loop and logging without
         publishing any motion.
@@ -1149,6 +1164,7 @@ class NavigateHLA(HighLevelAction):
             "time_cap_s": round(time_cap, 2),
             "dry_run": dry_run,
             "progress": None,
+            "yaw_drift_rad": None,   # straight segments only; null for rotates
             "driven_s": None,
             "stop_reason": None,
             "odom_origin": None,
@@ -1193,6 +1209,7 @@ class NavigateHLA(HighLevelAction):
         cmd.angular.z = float(w_rps)
         rate = rospy.Rate(self._SCRIPTED_RATE_HZ)
         progress = 0.0
+        yaw_drift_ticks = 0
         start_t = rospy.get_time()
         seg_start_t = start_t
         stop_reason = None
@@ -1222,6 +1239,25 @@ class NavigateHLA(HighLevelAction):
                         progress = math.hypot(
                             sample[0] - origin[0], sample[1] - origin[1]
                         )
+                        # Slip detector: the base should not rotate while
+                        # driving straight. The fused yaw is gyro-informed, so
+                        # it sees a slip-induced rotation the encoders miss.
+                        drift = abs(self._wrap(sample[2] - origin[2]))
+                        record["yaw_drift_rad"] = round(drift, 4)
+                        if drift > self._SCRIPTED_YAW_DRIFT_RAD:
+                            yaw_drift_ticks += 1
+                        else:
+                            yaw_drift_ticks = 0
+                        if yaw_drift_ticks >= self._SCRIPTED_YAW_DRIFT_TICKS:
+                            stop_reason = "yaw_drift"
+                            print(
+                                f"[logged-nav] {label}: yaw drifted "
+                                f"{math.degrees(drift):.1f} deg while driving "
+                                f"straight (wheel slip?) at {progress:.2f}/"
+                                f"{target:.2f} m -- aborting the scripted leg "
+                                "for autonomous navigation."
+                            )
+                            break
                     else:
                         progress = abs(self._wrap(sample[2] - origin[2]))
                     record["progress"] = round(progress, 4)
@@ -1280,9 +1316,11 @@ class NavigateHLA(HighLevelAction):
 
     def _run_scripted_motion(self, purpose: str, segments: list) -> str:
         """Run scripted segments in order. Returns "completed", "human_done"
-        (the user teleoped in and pressed Done -- the park is final), or
-        "teleop_fallback" (the user intervened and handed back -- the caller
-        must fall back to autonomous navigation). Segment failures raise."""
+        (the user teleoped in and pressed Done -- the park is final),
+        "teleop_fallback" (the user intervened and handed back), or
+        "slip_fallback" (yaw drifted on a straight segment -- wheel slip).
+        On either fallback the caller must fall back to autonomous
+        navigation. Segment failures raise."""
         self._ensure_scripted_odom_subscriber()
         self._done_pressed_this_leg = False
         self._set_base_control_available(True)
@@ -1291,6 +1329,10 @@ class NavigateHLA(HighLevelAction):
                 rec = self._scripted_segment(purpose, **seg)
                 if rec["stop_reason"] == "teleop":
                     return self._await_teleop_resolution(purpose)
+                if rec["stop_reason"] == "yaw_drift":
+                    # Base already stopped; nobody is driving -- no teleop
+                    # resolution to wait for. Remaining segments are void.
+                    return "slip_fallback"
                 if i < len(segments) - 1:
                     rospy.sleep(0.5)  # settle between direction changes
         finally:
@@ -1360,10 +1402,15 @@ class NavigateHLA(HighLevelAction):
             {"label": "forward", "v_mps": v_mps, "w_rps": 0.0,
              "dist_m": self._FRIDGE_TO_MICROWAVE_FWD_M},
         ])
-        if outcome == "teleop_fallback":
-            # The human moved the base mid-drive: the scripted assumption is
-            # void, so drive the leg autonomously (offset applies as on any
-            # autonomous leg, full arrival flow).
+        if outcome in ("teleop_fallback", "slip_fallback"):
+            # The scripted assumption is void -- either the human moved the
+            # base mid-drive, or wheel slip rotated it off its heading. Drive
+            # the leg autonomously to the microwave pose (offset applies as on
+            # any autonomous leg, full arrival flow); move_base corrects the
+            # heading closed-loop from wherever the base actually is.
+            trigger = "human teleop" if outcome == "teleop_fallback" else "wheel slip"
+            print(f"[logged-nav] microwave: {trigger} voided the scripted "
+                  "drive -- continuing with autonomous navigation.")
             self._navigate_to_target(
                 "microwave", speed, position_offset=position_offset,
                 arrival_confirm_mode=arrival_confirm_mode,
@@ -1799,8 +1846,9 @@ class NavigateHLA(HighLevelAction):
                 print("[logged-nav] table: human parked via Done; leg ends.")
                 return
             # completed: the egress replaced kitchen_exit -> go direct.
-            # teleop_fallback: the egress was interrupted and the base may
-            # still be inside the corridor -> full normal route incl. staging.
+            # teleop_fallback / slip_fallback: the egress was interrupted
+            # (human intervention or wheel slip) and the base may still be
+            # inside the corridor -> full normal route incl. staging.
             via = [] if outcome == "completed" else [self._STAGING_WAYPOINT]
             self._navigate_to_target(
                 "table", speed, via=via, position_offset=position_offset,
