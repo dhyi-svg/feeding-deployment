@@ -20,6 +20,9 @@ Last updated: 2026-07-14.
 | Main env | `~/feeding-deployment/.venv` |
 | Arm | Kinova Gen3 7-DOF at `192.168.1.10` (Kortex API port 10000). Box is `192.168.1.18`. |
 | Kortex SDK | **not** in `.venv` — installed in user site (`~/.local/lib/python3.10/site-packages`) |
+| Perception deps | `.venv` has GroundingDINO + SAM checkpoints (`~/Grounded-Segment-Anything/`), `open3d`, `pyrealsense2`, `sklearn` |
+| Camera | Intel RealSense **D435I** (color+depth) — grabbed directly via `pyrealsense2`, **no ROS** |
+| YOLO (compare) | `~/yolo_env` (bottle project) — ultralytics + **Jetson-native torch, GPU works** + COCO `.pt`. Read-only use only. |
 
 **Command prefix** for anything that talks to the arm (pulls in the Kortex SDK and
 points the RPC host at localhost instead of the hardcoded lab NUC):
@@ -58,8 +61,18 @@ PY=$HOME/feeding-deployment/.venv/bin/python
 | 1 | connect + fault-clear (`get_state()`) | 2026-07-09 | reads joints/EE over RPC |
 | 2 | read-only telemetry | 2026-07-09 | `position`/`velocity`/`ee_pos`/`effort`, radians |
 | 3 | joint move (+5° on J4) | 2026-07-09 | `set_joint_position`, exact, other joints ~0 |
-| 4 | cartesian move (+5 cm z) | 2026-07-09 | `set_ee_pose(pos, quat)`, dz=+5 cm no drift |
-| 5 | forward door-opening arc | ⚠️ partial | first 3 waypoints tracked 0–1 cm; **aborted** — see below |
+| 4 | cartesian move (+5 cm z) | 2026-07-09 | `set_ee_pose(pos, quat)` works for **small** moves |
+| 5 | door-opening arc (real arm) | ✅ 2026-07-14 | **joint-space** (sim-IK → `set_joint_position`) is reliable; forward + lateral swing completed. Cartesian aborts at extended configs (see gotchas). |
+
+### Perception — live, rospy-free (2026-07-14)
+| Step | How | Notes |
+|---|---|---|
+| grab color+depth | `pyrealsense2` direct (`rs.align`) | no ROS camera interface needed |
+| detect microwave | GroundedSAM / GroundingDINO (**CPU**) | `microwave` box 0.59–0.81; open-vocab. ~34 s CPU. |
+| box → 3D | deproject depth + intrinsics | control panel → valid 3D; glass door → no depth |
+| **handle in arm-base frame** | faithful mimic of `detect_handle_and_placement` | box → point cloud → `segment_plane` → protruding cluster (DBSCAN) → centroid → **camera→arm_base via static extrinsic + live EE pose** (replaces `tf2`). Hinge-consistent result, no rospy. |
+
+> **YOLO doesn't work for the microwave here:** nano COCO models (`yolov8n`→"bus", `yolo11n-seg`→missed, `yolo26n-seg`→"train") mis-ID or miss it. `-seg` models need a warmup pass. GroundingDINO is the one that gets it. Seg is **not needed** anyway (appliance path is boxes only).
 
 ---
 
@@ -69,9 +82,10 @@ PY=$HOME/feeding-deployment/.venv/bin/python
 |---|---|---|---|
 | IKFast (repo sim IK) | hangs indefinitely | IKFast build fails on this custom Gen3 URDF (aarch64) | PyBullet native `calculateInverseKinematics` |
 | `plan_to_ee_pose` (sim cartesian) | never converges | needs a stepping/real-time loop + IKFast | native IK + `resetJointState` for kinematic playback |
-| `rospy` (bulldog, PerceptionInterface) | not installed | ROS2 Humble on box vs ROS1 Noetic repo | bulldog → **bypass**; perception → recorded images / future x86 box |
+| `rospy` (bulldog, PerceptionInterface, tf2) | not installed | **ROS 1 Noetic repo vs ROS 2 Humble / Ubuntu 22.04 box** — Noetic only targets 20.04 | bulldog → **bypass**; camera → `pyrealsense2`; **tf2 → static extrinsic + arm FK** |
 | bulldog | won't start | needs arm **and** base RPC servers up | stub base server + (real bulldog still needs rospy) |
 | ViT-H on GPU | CUDA OOM (`NvMap error 12`) | 2.5 GB model + double-copy on 8 GB shared RAM | lazy SAM; use lighter SAM / bigger Jetson for the food path |
+| GroundingDINO on GPU | `NVML_SUCCESS==r ASSERT` in torch allocator | Tegra iGPU lacks NVML/PCI interface torch expects | run detection on **CPU** (`CUDA_VISIBLE_DEVICES=""`), ~34 s/frame. (YOLO via `yolo_env`'s Jetson torch runs GPU fine.) |
 | real-arm motion (all `set_*`) | `AssertionError: Bulldog is not running` | every motion method calls `_require_bulldog()` | bypass unlocks it |
 | door arc rung 5 | swept inward toward base → e-stopped | arc was generated sweeping toward the base | **sweep forward/away from base**; verify reachability first |
 
@@ -79,7 +93,9 @@ PY=$HOME/feeding-deployment/.venv/bin/python
 
 ## ⚠️ Gotchas & safety
 
-- **Physical obstacle:** a camera rig for another project is mounted under the arm base. Real-arm trajectories must stay **in front of / clear of the base** — never sweep inward.
+- **Joint control >> cartesian on the real arm:** `set_ee_pose` (Kortex cartesian) aborts (`returns False`, no motion) at **extended/near-singular configs**; `set_joint_position` is reliable. For arcs, compute joint targets via **sim IK** (sim↔real joints aligned to 0.2 cm) and command joints. Also: a move can **return `False`/`True` before it settles and complete late** — always **wait for velocity≈0 then re-check the EE**, don't trust the return value.
+- **Camera→arm frame without ROS:** the RealSense is eye-in-hand — static `arm_end_effector_link→camera_link` in `launch/sensors.launch:110` `xyz(-0.046,0.084,0.11) quat(0.707,0,0,0.707)`. Chain it with the live EE pose (`get_state`) to convert camera-frame 3D → arm-base, replacing `tf2`. (Exact accuracy needs hand-eye calibration: verify the EE frame + the ~1.5 cm color-sensor offset.)
+- **Physical obstacle:** a camera rig for another project was mounted under the arm/wrist (now removable). When present, real-arm trajectories must stay **clear of the base/low region** — sweep forward and keep z up.
 - **After any e-stop:** the Kortex session faults (`ERROR_PROTOCOL_SERVER` on the next call). Recover by restarting `arm_server.py` (reconnects + clears faults + holds — no motion). Then re-run the bypass (fresh server = motion re-locked).
 - **Bypass has no software e-stop.** Physical e-stop is the only stop. If the bypass process dies, the arm e-stops within ~1 s (heartbeat lost) — that's the one retained safety property.
 - **Single-instance lock** `/tmp/kinova.lock`: only one process can hold the arm. A stale lock (dead PID) is auto-cleared on the next `arm_server`/`kinova.py` start.
@@ -96,7 +112,9 @@ PY=$HOME/feeding-deployment/.venv/bin/python
 
 ## TODO / untested
 
-- Rung 5: a **forward-sweeping** door arc that completes (last attempt swept inward)
-- Real handle/hinge perception → a genuine `handle_opening_pos.pkl` (needs camera + rospy)
-- Full `open_microwave` HLA on hardware (needs perception + the rviz `None`-guard that is **not** yet fixed at `open_door.py:202`)
-- rospy/roscore path (or migrate to an x86 ROS1 box) to run real bulldog + perception
+- **Hand-eye calibration** — verify the EE frame + camera offset so the perception→arm-base target is accurate enough to grasp (pipeline is done; numbers need trust).
+- Confirm the protruding cluster is the actual **latch** vs the door bezel (this microwave has a subtle latch, not a fridge handle).
+- Turn the rospy-free perception result into a real `handle_opening_pos.pkl` (feed the arc geometry the HLA expects).
+- Full `open_microwave` HLA on hardware — needs the rviz `None`-guard fix at `open_door.py:202` (still **not** fixed) + wiring perception in without `PerceptionInterface`/rospy.
+- FastDownward (`FD_EXEC_PATH`) for actual PDDL **planner solve** (domain/problem already serialize as valid PDDL).
+- rospy/roscore path (or an x86 ROS 1 box) to run real bulldog + the full executive.
