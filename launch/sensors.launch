@@ -9,6 +9,9 @@
   <arg name="map_frame"         default="map"/>
   <arg name="camera_name"       default="zed_mini"/>
   <arg name="camera_base_frame" default="zed_mini_base_link"/>
+  <!-- Record raw ZED stereo+IMU to SVO for the navigation dataset (see the
+       IMU-only ZED block below). -->
+  <arg name="zed_svo_record"    default="true"/>
 
   <!-- ===== Lidar poses w.r.t. vention_base_link ===== -->
   <arg name="lidar_r_x"   default="0.2575"/>
@@ -123,21 +126,46 @@
   <param name="/$(arg camera_name)/zed_node/pos_tracking/two_d_mode"     value="true"/>
   <param name="/$(arg camera_name)/zed_node/pos_tracking/fixed_z_value"  value="0.0"/>
 
-  <!-- Convert ZED odom pose deltas into odom feedback for move_base (from base_sensors.launch) -->
-  <node pkg="feeding_deployment"
-        type="zed_pose_to_odom_feedback.py"
-        name="zed_pose_to_odom_feedback"
-        output="screen">
-    <param name="input_odom_topic" value="/$(arg camera_name)/zed_node/odom"/>
-    <param name="output_odom_topic" value="/move_base/odom_feedback"/>
-    <!-- Sanitized full-pose ZED odom (single-frame VIO teleports dropped).
-         Since Jul 2026 nothing authoritative consumes it (Cartographer rides
-         /odometry/fused_imu_wheel); kept for the drift traces + nav logs. -->
-    <param name="sanitized_odom_topic" value="/$(arg camera_name)/zed_node/odom_sanitized"/>
-    <!-- Ablation switches + tunables (enable_sanitizer, enable_windowed_diff,
-         gate thresholds, vel_diff_window). Flip either flag false to reproduce
-         original behavior for that stage. -->
-    <rosparam command="load" file="$(find feeding_deployment)/config/nav/odom_pipeline.yaml"/>
+  <!-- ===== IMU-only ZED [2026-07-15] ===== -->
+  <!-- depth_mode NONE hard-disables the depth pipeline AND blocks positional
+       tracking from ever starting (the nodelet's start_pos_tracking() refuses
+       with depth NONE). Motivation: 4 zed_wrapper segfaults since Jun 21 (2x
+       an identical libsl_zed.so tracking-internals site, 2x pthread_mutex_lock
+       on a freed object; SDK 5.0.7); the Jul 15 16:23 one killed a feeding run
+       mid-drive. Nothing live needs the visual products: the EKF below fuses
+       ONLY vyaw from imu/data_debiased, and IMU publishing is an independent
+       sensors thread (~200 Hz) unaffected by depth/tracking. Color/depth for
+       the navigation dataset are recorded raw via SVO (zed_svo_recorder
+       below) and recomputed offline, reproducibly, from the replay.
+       The pos_tracking params above are inert while tracking is off; kept as
+       the safe config should VIO ever be re-enabled.
+       NOTE: any subscriber to /zed_node/odom or pose makes the wrapper retry
+       and WARN "Cannot start Positional Tracking" every grab cycle; keep
+       odom/pose topics unsubscribed (watchdog + diag logger were cleaned of
+       their zed_odom subscribers along with this change). -->
+  <param name="/$(arg camera_name)/zed_node/depth/depth_mode"                  value="NONE"/>
+  <param name="/$(arg camera_name)/zed_node/pos_tracking/pos_tracking_enabled" value="false"/>
+
+  <!-- zed_pose_to_odom_feedback RETIRED [2026-07-15] with IMU-only ZED: it
+       subscribed to /zed_node/odom (VIO), which no longer publishes, and its
+       subscription alone would trigger the WARN spam above. Its outputs
+       (/move_base/odom_feedback, /zed_node/odom_sanitized) end here; nothing
+       authoritative consumed them since Jul 2026 (Cartographer rides
+       /odometry/fused_imu_wheel), and offline SVO replay replaces the drift
+       witness. Script + config survive in git: scripts/zed_pose_to_odom_feedback.py,
+       config/nav/odom_pipeline.yaml. -->
+
+  <!-- Start one SVO recording per bringup (raw stereo + IMU, wrapper-side
+       H.265/H.264 via general/svo_compression). Waits for the zed_node
+       recording service, then names the file by wall-clock timestamp.
+       Deliberately NO restart logic: if the ZED dies the whole launch exits
+       (zed_node is required=true) and the next bringup starts a fresh file. -->
+  <node if="$(arg zed_svo_record)"
+        pkg="feeding_deployment" type="zed_svo_recorder.py"
+        name="zed_svo_recorder" output="screen">
+    <param name="camera_name" value="$(arg camera_name)"/>
+    <param name="output_dir"
+           value="$(find feeding_deployment)/src/feeding_deployment/integration/log/svo"/>
   </node>
 
   <!-- ===== Fused wheel+IMU odometry (AUTHORITATIVE odom->base) ===== -->
@@ -208,10 +236,10 @@
     <arg name="filters" value="pointcloud"/>
     <arg name="color_width"  value="1280"/>
     <arg name="color_height" value="720"/>
-    <arg name="color_fps"    value="30"/>
+    <arg name="color_fps"    value="15"/>
     <arg name="depth_width"  value="1280"/>
     <arg name="depth_height" value="720"/>
-    <arg name="depth_fps"    value="30"/>
+    <arg name="depth_fps"    value="15"/>
   </include>
  
   <!-- END RealSense disable -->

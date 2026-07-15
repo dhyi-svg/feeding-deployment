@@ -45,7 +45,7 @@ the robot up by running (per `scripts/feeding-compute.sh` on the compute box and
 
 | Host | Address | Runs |
 |---|---|---|
-| **Compute** (Lenovo laptop) | `192.168.1.2` | `roscore`, **all sensors** (2× RPLIDAR, ZED Mini VIO, nav+arm RealSense, FT), URDF/TF, **Cartographer localization**, **move_base + TEB + cmd_vel bridge + zed_health_monitor**, shared_autonomy manager/teleop, webapp (`npm`), wrist driver, watchdog stack, TTS, health/sensor/nav loggers, `run.py`, rosbridge (TLS 9090). Drives the base over RPC. |
+| **Compute** (Lenovo laptop) | `192.168.1.2` | `roscore`, **all sensors** (2× RPLIDAR, ZED Mini [IMU-only + SVO recording since 2026-07-15], nav+arm RealSense, FT), URDF/TF, **Cartographer localization**, **move_base + TEB + cmd_vel bridge**, shared_autonomy manager/teleop, webapp (`npm`), wrist driver, watchdog stack, TTS, health/sensor/nav loggers, `run.py`, rosbridge (TLS 9090). Drives the base over RPC. |
 | **NUC** | `192.168.1.3` (user `emprise`) | `arm_server.py`, **`base_server.py`** (owns the base Arduino), bulldog + e-stop. RPC targets for the compute-side cmd_vel bridge and arm client. |
 | **E-stop Mac** | `192.168.1.13` | UDP e-stop heartbeat → NUC → bulldog. |
 | **Cluster** | — | molmo VLM server (`launch_molmo`), not in the nav loop. |
@@ -70,7 +70,7 @@ run.py (executive, actionlib client)
 
 Two side-channels wrap this:
 - **Teleop / shared autonomy:** Xbox / webapp publish `/shared_autonomy/{takeover,done,resume,cancel}`; the manager cancels move_base and can itself report `SUCCEEDED` for a human-completed goal (an actionlib client only trusts its own server — that is *why* the manager exists, `shared_autonomy_manager.py:40-43`). Human teleop drives `/cmd_vel_teleop` with priority (bypasses the ZED hold).
-- **Safety interlock:** `zed_health_monitor.py` asserts `/nav_safety_hold` (+ `_reason`) on VIO divergence or a map→odom "yank"; the cmd_vel bridge zeros the motors while held, and the manager pauses & re-sends the goal on recovery.
+- **Safety interlock:** DORMANT — `/nav_safety_hold` has no publisher since `zed_health_monitor` was deleted (2026-07-15, IMU-only ZED). The subscriber hooks remain (bridge zeros motors while held; manager pauses & re-sends on release) and re-engage if a Phase-3 interlock republishes the topic.
 
 ### Localization TF ownership (rewired 2026-07-13, Phase-2 cutover)
 Cartographer owns `map→odom`; the **fused wheel+IMU EKF** (`ekf_fused_imu_wheel` in
@@ -233,15 +233,18 @@ Three nodes, all in `sensors.launch` so they outlive `prefix+r` restarts:
   odom origin — a silent teleport into Cartographer; a dead EKF instead stalls the
   stack loudly (restart sensors, then `prefix+r`).
 
-### ZED odom → sanitizer/differentiator (`zed_pose_to_odom_feedback.py`) — WITNESS ONLY
-Since the 2026-07-13 cutover **nothing authoritative consumes any ZED-derived
-stream**; the chain is kept for observability (drift traces, health monitor,
-nav logs):
-- **`/zed_mini/zed_node/odom_sanitized`** — teleport-gated full pose (was
-  Cartographer's input). Note the sanitizer misses sub-0.5 m/s creep — measured
-  byte-identical to raw through 6–17 m creep divergences (Jul 10/13) — bug #2.
-- **`/move_base/odom_feedback`** — windowed-difference twist (was TEB's feedback;
-  still referenced by the disabled DWA yaml and the observer's stock-EKF `odom0`).
+### ZED odom → sanitizer/differentiator — RETIRED [2026-07-15]
+**The ZED runs IMU-only since 2026-07-15**: `depth/depth_mode=NONE` +
+`pos_tracking_enabled=false` in `sensors.launch`, after 4 SDK-internal
+segfaults since Jun 21 (tracking/depth internals, SDK 5.0.7; the Jul 15 one
+killed a feeding run mid-drive). VIO odom, `odom_sanitized`, and
+`/move_base/odom_feedback` no longer exist; `zed_pose_to_odom_feedback` was
+removed from `sensors.launch` (script kept in git). The only live ZED product
+is the IMU (~200 Hz) feeding `gyro_bias_estimator` → the EKF's `vyaw`.
+The navigation dataset (color/depth for offline method comparison) is now a
+per-bringup **SVO recording** (`zed_svo_recorder.py` →
+`integration/log/svo/`), replayable through the SDK offline. Drift traces are
+now carto / wheel / fused_imu_wheel only (see `drift_trace_compare.py`).
 
 ### Cartographer (localization mode)
 Runs against a **frozen `.pbstream`** (`load_frozen_state=true`), publishing `map→odom`
@@ -252,13 +255,13 @@ EKF, 20 Hz). With the fused odom the observed correction stream is ~5–8 cm / ~
 during driving (session_20260713_152341). This is the structural reason heading
 corrections can look like overshoot (§8).
 
-### ZED health interlock (`zed_health_monitor.py`)
-Five detector channels — **status, silence, gap, jump, yank** — assert
-`/nav_safety_hold`. The **yank** channel watches `map→odom` for a Cartographer
-relocalization/alias jump (e.g. the recurring 180° table alias) and, above the gates,
-holds the base *and clears move_base costmaps*. Disable the whole chain with
-`zed_interlock:=false` or `NO_ZED_INTERLOCK=1`; per-channel with
-`enable_yank_channel:=false` (`navigation.launch:62-89`).
+### ZED health interlock — DELETED [2026-07-15]
+`zed_health_monitor.py` (five detector channels asserting `/nav_safety_hold`)
+was unplumbed from `navigation.launch` on 2026-07-13 and deleted from the tree
+on 2026-07-15 with the IMU-only ZED sweep (it watched VIO odom/status, which no
+longer exist). The `/nav_safety_hold` SUBSCRIBER hooks (cmd_vel bridge,
+shared_autonomy_manager, navigate.py) remain as no-ops — a Phase-3 interlock
+(e.g. the map→odom yank channel) can republish the topic and they re-engage.
 
 ---
 
@@ -364,7 +367,13 @@ against the installed package version).
 | `constraint_builder.min_score` / `global_localization_min_score` | 0.55 / 0.6 (inherited) | — | Match-score thresholds to accept a local / global loop-closure constraint; higher = stricter, fewer false matches. |
 | `MAP_BUILDER.num_background_threads` | 4 (inherited) | — | Worker threads for pose-graph optimization and constraint building. |
 
-### 7.2 ZED wrapper — `zed_wrapper` defaults (overridden bits in `sensors.launch:84-88`)
+### 7.2 ZED wrapper — `zed_wrapper` defaults (overridden bits in `sensors.launch`)
+**[2026-07-15] IMU-only ZED**: `sensors.launch` now also overrides
+`depth/depth_mode=NONE` (hard-disables depth AND blocks tracking from ever
+starting) and `pos_tracking/pos_tracking_enabled=false`. Every `pos_tracking/*`
+row below is therefore inert — kept as the safe config should VIO ever be
+re-enabled. Raw stereo+IMU is recorded to SVO per bringup (`zed_svo_recorder.py`).
+
 | Param | Value | What it does |
 |---|---|---|
 | ★ `pos_tracking/area_memory` | **true** (default) | Enables the ZED's spatial memory (loop closure / relocalization) — lets VIO snap back to remembered places, but each snap is a discrete pose jump (bug #1). |
@@ -376,7 +385,10 @@ against the installed package version).
 | `pos_tracking/publish_tf` / `publish_map_tf` | **false** / **false** | The ZED broadcasts NO TF since the 2026-07-13 cutover (`ekf_fused_imu_wheel` owns `odom→base`; Cartographer owns `map→odom`). Verified in wrapper source: one gated call site, no force-publish path; `sensors/publish_imu_tf` is independent and stays on. |
 | `general/base_frame` | `zed_mini_base_link` | The frame the ZED tracks/publishes odom for. ⚠ This is the REAL param — `pos_tracking/base_frame` is silently ignored (was a no-op override for weeks). Must stay `zed_mini_base_link` (odom-topic child semantics + the wrapper's camera→base startup lookup). |
 
-### 7.3 odom sanitizer — `config/nav/odom_pipeline.yaml`
+### 7.3 odom sanitizer — `config/nav/odom_pipeline.yaml` — RETIRED [2026-07-15]
+The sanitizer node is out of `sensors.launch` (IMU-only ZED: no VIO odom to
+sanitize); this catalog stays for reading pre-Jul-15 logs/bags.
+
 | Param | Value | What it does |
 |---|---|---|
 | ★ `jump_accept_frames` | 5 | Consecutive self-consistent raw frames required before a *sustained* pose shift is accepted as a real relocalization instead of rejected as a teleport — the leak lever behind bug #2. |
@@ -427,7 +439,10 @@ against the installed package version).
 | `controller_frequency` | 10 | How often the local planner (TEB) runs and publishes `/cmd_vel`, in Hz. |
 | `planner_patience` / `controller_patience` | 15 / 15 | How long move_base waits for a valid global plan / valid control before invoking recovery behaviors (s). |
 
-### 7.8 zed_health_monitor — `launch/navigation.launch:62-89`
+### 7.8 zed_health_monitor — DELETED [2026-07-15]
+Script + launch params removed with the IMU-only ZED sweep (unplumbed from
+`navigation.launch` 2026-07-13). Catalog kept for reading pre-Jul-15 logs.
+
 | Param | Value | What it does |
 |---|---|---|
 | `max_lin_vel` / `max_ang_vel` | 0.5 / 1.5 | Jump channel: raw ZED odom implying a speed above this (m/s / rad/s) is flagged as VIO divergence and holds the base. |

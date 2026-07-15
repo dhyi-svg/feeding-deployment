@@ -169,20 +169,21 @@ must hold (re-baseline), not teleport.
    `/wheel_odom`; `track_width_m *= reported_yaw / (4*pi)`. Grippy wheels scrub:
    the effective value is commonly 1.3–2x the geometric spacing and differs
    between hardwood and rug — calibrate where the robot actually drives.
-3. Sanity: short drive, compare `/wheel_odom` linear distance against ZED odom.
+3. Sanity: short drive, compare `/wheel_odom` linear distance against the
+   Cartographer map pose (ZED VIO odom retired 2026-07-15).
 
 Set the calibrated values as node params (or bake new defaults into
 `wheel_odom_publisher.py`).
 
-## Drift test (wheel vs ZED vs Cartographer, live on the map)
+## Drift test (wheel vs fused EKF vs Cartographer, live on the map)
 
-The diagnostic the wheel odometry was built for. Four traces in RViz on the
-known map: **green** = live Cartographer (lidar reference), **red** = raw ZED
-odom (open loop), **orange** = sanitized ZED odom (open loop), **blue** = wheel
-odom (open loop). Reading: red/orange peeling from green = VIO drift, located
-on the map (this is the instrument for the Jul 8 slow-creep failure); blue
-peeling from green = wheel slip; red-vs-blue disagreements are arbitrated by
-green.
+The diagnostic the wheel odometry was built for. Three traces in RViz on the
+known map (ZED raw/sanitized traces retired 2026-07-15 with IMU-only ZED):
+**green** = live Cartographer (lidar reference), **blue** = wheel odom (open
+loop), **gold** = `/odometry/fused_imu_wheel` (open loop). Reading: gold
+peeling from green = fused-EKF drift (gyro bias / wheel scale); blue peeling
+from green = wheel slip; gold-vs-blue disagreement isolates the gyro's
+contribution.
 
 Bring-up:
 
@@ -200,24 +201,10 @@ rosrun feeding_deployment drift_lock.py
 # 5. drive with the Xbox X-deadman; watch the traces.
 ```
 
-Watching the health monitor (included by default, `monitor:=false` to omit):
-
-```bash
-rosrun feeding_deployment hold_reason_watch.py   # timestamped TRANSITIONS only:
-                                                 # HOLD <why> / CHANGE <why> /
-                                                 # CLEAR (held N s)
-# (raw firehose, 10 Hz incl. empty strings: rostopic echo /nav_safety_hold_reason)
-```
-
-The monitor's own log in the launch terminal narrates with timestamps:
-`HOLD asserted [...]`, `HOLD now [...]` (mid-hold escalations), and
-`HOLD released after Ns -- recovered (fired: ...)`. It is purely
-observational here — holds never stop your driving (teleop is hold-exempt,
-and the keyboard tool bypasses the bridge entirely). Two expected quirks:
-`clear_costmaps failed` warnings when `yank` fires (no move_base running),
-and the `jump` channel only auto-pauses for **Xbox** teleop — keyboard
-driving above ~0.5 m/s (`--max_translation` ≳ 2400) will false-trigger it
-(at the suggested 1500 ≈ 0.31 m/s all gates clear).
+**Health monitor section RETIRED [2026-07-15]**: `zed_health_monitor.py` and
+`hold_reason_watch.py` were deleted with the IMU-only ZED sweep (they watched
+VIO odom/status, which no longer exist); `zed_drift_test.launch` no longer has
+a `monitor` arg. `/nav_safety_hold` currently has no publisher.
 
 ### Traces during REAL runs (full nav stack)
 

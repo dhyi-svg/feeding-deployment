@@ -19,7 +19,6 @@ import sys
 
 from sensor_msgs.msg import CameraInfo, Image, LaserScan, JointState
 from geometry_msgs.msg import WrenchStamped, Pose
-from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool, Float32MultiArray
 
 import threading
@@ -44,7 +43,6 @@ FT_FREQUENCY_THRESHOLD = 300 # expected is 1000 Hz
 FT_THRESHOLD = [40.0, 40.0, 40.0, 2.0, 2.0, 2.0]
 COLLISION_FREE_FREQUENCY_THRESHOLD = 100 # expected is 350 Hz (empirical)
 LIDAR_FREQUENCY_THRESHOLD = 2 # expected is ~5-10 Hz (RPLIDAR A1)
-ZED_FREQUENCY_THRESHOLD = 2 # expected is ~30-60 Hz (ZED Mini odom)
 ROBOT_JOINT_STATES_FREQUENCY_THRESHOLD = 2 # expected high (tight publish loop)
 ROBOT_CARTESIAN_STATE_FREQUENCY_THRESHOLD = 2 # expected high (tight publish loop)
 
@@ -104,8 +102,10 @@ class WatchDog:
         self.lidar_r_sub = rospy.Subscriber('/lidar_r/scan', LaserScan, self.lidarRightCallback, queue_size = queue_size, buff_size = 65536*queue_size)
         self.lidar_r_timestamps = PeekableQueue()
 
-        self.zed_sub = rospy.Subscriber('/zed_mini/zed_node/odom', Odometry, self.zedCallback, queue_size = queue_size, buff_size = 65536*queue_size)
-        self.zed_timestamps = PeekableQueue()
+        # ZED odom subscriber removed [2026-07-15]: the ZED runs IMU-only
+        # (no VIO -> /zed_node/odom never publishes), and any odom subscriber
+        # makes the wrapper WARN "Cannot start Positional Tracking" every grab
+        # cycle. Its frequency check had long been commented out below.
 
         self.robot_joint_states_sub = rospy.Subscriber('/robot_joint_states', JointState, self.robotJointStatesCallback, queue_size = queue_size, buff_size = 65536*queue_size)
         self.robot_joint_states_timestamps = PeekableQueue()
@@ -185,9 +185,6 @@ class WatchDog:
     def lidarRightCallback(self, msg):
         self.lidar_r_timestamps.put(time.time())
 
-    def zedCallback(self, msg):
-        self.zed_timestamps.put(time.time())
-
     def robotJointStatesCallback(self, msg):
         self.robot_joint_states_timestamps.put(time.time())
 
@@ -239,7 +236,7 @@ class WatchDog:
                                             (self.collision_free_timestamps, COLLISION_FREE_FREQUENCY_THRESHOLD, AnomalyStatus.COLLISION_FREE_FREQUENCY),
                                             (self.lidar_l_timestamps, LIDAR_FREQUENCY_THRESHOLD, AnomalyStatus.LIDAR_L_FREQUENCY),
                                             (self.lidar_r_timestamps, LIDAR_FREQUENCY_THRESHOLD, AnomalyStatus.LIDAR_R_FREQUENCY),
-                                            # (self.zed_timestamps, ZED_FREQUENCY_THRESHOLD, AnomalyStatus.ZED_FREQUENCY),
+                                            # zed odom check retired [2026-07-15]: IMU-only ZED, no VIO odom (subscriber removed above)
                                             (self.robot_joint_states_timestamps, ROBOT_JOINT_STATES_FREQUENCY_THRESHOLD, AnomalyStatus.ROBOT_JOINT_STATES_FREQUENCY),
                                             (self.robot_cartesian_state_timestamps, ROBOT_CARTESIAN_STATE_FREQUENCY_THRESHOLD, AnomalyStatus.ROBOT_CARTESIAN_STATE_FREQUENCY)]:
             while _queue.peek() < start_time - 1.0:

@@ -18,7 +18,7 @@ Examples:
   rosrun feeding_deployment measure_base_speed.py
   rosrun feeding_deployment measure_base_speed.py --window 0.5
   rosrun feeding_deployment measure_base_speed.py --compare --window 0.5
-  rosrun feeding_deployment measure_base_speed.py --topic /zed_mini/zed_node/odom
+  rosrun feeding_deployment measure_base_speed.py --topic /odometry/fused_imu_wheel
 """
 
 import argparse

@@ -6,17 +6,17 @@ robot operates normally; it touches nothing the robot uses (read-only subscriber
 + read-only system polling). The watchdog has tripped on both the ZED odom
 frequency and the lidars; this logger records everything needed to pin the cause.
 
-It monitors FIVE streams at once so a stall is self-diagnosing:
+It monitors FOUR streams at once so a stall is self-diagnosing (zed_odom was
+retired 2026-07-15 with IMU-only ZED -- depth+tracking off, VIO odom never
+publishes; zed_imu is the ZED health signal):
 
   * /zed_mini/zed_node/imu/data  (zed_imu)   -- raw off the sensor, ~200 Hz
-  * /zed_mini/zed_node/odom      (zed_odom)  -- VIO-FUSED output, ~15 Hz
   * /lidar_r/scan                (lidar_r)   -- right RPLIDAR A1, ~8 Hz
   * /lidar_l/scan                (lidar_l)   -- left  RPLIDAR A1, ~8 Hz
   * /camera/color/camera_info    (realsense) -- D435i frame heartbeat, ~30 Hz
 
 How to read a stall from WHICH streams stop together:
-  * ZED odom + IMU stop together   -> ZED node/USB/camera dropped (hardware/bw).
-  * ZED odom only (IMU fine)       -> VIO/grab loop stalled (CPU/GPU/tracking).
+  * ZED IMU stops                  -> ZED node/USB/camera dropped (hardware/bw).
   * One lidar only                 -> that lidar's USB/serial/cable/motor.
   * Both lidars together           -> shared USB hub/power, or CPU starvation.
   * Lidars + ZED all together      -> system-wide: USB bus, power, or CPU.
@@ -63,7 +63,6 @@ from pathlib import Path
 
 import rospy
 from sensor_msgs.msg import Imu, LaserScan, CameraInfo
-from nav_msgs.msg import Odometry
 from std_msgs.msg import String
 
 
@@ -94,7 +93,9 @@ RESUBSCRIBE_AFTER_DEAD_WINDOWS = 5
 # nominal Hz (for the per-sensor dropout threshold), human description. Add a
 # row here to watch another topic -- CSV columns, events, and summary adapt.
 STREAMS = [
-    ("zed_odom", "/zed_mini/zed_node/odom",     Odometry,  2000,  15.0, "ZED VIO odom ~15 Hz"),
+    # zed_odom row removed [2026-07-15]: IMU-only ZED (depth+tracking off, see
+    # sensors.launch) -- VIO odom never publishes, and a subscriber to it makes
+    # the wrapper WARN every grab cycle. zed_imu is the ZED health signal now.
     ("zed_imu",  "/zed_mini/zed_node/imu/data", Imu,       4000, 200.0, "ZED raw IMU ~200 Hz"),
     ("lidar_r",  "/lidar_r/scan",               LaserScan,  200,   8.0, "Right RPLIDAR ~8 Hz"),
     ("lidar_l",  "/lidar_l/scan",               LaserScan,  200,   8.0, "Left RPLIDAR ~8 Hz"),
@@ -648,7 +649,6 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--duration", type=float, default=14400.0,
                     help="seconds to run (default 14400 = 4 h)")
-    ap.add_argument("--zed-odom-topic", default="/zed_mini/zed_node/odom")
     ap.add_argument("--zed-imu-topic", default="/zed_mini/zed_node/imu/data")
     ap.add_argument("--lidar-r-topic", default="/lidar_r/scan")
     ap.add_argument("--lidar-l-topic", default="/lidar_l/scan")
@@ -672,7 +672,6 @@ def main():
 
     # Resolve per-stream topics from CLI overrides (key -> arg attribute).
     topic_overrides = {
-        "zed_odom": args.zed_odom_topic,
         "zed_imu": args.zed_imu_topic,
         "lidar_r": args.lidar_r_topic,
         "lidar_l": args.lidar_l_topic,
@@ -831,10 +830,8 @@ def main():
 
     # Targeted hints from WHICH streams dropped together.
     dropped = {key for key, mon, _t, _d in monitors if mon.dropouts}
-    if {"zed_odom"} <= dropped and "zed_imu" not in dropped:
-        print("  hint: ZED odom stalled but IMU did NOT -> VIO/CPU/GPU, not USB.")
-    elif {"zed_odom", "zed_imu"} <= dropped:
-        print("  hint: ZED odom+IMU stalled together -> ZED node/USB/camera drop; "
+    if "zed_imu" in dropped:
+        print("  hint: ZED IMU stalled -> ZED node/USB/camera drop; "
               "check events.log KERNEL usb lines.")
     if {"lidar_r", "lidar_l"} <= dropped:
         print("  hint: BOTH lidars dropped -> shared USB hub/power or CPU starvation "
@@ -843,7 +840,7 @@ def main():
         one = "lidar_r" if "lidar_r" in dropped else "lidar_l"
         print(f"  hint: only {one} dropped -> that unit's USB/serial/cable/motor; "
               "check events.log for its ttyUSB/cp210/ftdi lines.")
-    if dropped == {"zed_odom", "zed_imu", "lidar_r", "lidar_l"}:
+    if dropped == {"zed_imu", "lidar_r", "lidar_l"}:
         print("  hint: ALL sensors dropped together -> system-wide: USB bus, power, "
               "or CPU; correlate with cpu_pct/load1 in samples.csv.")
     if "realsense" in dropped and ({"lidar_r", "lidar_l"} & dropped):

@@ -7,13 +7,16 @@ Passive (subscribe/lookup only) — safe to run alongside a session:
 Writes to system_logs/navlog_<stamp>/:
 
   params_snapshot.json  move_base + ZED params + git SHA at start (ablation bookkeeping)
-  odom.csv              raw ZED odom pose + per-frame deltas (jumps, stalls, drift)
-                        + ZED's native twist (does the SDK velocity survive a re-init?)
-  sanitized.csv         sanitizer output pose (join with odom.csv on t_stamp: rows
-                        where the two diverge are frames the sanitizer held/adopted)
+  odom.csv              /odometry/fused_imu_wheel pose + per-frame deltas (jumps,
+                        stalls, drift) + its twist. [2026-07-15] Was raw ZED VIO
+                        odom; repointed to the live authoritative EKF when the ZED
+                        went IMU-only (VIO odom is gone). Column names unchanged
+                        (zvx,zvy,zwz) so old parsers keep working. An EKF respawn
+                        origin-teleport shows up as odom_origin_reset.
   hold.csv              /nav_safety_hold transitions with the monitor's reason
-                        (interlock timeline; also mirrored into events.csv)
-  odom_feedback.csv     velocity feedback consumed by TEB (noise, spikes)
+                        (interlock timeline; also mirrored into events.csv).
+                        Publisher-less since 2026-07-15 (zed_health_monitor
+                        deleted); idles until a Phase-3 interlock republishes it.
   cmd_vel.csv           commanded velocities (hunting, creep commands)
   applied_vel.csv       bridge post-stiction-floor echo (needs NUC-side bridge update)
   tf.csv                10 Hz: map->odom (cartographer correction), odom->base_link
@@ -25,17 +28,13 @@ Writes to system_logs/navlog_<stamp>/:
   goals.csv             per-goal start/end/outcome, duration, terminal residual,
                         plus a "settled" row 30 s after success (post-refinement)
   bt_timeline.csv       execution_log.txt lines with wall timestamps (BT context)
-  zed_status.csv        rostopic-echoed ZED odom tracking status (type-agnostic)
-  zed_status_pose.csv   same for pose/status (odom/status has been empty in every
-                        run to date; a zed_status_silent event flags if both stay
-                        empty 120 s in, so we learn whether the echo is broken)
   events.csv            auto-flagged anomalies (thresholds below)
   rosout_warn.log       WARN+ from nav stack, plus keyword INFO lines
                         (constraint divergences, corrupted frames, recoveries)
   cmd_latency.csv       actual set_speeds RPC round-trip (compute->NUC->serial),
                         published by the cmd_vel bridge (the leg ~applied misses)
   wheel_odom.csv        wheel-encoder odometry + side disagreement (independent
-                        motion witness for a wheel-vs-ZED-vs-carto compare)
+                        motion witness for a wheel-vs-EKF-vs-carto compare)
   plan_tracking.csv     10 Hz base cross-track + heading error vs the global plan
                         (quantifies TEB path overshoot instead of inferring it)
   usb_dmesg.log         kernel USB/xHCI/Thunderbolt/reset lines (best-effort;
@@ -46,12 +45,16 @@ Writes to system_logs/navlog_<stamp>/:
   map.pgm / map.yaml    the /map grid this run localized against (map_server
                         format) -- makes the log self-describing about its map
 
-Orientation is now logged everywhere it was previously yaw-only: odom.csv and
-sanitized.csv carry roll,pitch (+ odom cov_trace); tf.csv carries ob_roll,ob_pitch
+Orientation is now logged everywhere it was previously yaw-only: odom.csv carries
+roll,pitch (+ odom cov_trace); tf.csv carries ob_roll,ob_pitch
 (odom->base tilt). imu_1hz.csv carries the gravity vector + derived/ fused
 roll,pitch. sys_1hz.csv carries per-core CPU, RAM/swap, GPU, governor, freq.
 New events: odom_tilt, odom_origin_reset, odom_stamp_regression, plan_deviation,
 rpc_slow, node_gone/node_new, dmesg_unavailable, trigger_bag.
+
+[2026-07-15] IMU-only ZED sweep: sanitized.csv, odom_feedback.csv, zed_status*.csv
+and the sanitizer_reject/adopt events were removed with their dead sources
+(VIO odom, sanitizer, ZED status topics no longer exist).
 """
 
 import glob
@@ -88,7 +91,7 @@ FOOTPRINT_RADIUS_M = 0.47  # circumscribed radius of 0.74 x 0.59 footprint
 SETTLE_S = 30.0           # re-measure goal residual this long after success
 ODOM_TILT_RAD = 0.05      # |roll|/|pitch| of odom above this = tilt (gravity-init bug)
 PLAN_DEV_M = 0.30         # base cross-track vs global plan above this = off-path
-ORIGIN_RESET_M = 0.50     # prev pose this far out, now ~origin = ZED/odom restart
+ORIGIN_RESET_M = 0.50     # prev pose this far out, now ~origin = EKF/odom restart
 RPC_SLOW_S = 0.05         # set_speeds RPC round-trip above this = flagged
 GPU_SAMPLE_EVERY = 5      # sample nvidia-smi every Nth cb_slow tick (~5 s)
 NODE_CHECK_EVERY = 15     # diff the ros node set every Nth cb_slow tick (~15 s)
@@ -100,12 +103,12 @@ TRIGGER_BAG_ON = ("hold_assert", "map_odom_yank", "odom_tilt", "teb_infeasible",
 # Base topics (small) always in a triggered bag. Lidar scans are the size hog
 # (~2-5 MB/bag), appended only when ~bag_include_scans (default true) -- drop
 # them when the concern is tilt/gravity (odom+imu+tf suffice).
-TRIGGER_BAG_TOPICS = ("/zed_mini/zed_node/odom /zed_mini/zed_node/imu/data /tf /tf_static "
+TRIGGER_BAG_TOPICS = ("/odometry/fused_imu_wheel /zed_mini/zed_node/imu/data /tf /tf_static "
                       "/nav_safety_hold /nav_safety_hold_reason /cmd_vel /cmd_vel_teleop "
                       "/wheel_odom")
 TRIGGER_BAG_SCAN_TOPICS = "/lidar_l/scan /lidar_r/scan"
 
-# "zed" also matches zed_health_monitor + zed_pose_to_odom_feedback (sanitizer);
+# "zed" matches the zed_node wrapper (grab errors, SDK warnings);
 # shared_autonomy/cmd_vel_bridge carry the hold pause/resume + gating lines.
 ROSOUT_NODES = ("move_base", "cartographer", "zed", "rplidar",
                 "shared_autonomy", "cmd_vel_bridge")
@@ -154,9 +157,7 @@ class NavDiagLogger:
         self.f_odom = self._open("odom.csv",
                                  "t_stamp,x,y,z,yaw,dstep_m,dyaw,dt_s,zvx,zvy,zwz,"
                                  "roll,pitch,cov_trace")
-        self.f_san = self._open("sanitized.csv", "t_stamp,x,y,yaw,roll,pitch")
         self.f_hold = self._open("hold.csv", "t_wall,held,reason")
-        self.f_fb = self._open("odom_feedback.csv", "t_stamp,vx,vy,wz")
         self.f_cmd = self._open("cmd_vel.csv", "t_wall,vx,wz")
         self.f_app = self._open("applied_vel.csv", "t_wall,vx,wz")
         self.f_lat = self._open("cmd_latency.csv", "t_wall,rpc_latency_s")
@@ -201,10 +202,8 @@ class NavDiagLogger:
         self.imu_acc = []                # (gyro_mag, accel_dev) since last flush
         self.scan_n = [0, 0]             # lidar_l / lidar_r msgs since last flush
         self.bt_pos = self._bt_seek_end()
-        self.status_last_try = 0.0
         self.heartbeat = 0
         self.start_wall = time.time()
-        self.status_diag_done = False
         self.hold_state = None           # None until first /nav_safety_hold msg
         self.hold_reason = ""            # latest reason-topic payload
         self.hold_reason_logged = ""     # last reason written to hold.csv
@@ -221,13 +220,14 @@ class NavDiagLogger:
         self.bag_include_scans = bool(rospy.get_param("~bag_include_scans", True))
         self.map_saved = False           # /map -> map.pgm/map.yaml written once
 
-        rospy.Subscriber("/zed_mini/zed_node/odom", Odometry, self.cb_odom, queue_size=100)
-        rospy.Subscriber("/zed_mini/zed_node/odom_sanitized", Odometry, self.cb_san,
+        # [2026-07-15] Repointed from raw ZED VIO odom (IMU-only ZED: VIO gone).
+        # This is the odom carto+TEB actually consume, so jump/gap/tilt/origin-
+        # reset events now guard the live pipeline.
+        rospy.Subscriber("/odometry/fused_imu_wheel", Odometry, self.cb_odom,
                          queue_size=100)
         rospy.Subscriber("/nav_safety_hold", Bool, self.cb_hold, queue_size=10)
         rospy.Subscriber("/nav_safety_hold_reason", String, self.cb_hold_reason,
                          queue_size=10)
-        rospy.Subscriber("/move_base/odom_feedback", Odometry, self.cb_fb, queue_size=100)
         rospy.Subscriber("/cmd_vel", Twist, self.cb_cmd, queue_size=50)
         # Teleop publishes on its own topic (bridge executes it hold-exempt with
         # priority); merge it into the same cmd_vel.csv for the full command view.
@@ -252,7 +252,7 @@ class NavDiagLogger:
                          lambda m: self.scan_n.__setitem__(1, self.scan_n[1] + 1),
                          queue_size=20)
         rospy.Subscriber("/rosout_agg", Log, self.cb_rosout, queue_size=200)
-        # Independent motion witness (wheel encoders): gives a wheel-vs-ZED-vs-
+        # Independent motion witness (wheel encoders): gives a wheel-vs-EKF-vs-
         # cartographer three-way comparison in EVERY run, not just drift traces.
         rospy.Subscriber("/wheel_odom", Odometry, self.cb_wheel, queue_size=50)
         rospy.Subscriber("/wheel_odom/side_disagreement", Float64,
@@ -267,13 +267,8 @@ class NavDiagLogger:
         rospy.Timer(rospy.Duration(0.5), self.cb_costmap_sample)
         rospy.Timer(rospy.Duration(1.0), self.cb_slow)
 
-        # Type-agnostic capture of the ZED tracking status topics. odom/status
-        # has been empty in every run to date, so pose/status is captured too
-        # and cb_slow flags a zed_status_silent event if both stay empty.
-        self.status_topics = (("/zed_mini/zed_node/odom/status", "zed_status.csv"),
-                              ("/zed_mini/zed_node/pose/status", "zed_status_pose.csv"))
-        self.status_procs = {t: self._spawn_status_echo(t, f)
-                             for t, f in self.status_topics}
+        # ZED tracking-status echoes removed [2026-07-15]: IMU-only ZED never
+        # starts tracking, so odom/status + pose/status can never publish.
         self.dmesg_proc = self._spawn_dmesg_tail()
         rospy.on_shutdown(self._shutdown)
 
@@ -295,8 +290,7 @@ class NavDiagLogger:
         except Exception:
             snap["_meta"]["git_sha"] = "unknown"
         complete = True
-        for ns in ("/move_base", "/zed_mini/zed_node", "/cmd_vel_bridge_basicmicro",
-                   "/zed_pose_to_odom_feedback"):
+        for ns in ("/move_base", "/zed_mini/zed_node", "/cmd_vel_bridge_basicmicro"):
             try:
                 snap[ns] = rospy.get_param(ns)
             except Exception:
@@ -345,16 +339,6 @@ class NavDiagLogger:
         except Exception:
             pass
         return complete
-
-    def _spawn_status_echo(self, topic, fname):
-        try:
-            # append mode + line buffering: survives respawns, and status msgs
-            # (published only on tracking-state changes) land immediately
-            f = open(os.path.join(self.outdir, fname), "a")
-            return subprocess.Popen(["stdbuf", "-oL", "rostopic", "echo", "-p", topic],
-                                    stdout=f, stderr=subprocess.DEVNULL)
-        except Exception:
-            return None
 
     def _bt_seek_end(self):
         try:
@@ -506,7 +490,7 @@ class NavDiagLogger:
             pass
 
     def _shutdown(self):
-        for p in list(self.status_procs.values()) + [self.dmesg_proc] + self.bag_procs:
+        for p in [self.dmesg_proc] + self.bag_procs:
             if p:
                 try:
                     p.terminate()
@@ -522,7 +506,7 @@ class NavDiagLogger:
         if etype in TRIGGER_BAG_ON:
             self._trigger_bag(etype)
 
-    # ---- raw ZED odom: jumps / gaps / drift ---------------------------------
+    # ---- live fused odom (/odometry/fused_imu_wheel): jumps / gaps / drift --
     def cb_odom(self, msg):
         t = msg.header.stamp.to_sec()
         p = msg.pose.pose.position
@@ -543,20 +527,23 @@ class NavDiagLogger:
                 self.event("odom_jump", dstep,
                            "dyaw=%.3f dt=%.3f implied=%.2fm/s" %
                            (dyaw, dt, dstep / dt if dt > 0 else -1))
-            # was well away from origin, now snapped to ~0 == ZED/odom re-init
+            # was well away from origin, now snapped to ~0 == EKF/odom re-init
+            # (an ekf_fused_imu_wheel restart resumes at the odom origin -- the
+            # exact silent teleport the no-respawn rule in sensors.launch exists
+            # to keep loud)
             prev_norm = math.sqrt(px * px + py * py + pz * pz)
             cur_norm = math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z)
             if prev_norm > ORIGIN_RESET_M and cur_norm < 0.05:
                 self.event("odom_origin_reset", prev_norm,
-                           "odom reset to origin (ZED/odom node restart)")
+                           "odom reset to origin (EKF/odom node restart)")
         # Pitch/roll tilt of the odom frame: invisible in yaw-only logs; this is
         # the 2026-07-08 gravity-init failure signature.
         if abs(roll) > ODOM_TILT_RAD or abs(pitch) > ODOM_TILT_RAD:
             self.event("odom_tilt", max(abs(roll), abs(pitch)),
                        "roll=%.1fdeg pitch=%.1fdeg" %
                        (math.degrees(roll), math.degrees(pitch)))
-        # ZED's native twist alongside the pose: whether the SDK's own velocity
-        # stays sane through a re-init teleport is exactly the open question.
+        # The EKF's twist alongside the pose (column names zvx/zvy/zwz kept from
+        # the ZED era so existing parsers don't break).
         tw = msg.twist.twist
         self.f_odom.write("%.3f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.3f,%.4f,%.4f,%.4f,"
                           "%.4f,%.4f,%.5f\n" %
@@ -564,13 +551,6 @@ class NavDiagLogger:
                            tw.linear.x, tw.linear.y, tw.angular.z,
                            roll, pitch, cov_trace))
         self.prev_odom = (t, p.x, p.y, p.z, yaw)
-
-    # ---- sanitizer output (what Cartographer consumes) -----------------------
-    def cb_san(self, msg):
-        p = msg.pose.pose.position
-        roll, pitch, yaw = rpy_from_quat(msg.pose.pose.orientation)
-        self.f_san.write("%.3f,%.4f,%.4f,%.4f,%.4f,%.4f\n" %
-                         (msg.header.stamp.to_sec(), p.x, p.y, yaw, roll, pitch))
 
     # ---- wheel odometry: independent motion witness --------------------------
     def cb_wheel(self, msg):
@@ -610,12 +590,6 @@ class NavDiagLogger:
             self.hold_reason_logged = msg.data
             self.f_hold.write('%.3f,1,"%s"\n' %
                               (time.time(), msg.data.replace('"', "'")))
-
-    # ---- velocity feedback (what TEB sees) ----------------------------------
-    def cb_fb(self, msg):
-        tw = msg.twist.twist
-        self.f_fb.write("%.3f,%.4f,%.4f,%.4f\n" %
-                        (msg.header.stamp.to_sec(), tw.linear.x, tw.linear.y, tw.angular.z))
 
     # ---- commanded velocity: hunting detection ------------------------------
     def cb_cmd(self, msg):
@@ -876,27 +850,6 @@ class NavDiagLogger:
         if not self.snap_complete and now - self.snap_last_try > 30.0:
             self.snap_last_try = now
             self.snap_complete = self._snapshot_params()
-        # zed_status echoes: respawn any that died (started before sensors, or
-        # sensors relaunched mid-run)
-        if now - self.status_last_try > 30.0:
-            for t, fname in self.status_topics:
-                p = self.status_procs.get(t)
-                if p is None or p.poll() is not None:
-                    self.status_last_try = now
-                    self.status_procs[t] = self._spawn_status_echo(t, fname)
-        # One-shot diagnostic: if neither status echo has produced a byte after
-        # 120 s, say so -- distinguishes "no tracking-state transitions" from
-        # "the echo/topic is broken" when reading the run afterwards.
-        if not self.status_diag_done and now - self.start_wall > 120.0:
-            self.status_diag_done = True
-            try:
-                if all(os.path.getsize(os.path.join(self.outdir, f)) == 0
-                       for _, f in self.status_topics):
-                    self.event("zed_status_silent", 0,
-                               "no PosTrackStatus captured in 120s "
-                               "(on-change-only topic or echo broken)")
-            except OSError:
-                pass
         # liveness heartbeat in the pane
         self.heartbeat += 1
         if self.heartbeat % 60 == 0:
@@ -959,12 +912,6 @@ class NavDiagLogger:
             self.event("teb_infeasible", 1, "trajectory not feasible")
         if "CORRUPTED" in msg.msg or "grab error" in msg.msg:
             self.event("zed_corrupted_frame", 1, msg.msg[:80])
-        # Sanitizer decisions (zed_pose_to_odom_feedback WARNs) as events, so
-        # held/adopted frames correlate against odom_jump/hold rows directly.
-        if "odom sanitizer: rejected" in msg.msg:
-            self.event("sanitizer_reject", 1, msg.msg[:80].replace(",", ";"))
-        elif "adopting sustained" in msg.msg:
-            self.event("sanitizer_adopt", 1, msg.msg[:80].replace(",", ";"))
         self.f_ros.write("%.3f %s %s %s\n" %
                          (msg.header.stamp.to_sec(), LEVELS.get(msg.level, "?"),
                           msg.name, msg.msg.replace("\n", " ")[:300]))

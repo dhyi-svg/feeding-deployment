@@ -1,33 +1,27 @@
-# ekf_zed_wheel.yaml -- robot_localization EKF, Stage 1 fused-odometry OBSERVER.
+# ekf_zed_wheel.yaml -- robot_localization EKF base config for the LIVE
+# ekf_fused_imu_wheel (sensors.launch), which loads this file and OVERRIDES:
+#   odom0 -> /odometry/_zed_vio_disabled (a never-published topic: VIO retired)
+#   imu0  -> /zed_mini/zed_node/imu/data_debiased, fusing vyaw ONLY
+#   publish_tf -> true (it owns odom->vention_base_link since 2026-07-13)
 #
-# Fuses the SANITIZED ZED velocity with the wheel-encoder velocity into a single
-# dead-reckoning "fused odometry" (/odometry/fused), for the drift-trace test.
+# [2026-07-15] ZED runs IMU-only (depth+tracking off after recurring SDK
+# segfaults); the sanitized-ZED-velocity odom0 chain this file originally
+# described (zed_pose_to_odom_feedback -> odom_feedback_cov -> cov relay) is
+# retired and the Stage-1 observer harness (fused_odom_observer.launch) is
+# deleted. The odom0 default below points at the same disabled topic as the
+# live override so disk matches runtime; effective live inputs are odom1
+# (wheel) + the launch-side imu0 (debiased gyro vyaw).
 #
-#   odom0 = /move_base/odom_feedback_cov  -- the SANITIZED ZED velocity (windowed
-#           derivative of the teleport-gated ZED pose; see
-#           zed_pose_to_odom_feedback.py) with the raw ZED SDK covariance stamped
-#           on by zed_feedback_cov_relay.py, so the EKF trusts ZED less when VIO
-#           is uncertain. Sanitized, so VIO teleports never enter the fusion.
-#   odom1 = /wheel_odom               -- encoder velocity (body-frame twist;
-#           forward good, yaw advisory: skid-steer scrub, ~35 deg full-turn
-#           under-rotation -- hence low weight / not over-trusted below).
+#   odom1 = /wheel_odom  -- encoder velocity (body-frame twist; forward good,
+#           yaw advisory: skid-steer scrub, ~35 deg full-turn under-rotation
+#           -- hence low weight / not over-trusted below).
 #
-# TWIST-ONLY fusion of both (no absolute pose/orientation), so /odometry/fused
-# is a pure dead-reckoning estimate directly comparable to the pure-ZED (red)
-# and pure-wheel (blue) open-loop traces in drift_trace_compare.py.
-#
-# publish_tf: false  -- Stage 1 is OBSERVE-ONLY. The ZED still owns odom->base
-# and Cartographer keeps its own prior; this node ONLY publishes the
-# /odometry/fused TOPIC (remapped from odometry/filtered in
-# fused_odom_observer.launch). Nothing downstream consumes it. Flipping this to
-# publish odom->base is Stage 2, and only after the traces show fusion helps.
+# TWIST-ONLY fusion (no absolute pose/orientation), so the output is a pure
+# dead-reckoning estimate directly comparable to the wheel open-loop trace in
+# drift_trace_compare.py.
 #
 # Frames: base_link_frame = vention_base_link matches /wheel_odom's child frame
-# (no transform). /move_base/odom_feedback has child_frame_id
-# zed_mini_base_link; robot_localization transforms its twist into
-# vention_base_link over the static URDF TF (identity rotation, pure
-# translation), so the lever-arm term is handled -- sensors.launch must be up
-# for that TF.
+# (no transform).
 
 frequency: 20.0
 sensor_timeout: 0.2
@@ -40,8 +34,8 @@ odom_frame: odom
 base_link_frame: vention_base_link
 world_frame: odom
 
-# --- odom0: sanitized ZED velocity + propagated ZED SDK covariance ---
-odom0: /move_base/odom_feedback_cov
+# --- odom0: DISABLED (never-published topic; matches the live override) ---
+odom0: /odometry/_zed_vio_disabled
 #              x      y      z      roll   pitch  yaw    vx     vy     vz     vr     vp     vyaw   ax     ay     az
 odom0_config: [false, false, false, false, false, false, true,  true,  false, false, false, true,  false, false, false]
 odom0_differential: false

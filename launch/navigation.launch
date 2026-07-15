@@ -88,11 +88,10 @@
     <param name="min_move_units" value="100"/>
   </node>
 
-  <!-- zed_health_monitor UNPLUMBED (2026-07-13): odom->base now comes from the
-       fused IMU+wheel EKF, so a ZED VIO fault no longer corrupts navigation;
-       leaving the monitor here would stop the base on faults in a sensor nav
-       doesn't ride anymore. The script stays at scripts/zed_health_monitor.py
-       (zed_drift_test.launch still uses it observationally). The bridge and
+  <!-- zed_health_monitor UNPLUMBED (2026-07-13); script DELETED (2026-07-15,
+       IMU-only ZED sweep: it watched VIO odom/status, which no longer
+       exist): odom->base comes from the fused IMU+wheel EKF, so a ZED fault
+       no longer corrupts navigation. The bridge and
        manager are no-ops without /nav_safety_hold messages, so nothing else
        changes.
        NOTE: this also unplumbs the map->odom YANK channel (Cartographer

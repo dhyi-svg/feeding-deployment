@@ -15,15 +15,15 @@
        do NOT start a second copy here).
 
        zed_drift_test.launch includes this file and adds its own drive
-       pieces (teleop/bridge/monitor/cartographer) for the standalone
-       teleop-only test. -->
+       pieces (teleop/bridge/cartographer) for the standalone teleop-only
+       test. ZED VIO trace topics retired 2026-07-15 (IMU-only ZED). -->
 
   <arg name="rviz"    default="false"/>
   <arg name="record"  default="false"/>
   <arg name="log_dir"
        default="$(find feeding_deployment)/src/feeding_deployment/integration/log/system_logs"/>
 
-  <!-- The tracer: /drift_test/{carto,zed,zed_sanitized,wheel}_path + anchor.
+  <!-- The tracer: /drift_test/{carto,wheel,fused_imu_wheel}_path + anchor.
        Draws nothing until /drift_test/lock (see drift_lock.py). -->
   <node pkg="feeding_deployment"
         type="drift_trace_compare.py"
@@ -38,9 +38,7 @@
   <node if="$(arg record)" pkg="rosbag" type="record" name="drift_test_record"
         args="record -o $(arg log_dir)/drift_test
               /tf /tf_static /cmd_vel_teleop
-              /zed_mini/zed_node/odom /zed_mini/zed_node/odom_sanitized
-              /zed_mini/zed_node/pose/status
+              /odometry/fused_imu_wheel
               /wheel_odom /wheel_odom/counts /wheel_odom/side_disagreement
-              /nav_safety_hold /nav_safety_hold_reason
               /drift_test/anchor /lidar_r/scan /lidar_l/scan"/>
 </launch>

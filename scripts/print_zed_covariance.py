@@ -2,11 +2,14 @@
 """
 print_zed_covariance.py -- print the ZED odom covariance diagonal, throttled.
 
+RETIRED [2026-07-15]: the ZED runs IMU-only (VIO odom never publishes), and the
+zed_feedback_cov_relay/observer-EKF chain this fed was deleted. Only useful
+against pre-Jul-15 bag replays now.
+
 Shows what the ZED SDK actually reports for pose (x, y, yaw) and twist
-(vx, vy, vyaw) uncertainty -- the numbers zed_feedback_cov_relay.py propagates
-into the fused-odom EKF. Prints the wheel odom's hand-set covariance alongside
-so you can judge the relative trust (whichever variance is smaller wins that
-field in the fusion).
+(vx, vy, vyaw) uncertainty. Prints the wheel odom's hand-set covariance
+alongside so you can judge the relative trust (whichever variance is smaller
+wins that field in a fusion).
 
   rosrun feeding_deployment print_zed_covariance.py
   rosrun feeding_deployment print_zed_covariance.py --rate 2

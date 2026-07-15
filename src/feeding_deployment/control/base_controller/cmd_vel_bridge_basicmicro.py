@@ -114,10 +114,11 @@ class CmdVelBridgeBasicmicro:
         # NOTE: the lost-command stop lives on the NUC (BaseInterface), not here.
         # This node only translates /cmd_vel into set_speeds RPC calls.
 
-        # ---- Safety hold (ZED-divergence interlock) ----
-        # zed_health_monitor asserts /nav_safety_hold when ZED tracking diverges
-        # (odom becomes garbage). While held, we command zero regardless of
-        # /cmd_vel, so the base stops until the ZED recovers. The hold gates
+        # ---- Safety hold (/nav_safety_hold) ----
+        # DORMANT since 2026-07-15: the original publisher (zed_health_monitor)
+        # was deleted with the IMU-only ZED sweep; a Phase-3 interlock can
+        # republish the topic and this gate re-engages unchanged. While held,
+        # we command zero regardless of /cmd_vel. The hold gates
         # AUTONOMOUS commands only: teleop is human-supervised and exempt --
         # driving out of a divergence is exactly what a takeover is for.
         # Fail-safe: once we've ever heard the monitor, a stale flag (monitor

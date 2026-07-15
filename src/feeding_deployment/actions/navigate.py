@@ -327,11 +327,13 @@ class NavigateHLA(HighLevelAction):
         self._takeover_pub = rospy.Publisher(
             "/shared_autonomy/takeover", Empty, queue_size=1
         )
-        # ZED-divergence safety hold (zed_health_monitor -> /nav_safety_hold). The
-        # cmd_vel bridge stops the wheels while held; here at the nav level we PAUSE
-        # (don't count a hold as a localization failure) and, if move_base aborts
-        # during a hold, re-send the goal once the ZED recovers -- so a divergence
-        # becomes "stop, wait, resume" instead of a failed leg / human recovery.
+        # Safety hold (/nav_safety_hold). DORMANT since 2026-07-15: the original
+        # publisher (zed_health_monitor) was deleted with the IMU-only ZED sweep;
+        # a Phase-3 interlock (e.g. map->odom yank channel) can republish it and
+        # this hook re-engages unchanged. While held: the cmd_vel bridge stops
+        # the wheels; here at the nav level we PAUSE (don't count a hold as a
+        # localization failure) and, if move_base aborts during a hold, re-send
+        # the goal on release -- "stop, wait, resume" instead of a failed leg.
         self._safety_hold = False
         self._last_hold_time = None
         rospy.Subscriber(
