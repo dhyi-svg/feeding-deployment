@@ -198,8 +198,9 @@ class OpenDoorHLA(HighLevelAction):
         poses.append(handle_opening_poses["above_closing_waypoint"])
         poses.append(handle_opening_poses["closing_waypoint"])
         poses.extend(handle_opening_poses["closing_waypoints"])
-        print(f"Visualizing {len(poses)} handle opening poses in RViz ...")
-        self.rviz_interface.visualize_poses(poses, frame_id="arm_base_link", ns="handle_opening_poses")
+        if self.rviz_interface is not None:
+            print(f"Visualizing {len(poses)} handle opening poses in RViz ...")
+            self.rviz_interface.visualize_poses(poses, frame_id="arm_base_link", ns="handle_opening_poses")
 
         # self.move_to_joint_positions(self.sim.scene_description.home_pos)
         self.move_to_joint_positions(self.sim.scene_description.fridge_door_staging_pos)
