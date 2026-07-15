@@ -68,6 +68,14 @@ CMD8='python run.py --user bohan_jun27 --run_on_robot --use_interface --resume_f
 TRACE_CMD_LAUNCH='roslaunch feeding_deployment drift_traces.launch record:=true'
 TRACE_CMD_LOCK='rosrun feeding_deployment drift_lock.py'
 
+# Dataset recording tooling, PRE-TYPED (never auto-run) in a 'recording' window
+# (see build_recording_window). Panes in execution order: TOP = pre-meal checks
+# (disk/clock/rates/SVO + interactive peripherals self-test; fire BEFORE run.py
+# -- LED serial contention), BOTTOM = per-meal rosbag recorders (fire once
+# preflight passes).
+RECORD_CMD="$SCRIPT_DIR/record_meal.sh"
+PREFLIGHT_CMD="$SCRIPT_DIR/preflight_check.sh"
+
 # ----- 'logger' tmux session (separate from 'feeding') ---------------------- #
 # Two stacked panes: top = system near-hang watchdog, bottom = ROS sensor logger.
 # Both keep a 3 h ROLLING window and stream/flush to disk (negligible RAM).
@@ -159,6 +167,28 @@ build_trace_window() {
   tmux select-pane -t "$bot" -T 'drift_lock.py'
   tmux send-keys   -t "$bot" "$TRACE_CMD_LOCK"            # pre-typed, NO Enter
   echo "Built 'trace' window (drift_traces.launch + drift_lock.py pre-typed; nothing run)."
+}
+
+# Build a 'recording' window: top pane = per-meal rosbag recorders, bottom pane
+# = pre-flight checks. Both PRE-TYPED (no Enter) like the rest of the bringup.
+# Distinct window so it never disturbs the 2x4 grid or 'prefix + r'.
+# Idempotent: leaves an existing 'recording' window alone.
+build_recording_window() {
+  tmux has-session -t "$SESSION" 2>/dev/null || return 0
+  if tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qx recording; then
+    return 0
+  fi
+  local top bot
+  top="$(tmux new-window -d -t "$SESSION:" -n recording -P -F '#{pane_id}')"
+  bot="$(tmux split-window -v -t "$top" -P -F '#{pane_id}')"
+  tmux select-layout -t "$SESSION:recording" even-vertical
+  tmux set-option -w -t "$SESSION:recording" pane-border-status top
+  tmux set-option -w -t "$SESSION:recording" pane-border-format ' #{pane_title} '
+  tmux select-pane -t "$top" -T 'preflight_check.sh'
+  tmux send-keys   -t "$top" "$PREFLIGHT_CMD"             # pre-typed, NO Enter
+  tmux select-pane -t "$bot" -T 'record_meal.sh'
+  tmux send-keys   -t "$bot" "$RECORD_CMD"                # pre-typed, NO Enter
+  echo "Built 'recording' window (preflight_check.sh + record_meal.sh pre-typed; nothing run)."
 }
 
 # ----- session-logging helpers ---------------------------------------------- #
@@ -407,6 +437,7 @@ do_build() {
   if (( ! fresh )); then
     echo "session '$SESSION' already exists -- attaching."
     build_trace_window
+    build_recording_window
     attach_or_switch
   fi
 
@@ -458,6 +489,7 @@ do_build() {
   echo "Built tmux session '$SESSION' (2x4 grid; commands pre-typed, no Enter)."
   echo "Restart bottom row (5-8) anytime with 'prefix + r'."
   build_trace_window
+  build_recording_window
   attach_or_switch
 }
 
