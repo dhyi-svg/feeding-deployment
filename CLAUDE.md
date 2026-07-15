@@ -2,6 +2,18 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## ⏱ CURRENT STATE / NEXT STEP (fork, `microwave-task` branch — updated 2026-07-14)
+
+**Goal this week:** autonomous **microwave door opening** on the real arm (single Jetson Orin Nano + Kinova Gen3, no NUC/base/ROS). See `LOCAL_DEPLOYMENT.md` for the env/what-works reference and `TESTING_LOG.md` for the blow-by-blow hardware log.
+
+**Where we are:** the **full autonomous cycle works** — live GroundingDINO detect → handle in arm-base frame (easy_handeye2 calib + live FK, no tf2) → depth/lateral-corrected grasp → open the door ~90° via a joint-space arc → release → retract. It has completed end-to-end. This session's refinements:
+- **Detect+approach+grip** is one script; corrections baked in: `DEPTH_CORR=0.16` (perception overestimates depth ~16 cm), `LAT_CORR=0.07` (lateral latch bias), `GRIP_EXT=0.065` (grasp EE = handle − 6.5 cm along approach; the 6.5 vs earlier 9 cm is the proven "grip a bit more forward / firmer" fix). Lands within ~1–2 cm, grip holds through the swing.
+- **Seeded-IK fix** (prevents the wrist-flip on big moves): before every `p.calculateInverseKinematics`, seed the sim from the arm's *current real joints* (`resetJointState` to `get_state()["position"]`) so IK returns a nearby config. **Caveat:** seeding is too conservative *mid-arc* — it stalled on arc step 2 (sim ik_err 3.5 cm). Use seeding for large jumps (approach, back-off); for the small arc waypoints fall back to unseeded (home-seeded) IK, which reaches the arc exactly.
+
+**Physical state right now:** the arm may be **holding the microwave door grasped** (gripper ~0.99) mid-arc, paused. To reclaim control / reset: restart `arm_server.py` then re-run `bulldog_bypass.py` (Xbox teleop or an e-stop faults the Kortex session; a fresh server re-locks motion so the bypass must be re-run).
+
+**Immediate next step:** finish the arc open with a solver that tries seeded IK first and **falls back to unseeded when ik_err > 2 cm** (guarding against a big joint-jump = flip), then fold the whole detect→grasp→open flow into the `open_microwave` HLA (still needs the `rviz` `None`-guard at `open_door.py:202` and perception wired in without `PerceptionInterface`/rospy).
+
 ## What this repo is
 
 The EmPRISE lab's robot-assisted feeding stack. It is both a **catkin (ROS 1 Noetic) package** (`package.xml`, `CMakeLists.txt`, `launch/*.launch`) and a **pip-installable Python package** (`pyproject.toml`, code under `src/feeding_deployment/`). A companion Vue 3 frontend lives in `webapp/`.
