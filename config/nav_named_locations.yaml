@@ -3,14 +3,14 @@ locations:
   microwave:
     frame_id: map
     position:
-      x: -4.139568
-      y: -1.263356
+      x: -4.133627
+      y: -1.256529
       z: -0.0
     orientation:
-      x: -0.0
-      y: 0.0
-      z: 0.873437
-      w: 0.486937
+      x: 0.0
+      y: -0.0
+      z: 0.872107
+      w: 0.489315
   fridge:
     frame_id: map
     position:
@@ -25,14 +25,14 @@ locations:
   sink:
     frame_id: map
     position:
-      x: -4.140241
-      y: -1.262101
-      z: 0.0
+      x: -4.132065
+      y: -1.254835
+      z: -0.0
     orientation:
       x: 0.0
       y: -0.0
-      z: 0.873861
-      w: 0.486176
+      z: 0.87203
+      w: 0.489452
   table:
     frame_id: map
     position:

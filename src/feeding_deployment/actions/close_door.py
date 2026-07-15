@@ -159,7 +159,8 @@ class CloseDoorHLA(HighLevelAction):
 
         self.close_gripper()
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
-        self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
+        # self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.microwave_push_starting_pos)
         self.move_to_ee_pose(handle_closing_poses["offset_closing_waypoints"][0])
 
         with hard_push_threshold:

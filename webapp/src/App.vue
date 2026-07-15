@@ -42,11 +42,6 @@
         </div>
       </div>
     </div>
-    <div v-if="!audioEnabled" class="enable-audio-wrap">
-      <button class="enable-audio-btn" @click="enableAudio">
-        🔊 Enable voice
-      </button>
-    </div>
     <div v-if="showTakeOver" class="global-controls">
       <button
         v-if="showBaseControl"
@@ -147,7 +142,6 @@ export default {
       _ros: null,
       _destroyed: false,
       _reconnectTimer: null,
-      audioEnabled: false,
       _micActive: false,
       _takeoverMicDeviceId: '',
       showMicSetupModal: false,
@@ -309,23 +303,6 @@ export default {
       ros.on('connection', () => {
         if (this.showSettings) this._publishSettings({ action: 'open' })
       })
-    },
-    enableAudio () {
-      // iPad Safari blocks speechSynthesis until speak() is first called from an
-      // explicit user gesture with a real utterance (an empty/silent one doesn't
-      // unlock it). This button is that gesture; "Voice enabled" both unlocks
-      // speech for the rest of the session and audibly confirms output works.
-      this.audioEnabled = true
-      if (!('speechSynthesis' in window)) {
-        alert('This browser has no speech synthesis support.')
-        return
-      }
-      try {
-        window.speechSynthesis.cancel()
-        const u = new SpeechSynthesisUtterance('Voice enabled')
-        u.lang = 'en-US'
-        window.speechSynthesis.speak(u)
-      } catch (e) { /* ignore */ }
     },
     speakText (text) {
       if (!text || !('speechSynthesis' in window)) return
@@ -746,29 +723,6 @@ nav a.router-link-exact-active {
   background: #202b42;
   border: 2px solid #31405f;
   color: #F5F0E8;
-}
-.enable-audio-wrap {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 2vh;
-  z-index: 1100;
-  display: flex;
-  justify-content: center;
-  pointer-events: none;
-}
-.enable-audio-btn {
-  pointer-events: auto;
-  font-family: Verdana, sans-serif;
-  font-size: 2.6vh;
-  font-weight: 800;
-  padding: 1.6vh 4vw;
-  border-radius: 999px;
-  background: #F0A500;
-  color: #0D1B2A;
-  border: 3px solid #F0A500;
-  box-shadow: 0 4px 14px rgba(240, 165, 0, .45);
-  cursor: pointer;
 }
 /* ── Settings overlay (view/edit already-set preferences) ── */
 .settings-gear {

@@ -24,12 +24,12 @@ TebLocalPlannerROS:
   # =====================================================================
   # Robot kinematics (must match your physical limits + diff-drive model)
   # =====================================================================
-  max_vel_x: 0.075
-  max_vel_x_backwards: 0.075
+  max_vel_x: 0.065
+  max_vel_x_backwards: 0.065
   max_vel_y: 0.0
   max_vel_theta: 0.125
   acc_lim_x: 0.7
-  acc_lim_theta: 1.5
+  acc_lim_theta: 0.15
 
   # Diff-drive: zero minimum turning radius (can rotate in place)
   min_turning_radius: 0.0

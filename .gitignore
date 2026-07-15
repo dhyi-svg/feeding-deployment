@@ -23,6 +23,8 @@ src/feeding_deployment/assets/vention_base/vention_base.STL
 src/feeding_deployment/assets/vention_base/vention_base.mtl
 src/feeding_deployment/assets/vention_base/vention_base.obj
 
+docs/feeding-deployment-docs
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

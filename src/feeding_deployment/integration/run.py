@@ -477,7 +477,7 @@ class _Runner:
             GroundAtom(IsUtensil, [self.utensil]),
             GroundAtom(DoorClosed, [self.fridge]),
             GroundAtom(DoorClosed, [self.microwave]),
-            GroundAtom(InFrontOf, [self.microwave]),
+            GroundAtom(InFrontOf, [self.fridge]),
             GroundAtom(PlateAt, [plate_start]),
             # GroundAtom(Holding, [self.plate]),
             GroundAtom(SafeToNavigate, []),

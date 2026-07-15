@@ -201,7 +201,7 @@
        compete for USB bandwidth/resources, causing the ZED to die. If confirmed,
        the fix is to move them to separate USB controllers rather than leave this off.
        NOTE: when this is disabled, the camera frequency + resolution checks in
-       watchdog.py MUST also be disabled or the watchdog E-stops the arm immediately.
+       watchdog.py MUST also be disabled or the watchdog E-stops the arm immediately. -->
   <include file="$(find realsense2_camera)/launch/rs_camera.launch">
     <arg name="align_depth" value="true"/>
     <arg name="enable_sync" value="true"/>
@@ -213,7 +213,7 @@
     <arg name="depth_height" value="720"/>
     <arg name="depth_fps"    value="30"/>
   </include>
-  -->
+ 
   <!-- END RealSense disable -->
 
 
