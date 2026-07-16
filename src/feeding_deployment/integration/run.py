@@ -1074,9 +1074,16 @@ class _Runner:
             # the user chooses, via the teleop Done button, whether to redo this
             # skill (re-run it) or continue to the next (treat it as done, so we
             # fall through and apply its effects below).
+            attempt = 0
             while True:
+                attempt += 1
                 try:
-                    ground_hla.execute_action()
+                    # skill_execution only records the outcome (skill_execute
+                    # event); every exception passes through it unchanged, so
+                    # the takeover/fatal handling below is exactly as before.
+                    with self.data_logger.skill_execution(
+                            skill_plan_names[i], attempt=attempt, phase=phase):
+                        ground_hla.execute_action()
                     break
                 except TeleopTakeoverException as e:
                     if e.redo_current:

@@ -32,6 +32,7 @@ import json
 import shutil
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -387,6 +388,54 @@ class DataLogger:
         except Exception as e:  # noqa: BLE001
             print(f"[data_logger] Failed to log json '{name}': {e}")
             return None
+
+    @contextmanager
+    def skill_execution(self, hla_name: str, **fields: Any):
+        """Wrap one skill-execution attempt in a ``skill_execute`` outcome event.
+
+        Purely observational: every exception is re-raised unchanged
+        (BaseException included, so SIGINT / sys.exit propagate exactly as
+        without the wrapper), and the event is emitted from ``finally`` via
+        best-effort ``log_event``, so logging can never alter the caller's
+        control flow. Outcomes: ``success``; ``takeover`` (a
+        TeleopTakeoverException, classified by class name to avoid an import
+        cycle, with its ``redo_current`` flag); ``aborted``
+        (SystemExit/KeyboardInterrupt); otherwise ``failed`` with the raised
+        exception, verbatim plus its innermost frame, as ``failure_reason`` --
+        the failure taxonomy is clustered offline from these strings, not
+        chosen at log time. ``run`` joins the event to ``images/<hla>/<run>_*``
+        from the same execution.
+        """
+        start = time.time()
+        with self._lock:
+            run_idx = self._run.get(hla_name)
+        result: dict[str, Any] = {"outcome": "success"}
+        try:
+            yield
+        except BaseException as e:  # noqa: BLE001 - observe and re-raise, never swallow
+            if type(e).__name__ == "TeleopTakeoverException":
+                result = {"outcome": "takeover",
+                          "redo": bool(getattr(e, "redo_current", False))}
+            elif isinstance(e, (KeyboardInterrupt, SystemExit)):
+                result = {"outcome": "aborted",
+                          "failure_reason": type(e).__name__}
+            else:
+                where = ""
+                tb = e.__traceback__
+                while tb is not None and tb.tb_next is not None:
+                    tb = tb.tb_next
+                if tb is not None:
+                    code = tb.tb_frame.f_code
+                    where = (f" @ {Path(code.co_filename).name}:"
+                             f"{tb.tb_lineno} in {code.co_name}")
+                result = {"outcome": "failed",
+                          "failure_reason": f"{type(e).__name__}: {e}{where}"}
+            raise
+        finally:
+            self.log_event("skill_execute", hla=hla_name, run=run_idx,
+                           start_epoch=start,
+                           duration_s=round(time.time() - start, 3),
+                           **result, **fields)
 
     def snapshot_state_file(self, path: Any) -> None:
         """Archive a versioned copy of a mutable user-level state file.
