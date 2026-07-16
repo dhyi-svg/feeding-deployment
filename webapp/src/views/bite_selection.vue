@@ -269,6 +269,9 @@ export default {
       imageHeight2: 1,
       activeIndex: null,
       previousSelectedOption: null,
+      // Set ONLY on countdown expiry: the acquire_food response carries
+      // user_action tap|autocontinue.
+      autoSubmit: false,
     }
   },
   watch: {
@@ -353,6 +356,7 @@ export default {
           this.updateCountdownText();
         } else {
           clearInterval(this.countdownInterval);
+          this.autoSubmit = true;
           this.redirectToChangeItem();
         }
       }, 1000);
@@ -768,11 +772,13 @@ export default {
           data: JSON.stringify({
             state: 'bite_selection',
             status: 'acquire_food',
-            data: [this.currentItem.name, this.selectedBox + 1] 
+            data: [this.currentItem.name, this.selectedBox + 1],
+            user_action: this.autoSubmit ? 'autocontinue' : 'tap'
           })
         });
 
         this.publisher.publish(message);
+        this.autoSubmit = false;
       } else {
       }
       if (this.selectedOption !== null && this.selectedOption !== 0) {

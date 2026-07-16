@@ -39,6 +39,8 @@ export default {
       countdown: null,
       countdownInterval: null,
       userInteracted: false,
+      // Set ONLY on countdown expiry: ok/adjust responses carry user_action tap|autocontinue.
+      autoSubmit: false,
     }
   },
   mounted () {
@@ -114,11 +116,17 @@ export default {
       if (!this.publisher) {
         return
       }
+      const payload = {
+        state: 'nav_adjust',
+        status: status
+      }
+      // 'ready' is a mount handshake, not a user decision -- no user_action.
+      if (status !== 'ready') {
+        payload.user_action = this.autoSubmit ? 'autocontinue' : 'tap'
+        this.autoSubmit = false
+      }
       const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          state: 'nav_adjust',
-          status: status
-        })
+        data: JSON.stringify(payload)
       })
       this.publisher.publish(message);
     },
@@ -141,6 +149,7 @@ export default {
         } else {
           this.stopCountdown()
           // Unattended: default to the safe no-op.
+          this.autoSubmit = true
           this.handleOk()
         }
       }, 1000);

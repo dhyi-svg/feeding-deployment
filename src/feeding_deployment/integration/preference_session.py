@@ -737,11 +737,16 @@ class PreferenceSession:
             self._web.finish_preference_correction()
 
         self._apply_non_planning()
+        # Per-dim answer mode from the webapp ('tap' | 'autocontinue' | None
+        # for interfaces without the side-channel): distinguishes engaged
+        # confirms from passive countdown expiries in the learning analysis.
+        actions = getattr(self._web, "preference_user_actions", None) or {}
         self._log(
             "preference_asked",
             dims=dims,
             ground_truth=self._loggable_bundle(only=dims),
             corrected=[d for d in dims if d in self.corrected],
+            user_actions={d: actions.get(d) for d in dims},
         )
 
     def apply_microwave(self, current_atoms: set, food_heated_atom: Any) -> Optional[int]:

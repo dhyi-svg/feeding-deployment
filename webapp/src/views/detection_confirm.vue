@@ -111,6 +111,8 @@ export default {
       countdown: null,
       countdownInterval: null,
       userInteracted: false,
+      // Set ONLY on countdown expiry: responses carry user_action tap|autocontinue.
+      autoSubmit: false,
     }
   },
   computed: {
@@ -204,10 +206,12 @@ export default {
         data: JSON.stringify({
           state: 'detection_confirm',
           status: status,
-          detection_type: this.detectionType
+          detection_type: this.detectionType,
+          user_action: this.autoSubmit ? 'autocontinue' : 'tap'
         })
       })
       this.publisher.publish(message);
+      this.autoSubmit = false;
     },
     startCountdown (seconds) {
       this.countdown = seconds
@@ -217,6 +221,7 @@ export default {
         } else {
           this.stopCountdown()
           // Unattended: accept the detection.
+          this.autoSubmit = true
           this.confirmDetection()
         }
       }, 1000);

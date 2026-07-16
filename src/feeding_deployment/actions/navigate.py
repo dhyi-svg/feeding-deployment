@@ -65,6 +65,12 @@ class NavigateHLA(HighLevelAction):
     # lives in nav_named_locations.yaml; until a real pose is captured there
     # (placeholder: false) the via-waypoint is skipped and we go direct.
     _STAGING_WAYPOINT = "kitchen_exit"
+    # Kitchen-ingress staging: the mirror of the egress, for the table->sink
+    # leg (navigate_to_sink). Drive to the open area in front of the corridor
+    # mouth first, turn there, then enter the corridor straight-on -- instead
+    # of TEB turning at the corridor entrance. Same yaml/placeholder skip
+    # rules as _STAGING_WAYPOINT.
+    _INGRESS_WAYPOINT = "kitchen_enter"
 
     # On a failed leg (move_base aborted, or localization lost past the watchdog
     # window) we hand the base to the user via the navigation teleop screen and
@@ -1807,8 +1813,14 @@ class NavigateHLA(HighLevelAction):
         )
 
     def navigate_to_sink(self, speed: str, position_offset=None, arrival_confirm_mode=None) -> None:
+        # table -> sink is the kitchen ingress: cross the open area to the
+        # staging pose at the corridor mouth, turn there, then drive straight
+        # into the corridor -- the mirror of the microwave->table egress via
+        # kitchen_exit. (Auto-skipped while the staging pose is missing or a
+        # placeholder.)
+        input("Is the FT sensor wire tucked in? Press Enter to continue...")
         self._navigate_to_target(
-            "sink", speed, position_offset=position_offset,
+            "sink", speed, via=[self._INGRESS_WAYPOINT], position_offset=position_offset,
             arrival_confirm_mode=arrival_confirm_mode,
         )
 

@@ -55,3 +55,14 @@ locations:
       y: 0.0
       z: -0.412139
       w: 0.911121
+  kitchen_enter:
+    frame_id: map
+    position:
+      x: -0.34726
+      y: -0.132533
+      z: 0.0
+    orientation:
+      x: -0.0
+      y: 0.0
+      z: 0.602117
+      w: 0.798408

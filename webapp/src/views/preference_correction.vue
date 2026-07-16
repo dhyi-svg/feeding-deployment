@@ -123,6 +123,10 @@ export default {
       otherText: '',
       isRecognizingOther: false,
       recognitionOther: null,
+      // Set ONLY by the countdown-expiry path so the response carries
+      // user_action: 'tap' | 'autocontinue' (engaged vs passive confirms are
+      // otherwise indistinguishable to the robot -- needed for learning analysis).
+      autoSubmit: false,
       step: 0,
       total: 0,
       autocontinueSeconds: DEFAULT_AUTOCONTINUE_SECONDS,
@@ -169,6 +173,7 @@ export default {
           this.countdown--
         } else {
           this.clearCountdownTimer()
+          this.autoSubmit = true
           this.confirmStep()
         }
       }, 1000)
@@ -321,9 +326,11 @@ export default {
         data: JSON.stringify({
           state: 'preference_correction_response',
           field: this.current.field,
-          value
+          value,
+          user_action: this.autoSubmit ? 'autocontinue' : 'tap'
         })
       }))
+      this.autoSubmit = false
       // Wait for the next step (or "done"); clear the current dim so the
       // waiting card shows until then.
       this.current = null

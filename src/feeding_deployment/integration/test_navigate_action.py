@@ -264,19 +264,21 @@ def test_navigate_action(
 
     scripted_terminal_leg = False
     try:
-        if navigate_hla._logged_nav_enabled():
-            # Logged-nav mode: go through the PUBLIC entry point so the exact
-            # deployment code path runs (origin gate, scripted branch, teleop
-            # fallback). The harness has no PDDL executive, so --assume_from
-            # substitutes the origin execute_action() would have stashed.
+        # Go through the PUBLIC entry point so the harness matches deployment
+        # behavior in navigate.py: route-specific via points (e.g. sink via
+        # kitchen_enter) and any origin-gated logged-nav branches live there,
+        # not in _navigate_to_target(). The harness has no PDDL executive, so
+        # --assume_from substitutes the origin execute_action() would stash.
+        navigate_method = getattr(navigate_hla, f"navigate_to_{location}")
+        if assume_from is not None:
             navigate_hla._nav_origin = assume_from
-            print(f"[logged-nav] harness: assumed origin = {assume_from!r}")
-            getattr(navigate_hla, f"navigate_to_{location}")(
-                speed, position_offset=position_offset
-            )
-            scripted_terminal_leg = location == "microwave" and assume_from == "fridge"
-        else:
-            navigate_hla._navigate_to_target(location, speed, position_offset=position_offset)
+            print(f"[nav] harness: assumed origin = {assume_from!r}")
+        navigate_method(speed, position_offset=position_offset)
+        scripted_terminal_leg = (
+            navigate_hla._logged_nav_enabled()
+            and location == "microwave"
+            and assume_from == "fridge"
+        )
 
         # With the interface, the HLA's own iPad adjust prompt already ran
         # inside _navigate_to_target; without it, offer the terminal-driven
@@ -364,8 +366,7 @@ if __name__ == "__main__":
         action="store_true",
         help=(
             "Mirror run.py's --logged-navigation (sets FEEDING_LOGGED_NAV=1): "
-            "scripted kitchen legs instead of move_base. Routes through the "
-            "public navigate_to_<location> entry point; combine with "
+            "scripted kitchen legs instead of move_base. Combine with "
             "--assume_from to pick which scripted leg fires."
         ),
     )
@@ -374,11 +375,11 @@ if __name__ == "__main__":
         type=str,
         default="",
         help=(
-            "Origin location to assume for --logged_nav (the harness has no "
-            "PDDL executive to provide ?from). E.g. --assume_from fridge "
-            "--location microwave drives the scripted 1.4 m approach; "
-            "--assume_from microwave --location table drives the scripted "
-            "kitchen egress."
+            "Origin location to assume (the harness has no PDDL executive to "
+            "provide ?from). Used by any origin-specific route logic; with "
+            "--logged_nav, e.g. --assume_from fridge --location microwave "
+            "drives the scripted 1.4 m approach, and --assume_from microwave "
+            "--location table drives the scripted kitchen egress."
         ),
     )
     args = parser.parse_args()

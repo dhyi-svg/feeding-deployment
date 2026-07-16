@@ -27,7 +27,7 @@ import numpy as np
 from pathlib import Path
 
 import rospy
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from netft_rdt_driver.srv import String_cmd
 
 from feeding_deployment.control.robot_controller.arm_interface import ArmInterface, ArmManager, NUC_HOSTNAME, ARM_RPC_PORT, RPC_AUTHKEY
@@ -114,6 +114,10 @@ class WatchDog:
         self.robot_cartesian_state_timestamps = PeekableQueue()
 
         self.watchdog_status_pub = rospy.Publisher("/watchdog_status", Bool, queue_size=1)
+        # Anomaly REASON for the dataset recorders (the NUC-master e-stop topics
+        # are invisible to this roscore). Latched so a late subscriber still
+        # sees the last anomaly while the node lives.
+        self.watchdog_anomaly_pub = rospy.Publisher("/watchdog_anomaly", String, queue_size=1, latch=True)
 
         self.execution_log_path = Path(__file__).parent.parent / "integration" / "log" / "execution_log.txt"
 
@@ -268,8 +272,13 @@ class WatchDog:
             self._arm_interface.emergency_stop()
             print(f"AnomalyStatus detected: {anomaly}")
             rospy.loginfo(f"AnomalyStatus detected: {anomaly}")
+            self.watchdog_anomaly_pub.publish(String(
+                data=f"{anomaly.name}: {AnomalyStatus.get_error_message(anomaly)}"))
             with open(self.execution_log_path, 'a') as f:
-                f.write(f"Anomaly Detected: {AnomalyStatus.get_error_message(anomaly)}\n") 
+                f.write(f"Anomaly Detected: {AnomalyStatus.get_error_message(anomaly)}\n")
+            # run() breaks (and the process exits) on anomaly -- give the
+            # publish a moment to flush to subscribers (rosbag) first.
+            time.sleep(0.5)
 
         self.watchdog_status_pub.publish(Bool(data=anomaly == AnomalyStatus.NO_ANOMALY))
         return anomaly

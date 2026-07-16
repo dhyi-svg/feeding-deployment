@@ -40,6 +40,8 @@ export default {
       countdown: null,
       countdownInterval: null,
       userInteracted: false,
+      // Set ONLY on countdown expiry: responses carry user_action tap|autocontinue.
+      autoSubmit: false,
     }
   },
   computed: {
@@ -119,6 +121,7 @@ export default {
         } else {
           this.stopCountdown()
           // Unattended: confirm and let the robot release the plate.
+          this.autoSubmit = true
           this.handleButtonClick()
         }
       }, 1000);
@@ -155,11 +158,13 @@ export default {
         data: JSON.stringify({
           state: 'plate_release_confirm',
           status: 'confirm',
-          location: this.location
+          location: this.location,
+          user_action: this.autoSubmit ? 'autocontinue' : 'tap'
         })
       })
 
       this.publisher.publish(message);
+      this.autoSubmit = false;
     }
   }
 }

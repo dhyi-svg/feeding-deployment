@@ -129,7 +129,7 @@ from feeding_deployment.integration.preference_session import (
     TABLE_PREF_DIMS as _TABLE_PREF_DIMS,
     bt_consumes_predictions,
 )
-from feeding_deployment.preference_learning.methods.prediction_model import PredictionModel, PREF_OPTIONS
+from feeding_deployment.preference_learning.methods.prediction_model import PredictionModel, PREF_OPTIONS, MEMORY_MODES, DEFAULT_MEMORY_MODE
 from feeding_deployment.preference_learning.config.physical_capabilities import (
     PHYSICAL_CAPABILITY_PROFILES,
 )
@@ -183,6 +183,7 @@ class _Runner:
                  resume_from_state: str = "", no_waits: bool = False,
                  physical_profile_label: str | None = None,
                  pref_mode: str = "none",
+                 pref_memory_mode: str = DEFAULT_MEMORY_MODE,
                  day: int | None = None) -> None:
         self.run_on_robot = run_on_robot
         self.use_interface = use_interface
@@ -195,6 +196,7 @@ class _Runner:
         # truth for both per-day release logging and the preference-learning day.
         self._day = day
         self._pref_mode = pref_mode
+        self._pref_memory_mode = pref_memory_mode
         self._prediction_model: PredictionModel | None = None
         self._pref_session: PreferenceSession | None = None
         self.predicted_bundle: dict[str, str] | None = None
@@ -594,6 +596,7 @@ class _Runner:
             physical_profile_label="deployment_physical_profile",
             logs_dir=self.log_dir / "preference_learning",
             physical_profile_description=self.physical_profile_label,
+            memory_mode=self._pref_memory_mode,
         )
         # Reject day gaps, then re-hydrate cross-day memory (LTM summary +
         # episodic history) from days strictly before today, so this fresh
@@ -1414,6 +1417,19 @@ if __name__ == "__main__":
              "'interface': predict + correct via web interface (requires frontend).",
     )
     parser.add_argument(
+        "--pref_memory_mode",
+        type=str,
+        choices=list(MEMORY_MODES),
+        default=DEFAULT_MEMORY_MODE,
+        help="Cross-day preference memory backend (PredictionModel.memory_mode). "
+             "'three_layer': semantic LTM summary + episodic retrieval. "
+             "'single_full_history': every prior finalized meal verbatim, no "
+             "summarization/retrieval. 'no_memory': working memory only. "
+             "Default: %(default)s. "
+             "Each mode persists its own log folder, so switch modes only with a "
+             "fresh user or after backfilling the mode's day_*.json history.",
+    )
+    parser.add_argument(
         "--pref_meal",
         type=str,
         default="",
@@ -1489,6 +1505,7 @@ if __name__ == "__main__":
                      args.no_waits,
                      physical_profile_label=physical_profile_label,
                      pref_mode=args.pref_mode,
+                     pref_memory_mode=args.pref_memory_mode,
                      day=args.day)
 
     if args.pref_mode == "interface" and args.pref_meal.strip():

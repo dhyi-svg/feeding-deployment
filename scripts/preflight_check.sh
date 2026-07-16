@@ -17,8 +17,9 @@ set -uo pipefail
 
 INTEGRATION_DIR="$HOME/deployment_ws/src/feeding-deployment/src/feeding_deployment/integration"
 MISC_DIR="$HOME/deployment_ws/src/feeding-deployment/src/feeding_deployment/misc"
-BAG_ROOT="${BAG_ROOT:-$INTEGRATION_DIR/log/bags}"
-SVO_DIR="${SVO_DIR:-$INTEGRATION_DIR/log/svo}"
+DATASET_ROOT="${DATASET_ROOT:-/data/feeding_dataset}"
+BAG_ROOT="${BAG_ROOT:-$DATASET_ROOT/bags}"
+SVO_DIR="${SVO_DIR:-$DATASET_ROOT/svo}"
 MIN_FREE_GB="${MIN_FREE_GB:-150}"
 NUC_SSH="${NUC_SSH:-emprise@192.168.1.3}"
 CLOCK_WARN_S="${CLOCK_WARN_S:-0.1}"
@@ -39,7 +40,15 @@ else
   echo "aborting remaining ROS checks."; exit 1
 fi
 
-# 2. disk free ----------------------------------------------------------------
+# 2. dataset disk mounted + free ----------------------------------------------
+# fstab uses nofail: an unmounted /data is a silent empty dir on the root fs.
+if [[ "$BAG_ROOT" == /data/* ]]; then
+  if mountpoint -q /data; then
+    warn_or_fail PASS "dataset disk: /data mounted ($(findmnt -no SOURCE /data 2>/dev/null))"
+  else
+    warn_or_fail FAIL "dataset disk: /data NOT mounted -- bags would land on the root fs"
+  fi
+fi
 mkdir -p "$BAG_ROOT"
 AVAIL="$(df -BG --output=avail "$BAG_ROOT" 2>/dev/null | tail -1 | tr -dc '0-9')"
 if [[ -n "$AVAIL" && "$AVAIL" -ge "$MIN_FREE_GB" ]]; then
@@ -93,13 +102,16 @@ check_rate() {   # <topic> <expected>
 }
 for rc in "${RATE_CHECKS[@]}"; do check_rate $rc; done
 
-# e-stop heartbeat: floor check (bulldog e-stops below 50/s)
-ESTOP_OUT="$(timeout -s INT -k 3 "$HZ_SECS" rostopic hz -w 40 /experimentor_estop 2>/dev/null || true)"
-ESTOP_RATE="$(printf '%s' "$ESTOP_OUT" | grep -oP 'average rate: \K[0-9.]+' | tail -1)"
-if [[ -n "$ESTOP_RATE" ]] && python3 -c "exit(0 if $ESTOP_RATE >= 50 else 1)"; then
-  warn_or_fail PASS "/experimentor_estop : ${ESTOP_RATE} Hz (floor 50)"
+# watchdog heartbeat: floor check. (The e-stop chain topics live on the NUC's
+# own roscore and are NOT visible here; /watchdog_status is the compute-side
+# safety heartbeat, published each check cycle, with /watchdog_anomaly carrying
+# the trip reason when it fires.)
+WD_OUT="$(timeout -s INT -k 3 "$HZ_SECS" rostopic hz -w 40 /watchdog_status 2>/dev/null || true)"
+WD_RATE="$(printf '%s' "$WD_OUT" | grep -oP 'average rate: \K[0-9.]+' | tail -1)"
+if [[ -n "$WD_RATE" ]] && python3 -c "exit(0 if $WD_RATE >= 50 else 1)"; then
+  warn_or_fail PASS "/watchdog_status : ${WD_RATE} Hz (floor 50)"
 else
-  warn_or_fail FAIL "/experimentor_estop : ${ESTOP_RATE:-none} Hz -- e-stop heartbeat missing/slow (Mac sender? UDP bridge?)"
+  warn_or_fail FAIL "/watchdog_status : ${WD_RATE:-none} Hz -- watchdog not running or starved (launch_watchdog pane?)"
 fi
 
 # 5. SVO recording growth -----------------------------------------------------

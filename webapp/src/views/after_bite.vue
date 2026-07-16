@@ -51,6 +51,8 @@ export default {
       // Set when the user opens the settings overlay: cancels the on-screen
       // autocontinue for this page visit (not re-engaged on close).
       autocontinueCancelled: false,
+      // Set ONLY on countdown expiry: responses carry user_action tap|autocontinue.
+      autoSubmit: false,
     }
   },
   mounted () {
@@ -93,6 +95,7 @@ export default {
           this.countdown -= 1;
         } else {
           clearInterval(this.countdownInterval);
+          this.autoSubmit = true;
           this.handleButtonClick();
         }
       }, 1000);
@@ -170,10 +173,12 @@ export default {
       const message = new ROSLIB.Message({
         data: JSON.stringify({
           state: 'task_selection',
-          status: 'take_bite'
+          status: 'take_bite',
+          user_action: this.autoSubmit ? 'autocontinue' : 'tap'
         })
       })
       this.publisher.publish(message);
+      this.autoSubmit = false;
     },
     publishMessagePhysical() {
       const message = new ROSLIB.Message({

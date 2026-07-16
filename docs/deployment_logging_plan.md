@@ -1,5 +1,21 @@
 # Deployment Logging & Metrics Plan
 
+> **STATUS (2026-07-15)** — DONE: two-bag recorders (`scripts/record_meal.sh`,
+> core + arm_vision) + SVO2 on `/data/feeding_dataset`, tmux `recording`
+> window + `feeding_stop` wiring, preflight checks, `/watchdog_anomaly`,
+> `/deployment/annotations` mirror (all log_events + meal_start/end),
+> `user_action` tap-vs-autocontinue across all 10 countdown views + per-dim
+> `user_actions` in `preference_asked`. Page latencies now derivable from the
+> bag (both webapp directions recorded). NUC-master e-stop topics are
+> unreachable from compute — watchdog status/anomaly is the compute-side
+> safety record; e-stop chain lives in NUC logs (collect at teardown).
+> REMAINING: `skill_execute` events, `preference_repredicted` events,
+> per-bite `bite_event`, teleop interrupted-HLA context, settings open/close,
+> LLM-fallback events, `/arm_abort_event`, Molmo/LED logging, nightly
+> user-dir snapshot + execution_log preservation, per-meal manifest script,
+> unconditional NUC log SCP, diary/survey JSONL templates, protocol decisions
+> (pre-meal state item, withdrawal probe, per-meal video).
+
 What to log during the month-long deployment, mapped to the paper's claims
 ("Table for Two", `docs/feeding-deployment-docs`). Status against the current
 codebase: **HAVE** (logged today), **PARTIAL** (derivable with effort or

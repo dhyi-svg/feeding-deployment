@@ -23,8 +23,11 @@
 set -uo pipefail
 
 INTEGRATION_DIR="$HOME/deployment_ws/src/feeding-deployment/src/feeding_deployment/integration"
-BAG_ROOT="${BAG_ROOT:-$INTEGRATION_DIR/log/bags}"
-SVO_DIR="${SVO_DIR:-$INTEGRATION_DIR/log/svo}"
+# Dataset root lives on the dedicated ext4 NVMe (label "robot-data", fstab
+# nofail) -- physically separate from the (near-full) OS disk.
+DATASET_ROOT="${DATASET_ROOT:-/data/feeding_dataset}"
+BAG_ROOT="${BAG_ROOT:-$DATASET_ROOT/bags}"
+SVO_DIR="${SVO_DIR:-$DATASET_ROOT/svo}"
 MIN_FREE_GB="${MIN_FREE_GB:-150}"
 STATUS_PERIOD="${STATUS_PERIOD:-10}"     # seconds between status lines
 ACTIVE_WAIT_S="${ACTIVE_WAIT_S:-30}"     # max wait for .active finalization
@@ -56,8 +59,12 @@ CORE_TOPICS=(
   /move_base/TebLocalPlannerROS/local_plan /move_base/odom_feedback
   /navigate/goal /navigate/result /navigate/status
   /map /constraint_list /submap_list /scan_matched_points2
-  # safety (e-stop heartbeat frequency IS the signal: bulldog trips <50/s)
-  /experimentor_estop /bulldog_status /watchdog_status /diagnostics
+  # safety -- compute-master view only. The e-stop chain (/experimentor_estop,
+  # /bulldog_status) lives on the NUC's OWN roscore and is invisible here; its
+  # record is the NUC-side logs (nuc_execution_log.txt, teardown collection).
+  # /watchdog_status is a ~kHz Bool heartbeat; /watchdog_anomaly carries the
+  # anomaly reason (published by safety/watchdog.py at trip time).
+  /watchdog_status /watchdog_anomaly /diagnostics
   # shared-autonomy state machine (proactive-vs-reactive intervention markers)
   /shared_autonomy/takeover /shared_autonomy/resume
   /shared_autonomy/done /shared_autonomy/cancel
@@ -143,6 +150,13 @@ do_start() {
   local prev; prev="$(newest_meal_dir)"
   if [[ -n "$prev" && -n "$(live_pids "$prev")" ]]; then
     echo "[record_meal] recorders already running for $(basename "$prev") -- 'stop' first." >&2
+    exit 1
+  fi
+
+  # fstab uses nofail: if the data disk ever fails to mount, /data is an empty
+  # dir on the near-full root filesystem -- refuse rather than fill the OS disk.
+  if [[ "$BAG_ROOT" == /data/* ]] && ! mountpoint -q /data; then
+    echo "[record_meal] REFUSING to start: /data is NOT mounted (robot-data disk missing?)" >&2
     exit 1
   fi
 

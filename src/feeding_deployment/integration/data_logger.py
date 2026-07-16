@@ -49,6 +49,14 @@ try:
 except ModuleNotFoundError:
     _NUMPY_IMPORTED = False
 
+try:
+    import rospy
+    from std_msgs.msg import String as _RosString
+
+    _ROSPY_IMPORTED = True
+except ModuleNotFoundError:
+    _ROSPY_IMPORTED = False
+
 
 class DataLogger:
     """Thread-safe, best-effort per-day data logger.
@@ -86,9 +94,31 @@ class DataLogger:
         self._group_used: dict[str, set] = {}
         self._webapp_seq = 0
 
+        # /deployment/annotations mirror: every log_event (plus meal start/end
+        # metadata) is republished as a JSON String so the per-meal rosbags are
+        # self-annotating -- a bag joined with nothing else still carries the
+        # meal timeline. Publishes regardless of `enabled` (the bag recorder has
+        # its own on/off), best-effort, and never blocks or raises.
+        self._ann_pub = None
+        self._ann_attempts = 0
+        if _ROSPY_IMPORTED:
+            try:
+                self._ann_pub = rospy.Publisher(
+                    "/deployment/annotations", _RosString, queue_size=50)
+                # A message published immediately after Publisher() is dropped
+                # before subscribers connect; give an already-running recorder
+                # up to 2 s to attach so the meal_start annotation lands.
+                deadline = time.time() + 2.0
+                while (self._ann_pub.get_num_connections() == 0
+                       and time.time() < deadline):
+                    time.sleep(0.05)
+            except Exception:  # noqa: BLE001 - e.g. node not initialized (tests)
+                self._ann_pub = None
+
         if not self.enabled:
             self.day_dir = None
             print("[data_logger] No day provided; per-day release logging is DISABLED.")
+            self._annotate("meal_start", user=self.user, day=None, release_logging=False)
             return
 
         self.day_dir = self.state_dir / f"day_{day:02d}"
@@ -102,6 +132,8 @@ class DataLogger:
 
         self._write_metadata(closed=False)
         print(f"[data_logger] Logging day {day:02d} for user '{self.user}' to {self.day_dir}")
+        self._annotate("meal_start", user=self.user, day=self.day,
+                       release_logging=True, day_dir=str(self.day_dir))
 
     # -- internal helpers ---------------------------------------------------
 
@@ -109,6 +141,30 @@ class DataLogger:
     def _timestamp() -> dict[str, Any]:
         now = time.time()
         return {"epoch": now, "iso": datetime.fromtimestamp(now).isoformat()}
+
+    def _annotate(self, category: str, **fields: Any) -> None:
+        """Mirror an event onto /deployment/annotations (JSON String).
+
+        Best-effort by design: any failure is swallowed, and if the publisher
+        could not be created eagerly (node not yet initialized), creation is
+        retried lazily a bounded number of times, then given up on.
+        """
+        try:
+            if not _ROSPY_IMPORTED:
+                return
+            if self._ann_pub is None:
+                if self._ann_attempts >= 20:
+                    return
+                self._ann_attempts += 1
+                try:
+                    self._ann_pub = rospy.Publisher(
+                        "/deployment/annotations", _RosString, queue_size=50)
+                except Exception:  # noqa: BLE001
+                    return
+            record = {**self._timestamp(), "category": category, **fields}
+            self._ann_pub.publish(_RosString(data=json.dumps(record, default=str)))
+        except Exception:  # noqa: BLE001 - annotations must never disturb a meal
+            pass
 
     def _append_jsonl(self, path: Path, record: dict[str, Any]) -> None:
         # Caller must hold the lock.
@@ -188,7 +244,12 @@ class DataLogger:
             print(f"[data_logger] Failed to log user input from {source}: {e}")
 
     def log_event(self, category: str, **fields: Any) -> None:
-        """Record a structured event (task command, preference bundle, etc.)."""
+        """Record a structured event (task command, preference bundle, etc.).
+
+        Also mirrored onto /deployment/annotations (even when per-day release
+        logging is disabled) so the meal rosbags carry the semantic timeline.
+        """
+        self._annotate(category, **fields)
         if not self.enabled:
             return
         try:
@@ -328,6 +389,8 @@ class DataLogger:
 
     def close(self) -> None:
         """Finalize metadata (end time + counts). Safe to call multiple times."""
+        self._annotate("meal_end", user=self.user, day=self.day,
+                       images_logged=self._image_seq)
         if not self.enabled:
             return
         try:

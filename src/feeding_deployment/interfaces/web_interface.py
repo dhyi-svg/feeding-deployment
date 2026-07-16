@@ -1161,6 +1161,14 @@ class WebInterface:
                 and m.get("field") == field
             )
         )
+        # Side-channel (return type unchanged for callers/fakes): how the user
+        # answered -- 'tap' (engaged) vs 'autocontinue' (countdown expired).
+        # None for responses from webapp versions predating the flag.
+        if not hasattr(self, "preference_user_actions"):
+            self.preference_user_actions = {}
+        self.preference_user_actions[field] = (
+            msg_dict.get("user_action") if msg_dict is not None else None
+        )
         if msg_dict is None:
             return predicted
         return msg_dict.get("value", predicted)

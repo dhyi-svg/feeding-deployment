@@ -164,8 +164,9 @@
         pkg="feeding_deployment" type="zed_svo_recorder.py"
         name="zed_svo_recorder" output="screen">
     <param name="camera_name" value="$(arg camera_name)"/>
-    <param name="output_dir"
-           value="$(find feeding_deployment)/src/feeding_deployment/integration/log/svo"/>
+    <!-- Dataset disk (ext4 NVMe, label "robot-data"), NOT the near-full OS
+         drive; sibling of the rosbag output (see scripts/record_meal.sh). -->
+    <param name="output_dir" value="/data/feeding_dataset/svo"/>
   </node>
 
   <!-- ===== Fused wheel+IMU odometry (AUTHORITATIVE odom->base) ===== -->

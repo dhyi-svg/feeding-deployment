@@ -10,15 +10,9 @@ Your task is to predict the user's FINAL accepted preference bundle for the CURR
 
 HOW THE USER INTERACTS WITH YOUR PREDICTIONS: as the meal progresses, the system surfaces each preference dimension one at a time, at the moment it becomes relevant, showing your predicted value. The user either CONFIRMS the prediction (accepts it as-is) or CORRECTS it (replaces it with the value they actually want). Confirmed and corrected dimensions are locked as this meal's ground truth and are listed for you below. You are re-run after every correction; your job each time is to re-predict the remaining OPEN dimensions (every dimension not yet confirmed or corrected).
 
-You may use the following three memory blocks. If a memory block is empty, ignore it and rely on the remaining information sources.
+You may use the following memory blocks. If a memory block is empty or absent, ignore it and rely on the remaining information sources.
 
-=== SEMANTIC MEMORY: Prior on the user's preference encoding inferred from all prior meals ===
-{ltm_summary}
-======
-
-=== EPISODIC MEMORY: Similar prior meals retrieved from memory with ground truth user preference bundles ===
-{retrieved_block}
-======
+{memory_block}
 
 === WORKING MEMORY: Current meal context and the user's responses so far ===
 
@@ -36,7 +30,7 @@ Dimensions the user CONFIRMED this meal (accepted the prediction as-is):
 Dimensions the user CORRECTED this meal (replaced the prediction with the value they want):
 {corrected_block}
 
-IMPORTANT — PREFERENCES ARE CORRELATED: the user's preferences co-vary through latent factors that are not directly observed: the user's current state (e.g., hurried, fatigued, relaxed), the physical conditions of this meal (setting, time of day, lighting and similar environmental factors), and properties of the meal itself. Each CORRECTION is a direct observation of what those latent factors are doing right now. A dimension does NOT need its own correction to change: when the user corrects one dimension, infer which latent factor most plausibly produced that correction, and update every OPEN dimension that same factor influences — categorical and continuous alike. Do not fall back on "this dimension was not itself corrected, so keep its previous value": a seed or memory value carried over from previous meals cannot reflect anything the user revealed DURING this meal, so where a this-meal correction bears on a dimension — even indirectly, through a shared latent factor — it outweighs the carried-over value. Similar prior meals in EPISODIC MEMORY show what the user actually preferred when those latent factors were in a comparable state; weigh them accordingly. Confirmations are weaker evidence: they tell you the prediction was acceptable, not that the latent factors changed.
+IMPORTANT — PREFERENCES ARE CORRELATED: the user's preferences co-vary through latent factors that are not directly observed: the user's current state (e.g., hurried, fatigued, relaxed), the physical conditions of this meal (setting, time of day, lighting and similar environmental factors), and properties of the meal itself. Each CORRECTION is a direct observation of what those latent factors are doing right now. A dimension does NOT need its own correction to change: when the user corrects one dimension, infer which latent factor most plausibly produced that correction, and update every OPEN dimension that same factor influences — categorical and continuous alike. Do not fall back on "this dimension was not itself corrected, so keep its previous value": a seed or memory value carried over from previous meals cannot reflect anything the user revealed DURING this meal, so where a this-meal correction bears on a dimension — even indirectly, through a shared latent factor — it outweighs the carried-over value. Similar prior meals in the memory blocks above (when present) show what the user actually preferred when those latent factors were in a comparable state; weigh them accordingly. Confirmations are weaker evidence: they tell you the prediction was acceptable, not that the latent factors changed.
 
 YOUR OBJECTIVE is to minimize the number of corrections the user still has to make this meal. Every open dimension is still presented to the user before it takes effect, so an updated prediction that turns out wrong costs the user nothing extra — they correct it exactly as they would have corrected the stale value — while keeping a carried-over value that this meal's evidence already contradicts guarantees one more correction. Never hold a value "pending the user's own correction" when a correction already made this meal, combined with a shared latent factor, tells you what the user is going to ask for.
 
@@ -45,9 +39,7 @@ COMMIT to the value your latent-factor inference implies. Do not split the diffe
 
 Use the following information in decreasing order of priority:
 1. User physical functioning abilities (these define feasibility constraints that must not be violated)
-2. WORKING MEMORY
-3. EPISODIC MEMORY
-4. SEMANTIC MEMORY
+{memory_priority_lines}
 
 Allowed values per dimension. Most dimensions are CATEGORICAL: you MUST choose exactly one of the listed strings. A few dimensions are COLOR dimensions (the plate_color_* fields): for these you MUST output an object {{"h": <0-179>, "s": <0-255>, "v": <0-255>, "range": <0.0-1.0>}}. The three plate_color_* dims are the SAME physical plate handle observed at three pickup locations; their values differ only through observation conditions (e.g., lighting), and such conditions may vary per location, per meal, or for the whole environment at once. Four dimensions are NAV OFFSET dimensions (the nav_offset_* fields): for these you MUST output an object {{"dx": <-0.5-0.5 meters>, "dy": <-0.5-0.5 meters>, "dyaw": <-0.785-0.785 radians>}} — a correction to the robot's parking pose at that location, expressed in the stored goal pose's local frame; each of the four nav_offset_* dims is a separate per-location value. Each color / nav offset line shows a "seed": the value saved at the end of the previous meal. Treat the seed as one piece of evidence among the others — it is decisive only when neither this meal's corrections nor similar prior meals bear on that dimension. Predict the value the user will actually accept THIS meal. The bite_ordering dimension is a TEXT dimension: output a single concise natural-language sentence describing the order in which the meal's foods should be fed and which solids to pair with which dips, using the exact food/dip names from the meal contents above. If there is no evidence of any ordering or dipping-pairing preference, output "no particular order".
 {options_block}

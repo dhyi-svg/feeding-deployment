@@ -38,6 +38,8 @@ export default {
       countdown: null,
       countdownInterval: null,
       userInteracted: false,
+      // Set ONLY on countdown expiry: responses carry user_action tap|autocontinue.
+      autoSubmit: false,
     }
   },
   mounted () {
@@ -101,6 +103,7 @@ export default {
         } else {
           this.stopCountdown()
           // Unattended: confirm and let the transfer proceed.
+          this.autoSubmit = true
           this.handleButtonClick()
         }
       }, 1000);
@@ -130,17 +133,20 @@ export default {
       const message = new ROSLIB.Message({
         data: JSON.stringify({
           state: 'bite_confirm_transfer',
-          status: 'confirm'
-        }) 
+          status: 'confirm',
+          user_action: this.autoSubmit ? 'autocontinue' : 'tap'
+        })
       })
       this.publisher.publish(message);
+      this.autoSubmit = false;
     },
     publishMessage2() {
       const message = new ROSLIB.Message({
         data: JSON.stringify({
           state: 'bite_confirm_transfer',
-          status: 'cancel'
-        }) 
+          status: 'cancel',
+          user_action: 'tap'
+        })
       })
 
       this.publisher.publish(message);

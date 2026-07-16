@@ -55,6 +55,11 @@ class TerminalCorrectionInterface:
         autocontinue_seconds: float,
         kind: str = "categorical",
     ) -> str:
+        # Terminal input is always an engaged answer (there is no countdown);
+        # mirror the web interface's user-action side-channel for the session log.
+        if not hasattr(self, "preference_user_actions"):
+            self.preference_user_actions = {}
+        self.preference_user_actions[field] = "tap"
         # Free-text dim (e.g. bite_ordering): accept the predicted sentence or
         # type a replacement.
         if kind == "text":

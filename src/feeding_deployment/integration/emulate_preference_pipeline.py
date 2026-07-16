@@ -77,6 +77,8 @@ from feeding_deployment.preference_learning.config.preference_bundle import (
     parse_color,
 )
 from feeding_deployment.preference_learning.methods.prediction_model import (
+    DEFAULT_MEMORY_MODE,
+    MEMORY_MODES,
     PredictionModel,
 )
 
@@ -295,12 +297,16 @@ def _seed_user_dir(log_dir: Path) -> None:
     shutil.copy(original_gestures, gestures_dir)
 
 
-def _build_prediction_model(user: str, profile: str, log_dir: Path, day: int) -> PredictionModel:
+def _build_prediction_model(
+    user: str, profile: str, log_dir: Path, day: int,
+    memory_mode: str = DEFAULT_MEMORY_MODE,
+) -> PredictionModel:
     model = PredictionModel(
         user=user,
         physical_profile_label="deployment_physical_profile",
         logs_dir=log_dir / "preference_learning",
         physical_profile_description=profile,
+        memory_mode=memory_mode,
     )
     model.validate_sequential_day(day)
     model.load_prior_memory(day)
@@ -387,12 +393,21 @@ def main() -> int:
                         help="Optional preset meal label (skips the terminal context pickers).")
     parser.add_argument("--pref_setting", type=str, default="Personal")
     parser.add_argument("--pref_time_of_day", type=str, default="morning")
+    parser.add_argument(
+        "--pref_memory_mode", type=str, choices=list(MEMORY_MODES), default=DEFAULT_MEMORY_MODE,
+        help="Cross-day preference memory backend (mirrors run.py's "
+             "--pref_memory_mode). Default: %(default)s.",
+    )
     args = parser.parse_args()
 
     if args.user == "":
         raise ValueError("Please provide a user name.")
 
-    for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+    # OpenAI is only used for episodic-retrieval embeddings, i.e. three_layer mode.
+    required_keys = ["ANTHROPIC_API_KEY"]
+    if args.pref_memory_mode == "three_layer":
+        required_keys.append("OPENAI_API_KEY")
+    for key in required_keys:
         if not os.environ.get(key, "").strip():
             print(f"ERROR: {key} is not set. The emulator makes real LLM/embedding calls.")
             return 1
@@ -426,12 +441,15 @@ def main() -> int:
             )
         print("Preference context (meal / setting / time_of_day):", context)
 
-        model = _build_prediction_model(args.user, profile, log_dir, args.day)
+        model = _build_prediction_model(
+            args.user, profile, log_dir, args.day, memory_mode=args.pref_memory_mode
+        )
         existing = model.working_memory_dir / f"day_{args.day:04d}.json"
         if existing.exists():
             print(
                 f"[learn] NOTE: day {args.day} memory already exists; finalizing will "
-                f"OVERWRITE day_{args.day:04d}.json (working/episodic/long_term)."
+                f"OVERWRITE day_{args.day:04d}.json (working memory plus this mode's "
+                f"cross-day memory)."
             )
 
         session = PreferenceSession(
