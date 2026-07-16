@@ -172,9 +172,10 @@ export default {
         if (parsedMessage.state === 'survey_data') {
           // The backend resends the current question every second (reload
           // robustness); ignore duplicates so an in-progress or just-sent
-          // answer isn't reset.
-          const dup = (ref) => ref && ref.field === parsedMessage.field && ref.step === parsedMessage.step
-          if (dup(this.current) || dup(this.lastAnswered)) return
+          // answer isn't reset. (The loaded question's step lives on
+          // this.step, not inside this.current.)
+          if (this.current && this.current.field === parsedMessage.field && this.step === parsedMessage.step) return
+          if (this.lastAnswered && this.lastAnswered.field === parsedMessage.field && this.lastAnswered.step === parsedMessage.step) return
           this.loadStep(parsedMessage)
           return
         }
@@ -331,8 +332,9 @@ export default {
 .likert-anchors {
   display: flex;
   justify-content: space-between;
-  margin-top: 1.2vh;
-  font-size: 2.2vh;
+  margin-top: 1.5vh;
+  font-size: 3.2vh;
+  font-weight: 600;
   color: var(--tm);
 }
 </style>
