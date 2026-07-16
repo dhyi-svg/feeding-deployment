@@ -146,6 +146,16 @@
   <param name="/$(arg camera_name)/zed_node/depth/depth_mode"                  value="NONE"/>
   <param name="/$(arg camera_name)/zed_node/pos_tracking/pos_tracking_enabled" value="false"/>
 
+  <!-- pub_frame_rate maps to SDK grab_compute_capping_fps: it caps the whole
+       grab loop, so it is also the EFFECTIVE SVO recording rate. The wrapper
+       common.yaml default of 15 silently halved the nav dataset (15 fps in a
+       30 fps container; verified on the Jul 15 full-session SVO). With depth
+       and tracking off nothing live consumes published frames, so run the
+       grab loop at the camera's native 30 fps and let the SVO capture every
+       frame. Expected cost: SVO ~2.8 to ~5.5 GB/h plus H265 encode load;
+       sanity-check sensorlog gpu columns on first bringup after this. -->
+  <param name="/$(arg camera_name)/zed_node/general/pub_frame_rate"            value="30.0"/>
+
   <!-- zed_pose_to_odom_feedback RETIRED [2026-07-15] with IMU-only ZED: it
        subscribed to /zed_node/odom (VIO), which no longer publishes, and its
        subscription alone would trigger the WARN spam above. Its outputs
