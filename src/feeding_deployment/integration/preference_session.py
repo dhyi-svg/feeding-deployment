@@ -274,6 +274,9 @@ class PreferenceSession:
         self._repredict_cv = threading.Condition()
         self._repredict_running = False
         self._repredict_dirty = False
+        # Pending trigger labels, drained by the worker onto the pass's
+        # preference_repredicted event (a coalesced pass lists all of them).
+        self._repredict_triggers: List[str] = []
 
     # ------------------------------------------------------------------ #
     # Color seeds / BT YAML I/O
@@ -450,7 +453,7 @@ class PreferenceSession:
         self.last_latent_inference = str(getattr(self._model, "last_latent_inference", "") or "")
         return pred
 
-    def _repredict_open(self) -> None:
+    def _repredict_open(self, triggers: Optional[List[str]] = None) -> None:
         """Refresh predictions for all still-open dims (finalized dims pinned).
 
         Runs on the background repredict worker (normal path) or on whatever
@@ -485,6 +488,9 @@ class PreferenceSession:
                         "[preference-session] external write landed during "
                         f"reprediction; keeping it for: {sorted(stale)}"
                     )
+                open_fields = [f for f in PREF_FIELDS
+                               if f not in self.finalized and f not in stale]
+                prev = self._loggable_bundle(only=open_fields)  # RLock: safe here
                 for field in PREF_FIELDS:
                     if field in self.finalized or field in stale:
                         continue
@@ -502,18 +508,32 @@ class PreferenceSession:
                     offset = self.bundle.get(field)
                     if isinstance(offset, dict):
                         self._write_nav_offset_to_bt(field, offset)
+                new = self._loggable_bundle(only=open_fields)
+        # The correction-propagation record: which open dims this pass actually
+        # moved, and which external writes it deferred to. Logged outside the
+        # locks; values are the same display forms as preference_predicted.
+        self._log(
+            "preference_repredicted",
+            triggers=list(triggers or []),
+            changed={f: {"from": prev[f], "to": new[f]}
+                     for f in open_fields if prev[f] != new[f]},
+            kept_external=sorted(stale),
+            open_dims=open_fields,
+        )
 
     # ------------------------------------------------------------------ #
     # Background reprediction worker
     # ------------------------------------------------------------------ #
-    def _schedule_repredict(self) -> None:
+    def _schedule_repredict(self, trigger: str = "unspecified") -> None:
         """Queue a background reprediction (repredict open dims + re-apply).
 
         Coalescing: at most one worker runs at a time; a trigger while one is
         in flight marks the state dirty and the worker runs one more pass with
         the newest corrections before exiting. Callers return immediately --
-        consumers synchronize via ``wait_for_reprediction``."""
+        consumers synchronize via ``wait_for_reprediction``. ``trigger``
+        labels what caused the pass for the preference_repredicted event."""
         with self._repredict_cv:
+            self._repredict_triggers.append(trigger)
             self._repredict_dirty = True
             if not self._repredict_running:
                 self._repredict_running = True
@@ -533,8 +553,10 @@ class PreferenceSession:
                     self._clear_activity()
                     return
                 self._repredict_dirty = False
+                triggers = self._repredict_triggers
+                self._repredict_triggers = []
             try:
-                self._repredict_open()
+                self._repredict_open(triggers)
                 # Apply repredicted categorical values to the BTs + FLAIR. The
                 # transfer-object reconstruction must happen on the MAIN thread
                 # (never under an in-flight motion), so defer it exactly like
@@ -659,7 +681,7 @@ class PreferenceSession:
             # Its own scheduled repredict pass may already have finished, in
             # which case the merge above just overwrote the open dims with
             # predictions NOT conditioned on that edit -- run one more pass.
-            self._schedule_repredict()
+            self._schedule_repredict("initial_predict_overlap")
         self._log(
             "preference_predicted",
             stage="start",
@@ -732,7 +754,7 @@ class PreferenceSession:
                 if changed:
                     # The correction itself is locked synchronously (above);
                     # refreshing the open dims happens in the background.
-                    self._schedule_repredict()
+                    self._schedule_repredict(f"correction:{field}")
         finally:
             self._web.finish_preference_correction()
 
@@ -795,7 +817,7 @@ class PreferenceSession:
         if changed:
             # Propagation to the other open color dims happens in the
             # background; the next pickup joins before reading its YAML.
-            self._schedule_repredict()
+            self._schedule_repredict(f"record_color:{field}")
 
         self._log(
             "preference_color_recorded",
@@ -835,7 +857,7 @@ class PreferenceSession:
         with self._bt_write_mutex:
             self._write_nav_offset_to_bt(field, observed)
         if changed:
-            self._schedule_repredict()
+            self._schedule_repredict(f"record_nav_offset:{field}")
 
         self._log(
             "preference_nav_offset_recorded",
@@ -906,7 +928,7 @@ class PreferenceSession:
                     self._pending_transfer_reinit = True
             # Re-propagate the still-open dims in the background; consumers
             # (ask steps, prediction-consuming skills) join before reading.
-            self._schedule_repredict()
+            self._schedule_repredict(f"settings_edit:{field}")
         self._log("preference_settings_edit", field=field, value=value, changed=changed)
         return True
 
