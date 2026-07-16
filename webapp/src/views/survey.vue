@@ -52,6 +52,11 @@
                 <img alt="clear" src="../assets/clear.png">
               </button>
             </div>
+            <p class="voice-status" :class="{ empty: !voiceStatus }" aria-live="polite">
+              <img alt="" src="../assets/voice.png">
+              <span v-if="voiceStatus">{{ voiceStatus }}</span>
+              <span v-else>&nbsp;</span>
+            </p>
           </div>
 
           <!-- Likert question: pick a number, then Continue. -->
@@ -101,6 +106,7 @@ export default {
       answerText: '',
       isRecognizing: false,
       recognition: null,
+      voiceStatus: '',
       // The question just answered; the backend resends the current question
       // every second until it processes our response, so without this a resend
       // arriving in that gap would re-show the answered question.
@@ -213,26 +219,73 @@ export default {
       this.isSubmitting = false
       this.stopSpeech()
     },
-    startSpeech() {
+    releaseTakeoverMic() {
+      // App.vue holds a persistent mic stream (physical-button detection);
+      // SpeechRecognition can't start while it's open. Ask App.vue to release
+      // it and wait briefly (same handshake as adaptability/transparency).
+      return new Promise((resolve) => {
+        let settled = false
+        const done = () => {
+          if (settled) return
+          settled = true
+          resolve()
+        }
+        window.dispatchEvent(new CustomEvent('release-takeover-mic', {
+          detail: { done }
+        }))
+        setTimeout(done, 300)
+      })
+    },
+    async startSpeech() {
       if (this.isRecognizing) return
+
+      if (this.$refs.answerTextarea) {
+        this.$refs.answerTextarea.blur()
+      }
+
+      await this.releaseTakeoverMic()
+
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+      if (!SpeechRecognition) {
+        this.voiceStatus = 'speech recognition not supported in this browser'
+        return
+      }
+
       if (!this.recognition) {
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
-        if (!SpeechRecognition) return
         this.recognition = new SpeechRecognition()
         this.recognition.lang = 'en-US'
         this.recognition.continuous = false
+        this.recognition.onstart = () => {
+          this.voiceStatus = 'listening...'
+        }
         this.recognition.onresult = (event) => {
           this.answerText += event.results[0][0].transcript
           this.isRecognizing = false
+          this.voiceStatus = ''
         }
-        this.recognition.onerror = () => { this.isRecognizing = false }
-        this.recognition.onend = () => { this.isRecognizing = false }
+        this.recognition.onerror = (event) => {
+          this.isRecognizing = false
+          this.voiceStatus = 'error: ' + (event.error || 'unknown') +
+            (event.message ? ' - ' + event.message : '')
+        }
+        this.recognition.onend = () => {
+          this.isRecognizing = false
+          if (this.voiceStatus === 'listening...') this.voiceStatus = 'no speech captured'
+        }
       }
+
       this.isRecognizing = true
-      this.recognition.start()
+      this.voiceStatus = 'starting...'
+      try {
+        this.recognition.start()
+      } catch (e) {
+        this.isRecognizing = false
+        this.voiceStatus = 'start failed: ' + (e && e.message ? e.message : e)
+      }
     },
     stopSpeech() {
       this.isRecognizing = false
+      this.voiceStatus = ''
       if (this.recognition) {
         try { this.recognition.abort() } catch (e) { /* ignore */ }
       }
