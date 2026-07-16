@@ -240,7 +240,7 @@ class NavDiagLogger:
                          self.cb_grid, queue_size=2)
         rospy.Subscriber("/move_base/local_costmap/costmap_updates", OccupancyGridUpdate,
                          self.cb_grid_update, queue_size=10)
-        rospy.Subscriber("/move_base/NavfnROS/plan", Path, self.cb_plan, queue_size=5)
+        rospy.Subscriber("/move_base/GlobalPlanner/plan", Path, self.cb_plan, queue_size=5)
         # Latched occupancy grid the run localized against -> saved once as
         # map.pgm/map.yaml so the log is self-describing about its map.
         rospy.Subscriber("/map", OccupancyGrid, self.cb_map, queue_size=1)

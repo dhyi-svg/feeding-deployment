@@ -68,7 +68,7 @@ def _parse_args():
         sp.add_argument("--rate", type=float, default=10.0, help="sample rate Hz")
         sp.add_argument("--timeout", type=float, default=120.0, help="goal timeout (s)")
         sp.add_argument("--plan-topic", default=None,
-                        help="global plan topic (default: auto TEB then NavfnROS)")
+                        help="global plan topic (default: auto TEB then GlobalPlanner)")
         sp.add_argument("--map-frame", default="map")
         sp.add_argument("--base-frame", default="vention_base_link")
         sp.add_argument("--locations-file", default=None)
@@ -189,7 +189,7 @@ def main():
     rospy.Subscriber(plan_topic, PathMsg, _on_plan, queue_size=1)
     # fallback so we still get a plan if TEB's transformed-plan topic is absent
     if args.plan_topic is None:
-        rospy.Subscriber("/move_base/NavfnROS/plan", PathMsg, _on_plan, queue_size=1)
+        rospy.Subscriber("/move_base/GlobalPlanner/plan", PathMsg, _on_plan, queue_size=1)
     rospy.Subscriber("/cmd_vel", Twist, _on_cmd, queue_size=10)
 
     client = actionlib.SimpleActionClient(args.action, MoveBaseAction)

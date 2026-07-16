@@ -13,7 +13,7 @@ publishes; zed_imu is the ZED health signal):
   * /zed_mini/zed_node/imu/data  (zed_imu)   -- raw off the sensor, ~200 Hz
   * /lidar_r/scan                (lidar_r)   -- right RPLIDAR A1, ~8 Hz
   * /lidar_l/scan                (lidar_l)   -- left  RPLIDAR A1, ~8 Hz
-  * /camera/color/camera_info    (realsense) -- D435i frame heartbeat, ~30 Hz
+  * /camera/color/camera_info    (realsense) -- D435i frame heartbeat, ~15 Hz
 
 How to read a stall from WHICH streams stop together:
   * ZED IMU stops                  -> ZED node/USB/camera dropped (hardware/bw).
@@ -99,7 +99,9 @@ STREAMS = [
     ("zed_imu",  "/zed_mini/zed_node/imu/data", Imu,       4000, 200.0, "ZED raw IMU ~200 Hz"),
     ("lidar_r",  "/lidar_r/scan",               LaserScan,  200,   8.0, "Right RPLIDAR ~8 Hz"),
     ("lidar_l",  "/lidar_l/scan",               LaserScan,  200,   8.0, "Left RPLIDAR ~8 Hz"),
-    ("realsense","/camera/color/camera_info",   CameraInfo, 200,  30.0, "RealSense color caminfo ~30 Hz"),
+    # realsense nominal must track sensors.launch color_fps (15 since 2026-07-15);
+    # at 30 the threshold floor sat ~2 frame periods and flagged jitter as DROPOUT.
+    ("realsense","/camera/color/camera_info",   CameraInfo, 200,  15.0, "RealSense color caminfo ~15 Hz"),
 ]
 
 
