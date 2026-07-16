@@ -852,6 +852,8 @@ class PerceptionInterface:
         if self.log_dir is not None:
             with open(self.log_dir / 'handle_opening_pos.pkl', 'wb') as f:
                 pickle.dump({"last_handle_poses": handle_poses}, f)
+            if self.data_logger is not None:
+                self.data_logger.snapshot_state_file(self.log_dir / 'handle_opening_pos.pkl')
         self.sync_rviz()
 
         return handle_poses
@@ -1202,6 +1204,8 @@ class PerceptionInterface:
         }
         with open(self.log_dir / 'attachment_poses.pkl', 'wb') as f:
             pickle.dump(attachment_poses, f)
+        if self.data_logger is not None:
+            self.data_logger.snapshot_state_file(self.log_dir / 'attachment_poses.pkl')
 
         return attachment_poses
 
@@ -1259,6 +1263,8 @@ class PerceptionInterface:
 
             with open(self.log_dir / 'sink_placement_poses.pkl', 'wb') as f:
                 pickle.dump(sink_placement_poses, f)
+            if self.data_logger is not None:
+                self.data_logger.snapshot_state_file(self.log_dir / 'sink_placement_poses.pkl')
 
         return sink_placement_poses
 
@@ -1333,6 +1339,8 @@ class PerceptionInterface:
 
             with open(self.log_dir / 'table_placement_poses.pkl', 'wb') as f:
                 pickle.dump(table_placement_poses, f)
+            if self.data_logger is not None:
+                self.data_logger.snapshot_state_file(self.log_dir / 'table_placement_poses.pkl')
 
         return table_placement_poses
 

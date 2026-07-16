@@ -29,6 +29,7 @@ Design notes:
 from __future__ import annotations
 
 import json
+import shutil
 import threading
 import time
 from datetime import datetime
@@ -387,12 +388,63 @@ class DataLogger:
             print(f"[data_logger] Failed to log json '{name}': {e}")
             return None
 
+    def snapshot_state_file(self, path: Any) -> None:
+        """Archive a versioned copy of a mutable user-level state file.
+
+        Calibration/pose pickles under ``state_dir`` are rewritten in place on
+        every re-perception, so only their last state would survive the day.
+        Called right after such a write, this copies the file to
+        ``day_<NN>/<stem>_log/<stem>_<N>.<ext>`` (N = 0, 1, 2, ... within the
+        day, mirroring the ``food_detection_log`` idiom) and logs a
+        ``state_snapshot`` event, so every calibration change is timestamped in
+        events.jsonl and on /deployment/annotations.
+        """
+        if not self.enabled:
+            return
+        try:
+            src = Path(path)
+            if not src.exists():
+                return
+            dest_dir = self.day_dir / f"{src.stem}_log"
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            with self._lock:
+                n = 0
+                while (dest_dir / f"{src.stem}_{n}{src.suffix}").exists():
+                    n += 1
+                dest = dest_dir / f"{src.stem}_{n}{src.suffix}"
+                shutil.copy2(src, dest)
+            self.log_event("state_snapshot", name=src.stem,
+                           path=str(dest.relative_to(self.day_dir)))
+        except Exception as e:  # noqa: BLE001
+            print(f"[data_logger] Failed to snapshot state file '{path}': {e}")
+
+    def _snapshot_actuated_state(self) -> None:
+        """Copy end-of-run actuated state into the day dir.
+
+        ``behavior_trees/`` (the parameters skills actually ran with) and
+        ``flair_history.txt`` live at the user level and are mutated in place
+        across days; copying them at close preserves each day's final state.
+        Overwrites earlier copies from the same day, so a day with several
+        run.py sessions keeps its last state.
+        """
+        try:
+            bt_src = self.state_dir / "behavior_trees"
+            if bt_src.is_dir():
+                shutil.copytree(bt_src, self.day_dir / "behavior_trees",
+                                dirs_exist_ok=True)
+            flair_src = self.state_dir / "flair_history.txt"
+            if flair_src.exists():
+                shutil.copy2(flair_src, self.day_dir / "flair_history.txt")
+        except Exception as e:  # noqa: BLE001
+            print(f"[data_logger] Failed to snapshot actuated state: {e}")
+
     def close(self) -> None:
         """Finalize metadata (end time + counts). Safe to call multiple times."""
         self._annotate("meal_end", user=self.user, day=self.day,
                        images_logged=self._image_seq)
         if not self.enabled:
             return
+        self._snapshot_actuated_state()
         try:
             with self._lock:
                 self._write_metadata(closed=True)
