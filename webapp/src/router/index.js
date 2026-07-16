@@ -144,6 +144,16 @@ const routes = [
     path: '/nav_adjust_confirm',
     name: 'nav_adjust_confirm',
     component: () => import('../views/nav_adjust_confirm.vue')
+  },
+  {
+    path: '/survey',
+    name: 'survey',
+    component: () => import('../views/survey.vue')
+  },
+  {
+    path: '/thank_you',
+    name: 'thank_you',
+    component: () => import('../views/thank_you.vue')
   }
 ]
 

@@ -85,6 +85,32 @@ WORKFLOW = [
 ]
 WORKFLOW_PLAN = [s[0] for s in WORKFLOW]
 
+# ── End-of-meal survey (mirrors feeding_deployment.integration.survey;
+# inlined so this script stays standalone). ──────────────────────────────────
+SURVEY_SCALE = {"scale_min": 1, "scale_max": 7,
+                "min_label": "Very Low", "max_label": "Very High"}
+SURVEY_QUESTIONS = [
+    {"key": "mental_demand", "title": "Mental Demand", "kind": "likert",
+     "question": "How mentally demanding was using the meal-assistance system?"},
+    {"key": "physical_demand", "title": "Physical Demand", "kind": "likert",
+     "question": "How physically demanding was using the meal-assistance system?"},
+    {"key": "temporal_demand", "title": "Temporal Demand", "kind": "likert",
+     "question": "How much time pressure did you feel when using the meal-assistance system?"},
+    {"key": "performance", "title": "Performance", "kind": "likert",
+     "question": "How successful were you in using the meal-assistance system to achieve your goals?"},
+    {"key": "effort", "title": "Effort", "kind": "likert",
+     "question": "How hard did you have to work to use the meal-assistance system effectively?"},
+    {"key": "frustration", "title": "Frustration", "kind": "likert",
+     "question": "How frustrated were you while using the meal-assistance system?"},
+    {"key": "trust", "title": "Trust", "kind": "likert",
+     "question": "How much did you trust the robot to do the right thing during today's meal?"},
+    {"key": "safety", "title": "Safety", "kind": "likert",
+     "question": "How safe did you feel during today's meal?"},
+    {"key": "adaptation", "title": "Adaptation", "kind": "text",
+     "question": "What, if anything, did you learn about the robot today, "
+                 "or how did your interaction with it change?"},
+]
+
 # Feeding-loop skill plans per action.
 FEED_PLANS = {
     "take_bite": (["pick_utensil", "acquire_bite", "transfer_utensil", "stow_utensil"],
@@ -128,9 +154,13 @@ class WorkflowSim:
     def clear_plan(self):
         self.skill_pub.publish(String(json.dumps({"plan": [], "current": -1})))
 
-    def wait_for(self, predicate, what, timeout=None):
+    def wait_for(self, predicate, what, timeout=None, resend=None):
+        # ``resend``: zero-arg callback re-invoked every second while waiting,
+        # like WebInterface.get_required_web_interface_message -- lets you test
+        # the survey's mid-question browser-reload recovery without the robot.
         print(f"  … waiting for: {what}")
         start = time.time()
+        last_resend = time.time()
         while not rospy.is_shutdown():
             try:
                 d = self.inbox.get(timeout=0.2)
@@ -138,6 +168,9 @@ class WorkflowSim:
                 if timeout and (time.time() - start) > timeout:
                     print(f"  ! timeout waiting for {what}")
                     return None
+                if resend is not None and time.time() - last_resend >= 1.0:
+                    resend()
+                    last_resend = time.time()
                 continue
             if predicate(d):
                 return d
@@ -230,7 +263,8 @@ class WorkflowSim:
                 self.back_to_executing()
                 time.sleep(STEP_SECONDS / 2)
                 self.clear_plan()
-                print("  meal finished.")
+                self.do_survey()
+                print("  meal finished (page resting on Thank You).")
                 return
 
             if action not in FEED_PLANS:
@@ -255,6 +289,37 @@ class WorkflowSim:
 
             # Move to the post-action hub for the next round.
             self.send({"state": hub_state, "status": "jump"})
+
+    # ── Phase 4: end-of-meal survey (mirrors WebInterface.start_survey /
+    # send_survey_question / finish_survey, including the 1 s resends) ────────
+    def do_survey(self):
+        print("\n=== 4. END-OF-MEAL SURVEY ===")
+        total = len(SURVEY_QUESTIONS)
+        jump = {"state": "survey", "status": "jump", "total": total}
+        self.send(jump)
+        self.wait_for(
+            lambda d: d.get("state") == "survey" and d.get("status") == "ready",
+            "survey page to report ready",
+            resend=lambda: self.send(jump))
+        for step, q in enumerate(SURVEY_QUESTIONS):
+            data = {"state": "survey_data", "field": q["key"],
+                    "title": q["title"], "question": q["question"],
+                    "kind": q["kind"], "step": step, "total": total,
+                    **SURVEY_SCALE}
+            self.send(data)
+            resp = self.wait_for(
+                lambda d, f=q["key"]: d.get("state") == "survey_response"
+                and d.get("field") == f,
+                f"answer to '{q['title']}' ({step + 1}/{total})",
+                resend=lambda m=data: self.send(m))
+            if resp:
+                print(f"    → {q['key']} = {resp.get('value')!r}")
+        done = {"state": "thank_you", "status": "jump"}
+        self.send(done)
+        self.wait_for(
+            lambda d: d.get("state") == "thank_you" and d.get("status") == "ready",
+            "thank_you page to report ready",
+            resend=lambda: self.send(done))
 
     def run(self):
         print("Legend:  ▶ IN = robot→app   ◀ OUT = app→robot\n")

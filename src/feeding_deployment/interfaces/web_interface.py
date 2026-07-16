@@ -1177,6 +1177,93 @@ class WebInterface:
         """Tell the page the correction stage is done (it returns to its caller)."""
         self._send_message({"state": "preference_correction", "status": "done"})
 
+    #### End-of-Meal Survey Page ####
+    # The survey page is driven ONE question at a time within a single page
+    # mount (like preference correction), then the iPad is parked on the
+    # terminal thank_you page. Protocol:
+    #
+    #   start_survey(total):
+    #       BE -> app: {"state":"survey","status":"jump","total":N}
+    #       app -> BE: {"state":"survey","status":"ready"}
+    #   send_survey_question(...) (called once per question):
+    #       BE -> app: {"state":"survey_data","field":..,"title":..,
+    #                   "question":..,"kind":"likert"|"text","step":i,
+    #                   "total":N,"scale_min":1,"scale_max":7,
+    #                   "min_label":..,"max_label":..}
+    #       app -> BE: {"state":"survey_response","field":..,"value":..,
+    #                   "user_action":"tap"}
+    #   finish_survey():
+    #       BE -> app: {"state":"thank_you","status":"jump"}
+    #       app -> BE: {"state":"thank_you","status":"ready"}
+
+    def start_survey(self, total: int) -> None:
+        """Navigate to the end-of-meal survey page and wait until it has
+        mounted/subscribed."""
+        # If the user has the settings overlay open, stall until they close it.
+        self.wait_until_settings_closed("robot_waiting", raise_on_takeover=True)
+        self.current_page = "survey"
+        # Drop stale messages so we wait for the ready for THIS navigation.
+        self.clear_received_messages()
+        jump_msg = {"state": "survey", "status": "jump", "total": int(total)}
+        self._send_message(jump_msg)
+        # Resend until the page mounts and reports ready: /robot_to_webapp is
+        # not latched and the page re-subscribes asynchronously on mount.
+        self.get_required_web_interface_message(
+            lambda m: m.get("state") == "survey" and m.get("status") == "ready",
+            resend=lambda: self._send_message(jump_msg),
+        )
+
+    def send_survey_question(
+        self,
+        field: str,
+        title: str,
+        question: str,
+        kind: str,
+        step: int,
+        total: int,
+        scale_min: int = 1,
+        scale_max: int = 7,
+        min_label: str = "Very Low",
+        max_label: str = "Very High",
+    ) -> dict[str, Any] | None:
+        """Show one survey question and block for the user's answer.
+
+        Returns the full response message (``value`` + ``user_action``), or
+        None if the webapp jumped to task selection. Unlike
+        send_preference_step, the question data is RESENT while waiting: a
+        webapp reload mid-question remounts the page, which would otherwise
+        wait forever since /robot_to_webapp is not latched. The page ignores
+        duplicate sends of the current/just-answered question."""
+        step_msg = {
+            "state": "survey_data",
+            "field": field,
+            "title": title,
+            "question": question,
+            "kind": kind,
+            "step": int(step),
+            "total": int(total),
+            "scale_min": int(scale_min),
+            "scale_max": int(scale_max),
+            "min_label": min_label,
+            "max_label": max_label,
+        }
+        self._send_message(step_msg)
+        return self.get_required_web_interface_message(
+            lambda m: m.get("state") == "survey_response" and m.get("field") == field,
+            resend=lambda: self._send_message(step_msg),
+        )
+
+    def finish_survey(self) -> None:
+        """Park the iPad on the terminal Thank You page (the meal is over --
+        deliberately no return to task selection)."""
+        self.current_page = "thank_you"
+        jump_msg = {"state": "thank_you", "status": "jump"}
+        self._send_message(jump_msg)
+        self.get_required_web_interface_message(
+            lambda m: m.get("state") == "thank_you" and m.get("status") == "ready",
+            resend=lambda: self._send_message(jump_msg),
+        )
+
     #### Gesture Pages ####
 
     def get_gesture_type(self) -> None:

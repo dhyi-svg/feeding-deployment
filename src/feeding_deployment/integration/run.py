@@ -122,6 +122,7 @@ from feeding_deployment.transparency.query_llm import TransparencyQuery
 from feeding_deployment.integration.preference_context import build_preference_context
 from feeding_deployment.integration.checkpoint import CheckpointStore
 from feeding_deployment.integration.data_logger import DataLogger
+from feeding_deployment.integration.survey import run_end_of_meal_survey
 from feeding_deployment.integration.preference_session import (
     DEFAULT_PHYSICAL_PROFILE,
     INITIAL_PREF_DIMS as _INITIAL_PREF_DIMS,
@@ -853,7 +854,16 @@ class _Runner:
                     # away, write the single per-day memory update.
                     self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["PlacePlateInSink"], (self.plate, self.sink)), phase="finish")
                     self._finalize_preference_session()
-                    last_task_type = None
+                    # End-of-meal survey; afterwards the meal ends on the
+                    # webapp's Thank You page, NOT back at task selection, so
+                    # skip the loop tail's ready_for_task_selection. A survey
+                    # hiccup must never crash the executive at meal end.
+                    try:
+                        run_end_of_meal_survey(self.web_interface, self.data_logger)
+                    except Exception as e:
+                        print(f"End-of-meal survey error (skipping): {e}")
+                    print("Meal finished; web interface parked on the Thank You page.")
+                    continue
                 elif task == "meal_assistance":
                     if task_type == "bite":
                         self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["TransferTool"], (self.utensil,self.table)))

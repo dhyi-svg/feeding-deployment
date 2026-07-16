@@ -83,6 +83,12 @@ teleop: {
   },
   gesture_record: {
     jump: '/gesture_record_positive'
+  },
+  survey: {
+    jump: '/survey'
+  },
+  thank_you: {
+    jump: '/thank_you'
   }
 };
 
