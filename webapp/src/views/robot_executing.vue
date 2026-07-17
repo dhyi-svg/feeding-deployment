@@ -27,7 +27,7 @@
     </div>
 
     <div class="bd exec-body">
-      <div class="exec-text">{{ activity || displayedMessage }}</div>
+      <div class="exec-text">{{ execText }}</div>
       <div class="exec-status" v-if="busy">
         <span class="spinner"></span>
         <span class="exec-elapsed">still working ({{ elapsedSec }}s)</span>
@@ -41,6 +41,11 @@ import ROSLIB from 'roslib'
 import routeMap from '@/router/routeMap';
 import { ROS_URL, USER} from '@/config/parameterConfig';
 import { skillLabel } from '@/config/skillLabels';
+
+// The safety watchdog publishes /watchdog_status at ~1 kHz and exits after an
+// anomaly (having e-stopped the arm), so silence on the topic means the robot
+// is in trouble or the stack is restarting. 5 s = 10 throttle intervals.
+const WATCHDOG_SILENCE_MS = 5000
 
 export default {
   data () {
@@ -64,10 +69,20 @@ export default {
       // button press. The physical button fires a global 'takeover-press' event on
       // every page; we relay it to the robot ONLY while armed so stray presses are
       // dropped here rather than queued on the robot side.
-      awaitingButton: false
+      awaitingButton: false,
+      // Recovery banner: set while /watchdog_status reports an anomaly, goes
+      // silent, or the rosbridge socket drops; cleared on the next healthy tick.
+      recovering: false,
+      lastWatchdogMs: 0,
+      watchdogListener: null,
+      watchdogCheckHandle: null
     }
   },
   computed: {
+    execText () {
+      if (this.recovering) return 'Recovering from an error, please wait…'
+      return this.activity || this.displayedMessage
+    },
 
     planSlots () {
       const plan = this.skillPlan
@@ -84,6 +99,10 @@ export default {
   },
   mounted () {
     this.ros = new ROSLIB.Ros({ url: ROS_URL })
+    // A dead rosbridge socket means we can't know the robot's state — treat it
+    // like a watchdog outage (App.vue owns reconnection of its own socket).
+    this.ros.on('error', () => this.tripRecovery())
+    this.ros.on('close', () => this.tripRecovery())
     this.initSubscriber()
     this.initPublisher()
     // The physical transfer button is detected globally in App.vue and dispatched as
@@ -106,6 +125,16 @@ export default {
     if (this.skillPlanListener) {
       this.skillPlanListener.unsubscribe();
       this.skillPlanListener = null;
+    }
+
+    if (this.watchdogListener) {
+      this.watchdogListener.unsubscribe();
+      this.watchdogListener = null;
+    }
+
+    if (this.watchdogCheckHandle) {
+      clearInterval(this.watchdogCheckHandle);
+      this.watchdogCheckHandle = null;
     }
 
     this.stopTimer();
@@ -131,10 +160,17 @@ export default {
           this.awaitingButton = parsedMessage.status === 'on';
           return;
         }
-        const route = routeMap[parsedMessage.state]?.[parsedMessage.status];
-        if (!route && parsedMessage.status) {
-          this.displayedMessage = parsedMessage.status;
+        if (parsedMessage.state === 'explanation') {
+          // LLM narrator fallback line (provide_continuous_explanations).
+          if (parsedMessage.status) {
+            this.displayedMessage = parsedMessage.status;
+          }
+          return;
         }
+        // Anything else without a routeMap entry is an internal signal
+        // (base_control enabled/disabled, auto_time, ...) — never show its
+        // raw status string to the user.
+        const route = routeMap[parsedMessage.state]?.[parsedMessage.status];
         if (route) {
           if (typeof route === 'string') {
             this.$router.push(route); 
@@ -222,6 +258,44 @@ export default {
       this.listener.subscribe((message) => {
         this.handleRosMessage(message);
       });
+
+      // throttle_rate makes rosbridge forward at most one message per 500 ms,
+      // so the watchdog's ~1 kHz publish rate never reaches the websocket.
+      this.watchdogListener = new ROSLIB.Topic({
+        ros: this.ros,
+        name: '/watchdog_status',
+        messageType: 'std_msgs/Bool',
+        throttle_rate: 500,
+        queue_length: 1
+      })
+      this.watchdogListener.subscribe((message) => this.handleWatchdog(message))
+
+      // Grace period from mount so we don't flash the recovery text before the
+      // first (throttled) status arrives.
+      this.lastWatchdogMs = Date.now()
+      this.watchdogCheckHandle = setInterval(() => {
+        if (Date.now() - this.lastWatchdogMs > WATCHDOG_SILENCE_MS) {
+          this.tripRecovery()
+        }
+      }, 1000)
+    },
+    handleWatchdog(message) {
+      this.lastWatchdogMs = Date.now()
+      if (message.data === false) {
+        this.tripRecovery()
+      } else {
+        this.recovering = false
+      }
+    },
+    tripRecovery() {
+      // Wipe the stale activity/explanation text and spinner; execText shows
+      // the polite recovery line until the watchdog reports healthy again.
+      if (this.recovering) return
+      this.recovering = true
+      this.activity = ''
+      this.busy = false
+      this.displayedMessage = ''
+      this.stopTimer()
     },
 
   }
