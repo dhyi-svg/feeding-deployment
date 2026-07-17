@@ -1495,10 +1495,10 @@ class NavigateHLA(HighLevelAction):
             return
         if location_name not in self._VALID_TARGETS:
             return
-        # confirm_navigation_arrival preference (ArrivalConfirmMode BT
-        # param): 0 = page off (parking offsets stop being refined), 1 = page
-        # with autocontinue, 2 = page waits indefinitely. None (per-user YAML
-        # predating the param) keeps today's behavior (mode 1).
+        # arrival_confirm_mode is the decoded confirm_navigation_arrival mode
+        # (from the single ArrivalConfirm BT param via _confirm_page_args):
+        # 0 = page off (parking offsets stop being refined), 1 = page with
+        # autocontinue, 2 = page waits indefinitely.
         mode = 1 if arrival_confirm_mode is None else int(arrival_confirm_mode)
         if mode == 0:
             print(
@@ -1535,7 +1535,7 @@ class NavigateHLA(HighLevelAction):
         try:
             # Mode 2 ("wait for me"): autocontinue_seconds <= 0 tells the page
             # to show no countdown and wait for an explicit answer. In mode 1
-            # the countdown is the skill's ArrivalConfirmAutocontinueSeconds BT
+            # the countdown is the seconds decoded from the ArrivalConfirm BT
             # parameter.
             autocontinue_s = 0.0 if mode == 2 else float(autocontinue_seconds)
             choice = self.web_interface.get_nav_position_adjust_choice(
@@ -1776,14 +1776,16 @@ class NavigateHLA(HighLevelAction):
         finally:
             self._nav_origin = None
 
-    def navigate_to_fridge(self, speed: str, position_offset, arrival_confirm_mode, autocontinue_seconds) -> None:
+    def navigate_to_fridge(self, speed: str, position_offset, arrival_confirm) -> None:
+        arrival_confirm_mode, autocontinue_seconds = self._confirm_page_args(arrival_confirm)
         self._navigate_to_target(
             "fridge", speed, position_offset=position_offset,
             arrival_confirm_mode=arrival_confirm_mode,
             autocontinue_seconds=autocontinue_seconds,
         )
 
-    def navigate_to_microwave(self, speed: str, position_offset, arrival_confirm_mode, autocontinue_seconds) -> None:
+    def navigate_to_microwave(self, speed: str, position_offset, arrival_confirm) -> None:
+        arrival_confirm_mode, autocontinue_seconds = self._confirm_page_args(arrival_confirm)
         # Logged-nav mode, fridge->microwave only: scripted forward drive. Any
         # other origin (table->microwave re-heat leg, unknown after a resume)
         # stays fully autonomous.
@@ -1805,7 +1807,8 @@ class NavigateHLA(HighLevelAction):
             autocontinue_seconds=autocontinue_seconds,
         )
 
-    def navigate_to_sink(self, speed: str, position_offset, arrival_confirm_mode, autocontinue_seconds) -> None:
+    def navigate_to_sink(self, speed: str, position_offset, arrival_confirm) -> None:
+        arrival_confirm_mode, autocontinue_seconds = self._confirm_page_args(arrival_confirm)
         # table -> sink is the kitchen ingress: cross the open area to the
         # staging pose at the corridor mouth, turn there, then drive straight
         # into the corridor -- the mirror of the microwave->table egress via
@@ -1818,7 +1821,8 @@ class NavigateHLA(HighLevelAction):
             autocontinue_seconds=autocontinue_seconds,
         )
 
-    def navigate_to_table(self, speed: str, position_offset, arrival_confirm_mode, autocontinue_seconds) -> None:
+    def navigate_to_table(self, speed: str, position_offset, arrival_confirm) -> None:
+        arrival_confirm_mode, autocontinue_seconds = self._confirm_page_args(arrival_confirm)
         # microwave -> table is the kitchen egress: reverse out through the narrow
         # corridor to the open staging area, then turn and drive to the table.
         # Routing via the staging waypoint stops TEB from oscillating as it tries

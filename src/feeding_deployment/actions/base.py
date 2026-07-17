@@ -475,24 +475,31 @@ class HighLevelAction(abc.ABC):
         else:
             self.execute_robot_command(CloseGripperCommand())
 
-    def _confirm_page_args(self, confirm_mode, autocontinue_seconds) -> tuple:
-        """Normalize a confirmation-mode BT param value into
-        ``(mode, autocontinue_seconds)`` for the detection/confirmation pages;
-        autocontinue seconds are only non-zero in mode 1.
-        ``autocontinue_seconds`` is the skill's ManipulationConfirmAutocontinueSeconds
-        BT parameter (written from the wait_before_autocontinue_mealprep
-        preference)."""
-        mode = 2 if confirm_mode is None else int(confirm_mode)
-        return mode, (float(autocontinue_seconds) if mode == 1 else 0.0)
+    def _confirm_page_args(self, confirm) -> tuple:
+        """Decode a single sentinel-encoded confirmation BT param into
+        ``(mode, autocontinue_seconds)`` for the detection/confirmation pages.
 
-    def confirm_plate_release(self, location: str, confirm_mode,
-                              autocontinue_seconds) -> None:
+        The confirm dims (confirm_navigation_arrival / confirm_manipulation /
+        confirm_feeding_pickup) each write ONE float param: -1 = skip the page,
+        0 = show and wait for the user, >0 = show and count down that many
+        seconds. This returns the legacy (mode, seconds) tuple the pages consume
+        -- mode 0 = skip, 1 = autocontinue (seconds>0), 2 = wait -- so the web
+        interface / perception layer are unchanged. None -> wait (mode 2)."""
+        if confirm is None:
+            return 2, 0.0
+        confirm = float(confirm)
+        if confirm < 0:
+            return 0, 0.0
+        if confirm == 0:
+            return 2, 0.0
+        return 1, confirm
+
+    def confirm_plate_release(self, location: str, confirm) -> None:
         """Confirm plate release on the webapp per confirm_manipulation; no-op in sim.
 
-        ``confirm_mode`` (ManipulationConfirmMode BT param): 0 = release
-        without asking, 1 = page with autocontinue (timeout => release), 2 = wait
-        for the user. ``autocontinue_seconds`` is the skill's
-        ManipulationConfirmAutocontinueSeconds BT parameter (only used in mode 1).
+        ``confirm`` (ManipulationConfirm BT param, sentinel-encoded per
+        _confirm_page_args): skip = release without asking, wait = block for the
+        user, countdown = page with autocontinue (timeout => release).
 
         Deliberately no try/except: a WebInterfaceTakeoverInterrupt raised while
         blocked must propagate to execute_action, which converts it into the
@@ -500,11 +507,10 @@ class HighLevelAction(abc.ABC):
         """
         if self.web_interface is None:
             return
-        mode = 2 if confirm_mode is None else int(confirm_mode)
+        mode, autocontinue_s = self._confirm_page_args(confirm)
         if mode == 0:
             print(f"Plate release at {location}: confirmation disabled by preference; releasing.")
             return
-        autocontinue_s = float(autocontinue_seconds) if mode == 1 else 0.0
         self.web_interface.get_plate_release_confirmation(location, autocontinue_s)
 
     def reset_wrist(self) -> None:

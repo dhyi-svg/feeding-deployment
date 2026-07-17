@@ -25,7 +25,7 @@ PREFERENCE_BUNDLE: List[PreferenceDim] = [
     PreferenceDim(
         field="microwave_time",
         label="Microwave time",
-        options=["no microwave", "1 min", "2 min", "3 min"],
+        options=["no microwave", "30 secs", "1 min", "2 min"],
         description="How long food should be reheated before being served. Some users may prefer hotter food, while others prefer food closer to room temperature. Many meals begin refrigerated and are intended to be served warm or hot. Fruit and dessert meals with an intended serving temperature of cold are usually eaten without microwaving.",
         short_description="How long to reheat your food before it is served.",
     ),
@@ -45,24 +45,24 @@ PREFERENCE_BUNDLE: List[PreferenceDim] = [
     ),
     PreferenceDim(
         field="confirm_feeding_pickup",
-        label="Should the robot check each bite, sip, or wipe pickup before bringing it to you?",
-        options=["no", "yes (with auto-continue countdown)", "yes (without any auto-continue)"],
-        short_description="",
-        description="Whether the robot shows a web-interface confirmation page after picking up the bite, drink, or mouth wipe, before bringing it toward the user. These pages let the user retry a failed pickup (e.g., an empty fork). 'no' skips the pages entirely to reduce interaction time, even if it means the robot might transfer a failed pickup; 'yes (with auto-continue countdown)' shows the page but proceeds automatically after the auto-continue wait (wait_before_autocontinue_feeding_pickup) if the user does not intervene; 'yes (without any auto-continue)' waits indefinitely for the user's explicit confirmation. A user might be comfortable skipping confirmation in some contexts (e.g., eating alone in a personal setting) and prefer it in others (e.g., a social setting where repeated empty-fork transfers would be awkward). Users who trust the robot more tend to relax confirmation across the board."
+        label="After picking up each bite, sip, or wipe — how should the check page behave?",
+        options=["skip", "countdown (15 sec)", "countdown (30 sec)", "countdown (60 sec)", "wait for me"],
+        short_description="Whether the robot checks each bite/sip/wipe pickup with you before bringing it over.",
+        description="How the robot handles the web-interface confirmation page shown after picking up a bite, drink, or mouth wipe, before bringing it toward the user. This page lets the user retry a failed pickup (e.g., an empty fork). 'skip' does not show the page at all to reduce interaction time, even if it means the robot might transfer a failed pickup; 'countdown (N sec)' shows the page but proceeds automatically after N seconds if the user does not intervene; 'wait for me' shows the page and waits indefinitely for the user's explicit confirmation. A user might be comfortable skipping confirmation in some contexts (e.g., eating alone in a personal setting) and prefer it in others (e.g., a social setting where repeated empty-fork transfers would be awkward). Users who trust the robot more tend to use a shorter countdown or skip across the board."
     ),
     PreferenceDim(
         field="confirm_navigation_arrival",
-        label="Should the robot check its parking after driving?",
-        options=["no", "yes (with auto-continue countdown)", "yes (without any auto-continue)"],
-        short_description="",
-        description="Whether the robot shows the position check page after driving to a location (fridge, microwave, table, sink), where the user can approve the parked position or fine-adjust it by teleoperating the base. This page is also how the robot learns the user's preferred parking spots over time. 'no' skips the page and drives on with the learned parking positions (they stop being refined); 'yes (with auto-continue countdown)' shows the page but accepts the position automatically after the auto-continue wait (wait_before_autocontinue_mealprep); 'yes (without any auto-continue)' waits indefinitely. Users typically start with confirmation on and relax it as the robot's parking proves reliable."
+        label="After the robot drives somewhere — how should the parking check behave?",
+        options=["skip", "countdown (15 sec)", "countdown (30 sec)", "countdown (60 sec)", "wait for me"],
+        short_description="Whether the robot checks its parking with you after driving to a location.",
+        description="How the robot handles the position check page shown after driving to a location (fridge, microwave, table, sink), where the user can approve the parked position or fine-adjust it by teleoperating the base. This page is also how the robot learns the user's preferred parking spots over time. 'skip' does not show the page and drives on with the learned parking positions (they stop being refined); 'countdown (N sec)' shows the page but accepts the position automatically after N seconds; 'wait for me' shows the page and waits indefinitely. Users typically start with a countdown or 'wait for me' and move toward skipping as the robot's parking proves reliable."
     ),
     PreferenceDim(
         field="confirm_manipulation",
-        label="During meal prep and cleaning: should the robot check before grabbing, pressing, or placing things?",
-        options=["no", "yes (with auto-continue countdown)", "yes (without any auto-continue)"],
-        short_description="",
-        description="Whether the robot shows web-interface confirmation pages around manipulation: verifying a detection before acting on it (the plate handle before a pickup, the fridge/microwave door handle before opening, the microwave button before pressing, the placement spot before setting the plate down) and confirming it is safe to release the plate at the microwave, table, or sink. The detection pages are also where the user can redo a detection or correct the plate-handle color. 'no' skips these pages (successful detections are accepted automatically and the plate is released without asking; detection colors stop being refined); 'yes (with auto-continue countdown)' shows each page but proceeds automatically after the auto-continue wait (wait_before_autocontinue_mealprep); 'yes (without any auto-continue)' waits indefinitely. Users who trust the robot's perception tend to relax this over time."
+        label="During meal prep and cleaning — how should the grab/press/place checks behave?",
+        options=["skip", "countdown (15 sec)", "countdown (30 sec)", "countdown (60 sec)", "wait for me"],
+        short_description="Whether the robot checks with you before grabbing, pressing, or placing things during meal prep.",
+        description="How the robot handles the web-interface confirmation pages around manipulation: verifying a detection before acting on it (the plate handle before a pickup, the fridge/microwave door handle before opening, the microwave button before pressing, the placement spot before setting the plate down) and confirming it is safe to release the plate at the microwave, table, or sink. The detection pages are also where the user can redo a detection or correct the plate-handle color. 'skip' does not show these pages (successful detections are accepted automatically and the plate is released without asking; detection colors stop being refined); 'countdown (N sec)' shows each page but proceeds automatically after N seconds; 'wait for me' waits indefinitely. Users who trust the robot's perception tend to use a shorter countdown or skip over time."
     ),
     PreferenceDim(
         field="transfer_mode",
@@ -88,22 +88,22 @@ PREFERENCE_BUNDLE: List[PreferenceDim] = [
     PreferenceDim(
         field="detect_user_ready_for_initiating_transfer_feeding",
         label="How do you tell the robot you're ready for a bite?",
-        options=["open mouth", "button", "autocontinue"],
-        description="How the robot determines that the user is ready to initiate bite transfer. open mouth: readiness is detected from the user opening their mouth (this can be a challenge in social settings when a user tends to open their mouth for talking); button: the user explicitly presses a physical button (this can be cumbersome if the user is fatigued); autocontinue: the robot proceeds automatically after waiting for a certain timeout.",
+        options=["open mouth", "button", "proceed automatically after a pause"],
+        description="How the robot determines that the user is ready to initiate bite transfer. open mouth: readiness is detected from the user opening their mouth (this can be a challenge in social settings when a user tends to open their mouth for talking); button: the user explicitly presses a physical button (this can be cumbersome if the user is fatigued); proceed automatically after a pause: the robot proceeds on its own after a short (5 second) pause, without waiting for a mouth-open or button press.",
         short_description="",
     ),
     PreferenceDim(
         field="detect_user_ready_for_initiating_transfer_drinking",
         label="How do you tell the robot you're ready for a sip?",
-        options=["open mouth", "button", "autocontinue"],
-        description="How the robot determines that the user is ready to initiate sip transfer. open mouth: readiness is detected from the user opening their mouth (this can be a challenge in social settings when a user tends to open their mouth for talking); button: the user explicitly presses a physical button (this can be cumbersome if the user is fatigued); autocontinue: the robot proceeds automatically after waiting for a certain timeout.",
+        options=["open mouth", "button", "proceed automatically after a pause"],
+        description="How the robot determines that the user is ready to initiate sip transfer. open mouth: readiness is detected from the user opening their mouth (this can be a challenge in social settings when a user tends to open their mouth for talking); button: the user explicitly presses a physical button (this can be cumbersome if the user is fatigued); proceed automatically after a pause: the robot proceeds on its own after a short (5 second) pause, without waiting for a mouth-open or button press.",
         short_description="",
     ),
     PreferenceDim(
         field="detect_user_ready_for_initiating_transfer_wiping",
         label="How do you tell the robot you're ready for a mouth wipe?",
-        options=["open mouth", "button", "autocontinue"],
-        description="How the robot determines that the user is ready to initiate transfer of mouth wiper. open mouth: readiness is detected from the user opening their mouth (this can be a challenge in social settings when a user tends to open their mouth for talking); button: the user explicitly presses a physical button (this can be cumbersome if the user is fatigued); autocontinue: the robot proceeds automatically after waiting for a certain timeout.",
+        options=["open mouth", "button", "proceed automatically after a pause"],
+        description="How the robot determines that the user is ready to initiate transfer of mouth wiper. open mouth: readiness is detected from the user opening their mouth (this can be a challenge in social settings when a user tends to open their mouth for talking); button: the user explicitly presses a physical button (this can be cumbersome if the user is fatigued); proceed automatically after a pause: the robot proceeds on its own after a short (5 second) pause, without waiting for a mouth-open or button press.",
         short_description="",
     ),
     PreferenceDim(
@@ -116,22 +116,22 @@ PREFERENCE_BUNDLE: List[PreferenceDim] = [
     PreferenceDim(
         field="detect_user_completed_transfer_feeding",
         label="How does the robot know you've finished a bite?",
-        options=["perception", "button", "autocontinue"],
-        description="How the robot determines that the user has finished taking a bite. perception: the robot detects completion using a force-torque sensor on the fork (very reliable); button: the user explicitly signals completion by physically pressing a button; autocontinue: the robot proceeds automatically after a certain timeout.",
+        options=["perception", "button", "proceed automatically after a pause"],
+        description="How the robot determines that the user has finished taking a bite. perception: the robot detects completion using a force-torque sensor on the fork (very reliable); button: the user explicitly signals completion by physically pressing a button; proceed automatically after a pause: the robot proceeds on its own after a short (5 second) pause, without waiting for a button press or head nod.",
         short_description="",
     ),
     PreferenceDim(
         field="detect_user_completed_transfer_drinking",
         label="How does the robot know you've finished a sip?",
-        options=["perception", "button", "autocontinue"],
-        description="How the robot determines that the user has finished drinking. perception: the robot detects completion using a head-nod gesture (which may feel unnatural in social settings); button: the user explicitly signals completion by physically pressing a button; autocontinue: the robot proceeds automatically after a certain timeout.",
+        options=["perception", "button", "proceed automatically after a pause"],
+        description="How the robot determines that the user has finished drinking. perception: the robot detects completion using a head-nod gesture (which may feel unnatural in social settings); button: the user explicitly signals completion by physically pressing a button; proceed automatically after a pause: the robot proceeds on its own after a short (5 second) pause, without waiting for a button press or head nod.",
         short_description="",
     ),
     PreferenceDim(
         field="detect_user_completed_transfer_wiping",
         label="How does the robot know you've finished wiping?",
-        options=["perception", "button", "autocontinue"],
-        description="How the robot determines that the user has finished mouth wiping. perception: the robot detects completion using a head-nod gesture (which may feel unnatural in social settings); button: the user explicitly signals completion by physically pressing a button; autocontinue: the robot proceeds automatically after a certain timeout.",
+        options=["perception", "button", "proceed automatically after a pause"],
+        description="How the robot determines that the user has finished mouth wiping. perception: the robot detects completion using a head-nod gesture (which may feel unnatural in social settings); button: the user explicitly signals completion by physically pressing a button; proceed automatically after a pause: the robot proceeds on its own after a short (5 second) pause, without waiting for a button press or head nod.",
         short_description="",
     ),
     PreferenceDim(
@@ -157,25 +157,18 @@ PREFERENCE_BUNDLE: List[PreferenceDim] = [
         short_description="The order your foods are fed, and which dips go with which items.",
     ),
     PreferenceDim(
+        field="wait_before_autocontinue_bite_selection",
+        label="The bite-choice page: how should it behave?",
+        options=["countdown (15 sec)", "countdown (30 sec)", "countdown (60 sec)", "wait for me"],
+        short_description="How long the robot waits on the bite-choice page before going with the predicted bite.",
+        description="How the robot handles the bite-selection page, where the user can confirm or change the predicted next bite. 'countdown (N sec)' shows the page but goes with the predicted bite automatically after N seconds; 'wait for me' waits indefinitely for the user to choose. Users who trust the robot's bite predictions prefer a short countdown to reduce meal time; users who like to choose each bite, or are often distracted (e.g., social settings, watching TV), prefer a longer countdown or 'wait for me'. This governs only the bite-choice page; the pickup check is confirm_feeding_pickup and the next-task page is wait_before_autocontinue_task_selection."
+    ),
+    PreferenceDim(
         field="wait_before_autocontinue_task_selection",
-        label="After a bite or sip: how long before auto-selecting the next task?",
-        options=["15 sec", "30 sec", "60 sec", "no autocontinue"],
-        short_description="",
-        description="How long the robot waits on the next-task page after finishing a bite or a sip before automatically starting another of the same (the page pre-selects 'take a bite' after a bite and 'take a sip' after a sip). 'no autocontinue' means the page never advances on its own — the robot waits for the user to pick the next task, useful for users who chat between bites or dislike being rushed; a shorter wait keeps the meal moving for users who eat steadily. This only governs the between-tasks page; the bite-selection and pickup-check waits are wait_before_autocontinue_feeding_pickup, and the meal-preparation check pages are wait_before_autocontinue_mealprep."
-    ),
-    PreferenceDim(
-        field="wait_before_autocontinue_feeding_pickup",
-        label="Bite choice and pickup confirmation checks: how long before auto-continuing?",
-        options=["15 sec", "30 sec", "60 sec", "no autocontinue"],
-        short_description="",
-        description="How long the robot waits on the bite-selection page (where the user can confirm or change the predicted next bite) and on the tool (bite/drink/wipe) pickup-check pages (shown when confirm_feeding_pickup is 'yes (with auto-continue countdown)') before proceeding automatically. 'no autocontinue' means these pages wait indefinitely for the user's answer; on the pickup checks that is equivalent to confirm_feeding_pickup's 'yes (without any auto-continue)'. Users who trust the robot's bite predictions prefer a short wait to reduce meal time; users who like to choose each bite, or are often distracted (e.g., social settings, watching TV), prefer a longer wait or no autocontinue. This is separate from wait_before_autocontinue_task_selection (the between-tasks page) and wait_before_autocontinue_mealprep (the meal-preparation check pages)."
-    ),
-    PreferenceDim(
-        field="wait_before_autocontinue_mealprep",
-        label="Meal prep and cleaning check pages: how long before auto-continuing?",
-        options=["15 sec", "30 sec", "60 sec"],
-        short_description="",
-        description="How long the robot waits before automatically continuing on the meal-preparation check pages set to 'yes (with auto-continue countdown)': the post-navigation position check (confirm_navigation_arrival) and the manipulation detection and plate-release checks (confirm_manipulation). The preference question pages themselves also use this wait. There is no 'no autocontinue' option here — a user who wants the robot to wait indefinitely on these pages sets the corresponding confirmation preference to 'yes (without any auto-continue)'. Shorter waits keep meal preparation moving; longer waits give more time to intervene when distracted. The feeding-side waits are wait_before_autocontinue_task_selection and wait_before_autocontinue_feeding_pickup."
+        label="The next-task page (after a bite or sip): how should it behave?",
+        options=["countdown (15 sec)", "countdown (30 sec)", "countdown (60 sec)", "wait for me"],
+        short_description="How long the robot waits before auto-selecting the next task after a bite or sip.",
+        description="How the robot handles the next-task page after finishing a bite or a sip before automatically starting another of the same (the page pre-selects 'take a bite' after a bite and 'take a sip' after a sip). 'wait for me' means the page never advances on its own — the robot waits for the user to pick the next task, useful for users who chat between bites or dislike being rushed; 'countdown (N sec)' auto-selects after N seconds, keeping the meal moving for users who eat steadily. This governs only the between-tasks page; the bite-choice page is wait_before_autocontinue_bite_selection and the pickup check is confirm_feeding_pickup."
     ),
     # --- Color dimensions (kind="color") -------------------------------------
     # The robot picks up the plate by detecting a colored handle. The detection

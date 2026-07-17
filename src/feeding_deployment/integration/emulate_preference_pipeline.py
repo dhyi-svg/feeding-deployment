@@ -146,16 +146,16 @@ def _emulate_pickup_color(session: PreferenceSession, bt_dir: Path, location: st
     )
     print(f"\n=== [skill] pick_plate_from_{location} (emulated) ===")
     print(f"  Detecting handle with color {format_color(current)}")
-    # confirm_manipulation preference: "no" skips the detection page entirely
-    # (the color picker is unreachable, exactly as on-robot); auto-continue is
-    # only annotated -- a terminal prompt has no real countdown.
-    confirm_mode = str(session.bundle.get("confirm_manipulation", "yes (without any auto-continue)"))
-    if confirm_mode == "no":
-        print("  (detection page skipped: manipulation confirmation is 'no')")
+    # confirm_manipulation preference: "skip" skips the detection page entirely
+    # (the color picker is unreachable, exactly as on-robot); a countdown is only
+    # annotated -- a terminal prompt has no real countdown.
+    confirm = str(session.bundle.get("confirm_manipulation", "wait for me"))
+    if confirm == "skip":
+        print("  (detection page skipped: manipulation confirmation is 'skip')")
         session.record_color(location)
         return
-    if confirm_mode == "yes (with auto-continue countdown)":
-        print(f"  (page would auto-confirm after {session.wait_seconds_mealprep:.0f}s on-robot)")
+    if confirm.startswith("countdown"):
+        print(f"  (page would auto-confirm after the '{confirm}' countdown on-robot)")
     while True:
         raw = input(
             "  [Enter] = detection confirmed  |  h,s,v[,range] = corrected color: "
@@ -194,13 +194,13 @@ def _emulate_navigation(session: PreferenceSession, bt_dir: Path, location: str)
     print(f"  Applied learned offset to goal: {format_nav_offset(prev)}")
     # confirm_navigation_arrival preference: "no" skips the arrival page (the
     # offset stays frozen, exactly as on-robot); auto-continue is annotated only.
-    confirm_mode = str(session.bundle.get("confirm_navigation_arrival", "yes (with auto-continue countdown)"))
-    if confirm_mode == "no":
-        print("  (arrival page skipped: navigation confirmation is 'no')")
+    confirm = str(session.bundle.get("confirm_navigation_arrival", "wait for me"))
+    if confirm == "skip":
+        print("  (arrival page skipped: navigation confirmation is 'skip')")
         session.record_nav_offset(location)
         return
-    if confirm_mode == "yes (with auto-continue countdown)":
-        print(f"  (page would auto-accept after {session.wait_seconds_mealprep:.0f}s on-robot)")
+    if confirm.startswith("countdown"):
+        print(f"  (page would auto-accept after the '{confirm}' countdown on-robot)")
     while True:
         raw = input(
             "  [Enter] = position OK  |  dx dy dyaw = teleop adjustment (m, m, rad): "

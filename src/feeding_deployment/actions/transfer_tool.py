@@ -343,8 +343,8 @@ class TransferToolHLA(HighLevelAction):
         self, speed: str,
         ready_to_initiate: str, initiate: str,
         ready_for_transfer: str, transfer_complete: str,
-        outside_mouth_distance: float, pickup_confirm_mode,
-        task_reselection_autocontinue_seconds: float, pickup_confirm_autocontinue_seconds: float,
+        outside_mouth_distance: float, pickup_confirm,
+        task_reselection_autocontinue_seconds: float,
     ) -> None:
         assert self.sim.held_object_name == "drink"
 
@@ -353,14 +353,10 @@ class TransferToolHLA(HighLevelAction):
 
         if self.web_interface is not None:
             self.web_interface.set_drink_autocontinue_timeout(task_reselection_autocontinue_seconds)
-            # pickup_confirm_mode (PickupConfirmMode,
-            # from confirm_feeding_pickup): 0 = skip, 1 = autocontinue, 2 = wait.
-            # Mode 1 counts down from PickupConfirmAutocontinueSeconds.
-            if pickup_confirm_mode:
-                autocontinue_s = (
-                    float(pickup_confirm_autocontinue_seconds)
-                    if int(pickup_confirm_mode) == 1 else 0.0
-                )
+            # pickup_confirm (PickupConfirm, from confirm_feeding_pickup):
+            # sentinel-encoded -> (mode, seconds). mode 0 = skip the page.
+            mode, autocontinue_s = self._confirm_page_args(pickup_confirm)
+            if mode != 0:
                 self.web_interface.get_drink_transfer_confirmation(autocontinue_s)
 
         self.move_to_joint_positions(self.sim.scene_description.before_transfer_pos)
@@ -375,8 +371,7 @@ class TransferToolHLA(HighLevelAction):
         self, speed: str,
         ready_to_initiate: str, initiate: str,
         ready_for_transfer: str, transfer_complete: str,
-        outside_mouth_distance: float, pickup_confirm_mode,
-        pickup_confirm_autocontinue_seconds: float,
+        outside_mouth_distance: float, pickup_confirm,
     ) -> None:
         assert self.sim.held_object_name == "wipe"
 
@@ -385,13 +380,11 @@ class TransferToolHLA(HighLevelAction):
 
         self.move_to_joint_positions(self.sim.scene_description.before_transfer_pos)
 
-        # pickup_confirm_mode semantics as in transfer_drink above.
-        if self.web_interface is not None and pickup_confirm_mode:
-            autocontinue_s = (
-                float(pickup_confirm_autocontinue_seconds)
-                if int(pickup_confirm_mode) == 1 else 0.0
-            )
-            self.web_interface.get_wipe_transfer_confirmation(autocontinue_s)
+        # pickup_confirm semantics as in transfer_drink above.
+        if self.web_interface is not None:
+            mode, autocontinue_s = self._confirm_page_args(pickup_confirm)
+            if mode != 0:
+                self.web_interface.get_wipe_transfer_confirmation(autocontinue_s)
 
         self.set_tool("wipe")
         self.execute_transfer(

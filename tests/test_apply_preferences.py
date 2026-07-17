@@ -17,8 +17,8 @@ from feeding_deployment.integration.apply_preferences import (
     apply_microwave_preference,
     apply_dip_preference,
     _SPEED_MAP,
-    _CONFIRM_MODE_MAP,
-    _AUTOCONTINUE_MAP,
+    _CONFIRM_MAP,
+    _COUNTDOWN_MAP,
     _OUTSIDE_MOUTH_DISTANCE_MAP,
     _CONVEY_READY_MAP,
     _INITIATE_TRANSFER_MAP,
@@ -30,7 +30,6 @@ from feeding_deployment.integration.apply_preferences import (
     _dipping_depth_translate,
     _microwave_duration_translate,
     _load_yaml,
-    _save_yaml,
 )
 from feeding_deployment.preference_learning.methods.utils import PREF_FIELDS
 
@@ -72,13 +71,25 @@ class TestValueTranslators:
     def test_speed_map_covers_all_bundle_options(self):
         assert set(_SPEED_MAP.keys()) == {"slow", "medium", "fast"}
 
-    def test_confirm_mode_map(self):
-        assert _CONFIRM_MODE_MAP == {
-            "no": 0, "yes (with auto-continue countdown)": 1, "yes (without any auto-continue)": 2,
+    def test_confirm_map(self):
+        # Single sentinel-encoded float per confirm page.
+        assert _CONFIRM_MAP == {
+            "skip": -1.0,
+            "countdown (15 sec)": 15.0,
+            "countdown (30 sec)": 30.0,
+            "countdown (60 sec)": 60.0,
+            "wait for me": 0.0,
         }
 
-    def test_autocontinue_map_values_are_floats(self):
-        for v in _AUTOCONTINUE_MAP.values():
+    def test_countdown_map(self):
+        # Feeding-page countdowns (no skip): wait for me -> 0.0.
+        assert _COUNTDOWN_MAP == {
+            "countdown (15 sec)": 15.0,
+            "countdown (30 sec)": 30.0,
+            "countdown (60 sec)": 60.0,
+            "wait for me": 0.0,
+        }
+        for v in _COUNTDOWN_MAP.values():
             assert isinstance(v, float)
 
     def test_outside_mouth_distance_values_in_range(self):
@@ -90,11 +101,11 @@ class TestValueTranslators:
 
     def test_initiate_transfer_map(self):
         assert _INITIATE_TRANSFER_MAP["open mouth"] == "open_mouth"
-        assert _INITIATE_TRANSFER_MAP["autocontinue"] == "auto_timeout"
+        assert _INITIATE_TRANSFER_MAP["proceed automatically after a pause"] == "auto_timeout"
 
     def test_complete_transfer_map(self):
         assert _COMPLETE_TRANSFER_MAP["perception"] == "sense"
-        assert _COMPLETE_TRANSFER_MAP["autocontinue"] == "auto_timeout"
+        assert _COMPLETE_TRANSFER_MAP["proceed automatically after a pause"] == "auto_timeout"
 
     def test_skewering_axis_map(self):
         assert _SKEWERING_AXIS_MAP["parallel to major axis"] == "horizontal"
@@ -106,9 +117,9 @@ class TestValueTranslators:
         assert _dipping_depth_translate("do not dip") is None
 
     def test_microwave_duration_translate(self):
+        assert _microwave_duration_translate("30 secs") == 30.0
         assert _microwave_duration_translate("1 min") == 60.0
         assert _microwave_duration_translate("2 min") == 120.0
-        assert _microwave_duration_translate("3 min") == 180.0
         assert _microwave_duration_translate("no microwave") is None
 
     def test_retract_map(self):
@@ -139,146 +150,66 @@ class TestApplyBundleToBehaviorTrees:
         data = _load(bt_dir, "acquire_bite.yaml")
         assert _get_param_value(data, "Speed") == "low"
 
-    def test_feeding_confirmation_written(self, bt_dir: Path):
-        bundle = {"confirm_feeding_pickup": "no"}
-        apply_bundle_to_behavior_trees(bundle, bt_dir)
-
-        ab = _load(bt_dir, "acquire_bite.yaml")
-        assert _get_param_value(ab, "PickupConfirmMode") == 0
-
-        td = _load(bt_dir, "transfer_drink.yaml")
-        assert _get_param_value(td, "PickupConfirmMode") == 0
-
-        tw = _load(bt_dir, "transfer_wipe.yaml")
-        assert _get_param_value(tw, "PickupConfirmMode") == 0
-
-    def test_navigation_confirmation_written(self, bt_dir: Path):
-        bundle = {"confirm_navigation_arrival": "yes (without any auto-continue)"}
-        apply_bundle_to_behavior_trees(bundle, bt_dir)
-        for loc in ("fridge", "microwave", "sink", "table"):
-            data = _load(bt_dir, f"navigate_to_{loc}.yaml")
-            assert _get_param_value(data, "ArrivalConfirmMode") == 2
-
-    def test_manipulation_confirmation_written(self, bt_dir: Path):
-        bundle = {"confirm_manipulation": "yes (with auto-continue countdown)"}
-        apply_bundle_to_behavior_trees(bundle, bt_dir)
-        for fname in (
-            "pick_plate_from_fridge.yaml", "pick_plate_from_microwave.yaml",
-            "pick_plate_from_table.yaml", "place_plate_in_microwave.yaml",
-            "place_plate_on_table.yaml", "place_plate_in_sink.yaml",
-            "press_microwave_button.yaml", "gaze_at_table.yaml",
-            "open_fridge.yaml", "open_microwave.yaml",
-        ):
-            data = _load(bt_dir, fname)
-            assert _get_param_value(data, "ManipulationConfirmMode") == 1
-
-    def test_confirm_param_upserted_into_legacy_tree(self, bt_dir: Path):
-        # A per-user tree that predates ArrivalConfirmMode gets it
-        # APPENDED (last -- positional binding) on the first apply.
-        fpath = bt_dir / "navigate_to_fridge.yaml"
-        data = _load_yaml(fpath)
-        data["parameters"] = [p for p in data["parameters"]
-                              if p["name"] != "ArrivalConfirmMode"]
-        _save_yaml(fpath, data)
-
-        apply_bundle_to_behavior_trees({"confirm_navigation_arrival": "no"}, bt_dir)
-        data = _load(bt_dir, "navigate_to_fridge.yaml")
-        assert data["parameters"][-1]["name"] == "ArrivalConfirmMode"
-        assert data["parameters"][-1]["value"] == 0
-        assert data["parameters"][-1]["space"]["elements"] == [0, 1, 2]
-
-    def test_confirm_param_space_migrated_from_legacy_enum(self, bt_dir: Path):
-        # A per-user tree whose feeding confirmation still carries the legacy
-        # Enum [0, 1] space gets it widened so mode 2 passes space.contains().
-        fpath = bt_dir / "acquire_bite.yaml"
-        data = _load_yaml(fpath)
-        for p in data["parameters"]:
-            if p["name"] == "PickupConfirmMode":
-                p["space"] = {"type": "Enum", "elements": [0, 1]}
-                p["value"] = 1
-        _save_yaml(fpath, data)
-
-        apply_bundle_to_behavior_trees({"confirm_feeding_pickup": "yes (without any auto-continue)"}, bt_dir)
-        data = _load(bt_dir, "acquire_bite.yaml")
-        for p in data["parameters"]:
-            if p["name"] == "PickupConfirmMode":
-                assert p["value"] == 2
-                assert p["space"]["elements"] == [0, 1, 2]
-
-    # The mealprep confirmation pages, governed by
-    # wait_before_autocontinue_mealprep: detection confirm / plate release
-    # (ManipulationConfirmAutocontinueSeconds) and the post-arrival position
-    # check (ArrivalConfirmAutocontinueSeconds).
-    _MANIPULATION_AUTOCONTINUE_YAMLS = [
+    # The single sentinel-encoded confirm param per page (skip=-1, wait=0,
+    # countdown=N) written by each confirm_* dim.
+    _MANIPULATION_CONFIRM_YAMLS = [
         "pick_plate_from_fridge.yaml", "pick_plate_from_microwave.yaml",
         "pick_plate_from_table.yaml", "place_plate_in_microwave.yaml",
         "place_plate_on_table.yaml", "place_plate_in_sink.yaml",
         "press_microwave_button.yaml", "gaze_at_table.yaml",
         "open_fridge.yaml", "open_microwave.yaml",
     ]
-    _NAV_AUTOCONTINUE_YAMLS = [
+    _NAV_CONFIRM_YAMLS = [
         "navigate_to_fridge.yaml", "navigate_to_microwave.yaml",
         "navigate_to_sink.yaml", "navigate_to_table.yaml",
     ]
 
-    def _assert_mealprep_autocontinue(self, bt_dir: Path, op):
-        for fname in self._MANIPULATION_AUTOCONTINUE_YAMLS:
-            assert op(_get_param_value(_load(bt_dir, fname), "ManipulationConfirmAutocontinueSeconds")), fname
-        for fname in self._NAV_AUTOCONTINUE_YAMLS:
-            assert op(_get_param_value(_load(bt_dir, fname), "ArrivalConfirmAutocontinueSeconds")), fname
+    def test_feeding_confirmation_skip(self, bt_dir: Path):
+        apply_bundle_to_behavior_trees({"confirm_feeding_pickup": "skip"}, bt_dir)
+        for fname in ("acquire_bite.yaml", "transfer_drink.yaml", "transfer_wipe.yaml"):
+            assert _get_param_value(_load(bt_dir, fname), "PickupConfirm") == -1.0
 
-    def test_autocontinue_task_selection_written(self, bt_dir: Path):
-        bundle = {"wait_before_autocontinue_task_selection": "30 sec"}
-        warnings = apply_bundle_to_behavior_trees(bundle, bt_dir)
+    def test_feeding_confirmation_countdown(self, bt_dir: Path):
+        apply_bundle_to_behavior_trees({"confirm_feeding_pickup": "countdown (30 sec)"}, bt_dir)
+        for fname in ("acquire_bite.yaml", "transfer_drink.yaml", "transfer_wipe.yaml"):
+            assert _get_param_value(_load(bt_dir, fname), "PickupConfirm") == 30.0
+
+    def test_navigation_confirmation_wait(self, bt_dir: Path):
+        apply_bundle_to_behavior_trees({"confirm_navigation_arrival": "wait for me"}, bt_dir)
+        for fname in self._NAV_CONFIRM_YAMLS:
+            assert _get_param_value(_load(bt_dir, fname), "ArrivalConfirm") == 0.0
+
+    def test_manipulation_confirmation_countdown(self, bt_dir: Path):
+        apply_bundle_to_behavior_trees({"confirm_manipulation": "countdown (15 sec)"}, bt_dir)
+        for fname in self._MANIPULATION_CONFIRM_YAMLS:
+            assert _get_param_value(_load(bt_dir, fname), "ManipulationConfirm") == 15.0
+
+    def test_bite_selection_countdown_written(self, bt_dir: Path):
+        warnings = apply_bundle_to_behavior_trees(
+            {"wait_before_autocontinue_bite_selection": "countdown (30 sec)"}, bt_dir)
         assert warnings == []
-
-        for fname in ["transfer_utensil.yaml", "transfer_drink.yaml"]:
-            data = _load(bt_dir, fname)
-            assert _get_param_value(data, "TaskReselectionAutocontinueSeconds") == 30.0
-        # The other dims' params are untouched.
-        assert _get_param_value(_load(bt_dir, "acquire_bite.yaml"), "BiteSelectionAutocontinueSeconds") != 30.0
-        assert _get_param_value(_load(bt_dir, "transfer_drink.yaml"), "PickupConfirmAutocontinueSeconds") != 30.0
-        self._assert_mealprep_autocontinue(bt_dir, lambda v: v != 30.0)
-
-    def test_autocontinue_feeding_pickup_written(self, bt_dir: Path):
-        bundle = {"wait_before_autocontinue_feeding_pickup": "30 sec"}
-        warnings = apply_bundle_to_behavior_trees(bundle, bt_dir)
-        assert warnings == []
-
-        # The dim writes the same value into the bite-selection page's param
-        # and the pickup-confirm param shared by all three pickup skills;
-        # transfer_drink's next-task page param must stay untouched.
         assert _get_param_value(_load(bt_dir, "acquire_bite.yaml"), "BiteSelectionAutocontinueSeconds") == 30.0
-        for fname in ["acquire_bite.yaml", "transfer_drink.yaml", "transfer_wipe.yaml"]:
-            data = _load(bt_dir, fname)
-            assert _get_param_value(data, "PickupConfirmAutocontinueSeconds") == 30.0
+        # Does not touch the next-task or confirm params.
         assert _get_param_value(_load(bt_dir, "transfer_drink.yaml"), "TaskReselectionAutocontinueSeconds") != 30.0
-        assert _get_param_value(_load(bt_dir, "transfer_utensil.yaml"), "TaskReselectionAutocontinueSeconds") != 30.0
 
-    def test_autocontinue_mealprep_written(self, bt_dir: Path):
-        bundle = {"wait_before_autocontinue_mealprep": "30 sec"}
-        warnings = apply_bundle_to_behavior_trees(bundle, bt_dir)
+    def test_task_selection_countdown_written(self, bt_dir: Path):
+        warnings = apply_bundle_to_behavior_trees(
+            {"wait_before_autocontinue_task_selection": "countdown (30 sec)"}, bt_dir)
         assert warnings == []
-
-        self._assert_mealprep_autocontinue(bt_dir, lambda v: v == 30.0)
-        assert _get_param_value(_load(bt_dir, "acquire_bite.yaml"), "BiteSelectionAutocontinueSeconds") != 30.0
-        assert _get_param_value(_load(bt_dir, "acquire_bite.yaml"), "PickupConfirmAutocontinueSeconds") != 30.0
         for fname in ["transfer_utensil.yaml", "transfer_drink.yaml"]:
-            assert _get_param_value(_load(bt_dir, fname), "TaskReselectionAutocontinueSeconds") != 30.0
+            assert _get_param_value(_load(bt_dir, fname), "TaskReselectionAutocontinueSeconds") == 30.0
+        assert _get_param_value(_load(bt_dir, "acquire_bite.yaml"), "BiteSelectionAutocontinueSeconds") != 30.0
 
-    def test_no_autocontinue_writes_zero(self, bt_dir: Path):
+    def test_feeding_page_wait_writes_zero(self, bt_dir: Path):
         bundle = {
-            "wait_before_autocontinue_task_selection": "no autocontinue",
-            "wait_before_autocontinue_feeding_pickup": "no autocontinue",
+            "wait_before_autocontinue_task_selection": "wait for me",
+            "wait_before_autocontinue_bite_selection": "wait for me",
         }
         warnings = apply_bundle_to_behavior_trees(bundle, bt_dir)
         assert warnings == []
-
         for fname in ["transfer_utensil.yaml", "transfer_drink.yaml"]:
             assert _get_param_value(_load(bt_dir, fname), "TaskReselectionAutocontinueSeconds") == 0.0
         assert _get_param_value(_load(bt_dir, "acquire_bite.yaml"), "BiteSelectionAutocontinueSeconds") == 0.0
-        for fname in ["acquire_bite.yaml", "transfer_drink.yaml", "transfer_wipe.yaml"]:
-            assert _get_param_value(_load(bt_dir, fname), "PickupConfirmAutocontinueSeconds") == 0.0
 
     def test_outside_mouth_distance_near(self, bt_dir: Path):
         bundle = {"outside_mouth_distance": "near"}
@@ -315,7 +246,7 @@ class TestApplyBundleToBehaviorTrees:
     def test_detect_initiate_per_tool(self, bt_dir: Path):
         bundle = {
             "detect_user_ready_for_initiating_transfer_feeding": "button",
-            "detect_user_ready_for_initiating_transfer_drinking": "autocontinue",
+            "detect_user_ready_for_initiating_transfer_drinking": "proceed automatically after a pause",
             "detect_user_ready_for_initiating_transfer_wiping": "open mouth",
         }
         apply_bundle_to_behavior_trees(bundle, bt_dir)
@@ -334,7 +265,7 @@ class TestApplyBundleToBehaviorTrees:
         bundle = {
             "detect_user_completed_transfer_feeding": "perception",
             "detect_user_completed_transfer_drinking": "button",
-            "detect_user_completed_transfer_wiping": "autocontinue",
+            "detect_user_completed_transfer_wiping": "proceed automatically after a pause",
         }
         apply_bundle_to_behavior_trees(bundle, bt_dir)
 
@@ -384,10 +315,10 @@ class TestApplyBundleToBehaviorTrees:
         data = _load(bt_dir, "press_microwave_button.yaml")
         assert _get_param_value(data, "MicrowaveDuration") == 60.0
 
-    def test_microwave_duration_3_min(self, bt_dir: Path):
-        apply_bundle_to_behavior_trees({"microwave_time": "3 min"}, bt_dir)
+    def test_microwave_duration_30_secs(self, bt_dir: Path):
+        apply_bundle_to_behavior_trees({"microwave_time": "30 secs"}, bt_dir)
         data = _load(bt_dir, "press_microwave_button.yaml")
-        assert _get_param_value(data, "MicrowaveDuration") == 180.0
+        assert _get_param_value(data, "MicrowaveDuration") == 30.0
 
     def test_microwave_no_microwave_skips(self, bt_dir: Path):
         original = _get_param_value(_load(bt_dir, "press_microwave_button.yaml"), "MicrowaveDuration")
@@ -426,7 +357,7 @@ class TestApplyBundleWarnings:
 
     def test_missing_yaml_file_produces_warning(self, bt_dir: Path):
         (bt_dir / "acquire_bite.yaml").unlink()
-        bundle = {"confirm_feeding_pickup": "yes (without any auto-continue)"}
+        bundle = {"confirm_feeding_pickup": "wait for me"}
         warnings = apply_bundle_to_behavior_trees(bundle, bt_dir)
         assert any("not found" in w for w in warnings)
 
@@ -452,20 +383,19 @@ class TestApplyBundleFullBundle:
     def test_full_bundle_applies_without_error(self, bt_dir: Path):
         bundle = {
             "robot_speed": "slow",
-            "confirm_feeding_pickup": "yes (with auto-continue countdown)",
-            "confirm_navigation_arrival": "yes (with auto-continue countdown)",
-            "confirm_manipulation": "yes (without any auto-continue)",
-            "wait_before_autocontinue_task_selection": "no autocontinue",
-            "wait_before_autocontinue_feeding_pickup": "60 sec",
-            "wait_before_autocontinue_mealprep": "15 sec",
+            "confirm_feeding_pickup": "countdown (60 sec)",
+            "confirm_navigation_arrival": "countdown (15 sec)",
+            "confirm_manipulation": "wait for me",
+            "wait_before_autocontinue_task_selection": "wait for me",
+            "wait_before_autocontinue_bite_selection": "countdown (60 sec)",
             "outside_mouth_distance": "far",
             "convey_robot_ready_for_initiating_transfer": "speech",
             "detect_user_ready_for_initiating_transfer_feeding": "open mouth",
             "detect_user_ready_for_initiating_transfer_drinking": "button",
-            "detect_user_ready_for_initiating_transfer_wiping": "autocontinue",
+            "detect_user_ready_for_initiating_transfer_wiping": "proceed automatically after a pause",
             "convey_robot_ready_for_completing_transfer": "LED",
             "detect_user_completed_transfer_feeding": "perception",
-            "detect_user_completed_transfer_drinking": "autocontinue",
+            "detect_user_completed_transfer_drinking": "proceed automatically after a pause",
             "detect_user_completed_transfer_wiping": "button",
             "transfer_mode": "outside mouth transfer",
             "microwave_time": "no microwave",
@@ -478,19 +408,16 @@ class TestApplyBundleFullBundle:
 
         data = _load(bt_dir, "acquire_bite.yaml")
         assert _get_param_value(data, "Speed") == "low"
-        assert _get_param_value(data, "PickupConfirmMode") == 1
+        assert _get_param_value(data, "PickupConfirm") == 60.0            # countdown 60 s
         assert _get_param_value(data, "BiteSelectionAutocontinueSeconds") == 60.0
-        assert _get_param_value(data, "PickupConfirmAutocontinueSeconds") == 60.0
         ut = _load(bt_dir, "transfer_utensil.yaml")
-        assert _get_param_value(ut, "TaskReselectionAutocontinueSeconds") == 0.0
+        assert _get_param_value(ut, "TaskReselectionAutocontinueSeconds") == 0.0   # wait for me
         nav = _load(bt_dir, "navigate_to_table.yaml")
-        assert _get_param_value(nav, "ArrivalConfirmMode") == 1
-        assert _get_param_value(nav, "ArrivalConfirmAutocontinueSeconds") == 15.0
+        assert _get_param_value(nav, "ArrivalConfirm") == 15.0           # countdown 15 s
         pk = _load(bt_dir, "pick_plate_from_fridge.yaml")
-        assert _get_param_value(pk, "ManipulationConfirmMode") == 2
-        assert _get_param_value(pk, "ManipulationConfirmAutocontinueSeconds") == 15.0
+        assert _get_param_value(pk, "ManipulationConfirm") == 0.0        # wait for me
         wp = _load(bt_dir, "transfer_wipe.yaml")
-        assert _get_param_value(wp, "PickupConfirmAutocontinueSeconds") == 60.0
+        assert _get_param_value(wp, "PickupConfirm") == 60.0
 
 
 # -------------------------------------------------------------------
@@ -563,11 +490,11 @@ class TestApplyMicrowavePreference:
         assert fh not in atoms
         assert result == 120
 
-    def test_3_min_returns_180(self):
+    def test_30_secs_returns_30(self):
         fh = self._food_heated()
         atoms: set = set()
-        result = apply_microwave_preference({"microwave_time": "3 min"}, atoms, fh)
-        assert result == 180
+        result = apply_microwave_preference({"microwave_time": "30 secs"}, atoms, fh)
+        assert result == 30
 
     def test_no_microwave_time_in_bundle_is_noop(self):
         fh = self._food_heated()
@@ -582,7 +509,7 @@ class TestApplyMicrowavePreference:
             apply_microwave_preference({"microwave_time": "5 min"}, set(), fh)
 
     def test_microwave_time_map_covers_all_options(self):
-        assert set(_MICROWAVE_TIME_MAP.keys()) == {"no microwave", "1 min", "2 min", "3 min"}
+        assert set(_MICROWAVE_TIME_MAP.keys()) == {"no microwave", "30 secs", "1 min", "2 min"}
 
 
 # -------------------------------------------------------------------

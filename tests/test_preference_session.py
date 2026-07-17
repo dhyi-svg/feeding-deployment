@@ -169,7 +169,7 @@ def test_color_seed_comes_from_bt_and_falls_back(bt_dir):
 def test_ask_confirm_finalizes_without_correction(bt_dir):
     s = PreferenceSession(FakeModel(), bt_dir, CTX, web_interface=FakeWeb())
     s.start()
-    s.ask(["robot_speed", "wait_before_autocontinue_mealprep"])
+    s.ask(["robot_speed", "confirm_manipulation"])
     assert "robot_speed" in s.finalized
     assert "robot_speed" not in s.corrected  # confirmed, not corrected
 
@@ -212,23 +212,23 @@ def test_repredict_receives_confirmed_and_corrected_split(bt_dir):
     assert "skewering_axis" not in last["confirmed"]
 
 
-def test_wait_pref_drives_autocontinue(bt_dir):
+def test_preference_pages_use_fixed_autocontinue(bt_dir):
+    # The preference ask/correction pages themselves auto-continue on a fixed
+    # 30 s timeout (no longer a user-facing wait dim); each page's own countdown
+    # is carried by its confirm/countdown dim and reaches the page via the BT.
+    from feeding_deployment.integration.preference_session import (
+        PREFERENCE_PAGE_AUTOCONTINUE_SECONDS,
+    )
+    assert PREFERENCE_PAGE_AUTOCONTINUE_SECONDS == 30.0
+
     web = FakeWeb()
     s = PreferenceSession(FakeModel(), bt_dir, CTX, web_interface=web)
-    # Bootstrap default before any prediction lands (start() fills the dim
-    # with the model's prediction, so the default only holds before it).
-    assert s.wait_seconds_mealprep == 10.0
     s.start()
-    s._finalize("wait_before_autocontinue_mealprep", "100 sec", changed=True)
-    assert s.wait_seconds_mealprep == 100.0
-
-
-def test_wait_pref_no_autocontinue_parses_to_zero():
-    from feeding_deployment.integration.preference_session import _wait_pref_to_seconds
-
-    assert _wait_pref_to_seconds("no autocontinue") == 0.0
-    assert _wait_pref_to_seconds("15 sec") == 15.0
-    assert _wait_pref_to_seconds(None) == 10.0
+    s.ask(["robot_speed", "confirm_manipulation"])
+    # FakeWeb.send_preference_step records (field, autocontinue_seconds).
+    assert web.steps, "ask() must show at least one page"
+    for _field, autocontinue_seconds in web.steps:
+        assert autocontinue_seconds == 30.0
 
 
 def test_record_color_correction_finalizes_and_propagates(bt_dir):
@@ -499,7 +499,7 @@ def test_on_change_persists_every_correction(bt_dir):
     s.start()  # prediction only -> no _finalize, no persist
     assert saved == []
 
-    s.ask(["robot_speed", "wait_before_autocontinue_mealprep"])
+    s.ask(["robot_speed", "confirm_manipulation"])
     assert saved, "ask() must persist on each finalize"
     assert saved[-1]["corrected"].get("robot_speed") == "fast"
 
@@ -645,10 +645,9 @@ def test_repredictions_do_not_write_memory(bt_dir):
 
 
 def test_confirmation_dims_shape_and_staging():
-    # The three per-family confirmation-mode dims share one option vocabulary;
-    # the mode dims are asked in the initial batch BEFORE the wait pref (the
-    # user learns what "autocontinue" refers to before choosing its duration),
-    # and the feeding dim replaced web_interface_confirmation at the table.
+    # The three per-family confirm dims share one option vocabulary that folds
+    # mode + countdown into one spectrum; they are asked in the initial batch,
+    # and the feeding confirm + the two feeding-page countdown dims at the table.
     from feeding_deployment.integration.preference_session import (
         INITIAL_PREF_DIMS, TABLE_PREF_DIMS,
     )
@@ -657,14 +656,19 @@ def test_confirmation_dims_shape_and_staging():
         "robot_speed",
         "confirm_navigation_arrival",
         "confirm_manipulation",
-        "wait_before_autocontinue_mealprep",
     ]
     assert "confirm_feeding_pickup" in TABLE_PREF_DIMS
-    # The two feeding wait dims are asked at the table, just before the pages
-    # they govern first appear.
-    assert "wait_before_autocontinue_feeding_pickup" in TABLE_PREF_DIMS
+    # The two feeding-page countdown dims are asked at the table, just before the
+    # pages they govern first appear.
+    assert "wait_before_autocontinue_bite_selection" in TABLE_PREF_DIMS
     assert "wait_before_autocontinue_task_selection" in TABLE_PREF_DIMS
+    # Deleted dims are gone.
+    assert "wait_before_autocontinue_mealprep" not in PREF_FIELDS
+    assert "wait_before_autocontinue_feeding_pickup" not in PREF_FIELDS
     assert "web_interface_confirmation" not in PREF_FIELDS
-    assert len(PREF_FIELDS) == 29
+    assert len(PREF_FIELDS) == 28
     for f in ("confirm_feeding_pickup", "confirm_navigation_arrival", "confirm_manipulation"):
-        assert PREF_OPTIONS[f] == ["no", "yes (with auto-continue countdown)", "yes (without any auto-continue)"]
+        assert PREF_OPTIONS[f] == [
+            "skip", "countdown (15 sec)", "countdown (30 sec)",
+            "countdown (60 sec)", "wait for me",
+        ]

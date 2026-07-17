@@ -90,9 +90,10 @@ _COLOR_FIELD_SET = set(COLOR_FIELDS)
 _TEXT_FIELD_SET = set(TEXT_FIELDS)
 _NAV_OFFSET_FIELD_SET = set(NAV_OFFSET_FIELDS)
 
-# Default autocontinue (seconds) for the correction page before the user's
-# wait_before_autocontinue_mealprep preference has been finalized.
-_DEFAULT_AUTOCONTINUE_SECONDS = 10.0
+# Autocontinue (seconds) for the preference ask/correction pages themselves.
+# Fixed -- these pages are not a user-facing preference (the confirm/countdown
+# dims each carry their own page's countdown).
+PREFERENCE_PAGE_AUTOCONTINUE_SECONDS = 30.0
 
 # ---------------------------------------------------------------------------
 # Staged ask schedule + deployment defaults, shared by run.py and the terminal
@@ -110,20 +111,16 @@ DEFAULT_PHYSICAL_PROFILE = (
 )
 
 # Preference dimensions asked at the start of the meal (before fetching the
-# plate). The two confirmation-mode dims fire first during the fridge leg
-# (navigation arrival page, handle-detection page), so they are asked up
-# front; they come BEFORE the mealprep wait pref so the user learns what pages
-# exist (and what "autocontinue" refers to) before choosing its duration. The
-# finalized mealprep wait then drives the autocontinue of every later
-# correction/ask page and mealprep confirmation page (the three earlier ask
-# pages use the 10 s bootstrap default). The two feeding wait dims are asked
-# at the table (TABLE_PREF_DIMS), just before the pages they govern first
-# appear.
+# plate). The two confirmation dims fire first during the fridge leg (navigation
+# arrival page, handle-detection page), so they are asked up front. Each confirm
+# dim now carries its own countdown length (skip / countdown (N sec) / wait for
+# me), so there is no separate mealprep wait dim to ask. The two feeding-page
+# countdown dims are asked at the table (TABLE_PREF_DIMS), just before the pages
+# they govern first appear.
 INITIAL_PREF_DIMS = [
     "robot_speed",
     "confirm_navigation_arrival",
     "confirm_manipulation",
-    "wait_before_autocontinue_mealprep",
 ]
 
 # Behavior trees whose parameters come from (re)prediction: plate pickups read
@@ -165,7 +162,7 @@ TABLE_PREF_DIMS = [
     "detect_user_completed_transfer_drinking",
     "detect_user_completed_transfer_wiping",
     "retract_between_bites",
-    "wait_before_autocontinue_feeding_pickup",
+    "wait_before_autocontinue_bite_selection",
     "wait_before_autocontinue_task_selection",
 ]
 
@@ -196,19 +193,6 @@ _NAV_OFFSET_PARAM = {
     },
     "is_user_editable": True,
 }
-
-
-def _wait_pref_to_seconds(value: Optional[str]) -> float:
-    """'10 sec' -> 10.0; 'no autocontinue' -> 0.0 (page waits indefinitely).
-    Falls back to the default on anything unexpected."""
-    if not value:
-        return _DEFAULT_AUTOCONTINUE_SECONDS
-    if str(value).strip().lower() == "no autocontinue":
-        return 0.0
-    try:
-        return float(str(value).split()[0])
-    except (ValueError, IndexError):
-        return _DEFAULT_AUTOCONTINUE_SECONDS
 
 
 class PreferenceSession:
@@ -681,14 +665,6 @@ class PreferenceSession:
         # clears its own activity).
         self._clear_activity()
 
-    @property
-    def wait_seconds_mealprep(self) -> float:
-        """Autocontinue timeout for the preference ask/correction pages, from
-        the (possibly finalized) wait_before_autocontinue_mealprep preference.
-        The feeding wait dims never flow through the session -- they reach
-        their pages only via the BT parameters apply_preferences writes."""
-        return _wait_pref_to_seconds(self.bundle.get("wait_before_autocontinue_mealprep"))
-
     def ask(self, dims: List[str]) -> None:
         """Show the prediction for each categorical dim in ``dims`` one at a
         time; lock each as ground truth; repredict still-open dims after any
@@ -713,7 +689,7 @@ class PreferenceSession:
             return
 
         total = len(dims)
-        self._web.start_preference_correction(total, self.wait_seconds_mealprep)
+        self._web.start_preference_correction(total, PREFERENCE_PAGE_AUTOCONTINUE_SECONDS)
         try:
             for step, field in enumerate(dims):
                 # Join any in-flight background reprediction before reading the
@@ -730,7 +706,7 @@ class PreferenceSession:
                     options=list(PREF_OPTIONS.get(field, [])),
                     step=step,
                     total=total,
-                    autocontinue_seconds=self.wait_seconds_mealprep,
+                    autocontinue_seconds=PREFERENCE_PAGE_AUTOCONTINUE_SECONDS,
                     kind=PREF_KIND.get(field, "categorical"),
                 )
                 if user_value is None:

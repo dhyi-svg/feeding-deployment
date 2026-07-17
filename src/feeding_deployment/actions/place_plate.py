@@ -77,7 +77,7 @@ class PlacePlateInApplianceHLA(HighLevelAction):
 
         self.report_activity("Placing the plate in the fridge")
 
-    def place_plate_in_microwave(self, speed: str, manip_confirm_mode, autocontinue_seconds) -> None:
+    def place_plate_in_microwave(self, speed: str, manip_confirm) -> None:
         # assert self.sim.held_object_name == "plate"
         if self.robot_interface is not None:
             self.robot_interface.set_speed(speed)
@@ -91,7 +91,7 @@ class PlacePlateInApplianceHLA(HighLevelAction):
         self.report_activity("Placing the plate into the microwave")
         self.move_to_joint_positions(self.sim.scene_description.microwave_plate_staging_pos)
         self.move_to_ee_pose(placement_pose)
-        self.confirm_plate_release("microwave", manip_confirm_mode, autocontinue_seconds)
+        self.confirm_plate_release("microwave", manip_confirm)
         self.close_gripper()
         self.report_activity("Backing the arm out of the microwave")
         self.move_to_ee_pose(behind_placement_pose)
@@ -208,7 +208,7 @@ class PlacePlateInSinkHLA(HighLevelAction):
 
         return f"place_plate_in_sink.yaml"
 
-    def place_plate_in_sink(self, speed: str, manip_confirm_mode, autocontinue_seconds) -> None:
+    def place_plate_in_sink(self, speed: str, manip_confirm) -> None:
         # assert self.sim.held_object_name == "plate"
         if self.robot_interface is not None:
             self.robot_interface.set_speed(speed)
@@ -221,7 +221,7 @@ class PlacePlateInSinkHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.sink_gaze_pos)
         self.settle_camera()
 
-        confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm_mode, autocontinue_seconds)
+        confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm)
         placement_poses = self.perception_interface.perceive_sink_placement_poses(
             web_interface=self.web_interface, confirm_mode=confirm_mode,
             confirm_autocontinue_s=confirm_autocontinue_s)
@@ -229,7 +229,7 @@ class PlacePlateInSinkHLA(HighLevelAction):
         self.report_activity("Lowering the plate into the sink")
         self.move_to_joint_positions(self.sim.scene_description.sink_plate_staging_pos)
         self.move_to_ee_pose(placement_poses["sink_placement_pose"])
-        self.confirm_plate_release("sink", manip_confirm_mode, autocontinue_seconds)
+        self.confirm_plate_release("sink", manip_confirm)
         self.close_gripper()
         self.move_to_ee_pose(self.sim.scene_description.sink_plate_staging_pose)
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
@@ -283,7 +283,7 @@ class PlacePlateOnTableHLA(HighLevelAction):
 
         return f"place_plate_on_table.yaml"
 
-    def place_plate_on_table(self, speed: str, manip_confirm_mode, autocontinue_seconds) -> None:
+    def place_plate_on_table(self, speed: str, manip_confirm) -> None:
         # assert self.sim.held_object_name == "plate"
         if self.robot_interface is not None:
             self.robot_interface.set_speed(speed)
@@ -299,7 +299,7 @@ class PlacePlateOnTableHLA(HighLevelAction):
         self.report_activity("Lowering the plate onto the table")
         self.move_to_ee_pose(placement_poses["pre_table_placement_pose"])
         self.move_to_ee_pose(placement_poses["table_placement_pose"])
-        self.confirm_plate_release("table", manip_confirm_mode, autocontinue_seconds)
+        self.confirm_plate_release("table", manip_confirm)
         self.close_gripper()
         self.move_to_ee_pose(placement_poses["behind_table_placement_pose"])
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)

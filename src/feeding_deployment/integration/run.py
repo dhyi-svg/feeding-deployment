@@ -661,8 +661,8 @@ class _Runner:
             print("Preference context (meal / setting / time_of_day):", ctx)
             self._prediction_model = self._build_prediction_model()
             self._pref_session = self._build_preference_session(self._prediction_model, dict(ctx))
-            # Predict everything before asking the initial dims (speed +
-            # autocontinue wait). The finalized wait drives later autocontinue.
+            # Predict everything before asking the initial dims (speed + the two
+            # meal-prep confirm dims, each carrying its own countdown length).
             self._pref_session.start()
             print("Predicted preference bundle (initial):",
                   json.dumps(self._pref_session._loggable_bundle(), indent=2))

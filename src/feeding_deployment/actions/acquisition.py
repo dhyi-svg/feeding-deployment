@@ -91,7 +91,7 @@ class AcquireBiteHLA(HighLevelAction):
         assert table.name == "table"
         return "acquire_bite.yaml"
     
-    def acquire_bite(self, speed: str, dipping_depth: float, skewering_depth: float, skewering_orientation: str, bite_selection_autocontinue_seconds: float, pickup_confirm_mode: int, pickup_confirm_autocontinue_seconds: float) -> None:
+    def acquire_bite(self, speed: str, dipping_depth: float, skewering_depth: float, skewering_orientation: str, bite_selection_autocontinue_seconds: float, pickup_confirm) -> None:
 
         # assert self.sim.held_object_name == "utensil"
 
@@ -414,16 +414,12 @@ class AcquireBiteHLA(HighLevelAction):
                                           **bite_event)
                 continue
             
-            # pickup_confirm_mode (PickupConfirmMode, from the
-            # confirm_feeding_pickup preference): 0 = skip the page, 1 = show
-            # with autocontinue (timeout => confirm), 2 = wait for the user.
-            # Mode 1 counts down from PickupConfirmAutocontinueSeconds.
-            if self.web_interface is not None and pickup_confirm_mode:
-                autocontinue_s = (
-                    float(pickup_confirm_autocontinue_seconds)
-                    if int(pickup_confirm_mode) == 1 else 0.0
-                )
-                get_success_confirmation = self.web_interface.get_successful_food_acquisition_confirmation(autocontinue_s)
+            # pickup_confirm (PickupConfirm, from the confirm_feeding_pickup
+            # preference): sentinel-encoded -> (mode, seconds). mode 0 = skip the
+            # page, 1 = autocontinue (seconds>0, timeout => confirm), 2 = wait.
+            pickup_mode, pickup_autocontinue_s = self._confirm_page_args(pickup_confirm)
+            if self.web_interface is not None and pickup_mode != 0:
+                get_success_confirmation = self.web_interface.get_successful_food_acquisition_confirmation(pickup_autocontinue_s)
                 if get_success_confirmation:
                     break
             else:

@@ -685,7 +685,7 @@ class WebInterface:
 
         # Jump to bite confirm transfer page. autocontinue_seconds > 0 makes the
         # page count down and auto-send "confirm" on expiry (confirm_feeding_pickup
-        # = "yes (with auto-continue countdown)"); <= 0 means wait for the user. The jump is
+        # = "countdown (N sec)"); <= 0 means wait for the user. The jump is
         # re-sent until answered: the routing jump is consumed by the PREVIOUS
         # page, so the freshly-mounted page learns its countdown from the first
         # resend it sees (also heals a dropped jump on the non-latched topic).
@@ -756,7 +756,7 @@ class WebInterface:
         A takeover while blocked raises WebInterfaceTakeoverInterrupt from
         get_required_web_interface_message (handled by the HLA layer).
         ``autocontinue_seconds`` > 0 makes the page count down and auto-send
-        "confirm" on expiry (confirm_manipulation = "yes (with auto-continue countdown)");
+        "confirm" on expiry (confirm_manipulation = "countdown (N sec)");
         <= 0 keeps today's wait-for-the-user behavior.
         """
         self.current_page = "plate_release_confirm"
@@ -840,7 +840,7 @@ class WebInterface:
         Returns True if the user confirms the detection looks correct, and False
         if the perception should be re-run. ``autocontinue_seconds`` > 0 makes
         the page count down and auto-confirm on expiry (confirm_manipulation =
-        "yes (with auto-continue countdown)"); <= 0 waits for the user.
+        "countdown (N sec)"); <= 0 waits for the user.
         """
         self.current_page = "detection_confirm"
 

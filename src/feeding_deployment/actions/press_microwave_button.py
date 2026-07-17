@@ -65,7 +65,7 @@ class PressMicrowaveButtonHLA(HighLevelAction):
         )
         return "press_microwave_button.yaml"
 
-    def press_microwave_button(self, speed: str, duration: float, manip_confirm_mode, autocontinue_seconds) -> None:
+    def press_microwave_button(self, speed: str, duration: float, manip_confirm) -> None:
         assert self.sim.held_object_name is None
 
         if self.robot_interface is not None:
@@ -86,7 +86,7 @@ class PressMicrowaveButtonHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.microwave_closeup_gaze_pos)
 
         self.settle_camera()
-        confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm_mode, autocontinue_seconds)
+        confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm)
         try:
             press_button_poses = self.perception_interface.perceive_button_pressing_poses(
                 web_interface=self.web_interface, confirm_mode=confirm_mode,
