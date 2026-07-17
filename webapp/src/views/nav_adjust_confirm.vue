@@ -13,7 +13,7 @@
         <div class="cf-left">
           <strong>Is the robot parked where you want it?</strong>
           <p>If the position looks right, continue.<br><br>If not, choose adjust and drive the robot to exactly where you want it — it will remember the correction for next time.</p>
-          <p v-if="!userInteracted && countdown !== null" class="cdown">Auto-confirming position in <span>{{ countdown }}s</span></p>
+          <p class="cdown" :class="{ 'cdown-hidden': userInteracted || countdown === null }">Auto-confirming position in <span>{{ countdown }}s</span></p>
         </div>
         <div class="cf-right">
           <button class="btn lg amber w100" @click="handleOk">Position OK</button>

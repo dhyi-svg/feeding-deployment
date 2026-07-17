@@ -11,7 +11,7 @@
     <div class="bd">
       <div class="simple-confirm">
         <p>The robot is holding the plate {{ locationText }}.<br>Press 'Continue' when you're ready for it to let go.</p>
-        <p v-if="!userInteracted && countdown !== null" class="cdown">Auto-continuing in <span>{{ countdown }}s</span></p>
+        <p class="cdown" :class="{ 'cdown-hidden': userInteracted || countdown === null }">Auto-continuing in <span>{{ countdown }}s</span></p>
         <button class="btn lg amber" style="min-width:24vw" @click="handleButtonClick">Continue</button>
       </div>
     </div>

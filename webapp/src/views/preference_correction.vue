@@ -63,7 +63,7 @@
                 <img alt="clear" src="../assets/clear.png">
               </button>
             </div>
-            <p v-if="!userInteracted && countdownTimer" class="cdown auto-note">Auto-confirming the predicted ordering in <span>{{ countdown }}s</span></p>
+            <p class="cdown auto-note" :class="{ 'cdown-hidden': userInteracted || !countdownTimer }">Auto-confirming the predicted ordering in <span>{{ countdown }}s</span></p>
           </div>
 
           <!-- Categorical dim: option chips. -->
@@ -80,7 +80,7 @@
                 <div class="och" v-if="selected === option">✓</div>
               </div>
             </div>
-            <p v-if="!userInteracted && countdownTimer" class="cdown auto-note">Auto-confirming <em>{{ selected }}</em> in <span>{{ countdown }}s</span></p>
+            <p class="cdown auto-note" :class="{ 'cdown-hidden': userInteracted || !countdownTimer }">Auto-confirming <em>{{ selected }}</em> in <span>{{ countdown }}s</span></p>
           </div>
         </div>
 

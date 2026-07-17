@@ -20,7 +20,7 @@
               <div class="tc-i"><img src="../assets/drin.png" alt="Sip"></div>
               <div class="tc-l">Take a Sip</div>
             </div>
-            <p v-if="!autocontinueCancelled && countdownInterval" class="cdown">Auto-confirming in <span>{{ countdown }}s</span></p>
+            <p class="cdown" :class="{ 'cdown-hidden': autocontinueCancelled || !countdownInterval }">Auto-confirming in <span>{{ countdown }}s</span></p>
           </div>
           <div class="tc" @click="handleButtonClickMouth">
             <div class="tc-i"><img src="../assets/Frame.png" alt="Wipe"></div>

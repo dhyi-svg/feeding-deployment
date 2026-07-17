@@ -13,7 +13,7 @@
         <div class="cf-left">
           <strong>Did the robot grab the bite successfully?</strong>
           <p>If the pickup looks correct, continue and the robot will bring it to your mouth.<br><br>If not, retry and it will try again.</p>
-          <p v-if="!userInteracted && countdown !== null" class="cdown">Auto-continuing in <span>{{ countdown }}s</span></p>
+          <p class="cdown" :class="{ 'cdown-hidden': userInteracted || countdown === null }">Auto-continuing in <span>{{ countdown }}s</span></p>
         </div>
         <div class="cf-right">
           <button class="btn lg amber w100" @click="handleButtonClick">Continue — Transfer Bite</button>

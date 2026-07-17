@@ -29,7 +29,7 @@
         <div v-else class="cam-placeholder">Waiting for detection image...</div>
       </div>
 
-      <p v-if="!userInteracted && countdown !== null" class="cdown">Auto-confirming in <span>{{ countdown }}s</span></p>
+      <p class="cdown" :class="{ 'cdown-hidden': userInteracted || countdown === null }">Auto-confirming in <span>{{ countdown }}s</span></p>
       <div class="det-actions">
         <button class="btn md amber" @click="confirmDetection">Looks Correct</button>
         <button class="btn md ghost" @click="redoDetection">Redo</button>
