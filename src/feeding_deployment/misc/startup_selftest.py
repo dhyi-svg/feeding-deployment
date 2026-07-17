@@ -37,14 +37,14 @@ from std_msgs.msg import String
 LED_SERIAL_PORT = "/dev/serial/by-id/usb-UnexpectedMaker_FeatherS2_Neo_84722E753121-if00"
 LED_BAUD_RATE = 115200
 
-# The molmo URL is a rotating ngrok tunnel hard-coded in appliance_perception.py.
+# The molmo URL is a static ngrok domain hard-coded in appliance_perception.py.
 # We read it from there at runtime so this test tracks the real deployment value
 # instead of drifting out of date. This literal is only the last-resort fallback.
 APPLIANCE_PERCEPTION_PY = (
     Path(__file__).resolve().parent.parent
     / "perception" / "appliance_perception" / "appliance_perception.py"
 )
-MOLMO_URL_FALLBACK = "https://c0fd-128-84-97-177.ngrok-free.app/predict"
+MOLMO_URL_FALLBACK = "https://exponent-sediment-professed.ngrok-free.dev/predict"
 
 WEBAPP_TO_ROBOT_TOPIC = "/webapp_to_robot"   # iPad -> robot
 ROBOT_TO_WEBAPP_TOPIC = "/robot_to_webapp"   # robot -> iPad
