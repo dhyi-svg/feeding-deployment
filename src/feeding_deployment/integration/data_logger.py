@@ -132,6 +132,11 @@ class DataLogger:
         self._images_index_path = self.day_dir / "images_index.jsonl"
         self._metadata_path = self.day_dir / "metadata.json"
 
+        # Relaunch into an existing day (mid-run restart): resume the monotonic
+        # counters from what prior sessions wrote so we don't reset to 0 and
+        # overwrite earlier files / under-count images.
+        self._resume_counters_from_disk()
+
         self._write_metadata(closed=False)
         print(f"[data_logger] Logging day {day:02d} for user '{self.user}' to {self.day_dir}")
         self._annotate("meal_start", user=self.user, day=self.day,
@@ -173,6 +178,71 @@ class DataLogger:
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, default=str) + "\n")
 
+    def _resume_counters_from_disk(self) -> None:
+        """Rehydrate the monotonic image counters after a relaunch into an
+        existing ``day_NN`` dir.
+
+        The in-memory counters (``_image_seq``, ``_webapp_seq``, per-folder
+        ``_run``) reset to 0 on every process start, so a mid-run restart would
+        re-issue filenames the previous session already wrote and silently
+        overwrite them, and would under-count ``images_logged`` in metadata
+        (rajat_pilot 2026-07-16: three restarts overwrote 38 images incl. the
+        first open_microwave detection set, and metadata showed 51/202 images).
+        Resume each counter past what is already on disk -- the disk/index is
+        the source of truth, mirroring ``snapshot_state_file``'s next-free-index
+        scan. Best-effort: never let resume IO break logging.
+
+        ``_retry`` / ``_group_used`` are intentionally NOT resumed: they are
+        per-run scratch state, and each resumed folder gets a fresh run index
+        from ``begin_hla`` (get(folder,-1)+1 -> max_on_disk+1), so a new run's
+        files never collide with the prior session's.
+        """
+        # Global capture seq: continue past the highest seq in the index. max+1
+        # (not row count) stays correct even though a prior restart already
+        # wrote duplicate low seqs into the file.
+        try:
+            if self._images_index_path.exists():
+                max_seq = -1
+                for line in self._images_index_path.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except Exception:  # noqa: BLE001 - skip a torn last line
+                        continue
+                    if isinstance(row.get("seq"), int):
+                        max_seq = max(max_seq, row["seq"])
+                self._image_seq = max_seq + 1
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Per-folder run index and the webapp counter: derive from the files
+        # actually on disk (the true anti-collision target).
+        try:
+            if self.images_dir.exists():
+                for folder_dir in self.images_dir.iterdir():
+                    if not folder_dir.is_dir():
+                        continue
+                    max_lead = -1
+                    for f in folder_dir.iterdir():
+                        if not f.is_file():
+                            continue
+                        head = f.stem.split("_", 1)[0]
+                        if head.isdigit():
+                            max_lead = max(max_lead, int(head))
+                    if max_lead < 0:
+                        continue
+                    if folder_dir.name == "webapp_images":
+                        self._webapp_seq = max_lead + 1
+                    else:
+                        # begin_hla will bump this to max_lead+1 for the new run.
+                        self._run[folder_dir.name] = max_lead
+                        self._retry[folder_dir.name] = 0
+                        self._group_used[folder_dir.name] = set()
+        except Exception:  # noqa: BLE001
+            pass
+
     def _write_metadata(self, closed: bool) -> None:
         meta = {
             "user": self.user,
@@ -184,10 +254,15 @@ class DataLogger:
             meta["started"] = self._timestamp()
         else:
             meta["ended"] = self._timestamp()
-        # Merge with any existing metadata (preserve the original start time).
+        # Merge with any existing metadata, preserving the ORIGINAL start time
+        # across relaunches into the same day. existing.update(meta) alone let
+        # the new (later) `started` clobber the true one on every restart
+        # (rajat_pilot 2026-07-16: logged 22:03:54 for a run that began 21:33:51).
         try:
             if self._metadata_path.exists():
                 existing = json.loads(self._metadata_path.read_text(encoding="utf-8"))
+                if not closed and "started" in existing:
+                    meta["started"] = existing["started"]
                 existing.update(meta)
                 meta = existing
         except Exception:  # noqa: BLE001 - never let metadata IO break logging

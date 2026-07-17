@@ -15,6 +15,7 @@ import string
 import traceback
 import re
 import inspect
+import uuid
 
 import yaml
 
@@ -537,6 +538,13 @@ class HighLevelAction(abc.ABC):
         if self.robot_interface is None or self.web_interface is None:
             print("Manual teleop recovery requested but robot/web interface is unavailable; skipping.")
             return None
+        # Stamp every teleop session with a unique id so its log rows can be
+        # joined to the skill it interrupted (previously session_id was always
+        # null -- no call site passed one). All teleop entry points funnel
+        # through here, so defaulting it once covers them all. Timestamp prefix
+        # keeps the id sortable and human-readable in the log.
+        if session_id is None:
+            session_id = f"{time.strftime('%Y%m%dT%H%M%S')}_{uuid.uuid4().hex[:8]}"
         from feeding_deployment.actions.teleop_recovery import TeleopRecoverySession
         session = TeleopRecoverySession(
             robot_interface=self.robot_interface,
