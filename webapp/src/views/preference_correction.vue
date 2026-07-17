@@ -30,8 +30,6 @@
           <div class="pref-q">
             <h1 class="pq">{{ current.label }}</h1>
             <p v-if="current.description" class="pref-sub">{{ current.description }}</p>
-            <p v-if="current.kind !== 'text'" class="pred">Predicted: <strong>{{ current.predicted }}</strong></p>
-            <p class="pref-help">Change it if this doesn't match what you'd like — the robot learns from each correction.</p>
           </div>
 
           <!-- Free-text dim (e.g. bite ordering): accept the predicted sentence, or write your own. -->
@@ -391,16 +389,6 @@ export default {
   color: var(--tm);
   line-height: 1.5;
   margin-top: 1vh;
-}
-
-.pred {
-  font-size: 2.3vh;
-  color: var(--tm);
-  margin-top: 1vh;
-}
-
-.pred strong {
-  color: var(--a2);
 }
 
 .pref-options {
