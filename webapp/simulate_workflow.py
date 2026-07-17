@@ -232,6 +232,19 @@ class WorkflowSim:
         self.clear_plan()
         print("  fridge retrieval complete.")
 
+    # ── Ready-for-feeding gate (mirrors WebInterface.get_feeding_ready_confirmation:
+    # no autocontinue, resend until the user taps) ────────────────────────────
+    def do_feeding_ready(self):
+        print("\n--- FEEDING READY (waiting for the user to take their seat) ---")
+        jump = {"state": "feeding_ready", "status": "jump"}
+        self.send(jump)
+        self.wait_for(
+            lambda d: d.get("state") == "feeding_ready"
+            and d.get("status") == "confirm",
+            "user confirm on feeding_ready",
+            resend=lambda: self.send(jump))
+        self.back_to_executing()
+
     # ── Phase 3: feeding loop ────────────────────────────────────────────────
     def run_feeding_loop(self):
         print("\n=== 3. FEEDING LOOP ===")
@@ -325,6 +338,7 @@ class WorkflowSim:
         print("Legend:  ▶ IN = robot→app   ◀ OUT = app→robot\n")
         self.do_context()
         self.run_workflow()
+        self.do_feeding_ready()
         self.run_feeding_loop()
         print("\n=== WORKFLOW COMPLETE ===")
 

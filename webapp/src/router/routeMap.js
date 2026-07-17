@@ -35,6 +35,9 @@ const routeMap = {
     sink: '/plate_release_confirm?location=sink',
     jump: '/plate_release_confirm'
   },
+  feeding_ready: {
+    jump: '/feeding_ready_confirm'
+  },
   detection_confirm: {
     jump: '/detection_confirm'
   },

@@ -794,6 +794,40 @@ class WebInterface:
         # finishes its retreat motions (also keeps current_page truthful).
         self.switch_to_explanation_page()
 
+    #### Feeding Ready Confirmation Page ####
+
+    def get_feeding_ready_confirmation(self) -> None:
+        """Block until the user, seated at the table, taps that they are ready
+        for feeding to start. Deliberately has NO autocontinue: the plate is
+        already resting on the table, so waiting indefinitely is safe and the
+        user must be present before the table-time preferences are asked.
+        """
+        self.current_page = "feeding_ready"
+
+        # Drop stale messages so an old confirm can't satisfy this wait.
+        self.clear_received_messages()
+
+        # Resend until confirmed -- /robot_to_webapp is not latched and a drop
+        # here would strand the webapp on robot_executing forever.
+        jump_msg = {"state": "feeding_ready", "status": "jump"}
+        self._send_message(jump_msg)
+
+        msg_dict = self.get_required_web_interface_message(
+            lambda m: (
+                m.get("state") == "feeding_ready"
+                and m.get("status") == "confirm"
+            ),
+            resend=lambda: self._send_message(jump_msg),
+            resend_interval=2.0,
+        )
+        if msg_dict is None:
+            print("WARNING: feeding-ready confirmation interrupted by task "
+                  "selection jump; continuing without it.")
+
+        # Park the iPad on the generic 'robot executing' page until the next
+        # jump (the table-time preferences) arrives; keeps current_page truthful.
+        self.switch_to_explanation_page()
+
     #### Detection Confirmation Page ####
 
     def get_detection_confirmation(self, detection_type: str, vis_image=None,
