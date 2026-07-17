@@ -424,8 +424,11 @@ class AcquireBiteHLA(HighLevelAction):
             else:
                 break
 
-        # set the wrist controller to always keep utensil horizontal
+        # set the wrist controller to always keep utensil horizontal; slowly
+        # bring the twirl DoF back to neutral first, otherwise the horizontal-
+        # spoon controller position-snaps it from the skewer angle.
         if self.wrist_interface is not None:
+            self.wrist_interface.twirl_to_neutral()
             self.wrist_interface.start_horizontal_spoon_thread()
 
         return []
