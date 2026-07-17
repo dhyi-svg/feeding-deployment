@@ -106,6 +106,12 @@ SURVEY_QUESTIONS = [
      "question": "How much did you trust the robot to do the right thing during today's meal?"},
     {"key": "safety", "title": "Safety", "kind": "likert",
      "question": "How safe did you feel during today's meal?"},
+    {"key": "predictability", "title": "Predictability", "kind": "likert",
+     "question": "How well could you predict what the robot was going to do during today's meal?"},
+    {"key": "robot_adaptation", "title": "Robot Adaptation", "kind": "likert",
+     "question": "How much do you feel the robot has learned about your preferences?"},
+    {"key": "satisfaction", "title": "Satisfaction", "kind": "likert",
+     "question": "Overall, how satisfied were you with today's meal?"},
     {"key": "adaptation", "title": "Adaptation", "kind": "text",
      "question": "What, if anything, did you learn about the robot today, "
                  "or how did your interaction with it change?"},
