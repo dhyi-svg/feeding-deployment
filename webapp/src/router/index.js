@@ -61,6 +61,11 @@ const routes = [
     component: () => import('../views/plate_release_confirm.vue')
   },
   {
+    path: '/feeding_ready_confirm',
+    name: 'feeding_ready_confirm',
+    component: () => import('../views/feeding_ready_confirm.vue')
+  },
+  {
     path: '/gesture_test',
     name: 'gesture_test',
     component: () => import('../views/gesture_test.vue')

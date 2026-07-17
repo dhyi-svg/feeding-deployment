@@ -748,6 +748,10 @@ class _Runner:
             )
 
         if resume_from_step <= self._PREP_TABLE_DIMS:
+            # Plate is on the table: wait for the user to take their seat
+            # before asking the table-time prefs. Explicit tap only -- the
+            # page has no autocontinue.
+            self.web_interface.get_feeding_ready_confirmation()
             # Table dims, just before feeding.
             session.ask(_TABLE_PREF_DIMS)
 
