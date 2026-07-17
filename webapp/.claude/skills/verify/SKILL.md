@@ -15,5 +15,12 @@ description: Build, launch, and drive the feeding webapp to verify frontend chan
   in a temp dir; launch with `--no-sandbox --ignore-certificate-errors` and `ignoreHTTPSErrors: true`.
 - Without a ROS backend, pages render fine but log "Uncaught, unspecified 'error' event"
   (roslib websocket failure) — harmless for layout/UI checks. ROS-driven state (countdowns,
-  images, preference steps) never arrives; simulate it by toggling the same classes/DOM Vue would.
-  `preference_correction` renders no content without ROS data.
+  images, preference steps) never arrives. `preference_correction` renders no content without ROS data.
+- ROS points at the real robot (`192.168.1.2:9090`, `src/config/parameterConfig.js`) — never connect
+  tests to it. To drive ROS-driven flows, inject a `window.WebSocket` stub via
+  `page.evaluateOnNewDocument` that auto-opens and exposes a helper dispatching
+  `{op:'publish', topic:'/robot_to_webapp', msg:{data: JSON.stringify({...})}}` to `onmessage` —
+  the real roslib/handleRosMessage path then runs. Working example: the `verify_cancel.js`
+  driver pattern (job tmp, session 2026-07-17). Message shapes: most confirm pages arm on
+  `{state:'<page>', status:'jump', autocontinue_seconds:N}`; after_bite/after_drink on
+  `{state:'auto_time', status:'<secs>'}`. Views publish to `/webapp_to_robot` (capture sends for asserts).

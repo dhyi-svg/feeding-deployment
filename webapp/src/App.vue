@@ -331,8 +331,9 @@ export default {
       this.showSettings = true
       this.settingsStatus = ''
       // Cancel any on-screen autocontinue on the live page underneath, so a
-      // countdown can't auto-advance while the user edits (see the 4 countdown
-      // views' 'settings-open' listeners). Not re-engaged on close.
+      // countdown can't auto-advance while the user edits. Countdown views now
+      // cancel on any window-level tap (the gear tap included); this event is
+      // kept as a fallback for the views that listen. Not re-engaged on close.
       window.dispatchEvent(new CustomEvent('settings-open'))
       this._publishSettings({ action: 'open' })
     },

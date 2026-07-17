@@ -40,6 +40,11 @@ export default {
     this.ros = new ROSLIB.Ros({ url: ROS_URL })
     this.initPublisher();
     this.initSubscriber()
+    // any tap anywhere (incl. App.vue chrome/overlays outside .page) cancels autocontinue
+    window.addEventListener('pointerdown', this.cancelAutocontinue, true)
+  },
+  beforeUnmount () {
+    window.removeEventListener('pointerdown', this.cancelAutocontinue, true)
   },
   beforeRouteLeave (to, from, next) {
     this.stopCountdown()

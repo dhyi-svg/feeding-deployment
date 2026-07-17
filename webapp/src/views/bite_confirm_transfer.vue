@@ -46,11 +46,16 @@ export default {
     this.ros = new ROSLIB.Ros({ url: ROS_URL })
     this.initSubscriber()
     this.initPublisher()
+    // any tap anywhere (incl. App.vue chrome/overlays outside .page) cancels autocontinue
+    window.addEventListener('pointerdown', this.cancelAutocontinue, true)
     // NOTE: the physical button is intentionally NOT wired here. It is handled only
     // on the robot_executing page (to avoid confusing the user about whether to use
     // the on-screen button or the physical one). handleButtonClick() below is still
     // used by the on-screen "Continue — Transfer Bite" tap and the auto-continue
     // countdown.
+  },
+  beforeUnmount () {
+    window.removeEventListener('pointerdown', this.cancelAutocontinue, true)
   },
   beforeRouteLeave (to, from, next) {
     this.stopCountdown()

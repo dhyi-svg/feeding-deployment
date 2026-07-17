@@ -63,9 +63,12 @@ export default {
     this.initSubscriber()
     this.initPublisher()
     window.addEventListener('settings-open', this.onSettingsOpen)
+    // any tap anywhere (incl. App.vue chrome/overlays outside .page) cancels autocontinue
+    window.addEventListener('pointerdown', this.cancelAutocontinue, true)
   },
   beforeUnmount () {
     window.removeEventListener('settings-open', this.onSettingsOpen)
+    window.removeEventListener('pointerdown', this.cancelAutocontinue, true)
     if (this.countdownInterval) {
       clearInterval(this.countdownInterval);
       this.countdownInterval = null;

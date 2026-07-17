@@ -50,8 +50,11 @@ export default {
     // Tell the backend we've mounted/subscribed so it can stop re-sending the
     // (non-latched) jump. Location + autocontinue arrive via the jump message.
     this.publishStatus('ready')
+    // any tap anywhere (incl. App.vue chrome/overlays outside .page) cancels autocontinue
+    window.addEventListener('pointerdown', this.cancelAutocontinue, true)
   },
   beforeUnmount () {
+    window.removeEventListener('pointerdown', this.cancelAutocontinue, true)
     this.stopCountdown()
   },
   beforeRouteLeave (to, from, next) {

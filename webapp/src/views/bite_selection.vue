@@ -304,6 +304,8 @@ export default {
     // Opening the settings overlay cancels the autocontinue for this visit (reuses
     // the same stopCountdown the user's own interaction triggers).
     window.addEventListener('settings-open', this.stopCountdown)
+    // any tap anywhere (incl. App.vue chrome/overlays outside .page) stops autocontinue
+    window.addEventListener('pointerdown', this.stopCountdown, true)
     this.activeIndex = 0
   },
   beforeUnmount () {
@@ -314,6 +316,7 @@ export default {
 
     window.removeEventListener('resize', this.getImageDimensions)
     window.removeEventListener('settings-open', this.stopCountdown)
+    window.removeEventListener('pointerdown', this.stopCountdown, true)
   },
   beforeRouteLeave (to, from, next) {
     if (this.countdownInterval) {

@@ -147,8 +147,11 @@ export default {
     // Tell the backend we've mounted/subscribed so it can send the (non-latched)
     // step data without racing our subscription. Sent on every (re)connection.
     this.ros.on('connection', () => this.sendReady())
+    // any tap anywhere (incl. App.vue chrome/overlays outside .page) cancels auto-confirm
+    window.addEventListener('pointerdown', this.cancelAutocontinue, true)
   },
   beforeUnmount() {
+    window.removeEventListener('pointerdown', this.cancelAutocontinue, true)
     this.teardownRos()
   },
   beforeRouteLeave(to, from, next) {
