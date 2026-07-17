@@ -1,6 +1,5 @@
 from typing import Any
 
-import time
 from contextlib import nullcontext
 
 from relational_structs import (
@@ -83,6 +82,7 @@ class PickPlateFromApplianceHLA(HighLevelAction):
         self.report_activity("Looking inside the fridge for the plate")
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.fridge_contents_gaze_pos)
+        self.settle_camera()
         confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm_mode, autocontinue_seconds)
         result = self.perception_interface.perceive_attachment_poses(handle_type="bottom textured fridge door", handle_color=handle_color, color_range=color_range, web_interface=self.web_interface, confirm_mode=confirm_mode, confirm_autocontinue_s=confirm_autocontinue_s)
 
@@ -128,7 +128,7 @@ class PickPlateFromApplianceHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.right_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.microwave_inside_gaze_pos)
 
-        time.sleep(2.0)
+        self.settle_camera()
         # The camera is physically flipped for the microwave-inside gaze, so the frame is
         # already upright -- tell perception not to re-flip the user-facing images.
         confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm_mode, autocontinue_seconds)
@@ -302,6 +302,7 @@ class PickPlateFromTableHLA(HighLevelAction):
         self.report_activity("Looking at the table for the plate")
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.table_plate_gaze_pos)
+        self.settle_camera()
 
         confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm_mode, autocontinue_seconds)
         result = self.perception_interface.perceive_attachment_poses(handle_type="table", handle_color=handle_color, color_range=color_range, web_interface=self.web_interface, handle_orientation="left", confirm_mode=confirm_mode, confirm_autocontinue_s=confirm_autocontinue_s)

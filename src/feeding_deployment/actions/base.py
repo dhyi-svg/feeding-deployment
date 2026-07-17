@@ -78,6 +78,11 @@ import feeding_deployment.perception.gestures_perception.static_gesture_detector
 # still works, just at the next move boundary. Set False to disable entirely.
 MID_SKILL_TAKEOVER_ENABLED = True
 
+# Wait after the last arm move to a perception config before capturing, so the
+# RealSense auto-exposure / auto-white-balance settles on the new scene (the
+# first frames after a large viewpoint change are often mis-lit).
+CAMERA_SETTLE_SECONDS = 5.0
+
 # Things the robot can hold.
 object_type = Type("object")
 plate_type = Type("plate", parent=object_type)
@@ -563,6 +568,15 @@ class HighLevelAction(abc.ABC):
 
     def pause(self, duration: float) -> None:
         time.sleep(duration)
+
+    def settle_camera(self, seconds: float = CAMERA_SETTLE_SECONDS) -> None:
+        """Wait after the last arm move before a perception capture so the
+        RealSense auto-exposure/white-balance settles on the new scene.
+        Call-site only (right after movement) -- webapp redo/rerun
+        re-detections happen without movement and must not re-wait.
+        No-op in simulation (no robot)."""
+        if self.robot_interface is not None:
+            time.sleep(seconds)
 
     def log_camera_image(self, name: str, settle_s: float = 0.0, **metadata: Any) -> None:
         """Capture the current RealSense color frame and save it via the data logger.

@@ -93,6 +93,7 @@ class OpenDoorHLA(HighLevelAction):
         self.report_activity("Looking at the fridge door")
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.fridge_door_gaze_pos)
+        self.settle_camera()
 
         confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm_mode, autocontinue_seconds)
         handle_opening_poses = self.perception_interface.perceive_handle_opening_poses(
@@ -176,6 +177,7 @@ class OpenDoorHLA(HighLevelAction):
         self.report_activity("Looking at the microwave door")
         # self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
+        self.settle_camera()
 
         confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm_mode, autocontinue_seconds)
         handle_opening_poses = self.perception_interface.perceive_handle_opening_poses(

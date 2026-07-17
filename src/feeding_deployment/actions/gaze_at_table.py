@@ -58,6 +58,7 @@ class GazeAtTableHLA(HighLevelAction):
         self.report_activity("Looking at the table")
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.table_gaze_pos)
+        self.settle_camera()
 
         confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm_mode, autocontinue_seconds)
         placement_poses = self.perception_interface.perceive_table_placement_poses(
