@@ -219,6 +219,7 @@ class PlacePlateInSinkHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.right_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.sink_gaze_pos)
+        self.settle_camera()
 
         confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm_mode, autocontinue_seconds)
         placement_poses = self.perception_interface.perceive_sink_placement_poses(

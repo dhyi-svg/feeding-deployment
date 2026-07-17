@@ -1045,15 +1045,9 @@ class PerceptionInterface:
         current_color = list(handle_color) if hasattr(handle_color, '__iter__') else handle_color
         current_range = float(color_range)
 
-        # Let the RealSense auto-exposure / auto-white-balance settle on this scene
-        # before the first detection. The robot has just moved to the detection pose,
-        # so the first frames are often mis-lit; detecting on them gives a dark frame
-        # that also throws off color picking. This waits once per call (i.e. once per
-        # microwave/fridge/table pickup) -- redo retries re-enter the loop below
-        # without re-waiting, and color-correction reruns are a separate method.
-        CAMERA_SETTLE_SECONDS = 5.0
-        time.sleep(CAMERA_SETTLE_SECONDS)
-
+        # No settle wait here: callers run Action.settle_camera() right after the
+        # last arm move -- redo/rerun re-detections happen without movement and
+        # must not re-wait.
         while True:
             attachment_pose = None
             last_rgb_image = None

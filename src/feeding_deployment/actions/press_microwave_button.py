@@ -84,7 +84,7 @@ class PressMicrowaveButtonHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.microwave_closeup_gaze_pos)
 
-        time.sleep(2.0) # wait for the robot to stabilize before perception
+        self.settle_camera()
         confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm_mode, autocontinue_seconds)
         press_button_poses = self.perception_interface.perceive_button_pressing_poses(
             web_interface=self.web_interface, confirm_mode=confirm_mode,

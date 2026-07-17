@@ -106,6 +106,7 @@ class AcquireBiteHLA(HighLevelAction):
 
         # self.move_to_joint_positions(self.sim.scene_description.before_transfer_pos) # leads to safer motion
         self.move_to_joint_positions(self.sim.scene_description.above_plate_pos)
+        self.settle_camera()
 
         consecutive_failed_detections = 0
         data_logger = getattr(self.perception_interface, "data_logger", None)
@@ -395,6 +396,10 @@ class AcquireBiteHLA(HighLevelAction):
                 self.move_to_joint_positions(self.sim.scene_description.above_plate_pos)
                 if not skill_success:
                     print("Skill failed. Retrying ...")
+                    # The loop re-captures next iteration and the arm just moved
+                    # back above the plate; not on the success path, which would
+                    # delay the bite hand-off.
+                    self.settle_camera()
                     continue
             except Exception as e:
                 print(
