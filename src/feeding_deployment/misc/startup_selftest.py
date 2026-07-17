@@ -220,6 +220,14 @@ def test_molmo(timeout_s):
         return False
 
     code = resp.status_code
+    # An ngrok error (ERR_NGROK_3200 etc.) means the tunnel itself is offline.
+    # ngrok serves these as HTTP 404, so check the header BEFORE trusting the
+    # status code -- otherwise a dead tunnel false-passes as "app answered 404".
+    ngrok_error = resp.headers.get("ngrok-error-code")
+    if ngrok_error:
+        print(f"  [x] HTTP {code} with ngrok-error-code={ngrok_error}: tunnel is OFFLINE.")
+        print("      Restart ngrok on the molmo machine, or the URL rotated in appliance_perception.py.")
+        return False
     # 502/503/504 from ngrok => tunnel is up but the molmo backend behind it isn't.
     if code in (502, 503, 504):
         print(f"  [x] HTTP {code}: tunnel reachable but molmo backend appears DOWN.")
