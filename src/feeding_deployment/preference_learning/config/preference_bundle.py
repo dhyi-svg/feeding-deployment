@@ -16,9 +16,9 @@ class PreferenceDim:
     #                seeded from / validated against the ParkingOffset value in
     #                the per-user navigate BT YAML.
     kind: str = "categorical"
-    # One plain-language sentence shown as the subtitle under the label on the
-    # iPad ask page (the full `description` is written for the LLM and only
-    # appears in the settings overlay). Empty = no subtitle.
+    # One plain-language sentence shown under the label on the iPad ask page and
+    # in the settings overlay (the full `description` is written for the LLM and
+    # never shown to the user). Empty = no subtitle / blank overlay line.
     short_description: str = ""
 
 PREFERENCE_BUNDLE: List[PreferenceDim] = [

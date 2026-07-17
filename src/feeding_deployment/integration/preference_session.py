@@ -67,13 +67,15 @@ from feeding_deployment.preference_learning.config.mealtime_context import (
     food_items_for_flair,
 )
 from feeding_deployment.preference_learning.methods.prediction_model import (
-    PREF_DESCRIPTIONS,
     PREF_KIND,
     PREF_OPTIONS,
 )
 from feeding_deployment.preference_learning.methods.utils import PREF_FIELDS
 
 _PREF_LABELS: Dict[str, str] = {dim.field: dim.label for dim in PREFERENCE_BUNDLE}
+_PREF_SHORT_DESCRIPTIONS: Dict[str, str] = {
+    dim.field: dim.short_description for dim in PREFERENCE_BUNDLE
+}
 
 from feeding_deployment.integration.apply_preferences import (
     _load_yaml,
@@ -857,7 +859,7 @@ class PreferenceSession:
                     "label": _PREF_LABELS.get(field, field.replace("_", " ").title()),
                     "value": self.bundle.get(field),
                     "options": list(PREF_OPTIONS.get(field, [])),
-                    "description": PREF_DESCRIPTIONS.get(field, ""),
+                    "description": _PREF_SHORT_DESCRIPTIONS.get(field, ""),
                     "editable": field not in self._locked,
                 })
         return out
