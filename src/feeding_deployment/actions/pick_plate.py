@@ -296,6 +296,7 @@ class PickPlateFromTableHLA(HighLevelAction):
         self.report_activity("Recording a picture of the plate after feeding")
         self.move_to_joint_positions(self.sim.scene_description.retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.above_plate_pos)
+        self.log_camera_image("plate_after_feeding", settle_s=5.0)
         self.move_to_joint_positions(self.sim.scene_description.retract_pos)
 
         self.report_activity("Looking at the table for the plate")

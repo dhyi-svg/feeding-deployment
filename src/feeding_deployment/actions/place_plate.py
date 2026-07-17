@@ -1,5 +1,7 @@
 from typing import Any
 
+from contextlib import nullcontext
+
 from relational_structs import (
     LiftedAtom,
     LiftedOperator,
@@ -304,4 +306,5 @@ class PlacePlateOnTableHLA(HighLevelAction):
 
         self.report_activity("Recording a picture of the plate before feeding")
         self.move_to_joint_positions(self.sim.scene_description.above_plate_pos)
+        self.log_camera_image("plate_before_feeding", settle_s=5.0)
         self.move_to_joint_positions(self.sim.scene_description.retract_pos)

@@ -564,6 +564,28 @@ class HighLevelAction(abc.ABC):
     def pause(self, duration: float) -> None:
         time.sleep(duration)
 
+    def log_camera_image(self, name: str, settle_s: float = 0.0, **metadata: Any) -> None:
+        """Capture the current RealSense color frame and save it via the data logger.
+
+        ``settle_s`` waits before grabbing the frame so auto-exposure can settle
+        after a large viewpoint change. No-op in simulation (no robot) or when
+        the data logger is absent; never raises -- logging must not abort a skill.
+        """
+        if self.robot_interface is None or self.perception_interface is None:
+            return
+        try:
+            if settle_s > 0:
+                time.sleep(settle_s)
+            color_image, _, _ = self.perception_interface.get_camera_data()
+            if color_image is None:
+                print(f"No camera frame available to log image '{name}'.")
+                return
+            data_logger = getattr(self.perception_interface, "data_logger", None)
+            if data_logger is not None:
+                data_logger.log_image(name, color_image, **metadata)
+        except Exception as e:  # noqa: BLE001
+            print(f"Failed to log camera image '{name}': {e}")
+
     def wait_for_gesture(self, gesture_fn_name: str) -> None:
         static_gestures = inspect.getmembers(static_gesture_detectors, inspect.isfunction)
         gestures = dict(static_gestures + self.load_synthesized_gestures())
