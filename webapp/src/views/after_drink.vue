@@ -20,7 +20,7 @@
               <div class="tc-i"><img src="../assets/drin.png" alt="Sip"></div>
               <div class="tc-l">Take a Sip</div>
             </div>
-            <p v-if="!autocontinueCancelled" class="cdown">Auto-confirming in <span>{{ countdown }}s</span></p>
+            <p v-if="!autocontinueCancelled && countdownInterval" class="cdown">Auto-confirming in <span>{{ countdown }}s</span></p>
           </div>
           <div class="tc" @click="handleButtonClickMouth">
             <div class="tc-i"><img src="../assets/Frame.png" alt="Wipe"></div>
@@ -46,7 +46,10 @@ export default {
     return {
       ros: null,
       username: USER,
-      countdown: 1000,
+      // Armed ONLY by the backend's auto_time message (see handleRosMessage):
+      // a missed/dropped auto_time means no countdown and the page waits for
+      // the user -- never a default countdown that could ghost-fire.
+      countdown: null,
       countdownInterval: null,
       // Set when the user opens the settings overlay: cancels the on-screen
       // autocontinue for this page visit (not re-engaged on close).
@@ -57,7 +60,6 @@ export default {
   },
   mounted () {
     this.ros = new ROSLIB.Ros({ url: ROS_URL })
-    this.startCountdown();
     this.initSubscriber()
     this.initPublisher()
     window.addEventListener('settings-open', this.onSettingsOpen)
@@ -133,9 +135,15 @@ export default {
             this.countdownInterval = null;
           }
 
-          this.countdown = parseInt(parsedMessage.status, 10);
-
-          this.startCountdown();
+          const secs = parseInt(parsedMessage.status, 10);
+          if (!Number.isFinite(secs) || secs <= 0) {
+            // "no autocontinue" preference: cancel the mount-time default
+            // countdown and hide the line; the page waits for the user.
+            this.autocontinueCancelled = true;
+          } else {
+            this.countdown = secs;
+            this.startCountdown();
+          }
         }
         const route = routeMap[parsedMessage.state]?.[parsedMessage.status];
         if (route) {

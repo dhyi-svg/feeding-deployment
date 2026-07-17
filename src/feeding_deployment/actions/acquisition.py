@@ -91,7 +91,7 @@ class AcquireBiteHLA(HighLevelAction):
         assert table.name == "table"
         return "acquire_bite.yaml"
     
-    def acquire_bite(self, speed: str, dipping_depth: float, skewering_depth: float, skewering_orientation: str, autocontinue_timeout: float, ask_confirmation: bool) -> None:
+    def acquire_bite(self, speed: str, dipping_depth: float, skewering_depth: float, skewering_orientation: str, bite_selection_autocontinue_seconds: float, pickup_confirm_mode: int, pickup_confirm_autocontinue_seconds: float) -> None:
 
         # assert self.sim.held_object_name == "utensil"
 
@@ -281,7 +281,7 @@ class AcquireBiteHLA(HighLevelAction):
                     n_dip_food_types = len(dip_data)
 
                     if self.web_interface is not None:
-                        skill_type, skill_params, dip_type = self.web_interface.get_next_bite_selection(items_detection['plate_image'], n_food_types, data, predicted_bite, n_dip_food_types, dip_data, autocontinue_timeout=autocontinue_timeout)   
+                        skill_type, skill_params, dip_type = self.web_interface.get_next_bite_selection(items_detection['plate_image'], n_food_types, data, predicted_bite, n_dip_food_types, dip_data, autocontinue_timeout=bite_selection_autocontinue_seconds)
                     else:
                         # params must be set to the autonomously selected values
                         skill_type = "autonomous"
@@ -409,13 +409,14 @@ class AcquireBiteHLA(HighLevelAction):
                                           **bite_event)
                 continue
             
-            # ask_confirmation (TransferAskForConfirmation, from the
+            # pickup_confirm_mode (PickupConfirmMode, from the
             # confirm_feeding_pickup preference): 0 = skip the page, 1 = show
             # with autocontinue (timeout => confirm), 2 = wait for the user.
-            if self.web_interface is not None and ask_confirmation:
+            # Mode 1 counts down from PickupConfirmAutocontinueSeconds.
+            if self.web_interface is not None and pickup_confirm_mode:
                 autocontinue_s = (
-                    self._confirm_autocontinue_seconds()
-                    if int(ask_confirmation) == 1 else 0.0
+                    float(pickup_confirm_autocontinue_seconds)
+                    if int(pickup_confirm_mode) == 1 else 0.0
                 )
                 get_success_confirmation = self.web_interface.get_successful_food_acquisition_confirmation(autocontinue_s)
                 if get_success_confirmation:

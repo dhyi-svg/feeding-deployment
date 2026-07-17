@@ -1,6 +1,6 @@
 """Run a focused NavigateHLA test to a named location.
 
-Standalone nav-offset loop (no preference pipeline): the PositionOffset stored
+Standalone nav-offset loop (no preference pipeline): the ParkingOffset stored
 in the navigate_to_<location>.yaml behavior tree is read and applied to the
 goal, and after arrival you can teleop the robot to the exact desired pose and
 have the new TOTAL offset written straight back to that YAML -- the next run
@@ -37,7 +37,7 @@ _FACTORY_BT_DIR = Path(__file__).parent.parent / "actions" / "behavior_trees"
 
 
 def _read_position_offset(bt_dir: Path, location: str) -> list[float] | None:
-    """PositionOffset [dx, dy, dyaw] from navigate_to_<location>.yaml, or None
+    """ParkingOffset [dx, dy, dyaw] from navigate_to_<location>.yaml, or None
     if the file/param is missing (treated as zero offset by the HLA)."""
     fpath = bt_dir / f"navigate_to_{location}.yaml"
     if not fpath.exists():
@@ -48,9 +48,9 @@ def _read_position_offset(bt_dir: Path, location: str) -> list[float] | None:
         # need the parameters block, so blank the tag before parsing.
         data = yaml.safe_load(f.read().replace("!hla", "")) or {}
     for param in data.get("parameters", []):
-        if param.get("name") == "PositionOffset":
+        if param.get("name") == "ParkingOffset":
             return [float(v) for v in param.get("value", [0.0, 0.0, 0.0])]
-    print(f"[nav-offset] no PositionOffset in {fpath.name}; navigating with zero offset.")
+    print(f"[nav-offset] no ParkingOffset in {fpath.name}; navigating with zero offset.")
     return None
 
 
@@ -122,7 +122,7 @@ def _terminal_adjustment(
     objects = (Object(location, nav_target_type), Object(location, nav_target_type))
     node_name = f"NavigateTo{location.capitalize()}"
     result = hla.process_behavior_tree_parameter_update(
-        objects, {}, node_name, "PositionOffset",
+        objects, {}, node_name, "ParkingOffset",
         [float(clamped[0]), float(clamped[1]), float(clamped[2])],
     )
     print(
@@ -336,7 +336,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ignore_offset",
         action="store_true",
-        help="Navigate to the raw mapped pose, ignoring any stored PositionOffset.",
+        help="Navigate to the raw mapped pose, ignoring any stored ParkingOffset.",
     )
     parser.add_argument(
         "--no_adjust",

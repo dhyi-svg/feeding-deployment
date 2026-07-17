@@ -90,7 +90,7 @@ def test_PickPlateHLA(location, sim, robot_interface, perception_interface, rviz
 
     plate_obj = Object("plate", plate_type)
     location_obj = Object(location, table_type if location == "table" else appliance_type)
-    # Speed / HandleColor / ColorRange come from the behavior tree's parameter defaults.
+    # Speed / PlateHandleColor / PlateHandleColorTolerance come from the behavior tree's parameter defaults.
     high_level_action.execute_action(objects=[plate_obj, location_obj], params={})
 
 

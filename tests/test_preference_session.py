@@ -142,8 +142,8 @@ def _set_yaml_color(bt_dir: Path, location: str, hsv_range) -> None:
     fp = bt_dir / f"pick_plate_from_{location}.yaml"
     data = _load_yaml(fp)
     hc, cr = color_to_bt(hsv_range)
-    _set_param_value(data, "HandleColor", hc)
-    _set_param_value(data, "ColorRange", cr)
+    _set_param_value(data, "PlateHandleColor", hc)
+    _set_param_value(data, "PlateHandleColorTolerance", cr)
     _save_yaml(fp, data)
 
 
@@ -169,7 +169,7 @@ def test_color_seed_comes_from_bt_and_falls_back(bt_dir):
 def test_ask_confirm_finalizes_without_correction(bt_dir):
     s = PreferenceSession(FakeModel(), bt_dir, CTX, web_interface=FakeWeb())
     s.start()
-    s.ask(["robot_speed", "wait_before_autocontinue_seconds"])
+    s.ask(["robot_speed", "wait_before_autocontinue_mealprep"])
     assert "robot_speed" in s.finalized
     assert "robot_speed" not in s.corrected  # confirmed, not corrected
 
@@ -215,10 +215,20 @@ def test_repredict_receives_confirmed_and_corrected_split(bt_dir):
 def test_wait_pref_drives_autocontinue(bt_dir):
     web = FakeWeb()
     s = PreferenceSession(FakeModel(), bt_dir, CTX, web_interface=web)
+    # Bootstrap default before any prediction lands (start() fills the dim
+    # with the model's prediction, so the default only holds before it).
+    assert s.wait_seconds_mealprep == 10.0
     s.start()
-    assert s.wait_seconds == 10.0  # default before finalized
-    s._finalize("wait_before_autocontinue_seconds", "100 sec", changed=True)
-    assert s.wait_seconds == 100.0
+    s._finalize("wait_before_autocontinue_mealprep", "100 sec", changed=True)
+    assert s.wait_seconds_mealprep == 100.0
+
+
+def test_wait_pref_no_autocontinue_parses_to_zero():
+    from feeding_deployment.integration.preference_session import _wait_pref_to_seconds
+
+    assert _wait_pref_to_seconds("no autocontinue") == 0.0
+    assert _wait_pref_to_seconds("15 sec") == 15.0
+    assert _wait_pref_to_seconds(None) == 10.0
 
 
 def test_record_color_correction_finalizes_and_propagates(bt_dir):
@@ -323,19 +333,16 @@ def test_microwave_time_locks_after_apply_microwave(bt_dir):
     assert s.bundle["microwave_time"] == before
 
 
-def test_transfer_mode_edit_defers_reinit_until_flush(bt_dir):
+def test_transfer_mode_inside_raises_on_apply(bt_dir):
     s = PreferenceSession(FakeModel(), bt_dir, CTX, web_interface=FakeWeb())
     s.start()
     s.ask(["transfer_mode"])
-    before = s.bundle["transfer_mode"]
-    other = next(o for o in PREF_OPTIONS["transfer_mode"] if o != before)
-    assert s.edit("transfer_mode", other) is True
-    assert s._pending_transfer_reinit is True  # deferred, not applied on the worker
-    # Settle the background reprediction first: its apply re-arms the pending
-    # flag, exactly as run.py's join-then-flush ordering settles it.
-    assert s.wait_for_reprediction(5.0)
-    s.flush_pending_inmemory()  # main-thread safe boundary
-    assert s._pending_transfer_reinit is False
+    assert s.bundle["transfer_mode"] == "outside mouth transfer"
+    # The deployment only performs outside-mouth transfer (transfer_type is
+    # fixed by the command line): selecting inside must fail loudly instead of
+    # silently diverging from what the robot actually does.
+    with pytest.raises(RuntimeError, match="inside mouth transfer"):
+        s.edit("transfer_mode", "inside mouth transfer")
 
 
 def test_settings_view_and_edit_are_thread_safe(bt_dir):
@@ -492,7 +499,7 @@ def test_on_change_persists_every_correction(bt_dir):
     s.start()  # prediction only -> no _finalize, no persist
     assert saved == []
 
-    s.ask(["robot_speed", "wait_before_autocontinue_seconds"])
+    s.ask(["robot_speed", "wait_before_autocontinue_mealprep"])
     assert saved, "ask() must persist on each finalize"
     assert saved[-1]["corrected"].get("robot_speed") == "fast"
 
@@ -650,10 +657,14 @@ def test_confirmation_dims_shape_and_staging():
         "robot_speed",
         "confirm_navigation_arrival",
         "confirm_manipulation",
-        "wait_before_autocontinue_seconds",
+        "wait_before_autocontinue_mealprep",
     ]
     assert "confirm_feeding_pickup" in TABLE_PREF_DIMS
+    # The two feeding wait dims are asked at the table, just before the pages
+    # they govern first appear.
+    assert "wait_before_autocontinue_feeding_pickup" in TABLE_PREF_DIMS
+    assert "wait_before_autocontinue_task_selection" in TABLE_PREF_DIMS
     assert "web_interface_confirmation" not in PREF_FIELDS
-    assert len(PREF_FIELDS) == 27
+    assert len(PREF_FIELDS) == 29
     for f in ("confirm_feeding_pickup", "confirm_navigation_arrival", "confirm_manipulation"):
         assert PREF_OPTIONS[f] == ["no", "yes (with auto-continue countdown)", "yes (without any auto-continue)"]

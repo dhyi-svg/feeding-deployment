@@ -1,5 +1,5 @@
 name: "AcquireBite"
-description: "Pick up the appropriate food item from the plate. The robot predicts a food item to pickup from the plate and waits TimeToWaitBeforeAutocontinue on the web application (web interface) before auto-continuing the pickup bite button. Within this duration, the user can confirm or change the prediction. The robot then attempts to pick up the food item from the plate and dip it if required. The robot then asks for confirmation on the web application (web interface) before initiating the transfer sequence for a bite, which is controlled by the TransferAskForConfirmation parameter."
+description: "Pick up the appropriate food item from the plate. The robot predicts a food item to pickup from the plate and waits BiteSelectionAutocontinueSeconds on the web application (web interface) before auto-continuing the pickup bite button. Within this duration, the user can confirm or change the prediction. The robot then attempts to pick up the food item from the plate and dip it if required. The robot then asks for confirmation on the web application (web interface) before initiating the transfer sequence for a bite, which is controlled by the PickupConfirmMode parameter (mode 1 counts down from PickupConfirmAutocontinueSeconds)."
 type: "Behavior"
 parameters:
   - name: "Speed"
@@ -32,19 +32,27 @@ parameters:
       elements: ["horizontal", "vertical"]
     is_user_editable: True
     value: "horizontal"
-  - name: "TimeToWaitBeforeAutocontinue"
-    description: "Time to wait before auto-continuing pickup bite button on the web app (web interface)."
+  - name: "BiteSelectionAutocontinueSeconds"
+    description: "Seconds before the bite-selection page auto-confirms the predicted bite on the web app (web interface). 0 disables the autocontinue (the page waits for the user)."
     space:
       type: "Box"
-      lower: 5.0
+      lower: 0.0
       upper: 1000.0
     is_user_editable: True
     value: 10.0
-  - name: "TransferAskForConfirmation"
+  - name: "PickupConfirmMode"
     description: "Bite pickup confirmation page mode: 0 = skip, 1 = show with autocontinue, 2 = wait for the user."
     space:
       type: "Enum"
       elements: [0, 1, 2]
     is_user_editable: True
     value: 2
+  - name: "PickupConfirmAutocontinueSeconds"
+    description: "Seconds before the bite pickup confirmation page autocontinues when PickupConfirmMode is 1. 0 disables the autocontinue (the page waits for the user)."
+    space:
+      type: "Box"
+      lower: 0.0
+      upper: 1000.0
+    is_user_editable: True
+    value: 20.0
 fn: !hla acquire_bite

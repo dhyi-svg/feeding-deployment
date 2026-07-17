@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-
 import pytest
 import yaml
 
@@ -146,20 +144,20 @@ class TestApplyBundleToBehaviorTrees:
         apply_bundle_to_behavior_trees(bundle, bt_dir)
 
         ab = _load(bt_dir, "acquire_bite.yaml")
-        assert _get_param_value(ab, "TransferAskForConfirmation") == 0
+        assert _get_param_value(ab, "PickupConfirmMode") == 0
 
         td = _load(bt_dir, "transfer_drink.yaml")
-        assert _get_param_value(td, "AskForConfirmationInitiatingTransferSequence") == 0
+        assert _get_param_value(td, "PickupConfirmMode") == 0
 
         tw = _load(bt_dir, "transfer_wipe.yaml")
-        assert _get_param_value(tw, "AskForConfirmationInitiatingTransferSequence") == 0
+        assert _get_param_value(tw, "PickupConfirmMode") == 0
 
     def test_navigation_confirmation_written(self, bt_dir: Path):
         bundle = {"confirm_navigation_arrival": "yes (without any auto-continue)"}
         apply_bundle_to_behavior_trees(bundle, bt_dir)
         for loc in ("fridge", "microwave", "sink", "table"):
             data = _load(bt_dir, f"navigate_to_{loc}.yaml")
-            assert _get_param_value(data, "AskForArrivalConfirmation") == 2
+            assert _get_param_value(data, "ArrivalConfirmMode") == 2
 
     def test_manipulation_confirmation_written(self, bt_dir: Path):
         bundle = {"confirm_manipulation": "yes (with auto-continue countdown)"}
@@ -172,20 +170,20 @@ class TestApplyBundleToBehaviorTrees:
             "open_fridge.yaml", "open_microwave.yaml",
         ):
             data = _load(bt_dir, fname)
-            assert _get_param_value(data, "AskForManipulationConfirmation") == 1
+            assert _get_param_value(data, "ManipulationConfirmMode") == 1
 
     def test_confirm_param_upserted_into_legacy_tree(self, bt_dir: Path):
-        # A per-user tree that predates AskForArrivalConfirmation gets it
+        # A per-user tree that predates ArrivalConfirmMode gets it
         # APPENDED (last -- positional binding) on the first apply.
         fpath = bt_dir / "navigate_to_fridge.yaml"
         data = _load_yaml(fpath)
         data["parameters"] = [p for p in data["parameters"]
-                              if p["name"] != "AskForArrivalConfirmation"]
+                              if p["name"] != "ArrivalConfirmMode"]
         _save_yaml(fpath, data)
 
         apply_bundle_to_behavior_trees({"confirm_navigation_arrival": "no"}, bt_dir)
         data = _load(bt_dir, "navigate_to_fridge.yaml")
-        assert data["parameters"][-1]["name"] == "AskForArrivalConfirmation"
+        assert data["parameters"][-1]["name"] == "ArrivalConfirmMode"
         assert data["parameters"][-1]["value"] == 0
         assert data["parameters"][-1]["space"]["elements"] == [0, 1, 2]
 
@@ -195,7 +193,7 @@ class TestApplyBundleToBehaviorTrees:
         fpath = bt_dir / "acquire_bite.yaml"
         data = _load_yaml(fpath)
         for p in data["parameters"]:
-            if p["name"] == "TransferAskForConfirmation":
+            if p["name"] == "PickupConfirmMode":
                 p["space"] = {"type": "Enum", "elements": [0, 1]}
                 p["value"] = 1
         _save_yaml(fpath, data)
@@ -203,17 +201,84 @@ class TestApplyBundleToBehaviorTrees:
         apply_bundle_to_behavior_trees({"confirm_feeding_pickup": "yes (without any auto-continue)"}, bt_dir)
         data = _load(bt_dir, "acquire_bite.yaml")
         for p in data["parameters"]:
-            if p["name"] == "TransferAskForConfirmation":
+            if p["name"] == "PickupConfirmMode":
                 assert p["value"] == 2
                 assert p["space"]["elements"] == [0, 1, 2]
 
-    def test_autocontinue_written(self, bt_dir: Path):
-        bundle = {"wait_before_autocontinue_seconds": "1000 sec"}
-        apply_bundle_to_behavior_trees(bundle, bt_dir)
+    # The mealprep confirmation pages, governed by
+    # wait_before_autocontinue_mealprep: detection confirm / plate release
+    # (ManipulationConfirmAutocontinueSeconds) and the post-arrival position
+    # check (ArrivalConfirmAutocontinueSeconds).
+    _MANIPULATION_AUTOCONTINUE_YAMLS = [
+        "pick_plate_from_fridge.yaml", "pick_plate_from_microwave.yaml",
+        "pick_plate_from_table.yaml", "place_plate_in_microwave.yaml",
+        "place_plate_on_table.yaml", "place_plate_in_sink.yaml",
+        "press_microwave_button.yaml", "gaze_at_table.yaml",
+        "open_fridge.yaml", "open_microwave.yaml",
+    ]
+    _NAV_AUTOCONTINUE_YAMLS = [
+        "navigate_to_fridge.yaml", "navigate_to_microwave.yaml",
+        "navigate_to_sink.yaml", "navigate_to_table.yaml",
+    ]
 
-        for fname in ["acquire_bite.yaml", "transfer_utensil.yaml", "transfer_drink.yaml"]:
+    def _assert_mealprep_autocontinue(self, bt_dir: Path, op):
+        for fname in self._MANIPULATION_AUTOCONTINUE_YAMLS:
+            assert op(_get_param_value(_load(bt_dir, fname), "ManipulationConfirmAutocontinueSeconds")), fname
+        for fname in self._NAV_AUTOCONTINUE_YAMLS:
+            assert op(_get_param_value(_load(bt_dir, fname), "ArrivalConfirmAutocontinueSeconds")), fname
+
+    def test_autocontinue_task_selection_written(self, bt_dir: Path):
+        bundle = {"wait_before_autocontinue_task_selection": "30 sec"}
+        warnings = apply_bundle_to_behavior_trees(bundle, bt_dir)
+        assert warnings == []
+
+        for fname in ["transfer_utensil.yaml", "transfer_drink.yaml"]:
             data = _load(bt_dir, fname)
-            assert _get_param_value(data, "TimeToWaitBeforeAutocontinue") == 1000.0
+            assert _get_param_value(data, "TaskReselectionAutocontinueSeconds") == 30.0
+        # The other dims' params are untouched.
+        assert _get_param_value(_load(bt_dir, "acquire_bite.yaml"), "BiteSelectionAutocontinueSeconds") != 30.0
+        assert _get_param_value(_load(bt_dir, "transfer_drink.yaml"), "PickupConfirmAutocontinueSeconds") != 30.0
+        self._assert_mealprep_autocontinue(bt_dir, lambda v: v != 30.0)
+
+    def test_autocontinue_feeding_pickup_written(self, bt_dir: Path):
+        bundle = {"wait_before_autocontinue_feeding_pickup": "30 sec"}
+        warnings = apply_bundle_to_behavior_trees(bundle, bt_dir)
+        assert warnings == []
+
+        # The dim writes the same value into the bite-selection page's param
+        # and the pickup-confirm param shared by all three pickup skills;
+        # transfer_drink's next-task page param must stay untouched.
+        assert _get_param_value(_load(bt_dir, "acquire_bite.yaml"), "BiteSelectionAutocontinueSeconds") == 30.0
+        for fname in ["acquire_bite.yaml", "transfer_drink.yaml", "transfer_wipe.yaml"]:
+            data = _load(bt_dir, fname)
+            assert _get_param_value(data, "PickupConfirmAutocontinueSeconds") == 30.0
+        assert _get_param_value(_load(bt_dir, "transfer_drink.yaml"), "TaskReselectionAutocontinueSeconds") != 30.0
+        assert _get_param_value(_load(bt_dir, "transfer_utensil.yaml"), "TaskReselectionAutocontinueSeconds") != 30.0
+
+    def test_autocontinue_mealprep_written(self, bt_dir: Path):
+        bundle = {"wait_before_autocontinue_mealprep": "30 sec"}
+        warnings = apply_bundle_to_behavior_trees(bundle, bt_dir)
+        assert warnings == []
+
+        self._assert_mealprep_autocontinue(bt_dir, lambda v: v == 30.0)
+        assert _get_param_value(_load(bt_dir, "acquire_bite.yaml"), "BiteSelectionAutocontinueSeconds") != 30.0
+        assert _get_param_value(_load(bt_dir, "acquire_bite.yaml"), "PickupConfirmAutocontinueSeconds") != 30.0
+        for fname in ["transfer_utensil.yaml", "transfer_drink.yaml"]:
+            assert _get_param_value(_load(bt_dir, fname), "TaskReselectionAutocontinueSeconds") != 30.0
+
+    def test_no_autocontinue_writes_zero(self, bt_dir: Path):
+        bundle = {
+            "wait_before_autocontinue_task_selection": "no autocontinue",
+            "wait_before_autocontinue_feeding_pickup": "no autocontinue",
+        }
+        warnings = apply_bundle_to_behavior_trees(bundle, bt_dir)
+        assert warnings == []
+
+        for fname in ["transfer_utensil.yaml", "transfer_drink.yaml"]:
+            assert _get_param_value(_load(bt_dir, fname), "TaskReselectionAutocontinueSeconds") == 0.0
+        assert _get_param_value(_load(bt_dir, "acquire_bite.yaml"), "BiteSelectionAutocontinueSeconds") == 0.0
+        for fname in ["acquire_bite.yaml", "transfer_drink.yaml", "transfer_wipe.yaml"]:
+            assert _get_param_value(_load(bt_dir, fname), "PickupConfirmAutocontinueSeconds") == 0.0
 
     def test_outside_mouth_distance_near(self, bt_dir: Path):
         bundle = {"outside_mouth_distance": "near"}
@@ -237,7 +302,7 @@ class TestApplyBundleToBehaviorTrees:
 
         for fname in ["transfer_utensil.yaml", "transfer_drink.yaml", "transfer_wipe.yaml"]:
             data = _load(bt_dir, fname)
-            assert _get_param_value(data, "ReadyToInitiateTransferInteraction") == "led"
+            assert _get_param_value(data, "RobotTransferStartCue") == "led"
 
     def test_convey_ready_completing(self, bt_dir: Path):
         bundle = {"convey_robot_ready_for_completing_transfer": "no cue"}
@@ -245,7 +310,7 @@ class TestApplyBundleToBehaviorTrees:
 
         for fname in ["transfer_utensil.yaml", "transfer_drink.yaml", "transfer_wipe.yaml"]:
             data = _load(bt_dir, fname)
-            assert _get_param_value(data, "ReadyForTransferInteraction") == "silent"
+            assert _get_param_value(data, "RobotTransferArrivedCue") == "silent"
 
     def test_detect_initiate_per_tool(self, bt_dir: Path):
         bundle = {
@@ -256,13 +321,13 @@ class TestApplyBundleToBehaviorTrees:
         apply_bundle_to_behavior_trees(bundle, bt_dir)
 
         assert _get_param_value(
-            _load(bt_dir, "transfer_utensil.yaml"), "InitiateTransferInteraction"
+            _load(bt_dir, "transfer_utensil.yaml"), "UserTransferReadySignal"
         ) == "button"
         assert _get_param_value(
-            _load(bt_dir, "transfer_drink.yaml"), "InitiateTransferInteraction"
+            _load(bt_dir, "transfer_drink.yaml"), "UserTransferReadySignal"
         ) == "auto_timeout"
         assert _get_param_value(
-            _load(bt_dir, "transfer_wipe.yaml"), "InitiateTransferInteraction"
+            _load(bt_dir, "transfer_wipe.yaml"), "UserTransferReadySignal"
         ) == "open_mouth"
 
     def test_detect_complete_per_tool(self, bt_dir: Path):
@@ -274,13 +339,13 @@ class TestApplyBundleToBehaviorTrees:
         apply_bundle_to_behavior_trees(bundle, bt_dir)
 
         assert _get_param_value(
-            _load(bt_dir, "transfer_utensil.yaml"), "TransferCompleteInteraction"
+            _load(bt_dir, "transfer_utensil.yaml"), "UserTransferDoneSignal"
         ) == "sense"
         assert _get_param_value(
-            _load(bt_dir, "transfer_drink.yaml"), "TransferCompleteInteraction"
+            _load(bt_dir, "transfer_drink.yaml"), "UserTransferDoneSignal"
         ) == "button"
         assert _get_param_value(
-            _load(bt_dir, "transfer_wipe.yaml"), "TransferCompleteInteraction"
+            _load(bt_dir, "transfer_wipe.yaml"), "UserTransferDoneSignal"
         ) == "auto_timeout"
 
     def test_skewering_axis_parallel(self, bt_dir: Path):
@@ -357,7 +422,7 @@ class TestApplyBundleWarnings:
 
         for fname in ["transfer_utensil.yaml", "transfer_drink.yaml", "transfer_wipe.yaml"]:
             data = _load(bt_dir, fname)
-            assert _get_param_value(data, "ReadyToInitiateTransferInteraction") == "voice_led"
+            assert _get_param_value(data, "RobotTransferStartCue") == "voice_led"
 
     def test_missing_yaml_file_produces_warning(self, bt_dir: Path):
         (bt_dir / "acquire_bite.yaml").unlink()
@@ -390,7 +455,9 @@ class TestApplyBundleFullBundle:
             "confirm_feeding_pickup": "yes (with auto-continue countdown)",
             "confirm_navigation_arrival": "yes (with auto-continue countdown)",
             "confirm_manipulation": "yes (without any auto-continue)",
-            "wait_before_autocontinue_seconds": "100 sec",
+            "wait_before_autocontinue_task_selection": "no autocontinue",
+            "wait_before_autocontinue_feeding_pickup": "60 sec",
+            "wait_before_autocontinue_mealprep": "15 sec",
             "outside_mouth_distance": "far",
             "convey_robot_ready_for_initiating_transfer": "speech",
             "detect_user_ready_for_initiating_transfer_feeding": "open mouth",
@@ -400,7 +467,7 @@ class TestApplyBundleFullBundle:
             "detect_user_completed_transfer_feeding": "perception",
             "detect_user_completed_transfer_drinking": "autocontinue",
             "detect_user_completed_transfer_wiping": "button",
-            "transfer_mode": "inside mouth transfer",
+            "transfer_mode": "outside mouth transfer",
             "microwave_time": "no microwave",
             "skewering_axis": "parallel to major axis",
             "retract_between_bites": "yes",
@@ -411,12 +478,19 @@ class TestApplyBundleFullBundle:
 
         data = _load(bt_dir, "acquire_bite.yaml")
         assert _get_param_value(data, "Speed") == "low"
-        assert _get_param_value(data, "TransferAskForConfirmation") == 1
-        assert _get_param_value(data, "TimeToWaitBeforeAutocontinue") == 100.0
+        assert _get_param_value(data, "PickupConfirmMode") == 1
+        assert _get_param_value(data, "BiteSelectionAutocontinueSeconds") == 60.0
+        assert _get_param_value(data, "PickupConfirmAutocontinueSeconds") == 60.0
+        ut = _load(bt_dir, "transfer_utensil.yaml")
+        assert _get_param_value(ut, "TaskReselectionAutocontinueSeconds") == 0.0
         nav = _load(bt_dir, "navigate_to_table.yaml")
-        assert _get_param_value(nav, "AskForArrivalConfirmation") == 1
+        assert _get_param_value(nav, "ArrivalConfirmMode") == 1
+        assert _get_param_value(nav, "ArrivalConfirmAutocontinueSeconds") == 15.0
         pk = _load(bt_dir, "pick_plate_from_fridge.yaml")
-        assert _get_param_value(pk, "AskForManipulationConfirmation") == 2
+        assert _get_param_value(pk, "ManipulationConfirmMode") == 2
+        assert _get_param_value(pk, "ManipulationConfirmAutocontinueSeconds") == 15.0
+        wp = _load(bt_dir, "transfer_wipe.yaml")
+        assert _get_param_value(wp, "PickupConfirmAutocontinueSeconds") == 60.0
 
 
 # -------------------------------------------------------------------
@@ -425,59 +499,23 @@ class TestApplyBundleFullBundle:
 
 
 class TestApplyTransferMode:
-    """Tests for apply_transfer_mode.
+    """apply_transfer_mode is validate-only: the robot's transfer type is
+    fixed by the command line, so it never applies anything and raises loudly
+    on the unsupported 'inside mouth transfer' value."""
 
-    When a TransferTool HLA is present in the map, the function imports
-    InsideMouthTransfer / OutsideMouthTransfer (heavy robot deps).  We mock
-    those imports to avoid pulling in scipy etc. in the test environment.
-    When there is no HLA in the map, only the scene attribute is set.
-    """
+    def test_outside_is_noop(self):
+        apply_transfer_mode({"transfer_mode": "outside mouth transfer"})
 
-    def _make_scene(self, current_type: str = "outside") -> MagicMock:
-        scene = MagicMock()
-        scene.transfer_type = current_type
-        return scene
-
-    def _make_hla(self) -> MagicMock:
-        hla = MagicMock()
-        hla.sim = MagicMock()
-        hla.robot_interface = None
-        hla.perception_interface = None
-        hla.rviz_interface = None
-        hla.no_waits = True
-        hla.head_perception_log_dir = Path("/tmp/test_head_log")
-        return hla
-
-    def test_sets_transfer_type_inside_no_hla(self):
-        scene = self._make_scene("outside")
-        apply_transfer_mode(
-            {"transfer_mode": "inside mouth transfer"}, scene, {},
-        )
-        assert scene.transfer_type == "inside"
-
-    def test_sets_transfer_type_outside_no_hla(self):
-        scene = self._make_scene("inside")
-        apply_transfer_mode(
-            {"transfer_mode": "outside mouth transfer"}, scene, {},
-        )
-        assert scene.transfer_type == "outside"
+    def test_inside_raises(self):
+        with pytest.raises(RuntimeError, match="inside mouth transfer"):
+            apply_transfer_mode({"transfer_mode": "inside mouth transfer"})
 
     def test_unknown_transfer_mode_raises(self):
-        scene = self._make_scene()
         with pytest.raises(ValueError, match="Unknown transfer_mode"):
-            apply_transfer_mode({"transfer_mode": "sideways"}, scene, {})
+            apply_transfer_mode({"transfer_mode": "sideways"})
 
     def test_no_transfer_mode_in_bundle_is_noop(self):
-        scene = self._make_scene("outside")
-        apply_transfer_mode({}, scene, {})
-        assert scene.transfer_type == "outside"
-
-    def test_no_transfer_hla_only_sets_scene(self):
-        scene = self._make_scene("outside")
-        apply_transfer_mode(
-            {"transfer_mode": "inside mouth transfer"}, scene, {},
-        )
-        assert scene.transfer_type == "inside"
+        apply_transfer_mode({})
 
 
 # -------------------------------------------------------------------

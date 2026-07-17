@@ -142,7 +142,6 @@ class HighLevelAction(abc.ABC):
         gesture_detectors_dir: Path,
         register_gesture_detector=None,
         load_synthesized_gestures=None,
-        get_autocontinue_seconds=None,
     ) -> None:
         self.sim = sim
         self.robot_interface = robot_interface
@@ -159,10 +158,6 @@ class HighLevelAction(abc.ABC):
         self.gesture_detectors_dir = gesture_detectors_dir
         self.register_gesture_detector = register_gesture_detector
         self.load_synthesized_gestures = load_synthesized_gestures
-        # Zero-arg callable returning the current autocontinue timeout in
-        # seconds (wired by run.py to the preference session's
-        # wait_before_autocontinue_seconds); None -> HLA-specific fallback.
-        self.get_autocontinue_seconds = get_autocontinue_seconds
         # NOTE: assuming 7-dof and that first 7 entries are arm joints (not gripper).
         self.arm_joint_lower_limits = self.sim.robot.joint_lower_limits[:7]
         self.arm_joint_upper_limits = self.sim.robot.joint_upper_limits[:7]
@@ -475,33 +470,24 @@ class HighLevelAction(abc.ABC):
         else:
             self.execute_robot_command(CloseGripperCommand())
 
-    def _confirm_autocontinue_seconds(self) -> float:
-        """Countdown for confirmation pages in autocontinue mode, from the live
-        wait_before_autocontinue_seconds preference (the provider run.py injects
-        into every HLA); 20 s when no preference session is wired in."""
-        provider = getattr(self, "get_autocontinue_seconds", None)
-        if provider is None:
-            return 20.0
-        try:
-            return float(provider())
-        except Exception:
-            return 20.0
-
-    def _confirm_page_args(self, confirm_mode) -> tuple:
+    def _confirm_page_args(self, confirm_mode, autocontinue_seconds) -> tuple:
         """Normalize a confirmation-mode BT param value into
-        ``(mode, autocontinue_seconds)`` for the detection/confirmation pages.
-        None (per-user YAML predating the param) means today's blocking
-        behavior (mode 2); autocontinue seconds are only non-zero in mode 1."""
+        ``(mode, autocontinue_seconds)`` for the detection/confirmation pages;
+        autocontinue seconds are only non-zero in mode 1.
+        ``autocontinue_seconds`` is the skill's ManipulationConfirmAutocontinueSeconds
+        BT parameter (written from the wait_before_autocontinue_mealprep
+        preference)."""
         mode = 2 if confirm_mode is None else int(confirm_mode)
-        return mode, (self._confirm_autocontinue_seconds() if mode == 1 else 0.0)
+        return mode, (float(autocontinue_seconds) if mode == 1 else 0.0)
 
-    def confirm_plate_release(self, location: str, confirm_mode=None) -> None:
+    def confirm_plate_release(self, location: str, confirm_mode,
+                              autocontinue_seconds) -> None:
         """Confirm plate release on the webapp per confirm_manipulation; no-op in sim.
 
-        ``confirm_mode`` (AskForManipulationConfirmation BT param): 0 = release
+        ``confirm_mode`` (ManipulationConfirmMode BT param): 0 = release
         without asking, 1 = page with autocontinue (timeout => release), 2 = wait
-        for the user. None (per-user YAML predating the param) keeps today's
-        wait-for-the-user behavior.
+        for the user. ``autocontinue_seconds`` is the skill's
+        ManipulationConfirmAutocontinueSeconds BT parameter (only used in mode 1).
 
         Deliberately no try/except: a WebInterfaceTakeoverInterrupt raised while
         blocked must propagate to execute_action, which converts it into the
@@ -513,7 +499,7 @@ class HighLevelAction(abc.ABC):
         if mode == 0:
             print(f"Plate release at {location}: confirmation disabled by preference; releasing.")
             return
-        autocontinue_s = self._confirm_autocontinue_seconds() if mode == 1 else 0.0
+        autocontinue_s = float(autocontinue_seconds) if mode == 1 else 0.0
         self.web_interface.get_plate_release_confirmation(location, autocontinue_s)
 
     def reset_wrist(self) -> None:

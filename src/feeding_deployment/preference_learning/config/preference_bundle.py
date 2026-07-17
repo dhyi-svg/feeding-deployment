@@ -13,7 +13,7 @@ class PreferenceDim:
     #                seeded from / validated against the per-user BT YAML color.
     # "nav_offset":  value is a continuous goal-pose correction (LLM emits
     #                {"dx","dy","dyaw"}); `options` is empty and the dim is
-    #                seeded from / validated against the PositionOffset value in
+    #                seeded from / validated against the ParkingOffset value in
     #                the per-user navigate BT YAML.
     kind: str = "categorical"
     # One plain-language sentence shown as the subtitle under the label on the
@@ -48,27 +48,27 @@ PREFERENCE_BUNDLE: List[PreferenceDim] = [
         label="Should the robot check with you before bringing food, drink, or wipe to you?",
         options=["no", "yes (with auto-continue countdown)", "yes (without any auto-continue)"],
         short_description="After picking up your food, drink, or wipe, the robot can check with you before bringing it to you.",
-        description="Whether the robot shows a web-interface confirmation page after picking up the bite, drink, or mouth wipe, before bringing it toward the user. These pages let the user retry a failed pickup (e.g., an empty fork). 'no' skips the pages entirely to reduce interaction time, even if it means the robot might transfer a failed pickup; 'yes (with auto-continue countdown)' shows the page but proceeds automatically after the auto-continue wait if the user does not intervene; 'yes (without any auto-continue)' waits indefinitely for the user's explicit confirmation. A user might be comfortable skipping confirmation in some contexts (e.g., eating alone in a personal setting) and prefer it in others (e.g., a social setting where repeated empty-fork transfers would be awkward). Users who trust the robot more tend to relax confirmation across the board."
+        description="Whether the robot shows a web-interface confirmation page after picking up the bite, drink, or mouth wipe, before bringing it toward the user. These pages let the user retry a failed pickup (e.g., an empty fork). 'no' skips the pages entirely to reduce interaction time, even if it means the robot might transfer a failed pickup; 'yes (with auto-continue countdown)' shows the page but proceeds automatically after the auto-continue wait (wait_before_autocontinue_feeding_pickup) if the user does not intervene; 'yes (without any auto-continue)' waits indefinitely for the user's explicit confirmation. A user might be comfortable skipping confirmation in some contexts (e.g., eating alone in a personal setting) and prefer it in others (e.g., a social setting where repeated empty-fork transfers would be awkward). Users who trust the robot more tend to relax confirmation across the board."
     ),
     PreferenceDim(
         field="confirm_navigation_arrival",
         label="Should the robot check its parking with you after driving somewhere?",
         options=["no", "yes (with auto-continue countdown)", "yes (without any auto-continue)"],
         short_description="After driving somewhere, the robot can ask you to check and fix where it parked.",
-        description="Whether the robot shows the position check page after driving to a location (fridge, microwave, table, sink), where the user can approve the parked position or fine-adjust it by teleoperating the base. This page is also how the robot learns the user's preferred parking spots over time. 'no' skips the page and drives on with the learned parking positions (they stop being refined); 'yes (with auto-continue countdown)' shows the page but accepts the position automatically after the auto-continue wait; 'yes (without any auto-continue)' waits indefinitely. Users typically start with confirmation on and relax it as the robot's parking proves reliable."
+        description="Whether the robot shows the position check page after driving to a location (fridge, microwave, table, sink), where the user can approve the parked position or fine-adjust it by teleoperating the base. This page is also how the robot learns the user's preferred parking spots over time. 'no' skips the page and drives on with the learned parking positions (they stop being refined); 'yes (with auto-continue countdown)' shows the page but accepts the position automatically after the auto-continue wait (wait_before_autocontinue_mealprep); 'yes (without any auto-continue)' waits indefinitely. Users typically start with confirmation on and relax it as the robot's parking proves reliable."
     ),
     PreferenceDim(
         field="confirm_manipulation",
-        label="Should the robot check with you before it grabs, presses, or places things?",
+        label="During meal prep and cleanup: should the robot check with you before it grabs, presses, or places things?",
         options=["no", "yes (with auto-continue countdown)", "yes (without any auto-continue)"],
         short_description="Before grabbing, pressing, or placing something, the robot can show you what its camera sees and ask before letting go of the plate.",
-        description="Whether the robot shows web-interface confirmation pages around manipulation: verifying a detection before acting on it (the plate handle before a pickup, the fridge/microwave door handle before opening, the microwave button before pressing, the placement spot before setting the plate down) and confirming it is safe to release the plate at the microwave, table, or sink. The detection pages are also where the user can redo a detection or correct the plate-handle color. 'no' skips these pages (successful detections are accepted automatically and the plate is released without asking; detection colors stop being refined); 'yes (with auto-continue countdown)' shows each page but proceeds automatically after the auto-continue wait; 'yes (without any auto-continue)' waits indefinitely. Users who trust the robot's perception tend to relax this over time."
+        description="Whether the robot shows web-interface confirmation pages around manipulation: verifying a detection before acting on it (the plate handle before a pickup, the fridge/microwave door handle before opening, the microwave button before pressing, the placement spot before setting the plate down) and confirming it is safe to release the plate at the microwave, table, or sink. The detection pages are also where the user can redo a detection or correct the plate-handle color. 'no' skips these pages (successful detections are accepted automatically and the plate is released without asking; detection colors stop being refined); 'yes (with auto-continue countdown)' shows each page but proceeds automatically after the auto-continue wait (wait_before_autocontinue_mealprep); 'yes (without any auto-continue)' waits indefinitely. Users who trust the robot's perception tend to relax this over time."
     ),
     PreferenceDim(
         field="transfer_mode",
         label="Outside mouth vs inside mouth transfer",
         options=["outside mouth transfer", "inside mouth transfer"],
-        description="How food is delivered to the mouth: outside-mouth transfer (the robot stops just outside the mouth, and the user leans forward to take the bite) versus inside-mouth transfer (the robot inserts the food directly into the mouth). Preference may depend on the user's physical capabilities (e.g., whether they can lean forward comfortably), their comfort with the robot moving close to their mouth, or their affective state (e.g., preferring inside-mouth transfer when fatigued).",
+        description="How food is delivered to the mouth: outside-mouth transfer (the robot stops just outside the mouth, and the user leans forward to take the bite) versus inside-mouth transfer (the robot inserts the food directly into the mouth). Preference may depend on the user's physical capabilities (e.g., whether they can lean forward comfortably), their comfort with the robot moving close to their mouth, or their affective state (e.g., preferring inside-mouth transfer when fatigued). This deployment only performs outside-mouth transfer; predict 'inside mouth transfer' only if the user has explicitly asked for it.",
         short_description="Whether food stops just outside your mouth or is placed inside your mouth.",
     ),
     PreferenceDim(
@@ -157,11 +157,25 @@ PREFERENCE_BUNDLE: List[PreferenceDim] = [
         short_description="The order your foods are fed, and which dips go with which items.",
     ),
     PreferenceDim(
-        field="wait_before_autocontinue_seconds",
-        label="How long should the robot wait before continuing automatically?",
+        field="wait_before_autocontinue_task_selection",
+        label="After a bite or sip: how long should the robot wait before automatically selecting the same task again?",
+        options=["15 sec", "30 sec", "60 sec", "no autocontinue"],
+        short_description="How long the what-next page waits after a bite or sip before automatically selecting the same task again.",
+        description="How long the robot waits on the next-task page after finishing a bite or a sip before automatically starting another of the same (the page pre-selects 'take a bite' after a bite and 'take a sip' after a sip). 'no autocontinue' means the page never advances on its own — the robot waits for the user to pick the next task, useful for users who chat between bites or dislike being rushed; a shorter wait keeps the meal moving for users who eat steadily. This only governs the between-tasks page; the bite-selection and pickup-check waits are wait_before_autocontinue_feeding_pickup, and the meal-preparation check pages are wait_before_autocontinue_mealprep."
+    ),
+    PreferenceDim(
+        field="wait_before_autocontinue_feeding_pickup",
+        label="How long should the bite-selection and tool pickup-check pages wait before continuing automatically?",
+        options=["15 sec", "30 sec", "60 sec", "no autocontinue"],
+        short_description="How long the bite-choice page and the tool pickup checks wait for your answer before continuing on their own.",
+        description="How long the robot waits on the bite-selection page (where the user can confirm or change the predicted next bite) and on the tool (bite/drink/wipe) pickup-check pages (shown when confirm_feeding_pickup is 'yes (with auto-continue countdown)') before proceeding automatically. 'no autocontinue' means these pages wait indefinitely for the user's answer; on the pickup checks that is equivalent to confirm_feeding_pickup's 'yes (without any auto-continue)'. Users who trust the robot's bite predictions prefer a short wait to reduce meal time; users who like to choose each bite, or are often distracted (e.g., social settings, watching TV), prefer a longer wait or no autocontinue. This is separate from wait_before_autocontinue_task_selection (the between-tasks page) and wait_before_autocontinue_mealprep (the meal-preparation check pages)."
+    ),
+    PreferenceDim(
+        field="wait_before_autocontinue_mealprep",
+        label="During meal prep and cleanup: how long should the robot's check-in pages wait before continuing automatically?",
         options=["15 sec", "30 sec", "60 sec"],
-        short_description="How long pages wait for your answer before continuing on their own.",
-        description="How long the robot waits before automatically continuing if the user does not intervene — on the next-bite/sip/wipe pages and on every confirmation page set to 'yes (with auto-continue countdown)' (navigation arrivals, manipulation detections and plate releases, feeding pickups). Some users may prefer a shorter wait time to reduce meal time, while others may prefer a longer wait time to give themselves more time to intervene if needed, especially in contexts where they might be more distracted (e.g., when eating in a social setting with a partner or when watching TV)."
+        short_description="How long the robot's parking and handling check pages (and these preference questions) wait before continuing on their own.",
+        description="How long the robot waits before automatically continuing on the meal-preparation check pages set to 'yes (with auto-continue countdown)': the post-navigation position check (confirm_navigation_arrival) and the manipulation detection and plate-release checks (confirm_manipulation). The preference question pages themselves also use this wait. There is no 'no autocontinue' option here — a user who wants the robot to wait indefinitely on these pages sets the corresponding confirmation preference to 'yes (without any auto-continue)'. Shorter waits keep meal preparation moving; longer waits give more time to intervene when distracted. The feeding-side waits are wait_before_autocontinue_task_selection and wait_before_autocontinue_feeding_pickup."
     ),
     # --- Color dimensions (kind="color") -------------------------------------
     # The robot picks up the plate by detecting a colored handle. The detection
@@ -202,7 +216,7 @@ PREFERENCE_BUNDLE: List[PreferenceDim] = [
     # pose's local frame (dx meters forward, dy meters left, dyaw radians
     # counter-clockwise). The next navigation to that location composes the
     # offset onto the nominal goal. Predictions are seeded from the current
-    # PositionOffset saved in the per-user navigate BT YAML (zero on day 1) and
+    # ParkingOffset saved in the per-user navigate BT YAML (zero on day 1) and
     # the user corrects them physically, not through a form. Unlike the plate
     # colors, the four locations are independent: a correction at one location
     # is only weak evidence for the others.
@@ -242,8 +256,8 @@ PREFERENCE_BUNDLE: List[PreferenceDim] = [
 # A color value is the canonical dict {"h": int, "s": int, "v": int,
 # "range": float} (HSV, H in [0,179], S/V in [0,255], range in [0,1]). This is
 # what the LLM emits for kind="color" dims and what flows through the bundle,
-# episode text, and the per-user behavior-tree YAML (HandleColor=[H,S,V],
-# ColorRange=range). The factory default matches
+# episode text, and the per-user behavior-tree YAML (PlateHandleColor=[H,S,V],
+# PlateHandleColorTolerance=range). The factory default matches
 # AttachmentPerception.detect_attachment_color.
 # ---------------------------------------------------------------------------
 
@@ -321,13 +335,13 @@ def format_color(c: dict) -> str:
 
 
 def color_to_bt(c: dict):
-    """Canonical color dict -> (HandleColor list [H,S,V], ColorRange float)."""
+    """Canonical color dict -> (PlateHandleColor list [H,S,V], PlateHandleColorTolerance float)."""
     c = parse_color(c)
     return [c["h"], c["s"], c["v"]], c["range"]
 
 
 def color_from_bt(handle_color, color_range) -> dict:
-    """(HandleColor [H,S,V], ColorRange) from the BT YAML -> canonical color dict."""
+    """(PlateHandleColor [H,S,V], PlateHandleColorTolerance) from the BT YAML -> canonical color dict."""
     hc = list(handle_color) if handle_color is not None else [DEFAULT_COLOR["h"], DEFAULT_COLOR["s"], DEFAULT_COLOR["v"]]
     if len(hc) < 3:
         hc = (hc + [0, 0, 0])[:3]
@@ -341,8 +355,8 @@ def color_from_bt(handle_color, color_range) -> dict:
 # "dyaw": float} (meters, meters, radians; expressed in the goal pose's local
 # frame, each clipped to +/- NAV_OFFSET_BOUNDS). This is what the LLM emits for
 # kind="nav_offset" dims and what flows through the bundle, episode text, and
-# the per-user navigate BT YAML (PositionOffset=[dx, dy, dyaw]). The bounds
-# must match the PositionOffset Box space in the navigate_to_*.yaml behavior
+# the per-user navigate BT YAML (ParkingOffset=[dx, dy, dyaw]). The bounds
+# must match the ParkingOffset Box space in the navigate_to_*.yaml behavior
 # trees and NavigateHLA's clamp.
 # ---------------------------------------------------------------------------
 
@@ -393,13 +407,13 @@ def format_nav_offset(o: dict) -> str:
 
 
 def nav_offset_to_bt(o: dict) -> list:
-    """Canonical nav-offset dict -> PositionOffset list [dx, dy, dyaw]."""
+    """Canonical nav-offset dict -> ParkingOffset list [dx, dy, dyaw]."""
     o = parse_nav_offset(o)
     return [o["dx"], o["dy"], o["dyaw"]]
 
 
 def nav_offset_from_bt(value) -> dict:
-    """PositionOffset [dx, dy, dyaw] from the BT YAML -> canonical offset dict."""
+    """ParkingOffset [dx, dy, dyaw] from the BT YAML -> canonical offset dict."""
     v = list(value) if value is not None else []
     v = (v + [0.0, 0.0, 0.0])[:3]
     return parse_nav_offset({"dx": v[0], "dy": v[1], "dyaw": v[2]})

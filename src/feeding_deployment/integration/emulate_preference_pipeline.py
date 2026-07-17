@@ -12,7 +12,7 @@ touchpoint replaced by a terminal prompt:
                        accept an optional ``h,s,v[,range]`` correction, written
                        back to the YAML exactly like the on-robot color picker,
                        then ``session.record_color(location)``
-- navigations       -> print the applied PositionOffset and accept an optional
+- navigations       -> print the applied ParkingOffset and accept an optional
                        ``dx dy dyaw`` teleop adjustment, composed onto the
                        total in SE(2) and written back to the YAML exactly like
                        the on-robot post-arrival adjustment, then
@@ -45,7 +45,6 @@ import math
 import os
 import shutil
 from pathlib import Path
-from types import SimpleNamespace
 
 from feeding_deployment.integration.apply_preferences import (
     _load_yaml,
@@ -96,12 +95,12 @@ def _read_param(bt_path: Path, name: str):
 
 
 def _write_params(bt_path: Path, values: dict) -> None:
-    """Set parameter values in a BT YAML, upserting PositionOffset if absent
+    """Set parameter values in a BT YAML, upserting ParkingOffset if absent
     (mirrors PreferenceSession._write_nav_offset_to_bt for pre-offset trees)."""
     data = _load_yaml(bt_path)
     for name, value in values.items():
         if not _set_param_value(data, name, value):
-            if name == "PositionOffset":
+            if name == "ParkingOffset":
                 data.setdefault("parameters", []).append(
                     {**_NAV_OFFSET_PARAM, "value": value}
                 )
@@ -143,7 +142,7 @@ def _emulate_pickup_color(session: PreferenceSession, bt_dir: Path, location: st
     session.wait_for_reprediction()
     bt_path = bt_dir / _pickup_yaml_name(location)
     current = color_from_bt(
-        _read_param(bt_path, "HandleColor"), _read_param(bt_path, "ColorRange")
+        _read_param(bt_path, "PlateHandleColor"), _read_param(bt_path, "PlateHandleColorTolerance")
     )
     print(f"\n=== [skill] pick_plate_from_{location} (emulated) ===")
     print(f"  Detecting handle with color {format_color(current)}")
@@ -156,7 +155,7 @@ def _emulate_pickup_color(session: PreferenceSession, bt_dir: Path, location: st
         session.record_color(location)
         return
     if confirm_mode == "yes (with auto-continue countdown)":
-        print(f"  (page would auto-confirm after {session.wait_seconds:.0f}s on-robot)")
+        print(f"  (page would auto-confirm after {session.wait_seconds_mealprep:.0f}s on-robot)")
     while True:
         raw = input(
             "  [Enter] = detection confirmed  |  h,s,v[,range] = corrected color: "
@@ -176,21 +175,21 @@ def _emulate_pickup_color(session: PreferenceSession, bt_dir: Path, location: st
             continue
         corrected = parse_color(corrected, seed=current)  # clip into valid ranges
         handle_color, color_range = color_to_bt(corrected)
-        _write_params(bt_path, {"HandleColor": handle_color, "ColorRange": color_range})
+        _write_params(bt_path, {"PlateHandleColor": handle_color, "PlateHandleColorTolerance": color_range})
         print(f"  Corrected color written to {bt_path.name}: {format_color(corrected)}")
         break
     session.record_color(location)
 
 
 def _emulate_navigation(session: PreferenceSession, bt_dir: Path, location: str) -> None:
-    """Emulate a navigation to ``location``: show the PositionOffset applied to
+    """Emulate a navigation to ``location``: show the ParkingOffset applied to
     the goal, optionally take a teleop adjustment (composed onto the total in
     the arrived pose's local frame, as on-robot), write it back, and record the
     dim."""
     # Pre-skill join, mirroring run.py (navigate_to_* consumes predictions).
     session.wait_for_reprediction()
     bt_path = bt_dir / _nav_yaml_name(location)
-    prev = nav_offset_from_bt(_read_param(bt_path, "PositionOffset"))
+    prev = nav_offset_from_bt(_read_param(bt_path, "ParkingOffset"))
     print(f"\n=== [skill] navigate_to_{location} (emulated) ===")
     print(f"  Applied learned offset to goal: {format_nav_offset(prev)}")
     # confirm_navigation_arrival preference: "no" skips the arrival page (the
@@ -201,7 +200,7 @@ def _emulate_navigation(session: PreferenceSession, bt_dir: Path, location: str)
         session.record_nav_offset(location)
         return
     if confirm_mode == "yes (with auto-continue countdown)":
-        print(f"  (page would auto-accept after {session.wait_seconds:.0f}s on-robot)")
+        print(f"  (page would auto-accept after {session.wait_seconds_mealprep:.0f}s on-robot)")
     while True:
         raw = input(
             "  [Enter] = position OK  |  dx dy dyaw = teleop adjustment (m, m, rad): "
@@ -228,7 +227,7 @@ def _emulate_navigation(session: PreferenceSession, bt_dir: Path, location: str)
         ]
         if clamped != list(total):
             print("  NOTE: total offset saturated at the +/-0.5 m / +/-45 deg bounds.")
-        _write_params(bt_path, {"PositionOffset": clamped})
+        _write_params(bt_path, {"ParkingOffset": clamped})
         print(
             f"  New total offset written to {bt_path.name}: "
             f"dx={clamped[0]:+.3f},dy={clamped[1]:+.3f},dyaw={clamped[2]:+.3f}"
@@ -458,10 +457,6 @@ def main() -> int:
             dict(context),
             web_interface=TerminalCorrectionInterface(),
             data_logger=data_logger,
-            # Minimal stand-in so apply_transfer_mode's scene update runs; with
-            # hla_map={} there is no transfer object to reconstruct.
-            scene_description=SimpleNamespace(transfer_type="outside"),
-            hla_map={},
             flair=None,
         )
 

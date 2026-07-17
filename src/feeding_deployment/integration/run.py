@@ -324,15 +324,7 @@ class _Runner:
         self.hlas = {
             cls(self.sim, self.robot_interface, self.perception_interface, self.rviz_interface, self.web_interface, hla_hyperparams,
                 self.wrist_interface, self.flair, self.no_waits, self.log_dir, self.run_behavior_tree_dir, self.execution_log, self.gesture_detectors_dir,
-                self.register_gesture_detector, self.load_synthesized_gestures,
-                # Post-arrival adjust prompt reuses the user's
-                # wait_before_autocontinue_seconds preference when a session is
-                # live (the session is created per meal, after the HLAs).
-                get_autocontinue_seconds=lambda: (
-                    self._pref_session.wait_seconds
-                    if getattr(self, "_pref_session", None) is not None
-                    else 20.0
-                )) for cls in HLAS  # type: ignore
+                self.register_gesture_detector, self.load_synthesized_gestures) for cls in HLAS  # type: ignore
         }
         print("HLAs created.")
         self.hla_name_to_hla = {hla.get_name(): hla for hla in self.hlas}
@@ -621,8 +613,6 @@ class _Runner:
             dict(ctx),
             web_interface=correction_interface,
             data_logger=self.data_logger,
-            scene_description=self.sim.scene_description,
-            hla_map=self.hla_name_to_hla,
             flair=self.flair,
             # Persist the session on every locked correction so a crash before the
             # next sub-skill checkpoint loses nothing (see _save_state / resume).
@@ -1060,9 +1050,7 @@ class _Runner:
             # Don't start the next HLA while the user has the settings overlay open:
             # a preference edit could change this skill. Stall until they close it
             # (raise_on_takeover=False so a takeover during the stall returns control
-            # to the existing takeover machinery below, not a new exception). Then
-            # flush any deferred in-memory pref apply (transfer re-init) on this main
-            # thread, just before the BT is read, so it never overlaps a live motion.
+            # to the existing takeover machinery below, not a new exception).
             if self.web_interface is not None:
                 self.web_interface.wait_until_settings_closed(
                     "robot_paused", raise_on_takeover=False
@@ -1073,12 +1061,9 @@ class _Runner:
                 # prediction-produced parameters (pickup colors, nav offsets,
                 # feeding dims) so they never execute on half-updated YAMLs.
                 # The join runs after the settings stall (edits made while the
-                # panel was open have scheduled their reprediction by now) and
-                # before the flush (so the deferred transfer re-init uses the
-                # final repredicted bundle).
+                # panel was open have scheduled their reprediction by now).
                 if bt_consumes_predictions(skill_plan_names[i]):
                     self._pref_session.wait_for_reprediction()
-                self._pref_session.flush_pending_inmemory()
 
             # Execute the high-level plan in simulation. On a mid-skill takeover
             # the user chooses, via the teleop Done button, whether to redo this
@@ -1305,8 +1290,8 @@ Write a VERY BRIEF summary of all the changes for a non-technical end user. Make
             f.write(gesture_file_text)
         # Immediately add the new gesture to specific BT nodes.
         gesture_interaction_parameters = [
-            "InitiateTransferInteraction",
-            "TransferCompleteInteraction",
+            "UserTransferReadySignal",
+            "UserTransferDoneSignal",
         ]
         for hla, objs in self._all_ground_hlas:
             try:

@@ -64,10 +64,7 @@ class PressMicrowaveButtonHLA(HighLevelAction):
         )
         return "press_microwave_button.yaml"
 
-    # manip_confirm_mode defaults to None so per-user behavior trees that
-    # predate the AskForManipulationConfirmation parameter still execute
-    # (today's wait-for-the-user button-detection page).
-    def press_microwave_button(self, speed: str, duration: float, manip_confirm_mode=None) -> None:
+    def press_microwave_button(self, speed: str, duration: float, manip_confirm_mode, autocontinue_seconds) -> None:
         assert self.sim.held_object_name is None
 
         if self.robot_interface is not None:
@@ -88,7 +85,7 @@ class PressMicrowaveButtonHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.microwave_closeup_gaze_pos)
 
         time.sleep(2.0) # wait for the robot to stabilize before perception
-        confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm_mode)
+        confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm_mode, autocontinue_seconds)
         press_button_poses = self.perception_interface.perceive_button_pressing_poses(
             web_interface=self.web_interface, confirm_mode=confirm_mode,
             confirm_autocontinue_s=confirm_autocontinue_s)

@@ -63,10 +63,7 @@ class OpenDoorHLA(HighLevelAction):
         assert appliance.name in ["fridge", "microwave"]
         return f"open_{appliance.name}.yaml"
 
-    # manip_confirm_mode defaults to None so per-user behavior trees that
-    # predate the AskForManipulationConfirmation parameter still execute
-    # (today's wait-for-the-user handle-detection page).
-    def open_fridge(self, speed: str, manip_confirm_mode=None) -> None:
+    def open_fridge(self, speed: str, manip_confirm_mode, autocontinue_seconds) -> None:
 
         assert self.sim.held_object_name is None
 
@@ -97,7 +94,7 @@ class OpenDoorHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.fridge_door_gaze_pos)
 
-        confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm_mode)
+        confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm_mode, autocontinue_seconds)
         handle_opening_poses = self.perception_interface.perceive_handle_opening_poses(
             "bottom textured fridge door", web_interface=self.web_interface,
             confirm_mode=confirm_mode, confirm_autocontinue_s=confirm_autocontinue_s)
@@ -150,7 +147,7 @@ class OpenDoorHLA(HighLevelAction):
 
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         
-    def open_microwave(self, speed: str, manip_confirm_mode=None) -> None:
+    def open_microwave(self, speed: str, manip_confirm_mode, autocontinue_seconds) -> None:
         assert self.sim.held_object_name is None
 
         if self.robot_interface is not None:
@@ -180,7 +177,7 @@ class OpenDoorHLA(HighLevelAction):
         # self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
 
-        confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm_mode)
+        confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm_mode, autocontinue_seconds)
         handle_opening_poses = self.perception_interface.perceive_handle_opening_poses(
             "microwave", web_interface=self.web_interface,
             confirm_mode=confirm_mode, confirm_autocontinue_s=confirm_autocontinue_s)

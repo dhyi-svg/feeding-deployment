@@ -39,7 +39,10 @@ _CONFIRM_MODE_MAP = {
 
 _RETRACT_MAP = {"yes": 1, "no": 0}
 
-_AUTOCONTINUE_MAP = {"15 sec": 15.0, "30 sec": 30.0, "60 sec": 60.0}
+# "no autocontinue" -> 0.0: the web pages treat a non-positive countdown as
+# "show the page and wait indefinitely". Only the two feeding wait dims offer
+# it; the mealprep dim's options never contain the key.
+_AUTOCONTINUE_MAP = {"15 sec": 15.0, "30 sec": 30.0, "60 sec": 60.0, "no autocontinue": 0.0}
 
 _OUTSIDE_MOUTH_DISTANCE_MAP = {"near": 0.07, "medium": 0.1, "far": 0.13}
 
@@ -152,16 +155,17 @@ _BT_MAPPING: list[tuple[str, list[str], str, dict | Any]] = [
     # Speed — all 29 YAMLs
     ("robot_speed", _ALL_BT_YAMLS, "Speed", _SPEED_MAP),
 
-    # Feeding pickup confirmation (bite / drink / wipe verification pages)
-    ("confirm_feeding_pickup", ["acquire_bite.yaml"], "TransferAskForConfirmation", _CONFIRM_MODE_MAP),
-    ("confirm_feeding_pickup", ["transfer_drink.yaml", "transfer_wipe.yaml"],
-     "AskForConfirmationInitiatingTransferSequence", _CONFIRM_MODE_MAP),
+    # Feeding pickup confirmation (bite / drink / wipe verification pages) —
+    # one parameter name across all three skills.
+    ("confirm_feeding_pickup",
+     ["acquire_bite.yaml", "transfer_drink.yaml", "transfer_wipe.yaml"],
+     "PickupConfirmMode", _CONFIRM_MODE_MAP),
 
     # Navigation arrival confirmation (post-arrival position check/adjust page)
     ("confirm_navigation_arrival",
      ["navigate_to_fridge.yaml", "navigate_to_microwave.yaml",
       "navigate_to_sink.yaml", "navigate_to_table.yaml"],
-     "AskForArrivalConfirmation", _CONFIRM_MODE_MAP),
+     "ArrivalConfirmMode", _CONFIRM_MODE_MAP),
 
     # Manipulation confirmation (detection confirms at pickups / door handles /
     # microwave button / table+sink placement + plate-release confirms).
@@ -175,39 +179,69 @@ _BT_MAPPING: list[tuple[str, list[str], str, dict | Any]] = [
       "place_plate_on_table.yaml", "place_plate_in_sink.yaml",
       "press_microwave_button.yaml", "gaze_at_table.yaml",
       "open_fridge.yaml", "open_microwave.yaml"],
-     "AskForManipulationConfirmation", _CONFIRM_MODE_MAP),
+     "ManipulationConfirmMode", _CONFIRM_MODE_MAP),
 
-    # Autocontinue wait time
-    ("wait_before_autocontinue_seconds",
-     ["acquire_bite.yaml", "transfer_utensil.yaml", "transfer_drink.yaml"],
-     "TimeToWaitBeforeAutocontinue", _AUTOCONTINUE_MAP),
+    # Autocontinue wait times. Every autocontinue duration is a BT parameter,
+    # split across three dims:
+    #   - task_selection: the next-task pages after a bite/sip
+    #     (TaskReselectionAutocontinueSeconds in transfer_utensil,
+    #     transfer_drink).
+    #   - feeding_pickup: the bite-selection page
+    #     (BiteSelectionAutocontinueSeconds) and the bite/drink/wipe
+    #     pickup-confirmation pages (PickupConfirmAutocontinueSeconds, one
+    #     name across all three pickup skills) -- both written with the same
+    #     value.
+    #   - mealprep: the detection/plate-release confirmation pages
+    #     (ManipulationConfirmAutocontinueSeconds) and the post-arrival
+    #     position check (ArrivalConfirmAutocontinueSeconds) -- both written
+    #     with the same value.
+    ("wait_before_autocontinue_task_selection",
+     ["transfer_utensil.yaml", "transfer_drink.yaml"],
+     "TaskReselectionAutocontinueSeconds", _AUTOCONTINUE_MAP),
+    ("wait_before_autocontinue_feeding_pickup",
+     ["acquire_bite.yaml"],
+     "BiteSelectionAutocontinueSeconds", _AUTOCONTINUE_MAP),
+    ("wait_before_autocontinue_feeding_pickup",
+     ["acquire_bite.yaml", "transfer_drink.yaml", "transfer_wipe.yaml"],
+     "PickupConfirmAutocontinueSeconds", _AUTOCONTINUE_MAP),
+    ("wait_before_autocontinue_mealprep",
+     ["pick_plate_from_fridge.yaml", "pick_plate_from_microwave.yaml",
+      "pick_plate_from_table.yaml", "place_plate_in_microwave.yaml",
+      "place_plate_on_table.yaml", "place_plate_in_sink.yaml",
+      "press_microwave_button.yaml", "gaze_at_table.yaml",
+      "open_fridge.yaml", "open_microwave.yaml"],
+     "ManipulationConfirmAutocontinueSeconds", _AUTOCONTINUE_MAP),
+    ("wait_before_autocontinue_mealprep",
+     ["navigate_to_fridge.yaml", "navigate_to_microwave.yaml",
+      "navigate_to_sink.yaml", "navigate_to_table.yaml"],
+     "ArrivalConfirmAutocontinueSeconds", _AUTOCONTINUE_MAP),
 
     # Outside-mouth distance
     ("outside_mouth_distance", _TRANSFER_YAMLS, "OutsideMouthDistance", _outside_mouth_translate),
 
     # Convey robot ready for initiating transfer
     ("convey_robot_ready_for_initiating_transfer", _TRANSFER_YAMLS,
-     "ReadyToInitiateTransferInteraction", _CONVEY_READY_MAP),
+     "RobotTransferStartCue", _CONVEY_READY_MAP),
 
     # Detect user ready (per-tool)
     ("detect_user_ready_for_initiating_transfer_feeding",
-     ["transfer_utensil.yaml"], "InitiateTransferInteraction", _INITIATE_TRANSFER_MAP),
+     ["transfer_utensil.yaml"], "UserTransferReadySignal", _INITIATE_TRANSFER_MAP),
     ("detect_user_ready_for_initiating_transfer_drinking",
-     ["transfer_drink.yaml"], "InitiateTransferInteraction", _INITIATE_TRANSFER_MAP),
+     ["transfer_drink.yaml"], "UserTransferReadySignal", _INITIATE_TRANSFER_MAP),
     ("detect_user_ready_for_initiating_transfer_wiping",
-     ["transfer_wipe.yaml"], "InitiateTransferInteraction", _INITIATE_TRANSFER_MAP),
+     ["transfer_wipe.yaml"], "UserTransferReadySignal", _INITIATE_TRANSFER_MAP),
 
     # Convey robot ready for completing transfer
     ("convey_robot_ready_for_completing_transfer", _TRANSFER_YAMLS,
-     "ReadyForTransferInteraction", _CONVEY_READY_MAP),
+     "RobotTransferArrivedCue", _CONVEY_READY_MAP),
 
     # Detect user completed transfer (per-tool)
     ("detect_user_completed_transfer_feeding",
-     ["transfer_utensil.yaml"], "TransferCompleteInteraction", _COMPLETE_TRANSFER_MAP),
+     ["transfer_utensil.yaml"], "UserTransferDoneSignal", _COMPLETE_TRANSFER_MAP),
     ("detect_user_completed_transfer_drinking",
-     ["transfer_drink.yaml"], "TransferCompleteInteraction", _COMPLETE_TRANSFER_MAP),
+     ["transfer_drink.yaml"], "UserTransferDoneSignal", _COMPLETE_TRANSFER_MAP),
     ("detect_user_completed_transfer_wiping",
-     ["transfer_wipe.yaml"], "TransferCompleteInteraction", _COMPLETE_TRANSFER_MAP),
+     ["transfer_wipe.yaml"], "UserTransferDoneSignal", _COMPLETE_TRANSFER_MAP),
 
     # Skewering axis
     ("skewering_axis", ["acquire_bite.yaml"], "SkeweringOrientation", _SKEWERING_AXIS_MAP),
@@ -304,29 +338,22 @@ def _set_param_value(bt_data: dict, param_name: str, new_value: Any) -> bool:
 _CONFIRM_MODE_SPACE = {"type": "Enum", "elements": [0, 1, 2]}
 
 _CONFIRM_PARAM_BLOCKS: dict[str, dict] = {
-    "TransferAskForConfirmation": {
-        "name": "TransferAskForConfirmation",
-        "description": "Bite pickup confirmation page mode: 0 = skip, 1 = show with autocontinue, 2 = wait for the user.",
+    "PickupConfirmMode": {
+        "name": "PickupConfirmMode",
+        "description": "Bite/drink/wipe pickup confirmation page mode: 0 = skip, 1 = show with autocontinue, 2 = wait for the user.",
         "space": dict(_CONFIRM_MODE_SPACE),
         "is_user_editable": True,
         "value": 2,
     },
-    "AskForConfirmationInitiatingTransferSequence": {
-        "name": "AskForConfirmationInitiatingTransferSequence",
-        "description": "Drink/wipe pickup confirmation page mode: 0 = skip, 1 = show with autocontinue, 2 = wait for the user.",
-        "space": dict(_CONFIRM_MODE_SPACE),
-        "is_user_editable": True,
-        "value": 2,
-    },
-    "AskForArrivalConfirmation": {
-        "name": "AskForArrivalConfirmation",
+    "ArrivalConfirmMode": {
+        "name": "ArrivalConfirmMode",
         "description": "Post-arrival position check/adjust page mode: 0 = skip, 1 = show with autocontinue, 2 = wait for the user.",
         "space": dict(_CONFIRM_MODE_SPACE),
         "is_user_editable": True,
         "value": 1,
     },
-    "AskForManipulationConfirmation": {
-        "name": "AskForManipulationConfirmation",
+    "ManipulationConfirmMode": {
+        "name": "ManipulationConfirmMode",
         "description": "Manipulation confirmation page mode (detection confirm / plate release): 0 = skip, 1 = show with autocontinue, 2 = wait for the user.",
         "space": dict(_CONFIRM_MODE_SPACE),
         "is_user_editable": True,
@@ -413,60 +440,31 @@ def apply_bundle_to_behavior_trees(
     return warnings
 
 
-def apply_transfer_mode(
-    bundle: dict[str, str],
-    scene_description: Any,
-    hla_map: dict[str, Any],
-) -> None:
-    """Set scene_description.transfer_type from the bundle and re-init the
-    TransferToolHLA transfer object so that subsequent execute_action() calls
-    use the correct inside/outside mouth transfer implementation.
+def apply_transfer_mode(bundle: dict[str, str]) -> None:
+    """Validate the transfer_mode dim WITHOUT applying anything.
+
+    The robot's actual transfer type is fixed by the command line
+    (scene_description.transfer_type) and must never be edited by code, and
+    TransferToolHLA's inside/outside transfer object must never be swapped at
+    runtime. This deployment only performs outside-mouth transfer: the dim is
+    still asked/learned, but an 'inside mouth transfer' value reaching the
+    apply path (predicted or user-selected) fails loudly rather than silently
+    diverging from what the robot actually does.
     """
     mode = bundle.get("transfer_mode")
     if mode is None:
         return
 
-    new_type = _TRANSFER_MODE_MAP.get(mode)
-    if new_type is None:
+    if mode not in _TRANSFER_MODE_MAP:
         raise ValueError(
             f"Unknown transfer_mode={mode!r}. "
             f"Expected one of {list(_TRANSFER_MODE_MAP.keys())}."
         )
-
-    scene_description.transfer_type = new_type
-
-    transfer_hla = hla_map.get("TransferTool")
-    if transfer_hla is None:
-        return
-
-    # Re-run the inside/outside branch from TransferToolHLA.__init__
-    from feeding_deployment.actions.feel_the_bite.inside_mouth_transfer import (
-        InsideMouthTransfer,
-    )
-    from feeding_deployment.actions.feel_the_bite.outside_mouth_transfer import (
-        OutsideMouthTransfer,
-    )
-
-    if new_type == "inside":
-        transfer_hla.transfer = InsideMouthTransfer(
-            transfer_hla.sim,
-            transfer_hla.robot_interface,
-            transfer_hla.perception_interface,
-            transfer_hla.rviz_interface,
-            transfer_hla.no_waits,
-            transfer_hla.head_perception_log_dir,
+    if mode == "inside mouth transfer":
+        raise RuntimeError(
+            "inside mouth transfer is not supported in this deployment; "
+            "transfer_type is fixed by the command line."
         )
-    elif new_type == "outside":
-        transfer_hla.transfer = OutsideMouthTransfer(
-            transfer_hla.sim,
-            transfer_hla.robot_interface,
-            transfer_hla.perception_interface,
-            transfer_hla.rviz_interface,
-            transfer_hla.no_waits,
-            transfer_hla.head_perception_log_dir,
-        )
-    else:
-        raise ValueError(f"Unrecognized transfer type: {new_type!r}")
 
 
 _MICROWAVE_TIME_MAP = {

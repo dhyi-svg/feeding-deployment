@@ -9,11 +9,19 @@ parameters:
       elements: ["low", "medium", "high"]
     is_user_editable: True
     value: "medium"
-  - name: "AskForManipulationConfirmation"
+  - name: "ManipulationConfirmMode"
     description: "Manipulation confirmation page mode (detection confirm / plate release): 0 = skip, 1 = show with autocontinue, 2 = wait for the user."
     space:
       type: Enum
       elements: [0, 1, 2]
     is_user_editable: True
     value: 2
+  - name: "ManipulationConfirmAutocontinueSeconds"
+    description: "Seconds before the plate release confirmation page autocontinues when ManipulationConfirmMode is 1. 0 disables the autocontinue (the page waits for the user)."
+    space:
+      type: Box
+      lower: 0.0
+      upper: 1000.0
+    is_user_editable: True
+    value: 20.0
 fn: !hla place_plate_in_microwave

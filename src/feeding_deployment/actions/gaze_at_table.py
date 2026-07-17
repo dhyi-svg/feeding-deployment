@@ -49,10 +49,7 @@ class GazeAtTableHLA(HighLevelAction):
         assert table.name == "table"
         return "gaze_at_table.yaml"
 
-    # manip_confirm_mode defaults to None so per-user behavior trees that
-    # predate the AskForManipulationConfirmation parameter still execute
-    # (today's wait-for-the-user placement-detection page).
-    def gaze_at_table(self, speed: str, manip_confirm_mode=None) -> None:
+    def gaze_at_table(self, speed: str, manip_confirm_mode, autocontinue_seconds) -> None:
         if self.robot_interface is not None:
             self.robot_interface.set_speed(speed)
 
@@ -62,7 +59,7 @@ class GazeAtTableHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.table_gaze_pos)
 
-        confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm_mode)
+        confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm_mode, autocontinue_seconds)
         placement_poses = self.perception_interface.perceive_table_placement_poses(
             web_interface=self.web_interface, confirm_mode=confirm_mode,
             confirm_autocontinue_s=confirm_autocontinue_s)

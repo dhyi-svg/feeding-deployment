@@ -93,7 +93,7 @@ class NavigateHLA(HighLevelAction):
     # one full optimization epoch lands (10 s could just miss one).
     _GOAL_CONFIRM_SETTLE_S = 15.0
 
-    # Learned per-location navigation offset (PositionOffset BT parameter):
+    # Learned per-location navigation offset (ParkingOffset BT parameter):
     # an SE(2) correction (dx m, dy m, dyaw rad) in the goal pose's LOCAL frame,
     # accumulated from the user's post-arrival teleop adjustments and applied to
     # the nominal goal on every navigation. Bounds must match the Box space in
@@ -114,9 +114,6 @@ class NavigateHLA(HighLevelAction):
     # SUCCEEDED): here the base has been stationary since the user pressed
     # Done, matching the refinement window's settle scale.
     _ADJUST_SETTLE_S = 10.0
-    # Fallback autocontinue for the "Position OK / Adjust" prompt when no
-    # preference session is wired in (get_autocontinue_seconds is None).
-    _ADJUST_AUTOCONTINUE_S = 20.0
 
     # Defaults for the post-nav refinement window. Overridden at runtime by
     # config/nav/custom_param.yaml (section: refinement); see that file for the
@@ -428,8 +425,8 @@ class NavigateHLA(HighLevelAction):
         self._get_tf_buffer()  # warm the TF listener (used by the stall watchdog)
 
     def _navigate_to_target(
-        self, location_name: str, speed: str, via: list = None, position_offset=None,
-        arrival_confirm_mode=None,
+        self, location_name: str, speed: str, position_offset,
+        arrival_confirm_mode, autocontinue_seconds, via: list = None,
     ) -> None:
         # if self.robot_interface is None:
         #     print(f"[SIM] Would navigate to {location_name} (speed={speed}).")
@@ -489,7 +486,9 @@ class NavigateHLA(HighLevelAction):
                 if not human_parked:
                     self._refinement_window(wp, pose)
                 self._offer_position_adjustment(
-                    wp, nominal_pose, pose, position_offset, leg_used_recovery,
+                    wp, nominal_pose, pose, position_offset,
+                    autocontinue_seconds=autocontinue_seconds,
+                    leg_used_recovery=leg_used_recovery,
                     arrival_confirm_mode=arrival_confirm_mode,
                     human_parked=human_parked,
                 )
@@ -704,7 +703,7 @@ class NavigateHLA(HighLevelAction):
         return c * ddx + s * ddy, -s * ddx + c * ddy, NavigateHLA._wrap(byaw - ayaw)
 
     def _apply_offset_to_pose(self, pose: dict, offset) -> dict:
-        """Compose the learned PositionOffset onto a nominal goal pose.
+        """Compose the learned ParkingOffset onto a nominal goal pose.
 
         ``offset`` is the BT parameter value ([dx, dy, dyaw] in the goal's
         local frame) or None (per-user trees that predate the parameter).
@@ -1390,6 +1389,7 @@ class NavigateHLA(HighLevelAction):
 
     def _hardcoded_microwave_approach(
         self, speed: str, position_offset, arrival_confirm_mode,
+        autocontinue_seconds,
     ) -> None:
         """Logged-nav fridge->microwave: a scripted forward drive instead of
         move_base. Skips the goal-confirm settle/replan and the refinement
@@ -1422,6 +1422,7 @@ class NavigateHLA(HighLevelAction):
             self._navigate_to_target(
                 "microwave", speed, position_offset=position_offset,
                 arrival_confirm_mode=arrival_confirm_mode,
+                autocontinue_seconds=autocontinue_seconds,
             )
             return
         self.report_activity("Arriving at the microwave")
@@ -1430,6 +1431,7 @@ class NavigateHLA(HighLevelAction):
             "microwave", nominal_pose, dict(nominal_pose), position_offset,
             leg_used_recovery=False,
             arrival_confirm_mode=arrival_confirm_mode,
+            autocontinue_seconds=autocontinue_seconds,
             human_parked=(outcome == "human_done"),
         )
 
@@ -1463,31 +1465,20 @@ class NavigateHLA(HighLevelAction):
             NavigateHLA._yaw_from_quat(pose["qx"], pose["qy"], pose["qz"], pose["qw"]),
         )
 
-    def _adjust_autocontinue_seconds(self) -> float:
-        """Autocontinue for the adjust prompt, from the preference session's
-        wait_before_autocontinue_seconds (via the injected provider) when
-        available."""
-        provider = getattr(self, "get_autocontinue_seconds", None)
-        if provider is None:
-            return self._ADJUST_AUTOCONTINUE_S
-        try:
-            return float(provider())
-        except Exception:
-            return self._ADJUST_AUTOCONTINUE_S
-
     def _offer_position_adjustment(
         self,
         location_name: str,
         nominal_pose: dict[str, Any],
         commanded_pose: dict[str, Any],
         prev_offset,
+        autocontinue_seconds,
         leg_used_recovery: bool = False,
         arrival_confirm_mode=None,
         human_parked: bool = False,
     ) -> None:
         """After arrival at a real destination, let the user teleop the base to
         fine-adjust its position, and fold the adjustment into the learned
-        PositionOffset for this location.
+        ParkingOffset for this location.
 
         The new TOTAL offset is the user's final localized pose expressed in
         the NOMINAL (mapped) goal's local frame -- this accumulates previous
@@ -1504,7 +1495,7 @@ class NavigateHLA(HighLevelAction):
             return
         if location_name not in self._VALID_TARGETS:
             return
-        # confirm_navigation_arrival preference (AskForArrivalConfirmation BT
+        # confirm_navigation_arrival preference (ArrivalConfirmMode BT
         # param): 0 = page off (parking offsets stop being refined), 1 = page
         # with autocontinue, 2 = page waits indefinitely. None (per-user YAML
         # predating the param) keeps today's behavior (mode 1).
@@ -1543,8 +1534,10 @@ class NavigateHLA(HighLevelAction):
 
         try:
             # Mode 2 ("wait for me"): autocontinue_seconds <= 0 tells the page
-            # to show no countdown and wait for an explicit answer.
-            autocontinue_s = 0.0 if mode == 2 else self._adjust_autocontinue_seconds()
+            # to show no countdown and wait for an explicit answer. In mode 1
+            # the countdown is the skill's ArrivalConfirmAutocontinueSeconds BT
+            # parameter.
+            autocontinue_s = 0.0 if mode == 2 else float(autocontinue_seconds)
             choice = self.web_interface.get_nav_position_adjust_choice(
                 location_name, autocontinue_s
             )
@@ -1655,7 +1648,7 @@ class NavigateHLA(HighLevelAction):
         )
         node_name = f"NavigateTo{location_name.capitalize()}"
         result = self.process_behavior_tree_parameter_update(
-            objects, {}, node_name, "PositionOffset",
+            objects, {}, node_name, "ParkingOffset",
             [float(clamped[0]), float(clamped[1]), float(clamped[2])],
         )
         print(
@@ -1783,23 +1776,22 @@ class NavigateHLA(HighLevelAction):
         finally:
             self._nav_origin = None
 
-    # position_offset / arrival_confirm_mode default to None so per-user
-    # behavior trees that predate those parameters still execute (zero offset;
-    # today's autocontinue arrival page).
-    def navigate_to_fridge(self, speed: str, position_offset=None, arrival_confirm_mode=None) -> None:
+    def navigate_to_fridge(self, speed: str, position_offset, arrival_confirm_mode, autocontinue_seconds) -> None:
         self._navigate_to_target(
             "fridge", speed, position_offset=position_offset,
             arrival_confirm_mode=arrival_confirm_mode,
+            autocontinue_seconds=autocontinue_seconds,
         )
 
-    def navigate_to_microwave(self, speed: str, position_offset=None, arrival_confirm_mode=None) -> None:
+    def navigate_to_microwave(self, speed: str, position_offset, arrival_confirm_mode, autocontinue_seconds) -> None:
         # Logged-nav mode, fridge->microwave only: scripted forward drive. Any
         # other origin (table->microwave re-heat leg, unknown after a resume)
         # stays fully autonomous.
         if self._logged_nav_enabled():
             if getattr(self, "_nav_origin", None) == "fridge":
                 self._hardcoded_microwave_approach(
-                    speed, position_offset, arrival_confirm_mode
+                    speed, position_offset, arrival_confirm_mode,
+                    autocontinue_seconds=autocontinue_seconds,
                 )
                 return
             print(
@@ -1810,9 +1802,10 @@ class NavigateHLA(HighLevelAction):
         self._navigate_to_target(
             "microwave", speed, position_offset=position_offset,
             arrival_confirm_mode=arrival_confirm_mode,
+            autocontinue_seconds=autocontinue_seconds,
         )
 
-    def navigate_to_sink(self, speed: str, position_offset=None, arrival_confirm_mode=None) -> None:
+    def navigate_to_sink(self, speed: str, position_offset, arrival_confirm_mode, autocontinue_seconds) -> None:
         # table -> sink is the kitchen ingress: cross the open area to the
         # staging pose at the corridor mouth, turn there, then drive straight
         # into the corridor -- the mirror of the microwave->table egress via
@@ -1822,9 +1815,10 @@ class NavigateHLA(HighLevelAction):
         self._navigate_to_target(
             "sink", speed, via=[self._INGRESS_WAYPOINT], position_offset=position_offset,
             arrival_confirm_mode=arrival_confirm_mode,
+            autocontinue_seconds=autocontinue_seconds,
         )
 
-    def navigate_to_table(self, speed: str, position_offset=None, arrival_confirm_mode=None) -> None:
+    def navigate_to_table(self, speed: str, position_offset, arrival_confirm_mode, autocontinue_seconds) -> None:
         # microwave -> table is the kitchen egress: reverse out through the narrow
         # corridor to the open staging area, then turn and drive to the table.
         # Routing via the staging waypoint stops TEB from oscillating as it tries
@@ -1867,6 +1861,7 @@ class NavigateHLA(HighLevelAction):
             self._navigate_to_target(
                 "table", speed, via=via, position_offset=position_offset,
                 arrival_confirm_mode=arrival_confirm_mode,
+                autocontinue_seconds=autocontinue_seconds,
             )
             return
         if self._logged_nav_enabled():
@@ -1877,4 +1872,5 @@ class NavigateHLA(HighLevelAction):
         self._navigate_to_target(
             "table", speed, via=[self._STAGING_WAYPOINT], position_offset=position_offset,
             arrival_confirm_mode=arrival_confirm_mode,
+            autocontinue_seconds=autocontinue_seconds,
         )

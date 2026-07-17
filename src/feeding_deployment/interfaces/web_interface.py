@@ -604,9 +604,9 @@ class WebInterface:
             # Detection found no actionable bite: run the page in manual-only
             # mode. Send only the plate image and the no_detections status --
             # skip the bite/dip payloads (an empty current_bite dict hangs the
-            # page's data parsing) and auto_time (the page parses "0.0" as
-            # truthy, so a zero countdown would instantly auto-publish
-            # acquire_food with placeholder data).
+            # page's data parsing) and auto_time (manual-only mode must never
+            # arm a countdown; the page only counts down when an auto_time
+            # with a positive value arrives).
             no_detections_msg = {"state": "bite_selection", "status": "no_detections"}
 
             def _send_no_detections_data():

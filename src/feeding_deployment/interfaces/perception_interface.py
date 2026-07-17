@@ -23,7 +23,7 @@ LED_BAUD_RATE = 115200
 # color-mask false positives and shrinks the plate on the confirm screen. 0.70 keeps
 # the central 70% of width and height (~49% of pixels). Applies ONLY to the pick-plate
 # (attachment) flow -- see _center_crop_rgbd / perceive_attachment_poses.
-ATTACHMENT_CROP_FRAC = 0.70
+ATTACHMENT_CROP_FRAC = 0.65
 
 try:
     import rospy

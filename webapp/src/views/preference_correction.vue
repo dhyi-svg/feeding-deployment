@@ -65,7 +65,7 @@
                 <img alt="clear" src="../assets/clear.png">
               </button>
             </div>
-            <p v-if="!userInteracted" class="cdown auto-note">Auto-confirming the predicted ordering in <span>{{ countdown }}s</span></p>
+            <p v-if="!userInteracted && countdownTimer" class="cdown auto-note">Auto-confirming the predicted ordering in <span>{{ countdown }}s</span></p>
           </div>
 
           <!-- Categorical dim: option chips. -->
@@ -82,7 +82,7 @@
                 <div class="och" v-if="selected === option">✓</div>
               </div>
             </div>
-            <p v-if="!userInteracted" class="cdown auto-note">Auto-confirming <em>{{ selected }}</em> in <span>{{ countdown }}s</span></p>
+            <p v-if="!userInteracted && countdownTimer" class="cdown auto-note">Auto-confirming <em>{{ selected }}</em> in <span>{{ countdown }}s</span></p>
           </div>
         </div>
 
@@ -167,6 +167,11 @@ export default {
     },
     restartCountdown() {
       this.clearCountdownTimer()
+      // A non-positive wait means "no autocontinue": leave the page unarmed and
+      // wait for the user (never reachable via the mealprep options today, but
+      // every other countdown page guards this and self-confirming preference
+      // questions would be the worst possible failure mode).
+      if (!Number.isFinite(this.autocontinueSeconds) || this.autocontinueSeconds <= 0) return
       this.countdown = this.autocontinueSeconds
       this.countdownTimer = setInterval(() => {
         if (this.countdown > 0) {

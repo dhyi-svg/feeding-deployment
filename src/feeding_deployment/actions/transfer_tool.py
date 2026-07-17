@@ -306,7 +306,7 @@ class TransferToolHLA(HighLevelAction):
         self, speed: str,
         ready_to_initiate: str, initiate: str,
         ready_for_transfer: str, transfer_complete: str,
-        outside_mouth_distance: float, time_to_wait: float,
+        outside_mouth_distance: float, task_reselection_autocontinue_seconds: float,
         retract_after_transfer: int = 0,
     ) -> None:
         # assert self.sim.held_object_name == "utensil"
@@ -317,7 +317,7 @@ class TransferToolHLA(HighLevelAction):
             self.robot_interface.set_speed(speed)
 
         if self.web_interface is not None:
-            self.web_interface.set_bite_autocontinue_timeout(time_to_wait)
+            self.web_interface.set_bite_autocontinue_timeout(task_reselection_autocontinue_seconds)
 
         if self.wrist_interface is not None:
             # start the horizontal spoon thread if it is not already running
@@ -339,57 +339,62 @@ class TransferToolHLA(HighLevelAction):
             print("Retracting to rest position after bite transfer.")
             self.move_to_joint_positions(self.sim.scene_description.retract_pos)
 
-    def transfer_drink(self, speed: str, *args, **kwargs) -> None:
+    def transfer_drink(
+        self, speed: str,
+        ready_to_initiate: str, initiate: str,
+        ready_for_transfer: str, transfer_complete: str,
+        outside_mouth_distance: float, pickup_confirm_mode,
+        task_reselection_autocontinue_seconds: float, pickup_confirm_autocontinue_seconds: float,
+    ) -> None:
         assert self.sim.held_object_name == "drink"
 
         if self.robot_interface is not None:
             self.robot_interface.set_speed(speed)
-        
-        # Assume the second last item in args is the ask_confirmation
-        ask_confirmation = args[-2]
-
-        # Assume the last item in args is autocontinue time
-        drink_autocontinue_time = args[-1]
-
-        # All other items (everything except the last two) should go on to the next call
-        remaining_args = args[:-2]
 
         if self.web_interface is not None:
-            self.web_interface.set_drink_autocontinue_timeout(drink_autocontinue_time)
-            # ask_confirmation (AskForConfirmationInitiatingTransferSequence,
+            self.web_interface.set_drink_autocontinue_timeout(task_reselection_autocontinue_seconds)
+            # pickup_confirm_mode (PickupConfirmMode,
             # from confirm_feeding_pickup): 0 = skip, 1 = autocontinue, 2 = wait.
-            if ask_confirmation:
+            # Mode 1 counts down from PickupConfirmAutocontinueSeconds.
+            if pickup_confirm_mode:
                 autocontinue_s = (
-                    self._confirm_autocontinue_seconds()
-                    if int(ask_confirmation) == 1 else 0.0
+                    float(pickup_confirm_autocontinue_seconds)
+                    if int(pickup_confirm_mode) == 1 else 0.0
                 )
                 self.web_interface.get_drink_transfer_confirmation(autocontinue_s)
 
         self.move_to_joint_positions(self.sim.scene_description.before_transfer_pos)
 
-        self.set_tool("drink")    
-        self.execute_transfer(*remaining_args, maintain_position_at_goal=True, **kwargs)    
+        self.set_tool("drink")
+        self.execute_transfer(
+            ready_to_initiate, initiate, ready_for_transfer, transfer_complete,
+            outside_mouth_distance, maintain_position_at_goal=True,
+        )
 
-    def transfer_wipe(self, speed: str, *args, **kwargs) -> None:
+    def transfer_wipe(
+        self, speed: str,
+        ready_to_initiate: str, initiate: str,
+        ready_for_transfer: str, transfer_complete: str,
+        outside_mouth_distance: float, pickup_confirm_mode,
+        pickup_confirm_autocontinue_seconds: float,
+    ) -> None:
         assert self.sim.held_object_name == "wipe"
 
         if self.robot_interface is not None:
             self.robot_interface.set_speed(speed)
 
-        # Assume the last item in args is the ask_confirmation
-        ask_confirmation = args[-1]
-        # All other items (everything except the last) should go on to the next call
-        remaining_args = args[:-1]
-        
         self.move_to_joint_positions(self.sim.scene_description.before_transfer_pos)
 
-        # ask_confirmation semantics as in transfer_drink above.
-        if self.web_interface is not None and ask_confirmation:
+        # pickup_confirm_mode semantics as in transfer_drink above.
+        if self.web_interface is not None and pickup_confirm_mode:
             autocontinue_s = (
-                self._confirm_autocontinue_seconds()
-                if int(ask_confirmation) == 1 else 0.0
+                float(pickup_confirm_autocontinue_seconds)
+                if int(pickup_confirm_mode) == 1 else 0.0
             )
             self.web_interface.get_wipe_transfer_confirmation(autocontinue_s)
 
         self.set_tool("wipe")
-        self.execute_transfer(*remaining_args, maintain_position_at_goal=True, **kwargs)
+        self.execute_transfer(
+            ready_to_initiate, initiate, ready_for_transfer, transfer_complete,
+            outside_mouth_distance, maintain_position_at_goal=True,
+        )

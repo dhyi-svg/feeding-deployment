@@ -1,5 +1,5 @@
 name: "TransferWipe"
-description: "Bring the wipe to the user's mouth for a cleaning. Before initiating the transfer sequence for wipe, the robot can confirm with the user on the web app (web interface) once using AskForConfirmationInitiatingTransferSequence. A wipe transfer starts with an ReadyToInitiateTransferInteraction (robot to human) where the robot conveys to the user that it is ready to initiate the wipe transfer, then an InitiateTransferInteraction (human to robot) where the human conveys to the robot that it is ready for a wipe transfer. After this, the robot moves the wipe either near the user's mouth (OutsideMouthDistance defines how near) or to touching distance of the user's mouth. Then commences the ReadyForTransferInteraction (robot to human) where the robot conveys to the user that they can start cleaning their mouth now. After the users is done cleaning their mouth, they use the TransferCompleteInteraction (human to robot) to convey to the robot that they are done. The robot then moves the wipe away from the user's mouth. The robot does not autocontinue wipe transfer again, and wait's for the user's to specify the next task."
+description: "Bring the wipe to the user's mouth for a cleaning. Before initiating the transfer sequence for wipe, the robot can confirm with the user on the web app (web interface) once using PickupConfirmMode. A wipe transfer starts with an RobotTransferStartCue (robot to human) where the robot conveys to the user that it is ready to initiate the wipe transfer, then an UserTransferReadySignal (human to robot) where the human conveys to the robot that it is ready for a wipe transfer. After this, the robot moves the wipe either near the user's mouth (OutsideMouthDistance defines how near) or to touching distance of the user's mouth. Then commences the RobotTransferArrivedCue (robot to human) where the robot conveys to the user that they can start cleaning their mouth now. After the users is done cleaning their mouth, they use the UserTransferDoneSignal (human to robot) to convey to the robot that they are done. The robot then moves the wipe away from the user's mouth. The robot does not autocontinue wipe transfer again, and wait's for the user's to specify the next task."
 type: "Behavior"
 parameters:
   - name: "Speed"
@@ -9,29 +9,29 @@ parameters:
       elements: ["low", "medium", "high"]
     is_user_editable: True
     value: "medium"
-  - name: "ReadyToInitiateTransferInteraction"
-    description: "Interaction mode for how the robot conveys to the user that it is ready to initiate the wipe transfer."
+  - name: "RobotTransferStartCue"
+    description: "Cue (robot to user) announcing the robot is about to start the wipe transfer."
     space:
       type: "Enum"
       elements: ["silent", "voice", "led", "beep", "voice_led"]
     is_user_editable: True
     value: "voice"
-  - name: "InitiateTransferInteraction"
-    description: "Interaction mode for how the user conveys to the robot that they are ready for a wipe transfer."
+  - name: "UserTransferReadySignal"
+    description: "Signal (user to robot) that the user is ready for the wipe transfer."
     space:
       type: "Enum"
       elements: ["button", "open_mouth", "auto_timeout"]
     is_user_editable: True
     value: "open_mouth"
-  - name: "ReadyForTransferInteraction"
-    description: "Interaction mode for how the robot conveys to the user that they can take start cleaning now."
+  - name: "RobotTransferArrivedCue"
+    description: "Cue (robot to user) that the wipe has arrived and the user can start cleaning their mouth."
     space:
       type: "Enum"
       elements: ["silent", "voice", "led", "beep", "voice_led"]
     is_user_editable: True
     value: "voice"
-  - name: "TransferCompleteInteraction"
-    description: "Interaction mode for how the user conveys to the robot that they are done cleaning their mouth. Sense corresponds to the robot waiting for a head nod from the user."
+  - name: "UserTransferDoneSignal"
+    description: "Signal (user to robot) that the user is done cleaning their mouth. Sense corresponds to the robot waiting for a head nod from the user."
     space:
       type: "Enum"
       elements: ["button", "sense", "auto_timeout"]
@@ -45,11 +45,19 @@ parameters:
       upper: 0.15
     is_user_editable: True
     value: 0.1
-  - name: "AskForConfirmationInitiatingTransferSequence"
+  - name: "PickupConfirmMode"
     description: "Wipe pickup confirmation page mode: 0 = skip, 1 = show with autocontinue, 2 = wait for the user."
     space:
       type: "Enum"
       elements: [0, 1, 2]
     is_user_editable: True
     value: 2
+  - name: "PickupConfirmAutocontinueSeconds"
+    description: "Seconds before the wipe pickup confirmation page autocontinues when PickupConfirmMode is 1. 0 disables the autocontinue (the page waits for the user)."
+    space:
+      type: "Box"
+      lower: 0.0
+      upper: 1000.0
+    is_user_editable: True
+    value: 20.0
 fn: !hla transfer_wipe

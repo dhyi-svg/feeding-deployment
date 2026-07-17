@@ -91,7 +91,7 @@ _TEXT_FIELD_SET = set(TEXT_FIELDS)
 _NAV_OFFSET_FIELD_SET = set(NAV_OFFSET_FIELDS)
 
 # Default autocontinue (seconds) for the correction page before the user's
-# wait_before_autocontinue_seconds preference has been finalized.
+# wait_before_autocontinue_mealprep preference has been finalized.
 _DEFAULT_AUTOCONTINUE_SECONDS = 10.0
 
 # ---------------------------------------------------------------------------
@@ -112,20 +112,22 @@ DEFAULT_PHYSICAL_PROFILE = (
 # Preference dimensions asked at the start of the meal (before fetching the
 # plate). The two confirmation-mode dims fire first during the fridge leg
 # (navigation arrival page, handle-detection page), so they are asked up
-# front; they come BEFORE the wait pref so the user learns what pages exist
-# (and what "autocontinue" refers to) before choosing its duration. The
-# finalized wait then drives the autocontinue of every later correction and
-# confirmation page (the three earlier ask pages use the 10 s bootstrap
-# default).
+# front; they come BEFORE the mealprep wait pref so the user learns what pages
+# exist (and what "autocontinue" refers to) before choosing its duration. The
+# finalized mealprep wait then drives the autocontinue of every later
+# correction/ask page and mealprep confirmation page (the three earlier ask
+# pages use the 10 s bootstrap default). The two feeding wait dims are asked
+# at the table (TABLE_PREF_DIMS), just before the pages they govern first
+# appear.
 INITIAL_PREF_DIMS = [
     "robot_speed",
     "confirm_navigation_arrival",
     "confirm_manipulation",
-    "wait_before_autocontinue_seconds",
+    "wait_before_autocontinue_mealprep",
 ]
 
 # Behavior trees whose parameters come from (re)prediction: plate pickups read
-# HandleColor/ColorRange, navigations read PositionOffset, and the feeding
+# PlateHandleColor/PlateHandleColorTolerance, navigations read ParkingOffset, and the feeding
 # skills read the table dims. run.py joins the background reprediction before
 # executing these; every other skill only reads dims that are finalized before
 # it can run (Speed, confirm_navigation_arrival and confirm_manipulation from
@@ -163,6 +165,8 @@ TABLE_PREF_DIMS = [
     "detect_user_completed_transfer_drinking",
     "detect_user_completed_transfer_wiping",
     "retract_between_bites",
+    "wait_before_autocontinue_feeding_pickup",
+    "wait_before_autocontinue_task_selection",
 ]
 
 
@@ -174,12 +178,12 @@ def _nav_yaml_name(location: str) -> str:
     return f"navigate_to_{location}.yaml"
 
 
-# Full parameter block for upserting PositionOffset into a per-user navigate
+# Full parameter block for upserting ParkingOffset into a per-user navigate
 # BT YAML that predates the parameter (per-user trees are copied from factory
 # only for NEW users, so existing deployments never pick it up otherwise).
 # Must match the factory navigate_to_*.yaml definition.
 _NAV_OFFSET_PARAM = {
-    "name": "PositionOffset",
+    "name": "ParkingOffset",
     "description": (
         "Learned SE(2) offset (dx m, dy m, dyaw rad) applied to the nominal "
         "goal pose in the goal's local frame, accumulated from the user's "
@@ -195,9 +199,12 @@ _NAV_OFFSET_PARAM = {
 
 
 def _wait_pref_to_seconds(value: Optional[str]) -> float:
-    """'10 sec' -> 10.0. Falls back to the default on anything unexpected."""
+    """'10 sec' -> 10.0; 'no autocontinue' -> 0.0 (page waits indefinitely).
+    Falls back to the default on anything unexpected."""
     if not value:
         return _DEFAULT_AUTOCONTINUE_SECONDS
+    if str(value).strip().lower() == "no autocontinue":
+        return 0.0
     try:
         return float(str(value).split()[0])
     except (ValueError, IndexError):
@@ -213,8 +220,6 @@ class PreferenceSession:
         *,
         web_interface: Any = None,
         data_logger: Any = None,
-        scene_description: Any = None,
-        hla_map: Optional[Dict[str, Any]] = None,
         flair: Any = None,
         on_change: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> None:
@@ -223,8 +228,6 @@ class PreferenceSession:
         self.context = dict(context)
         self._web = web_interface
         self._logger = data_logger
-        self._scene = scene_description
-        self._hla_map = hla_map or {}
         self._flair = flair
         # Called with capture_state() whenever a correction is locked, so the
         # latest preference state is persisted immediately (see _finalize).
@@ -252,11 +255,6 @@ class PreferenceSession:
         # microwave_time once apply_microwave routes the planner). settings_view()
         # marks these editable=False and edit() ignores them.
         self._locked: set[str] = set()
-        # Set by a settings edit that changed transfer_mode (and by every
-        # background reprediction apply); the transfer-object re-init
-        # (apply_transfer_mode) is deferred to flush_pending_inmemory() on
-        # the main thread so it never swaps the transfer under an in-flight motion.
-        self._pending_transfer_reinit = False
 
         # Serializes every BT-YAML writing section (_apply_non_planning and the
         # open-color/nav writers) across the main thread, the settings
@@ -296,9 +294,9 @@ class PreferenceSession:
         handle_color = None
         color_range = None
         for param in data.get("parameters", []):
-            if param.get("name") == "HandleColor":
+            if param.get("name") == "PlateHandleColor":
                 handle_color = param.get("value")
-            elif param.get("name") == "ColorRange":
+            elif param.get("name") == "PlateHandleColorTolerance":
                 color_range = param.get("value")
         return color_from_bt(handle_color, color_range)
 
@@ -306,7 +304,7 @@ class PreferenceSession:
         return {f: self._read_color_seed(f) for f in COLOR_FIELDS}
 
     def _write_color_to_bt(self, field: str, color: Dict[str, Any]) -> None:
-        """Write a canonical color into its pickup BT YAML (HandleColor/ColorRange)."""
+        """Write a canonical color into its pickup BT YAML (PlateHandleColor/PlateHandleColorTolerance)."""
         location = field.rsplit("_", 1)[-1]
         fpath = self._bt_dir / _pickup_yaml_name(location)
         if not fpath.exists():
@@ -314,8 +312,8 @@ class PreferenceSession:
         data = _load_yaml(fpath)
         handle_color, color_range = color_to_bt(color)
         changed = False
-        changed |= _set_param_value(data, "HandleColor", handle_color)
-        changed |= _set_param_value(data, "ColorRange", color_range)
+        changed |= _set_param_value(data, "PlateHandleColor", handle_color)
+        changed |= _set_param_value(data, "PlateHandleColorTolerance", color_range)
         if changed:
             _save_yaml(fpath, data)
 
@@ -349,7 +347,7 @@ class PreferenceSession:
         data = _load_yaml(fpath)
         value = None
         for param in data.get("parameters", []):
-            if param.get("name") == "PositionOffset":
+            if param.get("name") == "ParkingOffset":
                 value = param.get("value")
         return nav_offset_from_bt(value)
 
@@ -357,7 +355,7 @@ class PreferenceSession:
         return {f: self._read_nav_offset_seed(f) for f in NAV_OFFSET_FIELDS}
 
     def _write_nav_offset_to_bt(self, field: str, offset: Dict[str, Any]) -> None:
-        """Write a canonical offset into its navigate BT YAML (PositionOffset).
+        """Write a canonical offset into its navigate BT YAML (ParkingOffset).
 
         Unlike colors (whose params shipped in the factory YAMLs from day one),
         a pre-existing per-user tree may lack the parameter entirely -- upsert
@@ -368,7 +366,7 @@ class PreferenceSession:
             return
         data = _load_yaml(fpath)
         value = nav_offset_to_bt(offset)
-        if _set_param_value(data, "PositionOffset", value):
+        if _set_param_value(data, "ParkingOffset", value):
             _save_yaml(fpath, data)
         else:
             data.setdefault("parameters", []).append({**_NAV_OFFSET_PARAM, "value": value})
@@ -557,14 +555,8 @@ class PreferenceSession:
                 self._repredict_triggers = []
             try:
                 self._repredict_open(triggers)
-                # Apply repredicted categorical values to the BTs + FLAIR. The
-                # transfer-object reconstruction must happen on the MAIN thread
-                # (never under an in-flight motion), so defer it exactly like
-                # the settings-edit path does: flush_pending_inmemory() runs it
-                # at the next skill boundary.
-                self._apply_non_planning(reinit_transfer=False)
-                with self._lock:
-                    self._pending_transfer_reinit = True
+                # Apply repredicted categorical values to the BTs + FLAIR.
+                self._apply_non_planning()
             except Exception as e:  # a failed repredict must never wedge joiners
                 # Previous predictions stay applied; the next correction (or
                 # this loop's dirty pass) retries with a fresh LLM call.
@@ -587,21 +579,17 @@ class PreferenceSession:
     # ------------------------------------------------------------------ #
     # Apply
     # ------------------------------------------------------------------ #
-    def _apply_non_planning(self, *, reinit_transfer: bool = True) -> List[str]:
-        """Apply all BT-parameter dims + (optionally) transfer mode + dip from the
-        current bundle. Idempotent and free of planner side effects (microwave atom is
-        applied separately via apply_microwave).
-
-        ``reinit_transfer=False`` skips the transfer-object reconstruction
-        (apply_transfer_mode); the settings-edit worker and the background
-        repredict worker pass this and defer that reconstruction to
-        flush_pending_inmemory() on the main thread so the transfer object is
-        never swapped under an in-flight transfer motion."""
+    def _apply_non_planning(self) -> List[str]:
+        """Apply all BT-parameter dims + dip + bite ordering from the current
+        bundle, and validate transfer_mode (apply_transfer_mode never applies
+        anything -- the robot's transfer type is fixed by the command line --
+        but raises loudly on an unsupported 'inside mouth transfer' value).
+        Idempotent and free of planner side effects (microwave atom is applied
+        separately via apply_microwave)."""
         with self._bt_write_mutex:
             bundle = self._categorical_bundle()  # single consistent snapshot
             warnings = apply_bundle_to_behavior_trees(bundle, self._bt_dir)
-            if reinit_transfer and self._scene is not None:
-                apply_transfer_mode(bundle, self._scene, self._hla_map)
+            apply_transfer_mode(bundle)
             apply_dip_preference(bundle, self._flair)
             apply_bite_ordering(bundle, self._flair)
             return warnings
@@ -694,10 +682,12 @@ class PreferenceSession:
         self._clear_activity()
 
     @property
-    def wait_seconds(self) -> float:
-        """Autocontinue timeout for correction pages, from the (possibly
-        finalized) wait_before_autocontinue_seconds preference."""
-        return _wait_pref_to_seconds(self.bundle.get("wait_before_autocontinue_seconds"))
+    def wait_seconds_mealprep(self) -> float:
+        """Autocontinue timeout for the preference ask/correction pages, from
+        the (possibly finalized) wait_before_autocontinue_mealprep preference.
+        The feeding wait dims never flow through the session -- they reach
+        their pages only via the BT parameters apply_preferences writes."""
+        return _wait_pref_to_seconds(self.bundle.get("wait_before_autocontinue_mealprep"))
 
     def ask(self, dims: List[str]) -> None:
         """Show the prediction for each categorical dim in ``dims`` one at a
@@ -723,7 +713,7 @@ class PreferenceSession:
             return
 
         total = len(dims)
-        self._web.start_preference_correction(total, self.wait_seconds)
+        self._web.start_preference_correction(total, self.wait_seconds_mealprep)
         try:
             for step, field in enumerate(dims):
                 # Join any in-flight background reprediction before reading the
@@ -740,7 +730,7 @@ class PreferenceSession:
                     options=list(PREF_OPTIONS.get(field, [])),
                     step=step,
                     total=total,
-                    autocontinue_seconds=self.wait_seconds,
+                    autocontinue_seconds=self.wait_seconds_mealprep,
                     kind=PREF_KIND.get(field, "categorical"),
                 )
                 if user_value is None:
@@ -901,8 +891,7 @@ class PreferenceSession:
 
         Treated as a *correction* to ground truth: updates the bundle, records it in
         ``corrected``, re-predicts the still-open dims against the new value, and
-        applies it to the BTs immediately. The transfer-object re-init is deferred to
-        flush_pending_inmemory() (main thread). Returns True if applied, False if the
+        applies it to the BTs immediately. Returns True if applied, False if the
         edit was ignored (color dim, locked, or not a valid option). Called from the
         WebInterface apply-worker thread; the slow LLM re-prediction runs outside the
         session lock."""
@@ -919,29 +908,13 @@ class PreferenceSession:
         self._finalize(field, value, changed=changed)
         if changed:
             # Apply the edited value to the BTs + dip immediately (fast, no
-            # LLM) so the next skill sees it even before the reprediction
-            # lands; defer the transfer-object reconstruction so it never
-            # swaps under an in-flight transfer (flush_pending_inmemory).
-            self._apply_non_planning(reinit_transfer=False)
-            if field == "transfer_mode":
-                with self._lock:
-                    self._pending_transfer_reinit = True
+            # LLM) so the next skill sees it even before the reprediction lands.
+            self._apply_non_planning()
             # Re-propagate the still-open dims in the background; consumers
             # (ask steps, prediction-consuming skills) join before reading.
             self._schedule_repredict(f"settings_edit:{field}")
         self._log("preference_settings_edit", field=field, value=value, changed=changed)
         return True
-
-    def flush_pending_inmemory(self) -> None:
-        """Run deferred in-memory applies on the MAIN thread at a safe boundary
-        (run.py calls this just before each execute_action). Currently only the
-        transfer-object re-init, deferred from edit() so the transfer object is
-        never reconstructed under an in-flight transfer motion."""
-        with self._lock:
-            pending = self._pending_transfer_reinit
-            self._pending_transfer_reinit = False
-        if pending and self._scene is not None:
-            apply_transfer_mode(self._categorical_bundle(), self._scene, self._hla_map)
 
     def finalize_meal(self, day: int) -> Dict[str, Any]:
         """Single per-day memory update with the full finalized bundle.
