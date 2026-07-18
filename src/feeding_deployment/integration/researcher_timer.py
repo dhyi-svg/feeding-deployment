@@ -1,21 +1,27 @@
 #!/usr/bin/env python3
-"""Researcher intervention timer -- standalone web tool on port 8081.
+"""Researcher timer -- standalone web tool on port 8081.
 
 During a study meal the participant's iPad occupies the main webapp (port
 8080). This serves a separate single page where the *researcher* (phone or
-laptop, http://192.168.1.2:8081) timestamps interventions and explanations --
-events outside the system that the robot cannot capture itself. The offline
-``compute_feeding_time.py`` then reports
-``feeding time = meal window - union(marked intervals)``.
+laptop, http://192.168.1.2:8081) marks the meal boundaries and timestamps
+interventions and explanations -- events outside the system that the robot
+cannot capture itself. The flow is deliberately linear:
+
+    Start Meal  ->  { Intervention | Explanation | Finish Feeding }
+                        Intervention / Explanation -> write a note -> Finish
+
+The offline ``compute_feeding_time.py`` then reports
+``feeding time = meal window - union(marked intervals)``, taking the meal
+window straight from the Start Meal / Finish Feeding marks recorded here.
 
 Design constraints (why this is not part of run.py or the Vue app):
 - Interventions happen exactly when the system is down, so this depends on
   nothing: no roscore, no rosbridge, no run.py. Plain Flask + JSONL files.
 - Timestamps are stamped SERVER-side so they share the robot's clock with
   data_logger's events.jsonl/metadata.json regardless of the phone's clock.
-- Append-only log (``log/<user>/day_NN/researcher_events.jsonl``): interval
-  starts are written at press time (a crash mid-interval keeps the start), and
-  mistakes are tombstoned, never rewritten.
+- Append-only log (``log/<user>/day_NN/researcher_events.jsonl``): meal and
+  interval starts are written the moment they are pressed, so a crash mid-meal
+  or mid-interval keeps everything recorded up to that point.
 - Best-effort mirror of every record onto /deployment/annotations (via a
   ``rostopic pub`` subprocess, so ROS being down can never hurt the server)
   keeps the per-meal rosbags self-annotating, matching data_logger.
@@ -41,15 +47,15 @@ from flask import Flask, Response, jsonify, request
 
 try:
     from feeding_deployment.integration.compute_feeding_time import (
-        CATEGORY_DELETED, CATEGORY_INTERVAL, INTERVAL_KINDS, LOG_ROOT,
+        CATEGORY_INTERVAL, CATEGORY_MEAL, INTERVAL_KINDS, LOG_ROOT,
         RESEARCHER_EVENTS_FILENAME, _read_jsonl, load_researcher_intervals,
-        meal_window)
+        load_researcher_meal_marks)
 except ImportError:  # run directly as `python researcher_timer.py`
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from compute_feeding_time import (
-        CATEGORY_DELETED, CATEGORY_INTERVAL, INTERVAL_KINDS, LOG_ROOT,
+        CATEGORY_INTERVAL, CATEGORY_MEAL, INTERVAL_KINDS, LOG_ROOT,
         RESEARCHER_EVENTS_FILENAME, _read_jsonl, load_researcher_intervals,
-        meal_window)
+        load_researcher_meal_marks)
 
 PORT = 8081
 SELECTION_FILE = LOG_ROOT / ".researcher_timer_state.json"
@@ -156,6 +162,21 @@ def _next_interval_id(day_dir: Path) -> int:
     return max(ids, default=0) + 1
 
 
+def _meal_active(day_dir: Path) -> tuple[bool, float | None]:
+    """Replay the meal marks -> (is a meal open now, epoch it started).
+
+    A meal is open when the latest researcher_meal mark is a ``start``. Returns
+    ``(False, None)`` before the first Start Meal or after a Finish Feeding.
+    """
+    active, start = False, None
+    for phase, epoch in load_researcher_meal_marks(day_dir):
+        if phase == "start":
+            active, start = True, epoch
+        else:  # "end"
+            active, start = False, None
+    return active, start
+
+
 # -- API ----------------------------------------------------------------------
 
 @app.get("/api/state")
@@ -166,19 +187,21 @@ def api_state():
         "server_epoch": time.time(),
         "sessions": _list_sessions(),
         "session": None,
-        "intervals": [],
-        "warnings": [],
-        "window_start": None,
+        "meal_active": False,
+        "meal_start": None,
+        "open_interval": None,
     }
     if day_dir is not None:
-        intervals, warnings = load_researcher_intervals(day_dir)
-        window_start, _, _ = meal_window(day_dir)
+        active, meal_start = _meal_active(day_dir)
+        intervals, _ = load_researcher_intervals(day_dir)
+        open_iv = next((iv for iv in intervals if iv["end"] is None), None)
         state.update({
             "session": {"dir": str(day_dir), "user": day_dir.parent.name,
                         "day": int(day_dir.name.split("_")[1])},
-            "intervals": intervals,
-            "warnings": warnings,
-            "window_start": window_start,
+            "meal_active": active,
+            "meal_start": meal_start,
+            "open_interval": ({"id": open_iv["id"], "kind": open_iv["kind"],
+                               "start": open_iv["start"]} if open_iv else None),
         })
     return jsonify(state)
 
@@ -208,11 +231,31 @@ def api_session():
     return jsonify({"ok": True})
 
 
+@app.post("/api/meal")
+def api_meal():
+    """Mark the meal boundary: ``{phase: "start" | "end"}``.
+
+    Idempotent -- starting an already-running meal or ending a stopped one is a
+    no-op, so a stale client or a double-tap can never corrupt the window."""
+    body = request.get_json(silent=True) or {}
+    phase = body.get("phase")
+    if phase not in ("start", "end"):
+        return jsonify({"error": 'phase must be "start" or "end"'}), 400
+    with _lock:
+        if _selected is None:
+            return jsonify({"error": "no session selected"}), 400
+        active, _ = _meal_active(_selected)
+        if (phase == "start") == active:  # start while running / end while stopped
+            return jsonify({"ok": True, "noop": True})
+        _append_record(_selected, {**_stamp(), "category": CATEGORY_MEAL, "phase": phase})
+    return jsonify({"ok": True, "phase": phase})
+
+
 @app.post("/api/press")
 def api_press():
     """Toggle an interval: first press opens it (start stamped immediately),
-    second press closes it. The optional note rides on whichever record the
-    press produces; a note given at close time wins."""
+    second press closes it. Opening one requires a running meal; the optional
+    note rides on the closing record."""
     body = request.get_json(silent=True) or {}
     kind, note = body.get("kind"), str(body.get("note", "")).strip()
     if kind not in INTERVAL_KINDS:
@@ -225,6 +268,9 @@ def api_press():
             (iv for iv in intervals if iv["kind"] == kind and iv["end"] is None), None)
         record = {**_stamp(), "category": CATEGORY_INTERVAL, "kind": kind}
         if open_interval is None:
+            active, _ = _meal_active(_selected)
+            if not active:
+                return jsonify({"error": "start the meal first"}), 400
             record.update(phase="start", id=_next_interval_id(_selected))
         else:
             record.update(phase="end", id=open_interval["id"])
@@ -232,20 +278,6 @@ def api_press():
             record["note"] = note
         _append_record(_selected, record)
     return jsonify({"ok": True, "phase": record["phase"], "id": record["id"]})
-
-
-@app.post("/api/delete")
-def api_delete():
-    body = request.get_json(silent=True) or {}
-    interval_id = body.get("id")
-    if not isinstance(interval_id, int):
-        return jsonify({"error": "id must be an integer"}), 400
-    with _lock:
-        if _selected is None:
-            return jsonify({"error": "no session selected"}), 400
-        _append_record(_selected, {**_stamp(), "category": CATEGORY_DELETED,
-                                   "id": interval_id})
-    return jsonify({"ok": True})
 
 
 @app.get("/")
@@ -262,101 +294,143 @@ PAGE = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Researcher Timer</title>
 <style>
-  * { box-sizing: border-box; margin: 0; -webkit-tap-highlight-color: transparent; }
-  body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif;
-         background: #111318; color: #e7e9ee; padding: 14px; max-width: 640px;
-         margin: 0 auto; }
-  header { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
-  header h1 { font-size: 15px; font-weight: 600; color: #9aa1af; flex: 1;
-              white-space: nowrap; }
-  select, .ghost-btn { background: #1b1e26; color: #e7e9ee; border: 1px solid #2c3140;
-              border-radius: 8px; padding: 8px 10px; font-size: 14px; max-width: 46%; }
-  #banner { display: none; background: #7f1d1d; color: #fee; border-radius: 8px;
-            padding: 8px 12px; margin-bottom: 10px; font-size: 13px; }
-  #meal { color: #9aa1af; font-size: 13px; margin-bottom: 12px; }
-  .buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .card { display: flex; flex-direction: column; gap: 8px; }
-  .big { border: 2px solid; border-radius: 14px; background: #1b1e26; color: inherit;
-         min-height: 120px; font-size: 17px; font-weight: 700; cursor: pointer;
-         display: flex; flex-direction: column; align-items: center;
-         justify-content: center; gap: 6px; width: 100%; }
-  .big .elapsed { font-size: 26px; font-variant-numeric: tabular-nums; }
-  .big .hint { font-size: 12px; font-weight: 400; opacity: .75; }
-  .big.intervention { border-color: #e5484d; }
-  .big.explanation  { border-color: #4f83f1; }
-  .big.intervention.active { background: #e5484d; color: #fff; }
-  .big.explanation.active  { background: #4f83f1; color: #fff; }
-  .card textarea { background: #1b1e26; border: 1px solid #2c3140; border-radius: 8px;
-                color: #e7e9ee; padding: 9px 10px; font-size: 14px; width: 100%;
-                font-family: inherit; line-height: 1.4; min-height: 84px;
-                resize: vertical; }
-  .totals { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
-  .chip { background: #1b1e26; border: 1px solid #2c3140; border-radius: 10px;
-          padding: 7px 11px; font-size: 12px; color: #9aa1af; }
-  .chip b { display: block; color: #e7e9ee; font-size: 16px; font-weight: 600;
-            font-variant-numeric: tabular-nums; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th { text-align: left; color: #9aa1af; font-weight: 500; padding: 6px 6px;
-       border-bottom: 1px solid #2c3140; }
-  td { padding: 8px 6px; border-bottom: 1px solid #20242e;
-       font-variant-numeric: tabular-nums; }
-  td.note { color: #9aa1af; word-break: break-word; white-space: pre-wrap; }
-  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
-         margin-right: 6px; }
-  .dot.intervention { background: #e5484d; } .dot.explanation { background: #4f83f1; }
-  .open-tag { color: #f5b04c; font-weight: 600; }
-  .del { background: none; border: none; color: #9aa1af; font-size: 16px;
-         cursor: pointer; padding: 2px 8px; }
-  #warnings { color: #f5b04c; font-size: 12px; margin-top: 10px; }
-  #nosession { text-align: center; color: #9aa1af; padding: 40px 10px; display: none; }
+  :root {
+    --bg:#f4f5f7; --surface:#ffffff; --text:#1b2130; --muted:#667085;
+    --border:#e3e6ec; --shadow:0 1px 2px rgba(16,24,40,.05), 0 2px 6px rgba(16,24,40,.06);
+    --intervention:#d64545; --explanation:#2f6fed; --start:#12805c; --danger:#b42318;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#0f1216; --surface:#171b22; --text:#e7e9ee; --muted:#98a1b0;
+      --border:#272c36; --shadow:none;
+      --intervention:#e5605f; --explanation:#5b8bf5; --start:#1f9d72; --danger:#e5605f;
+    }
+  }
+  * { box-sizing:border-box; margin:0; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; }
+  body { font-family:-apple-system, 'Segoe UI', Roboto, sans-serif; background:var(--bg);
+         color:var(--text); -webkit-font-smoothing:antialiased; }
+  #app { max-width:460px; margin:0 auto; min-height:100%; padding:20px 18px 28px;
+         display:flex; flex-direction:column; }
+
+  #topbar { display:none; align-items:center; justify-content:space-between;
+            padding:11px 15px; margin-bottom:20px; background:var(--surface);
+            border:1px solid var(--border); border-radius:12px; box-shadow:var(--shadow); }
+  #topbar.show { display:flex; }
+  #topbar .session { font-size:14px; font-weight:600; }
+  #topbar .meal-clock { font-size:15px; font-weight:600; color:var(--muted);
+            font-variant-numeric:tabular-nums; letter-spacing:.02em; }
+
+  .screen { display:none; flex-direction:column; gap:14px; }
+  .screen.show { display:flex; }
+  #screen-setup, #screen-main, #screen-event { flex:1; }
+  #screen-setup, #screen-main { justify-content:center; }
+
+  .brand { text-align:center; margin-bottom:6px; }
+  .brand h1 { font-size:15px; font-weight:600; color:var(--muted); letter-spacing:.02em; }
+  .field label { display:block; font-size:12px; font-weight:600; color:var(--muted);
+            text-transform:uppercase; letter-spacing:.06em; margin-bottom:8px; }
+  .session-row { display:flex; gap:8px; }
+  #session-select { flex:1; background:var(--surface); color:var(--text);
+            border:1px solid var(--border); border-radius:12px; padding:14px 12px;
+            font-size:16px; box-shadow:var(--shadow); appearance:none; }
+  .setup-note { text-align:center; font-size:13px; color:var(--muted); }
+
+  .btn { border:none; border-radius:14px; font-family:inherit; font-size:17px;
+         font-weight:600; cursor:pointer; width:100%; padding:18px; color:#fff;
+         transition:transform .04s ease, opacity .15s ease; }
+  .btn:active { transform:scale(.985); }
+  .btn:disabled { opacity:.45; cursor:default; }
+  .btn.ghost { flex:0 0 auto; width:auto; background:var(--surface); color:var(--text);
+         border:1px solid var(--border); box-shadow:var(--shadow); padding:14px 18px; }
+  .btn.start { background:var(--start); box-shadow:var(--shadow); }
+
+  #screen-main { gap:16px; }
+  .action { display:flex; align-items:center; gap:14px; text-align:left;
+         background:var(--surface); color:var(--text); border:1px solid var(--border);
+         box-shadow:var(--shadow); padding:22px 20px; font-size:19px; }
+  .action::before { content:''; width:12px; height:12px; border-radius:50%; flex:0 0 auto; }
+  .action.intervention::before { background:var(--intervention); }
+  .action.explanation::before { background:var(--explanation); }
+  .action.finish { margin-top:8px; justify-content:center; color:var(--muted);
+         font-size:16px; padding:16px; }
+  .action.finish::before { display:none; }
+
+  .event-head { display:flex; align-items:baseline; justify-content:space-between; }
+  .event-kind { font-size:21px; font-weight:700; }
+  .event-kind.intervention { color:var(--intervention); }
+  .event-kind.explanation { color:var(--explanation); }
+  .event-clock { font-size:18px; font-weight:600; color:var(--muted);
+         font-variant-numeric:tabular-nums; }
+  #event-note { width:100%; flex:1; min-height:160px; resize:none; font-family:inherit;
+         font-size:16px; line-height:1.5; color:var(--text); background:var(--surface);
+         border:1px solid var(--border); border-radius:14px; padding:16px;
+         box-shadow:var(--shadow); }
+  #event-note:focus { outline:2px solid var(--border); outline-offset:0; }
+  .btn.primary.intervention { background:var(--intervention); }
+  .btn.primary.explanation { background:var(--explanation); }
+
+  #banner { display:none; background:var(--danger); color:#fff; border-radius:12px;
+         padding:12px 14px; margin-top:16px; font-size:14px; text-align:center; }
+  #banner.show { display:block; }
 </style>
 </head>
 <body>
-<header>
-  <h1>⏱ Researcher Timer</h1>
-  <select id="session-select"></select>
-  <button class="ghost-btn" id="new-session">＋ new</button>
-</header>
-<div id="banner">Server unreachable — presses are NOT being recorded.</div>
-<div id="meal"></div>
-<div id="nosession">No session selected — pick one above or create a new one.</div>
-<div id="app" style="display:none">
-  <div class="buttons">
-    <div class="card">
-      <button class="big intervention" id="btn-intervention"></button>
-      <textarea id="note-intervention" rows="4" placeholder="note (optional, saved on stop)"></textarea>
-    </div>
-    <div class="card">
-      <button class="big explanation" id="btn-explanation"></button>
-      <textarea id="note-explanation" rows="4" placeholder="note (optional, saved on stop)"></textarea>
-    </div>
+<main id="app">
+  <div id="topbar">
+    <span class="session" id="session-label"></span>
+    <span class="meal-clock" id="meal-clock"></span>
   </div>
-  <div class="totals" id="totals"></div>
-  <table>
-    <thead><tr><th>#</th><th>kind</th><th>start</th><th>dur</th><th>note</th><th></th></tr></thead>
-    <tbody id="rows"></tbody>
-  </table>
-  <div id="warnings"></div>
-</div>
+
+  <section class="screen show" id="screen-setup">
+    <div class="brand"><h1>Researcher Timer</h1></div>
+    <div class="field">
+      <label for="session-select">Session</label>
+      <div class="session-row">
+        <select id="session-select"></select>
+        <button class="btn ghost" id="new-session">New</button>
+      </div>
+    </div>
+    <button class="btn start" id="btn-start">Start Meal</button>
+    <p class="setup-note" id="setup-note"></p>
+  </section>
+
+  <section class="screen" id="screen-main">
+    <button class="btn action intervention" id="btn-intervention">Intervention</button>
+    <button class="btn action explanation" id="btn-explanation">Explanation</button>
+    <button class="btn action finish" id="btn-finish">Finish Feeding</button>
+  </section>
+
+  <section class="screen" id="screen-event">
+    <div class="event-head">
+      <span class="event-kind" id="event-kind"></span>
+      <span class="event-clock" id="event-clock"></span>
+    </div>
+    <textarea id="event-note"></textarea>
+    <button class="btn primary" id="btn-finish-event">Finish</button>
+  </section>
+
+  <div id="banner">Server unreachable — actions are NOT being recorded.</div>
+</main>
 <script>
 'use strict';
-const KINDS = ['intervention', 'explanation'];
 let st = null;          // last /api/state payload
 let skew = 0;           // server_epoch - local epoch, so timers use the robot clock
 let busy = false;
 let sessionsJson = '';
+let eventId = null;     // open interval currently shown -- guards the note textarea
 
 const $ = id => document.getElementById(id);
-const esc = s => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
 const now = () => Date.now() / 1000 + skew;
 const fmt = s => { s = Math.max(0, Math.round(s));
   return Math.floor(s/3600) + ':' + String(Math.floor(s/60)%60).padStart(2,'0')
          + ':' + String(s%60).padStart(2,'0'); };
-const clock = e => new Date(e * 1000).toLocaleTimeString('en-GB');
 
 async function api(path, body) {
   const res = await fetch(path, body === undefined ? {} :
-    {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
   return res.json();
 }
 
@@ -365,11 +439,11 @@ async function poll() {
     const data = await api('/api/state');
     skew = data.server_epoch - Date.now() / 1000;
     st = data;
-    $('banner').style.display = 'none';
+    $('banner').classList.remove('show');
     renderSessions();
     render();
   } catch (e) {
-    $('banner').style.display = 'block';
+    $('banner').classList.add('show');
   }
 }
 
@@ -378,101 +452,91 @@ function renderSessions() {
   if (json === sessionsJson) return;   // don't rebuild the dropdown under the user
   sessionsJson = json;
   const sel = $('session-select');
-  sel.innerHTML = st.sessions.map(s =>
-    `<option value="${esc(s.dir)}">${esc(s.label)}</option>`).join('');
+  sel.innerHTML = st.sessions.length
+    ? st.sessions.map(s => `<option value="${esc(s.dir)}">${esc(s.label)}</option>`).join('')
+    : '<option value="" disabled selected>no sessions yet</option>';
   if (st.session) sel.value = st.session.dir;
+}
+
+function screenFor() {
+  if (!st || !st.session) return 'setup';
+  if (st.open_interval) return 'event';
+  if (st.meal_active) return 'main';
+  return 'setup';
 }
 
 function render() {
   if (!st) return;
-  $('nosession').style.display = st.session ? 'none' : 'block';
-  $('app').style.display = st.session ? 'block' : 'none';
-  if (!st.session) { $('meal').textContent = ''; return; }
-  const t = now();
+  const screen = screenFor();
+  for (const name of ['setup', 'main', 'event'])
+    $('screen-' + name).classList.toggle('show', name === screen);
+  $('topbar').classList.toggle('show', screen !== 'setup');
 
-  for (const kind of KINDS) {
-    const open = st.intervals.find(iv => iv.kind === kind && iv.end === null);
-    const btn = $('btn-' + kind);
-    btn.classList.toggle('active', !!open);
-    btn.innerHTML = open
-      ? `<span>STOP ${kind.toUpperCase()}</span><span class="elapsed">${fmt(t - open.start)}</span>`
-      : `<span>${kind.toUpperCase()}</span><span class="hint">tap to start</span>`;
-  }
+  $('btn-start').disabled = !st.session;
+  $('setup-note').textContent = st.session
+    ? `Will record to ${st.session.user} / day ${st.session.day}`
+    : 'Pick or create a session to begin.';
+  if (st.session)
+    $('session-label').textContent = `${st.session.user} / day ${st.session.day}`;
 
-  const sum = f => st.intervals.reduce((a, iv) =>
-    a + (f(iv) ? (iv.end === null ? t : iv.end) - iv.start : 0), 0);
-  const spans = st.intervals.map(iv => [iv.start, iv.end === null ? t : iv.end])
-    .sort((a, b) => a[0] - b[0]);
-  let union = 0, hi = -1;
-  for (const [s, e] of spans) {
-    if (s > hi) { union += e - s; hi = e; }
-    else if (e > hi) { union += e - hi; hi = e; }
-  }
-  const chips = [
-    ['intervention Σ', fmt(sum(iv => iv.kind === 'intervention'))],
-    ['explanation Σ', fmt(sum(iv => iv.kind === 'explanation'))],
-    ['deducted (union)', fmt(union)],
-  ];
-  if (st.window_start !== null) {
-    chips.push(['meal elapsed', fmt(t - st.window_start)]);
-    chips.push(['est. feeding time', fmt(t - st.window_start - union)]);
-    $('meal').textContent = `Writing to ${st.session.user} / day ${st.session.day}` +
-      ` · meal started ${clock(st.window_start)}`;
+  if (screen === 'event') {
+    const iv = st.open_interval;
+    if (iv.id !== eventId) {   // a fresh interval -- set up its screen once
+      eventId = iv.id;
+      const note = $('event-note');
+      note.value = '';
+      note.placeholder = `Describe the ${iv.kind}…`;
+      $('event-kind').textContent = cap(iv.kind);
+      $('event-kind').className = 'event-kind ' + iv.kind;
+      $('btn-finish-event').textContent = 'Finish ' + cap(iv.kind);
+      $('btn-finish-event').className = 'btn primary ' + iv.kind;
+      setTimeout(() => note.focus(), 60);
+    }
   } else {
-    $('meal').textContent = `Writing to ${st.session.user} / day ${st.session.day}` +
-      ` · no run.py data yet (meal clock starts with the system)`;
+    eventId = null;
   }
-  $('totals').innerHTML = chips.map(([label, value]) =>
-    `<div class="chip">${label}<b>${value}</b></div>`).join('');
-
-  $('rows').innerHTML = st.intervals.slice().reverse().map(iv => `
-    <tr><td>${iv.id}</td>
-    <td><span class="dot ${iv.kind}"></span>${iv.kind.slice(0, 6)}</td>
-    <td>${clock(iv.start)}</td>
-    <td>${iv.end === null ? '<span class="open-tag">' + fmt(t - iv.start) + ' …</span>'
-                          : fmt(iv.end - iv.start)}</td>
-    <td class="note">${esc(iv.note || '')}</td>
-    <td><button class="del" onclick="removeInterval(${iv.id})">✕</button></td></tr>`).join('');
-
-  $('warnings').innerHTML = st.warnings.map(w => '⚠ ' + esc(w)).join('<br>');
+  tick();
 }
 
-async function press(kind) {
-  if (busy || !st || !st.session) return;
+function tick() {
+  if (!st) return;
+  if (st.meal_start != null) $('meal-clock').textContent = fmt(now() - st.meal_start);
+  if (st.open_interval) $('event-clock').textContent = fmt(now() - st.open_interval.start);
+}
+
+async function act(fn) {
+  if (busy) return;
   busy = true;
-  try {
-    const noteInput = $('note-' + kind);
-    const result = await api('/api/press', {kind, note: noteInput.value});
-    if (result.phase === 'end') noteInput.value = '';
-    await poll();
-  } catch (e) { $('banner').style.display = 'block'; }
-  finally { setTimeout(() => { busy = false; }, 600); }   // swallow double-taps
+  try { const r = await fn(); if (r && r.error) alert(r.error); await poll(); }
+  catch (e) { $('banner').classList.add('show'); }
+  finally { setTimeout(() => { busy = false; }, 500); }   // swallow double-taps
 }
 
-async function removeInterval(id) {
-  if (!confirm('Delete interval #' + id + '? (It is tombstoned in the log, not erased.)')) return;
-  try { await api('/api/delete', {id}); await poll(); }
-  catch (e) { $('banner').style.display = 'block'; }
-}
-
-$('btn-intervention').onclick = () => press('intervention');
-$('btn-explanation').onclick = () => press('explanation');
-$('session-select').onchange = async e => {
-  try { await api('/api/session', {dir: e.target.value}); await poll(); }
-  catch (err) { $('banner').style.display = 'block'; }
+$('btn-start').onclick = () => act(() => api('/api/meal', {phase: 'start'}));
+$('btn-intervention').onclick = () => act(() => api('/api/press', {kind: 'intervention'}));
+$('btn-explanation').onclick = () => act(() => api('/api/press', {kind: 'explanation'}));
+$('btn-finish-event').onclick = () => {
+  if (!st || !st.open_interval) return;
+  const kind = st.open_interval.kind, note = $('event-note').value;
+  act(() => api('/api/press', {kind, note}));
 };
+$('btn-finish').onclick = () => {
+  if (!confirm('End the meal now? This records the meal end time.')) return;
+  act(() => api('/api/meal', {phase: 'end'}));
+};
+$('session-select').onchange = e => act(() => api('/api/session', {dir: e.target.value}));
 $('new-session').onclick = async () => {
   const user = prompt('User name (log/<user>/):'); if (!user) return;
   const day = prompt('Day number:'); if (day === null || day === '') return;
   const result = await api('/api/session', {user: user.trim(), day: Number(day)});
-  if (result.error) alert(result.error);
+  if (result && result.error) { alert(result.error); return; }
   sessionsJson = '';   // force dropdown rebuild
   await poll();
 };
 
 poll();
-setInterval(poll, 2500);
-setInterval(render, 1000);
+setInterval(poll, 2000);
+setInterval(tick, 1000);
 </script>
 </body>
 </html>
@@ -481,7 +545,7 @@ setInterval(render, 1000);
 
 def main() -> None:
     global _selected
-    # The page polls /api/state every 2.5s; without this, werkzeug writes an
+    # The page polls /api/state every 2s; without this, werkzeug writes an
     # access-log line per poll and researcher_timer.log is pure spam. Keep only
     # warnings/errors -- the day's data lives in researcher_events.jsonl anyway.
     logging.getLogger("werkzeug").setLevel(logging.WARNING)

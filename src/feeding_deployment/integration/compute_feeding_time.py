@@ -9,11 +9,13 @@ timer web tool (``researcher_timer.py``, port 8081). They are events *outside*
 the system -- a human stepping in or explaining -- so they are stamped manually
 and subtracted from the wall-clock meal window.
 
-The meal window is derived from every timestamp source available in the day
+The meal window comes from the researcher's own Start Meal / Finish Feeding
+marks when they exist (they know when the meal really began and ended). Either
+boundary the researcher did not mark falls back to the timestamps in the day
 directory rather than trusting ``metadata.json`` alone: on days with several
 run.py sessions each restart overwrites ``started``, so metadata can even end
-up with ``ended`` earlier than ``started``. We take the earliest / latest of
-metadata start/end, ``events.jsonl`` and ``user_inputs.jsonl``.
+up with ``ended`` earlier than ``started``. The fallback takes the earliest /
+latest of metadata start/end, ``events.jsonl`` and ``user_inputs.jsonl``.
 
 Intentionally stdlib-only so it runs anywhere the logs are copied to (analysis
 laptops without the robot environment). ``researcher_timer.py`` imports the
@@ -39,6 +41,7 @@ RESEARCHER_EVENTS_FILENAME = "researcher_events.jsonl"
 # researcher_events.jsonl record categories (written by researcher_timer.py)
 CATEGORY_INTERVAL = "researcher_interval"
 CATEGORY_DELETED = "researcher_interval_deleted"
+CATEGORY_MEAL = "researcher_meal"  # phase: "start" | "end"
 INTERVAL_KINDS = ("intervention", "explanation")
 
 
@@ -116,6 +119,37 @@ def load_researcher_intervals(day_dir: Path) -> tuple[list[dict], list[str]]:
     return intervals, warnings
 
 
+def load_researcher_meal_marks(day_dir: Path) -> list[tuple[str, float]]:
+    """``(phase, epoch)`` for every researcher_meal record, sorted by epoch.
+
+    The researcher marks when the meal actually starts and ends from the timer
+    web tool; ``phase`` is ``"start"`` or ``"end"``. Malformed records are
+    skipped. This is the source of truth for the meal boundaries.
+    """
+    marks = []
+    for rec in _read_jsonl(Path(day_dir) / RESEARCHER_EVENTS_FILENAME):
+        if rec.get("category") != CATEGORY_MEAL:
+            continue
+        phase, epoch = rec.get("phase"), rec.get("epoch")
+        if phase in ("start", "end") and isinstance(epoch, (int, float)):
+            marks.append((phase, float(epoch)))
+    marks.sort(key=lambda m: m[1])
+    return marks
+
+
+def researcher_meal_window(day_dir: Path) -> tuple[float | None, float | None]:
+    """Meal window from researcher marks: (earliest start, latest end).
+
+    Either side is None when the researcher never marked it. Spanning all
+    starts/ends keeps the whole-meal window even if a day has several
+    start/finish pairs.
+    """
+    marks = load_researcher_meal_marks(day_dir)
+    starts = [epoch for phase, epoch in marks if phase == "start"]
+    ends = [epoch for phase, epoch in marks if phase == "end"]
+    return (min(starts) if starts else None, max(ends) if ends else None)
+
+
 def _spans(intervals: list[dict], now: float | None = None,
            clamp: tuple[float, float] | None = None) -> list[tuple[float, float]]:
     """Intervals -> concrete (start, end) spans; open ones close at ``now``.
@@ -166,13 +200,16 @@ def union_seconds(intervals: list[dict], now: float | None = None,
 
 
 def meal_window(day_dir: Path) -> tuple[float | None, float | None, dict]:
-    """Derive the meal window (start, end) for a day directory.
+    """Meal window (start, end) for a day directory.
 
-    Start is the earliest and end the latest timestamp across metadata.json
+    The researcher's own marks (Start Meal / Finish Feeding, via the timer web
+    tool) are authoritative: when present they define each end of the window.
+    Whichever side the researcher did not mark falls back to the run.py-derived
+    boundary -- the earliest / latest timestamp across metadata.json
     (started/ended) and the first/last lines of events.jsonl and
     user_inputs.jsonl. Returns ``(start, end, sources)`` where ``sources``
     records each candidate for the summary printout; start/end are None when
-    no source is available.
+    no source is available at all.
     """
     day_dir = Path(day_dir)
     sources: dict[str, Any] = {}
@@ -193,9 +230,18 @@ def meal_window(day_dir: Path) -> tuple[float | None, float | None, dict]:
             sources[f"{name}.first"] = float(epochs[0])
             sources[f"{name}.last"] = float(epochs[-1])
 
-    if not sources:
-        return None, None, sources
-    return min(sources.values()), max(sources.values()), sources
+    derived_start = min(sources.values()) if sources else None
+    derived_end = max(sources.values()) if sources else None
+
+    r_start, r_end = researcher_meal_window(day_dir)
+    if r_start is not None:
+        sources["researcher.start"] = r_start
+    if r_end is not None:
+        sources["researcher.end"] = r_end
+
+    window_start = r_start if r_start is not None else derived_start
+    window_end = r_end if r_end is not None else derived_end
+    return window_start, window_end, sources
 
 
 def summarize_day(day_dir: Path, now: float | None = None) -> dict:
