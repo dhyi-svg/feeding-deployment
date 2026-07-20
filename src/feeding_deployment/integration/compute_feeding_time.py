@@ -42,7 +42,11 @@ RESEARCHER_EVENTS_FILENAME = "researcher_events.jsonl"
 CATEGORY_INTERVAL = "researcher_interval"
 CATEGORY_DELETED = "researcher_interval_deleted"
 CATEGORY_MEAL = "researcher_meal"  # phase: "start" | "end"
-INTERVAL_KINDS = ("intervention", "explanation")
+INTERVAL_KINDS = ("intervention", "explanation", "note")
+# Kinds subtracted from the meal window. "note" is a free-form annotation the
+# researcher jots during the meal -- timestamped and shown in summaries, but
+# never deducted from feeding time (only real system-down events are).
+DEDUCTED_KINDS = ("intervention", "explanation")
 
 
 def _read_jsonl(path: Path) -> list[dict]:
@@ -258,12 +262,14 @@ def summarize_day(day_dir: Path, now: float | None = None) -> dict:
 
     per_kind = {kind: sum_seconds([iv for iv in intervals if iv["kind"] == kind], now)
                 for kind in INTERVAL_KINDS}
-    union_raw = union_seconds(intervals, now)
+    # Only intervention/explanation time is deducted; notes are annotations.
+    deducted = [iv for iv in intervals if iv["kind"] in DEDUCTED_KINDS]
+    union_raw = union_seconds(deducted, now)
 
     total_s = feeding_s = union_clamped = None
     if window_start is not None and window_end is not None and window_end > window_start:
         total_s = window_end - window_start
-        union_clamped = union_seconds(intervals, now, clamp=(window_start, window_end))
+        union_clamped = union_seconds(deducted, now, clamp=(window_start, window_end))
         feeding_s = total_s - union_clamped
         if union_clamped < union_raw - 1.0:
             warnings.append(
