@@ -14,8 +14,9 @@ The first time a session is opened the review is seeded from the original marks
 saved. Removing an entry keeps it in the review file tombstoned (``deleted``),
 so nothing is silently lost there either.
 
-Run on demand (deliberately NOT part of launch_app, since review happens after
-the meal, with the live timer no longer running):
+Started in the background by webapp/launch_app.sh alongside the timer, so it is
+always live at http://192.168.1.2:8082 during a session (review a meal any time,
+during or after). Can also be run standalone:
 
     python review_meal.py                 # then open http://192.168.1.2:8082
 
