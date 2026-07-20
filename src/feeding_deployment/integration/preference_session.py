@@ -150,7 +150,6 @@ def bt_consumes_predictions(bt_name: str) -> bool:
 # Preference dimensions asked at the table, just before feeding begins.
 TABLE_PREF_DIMS = [
     "skewering_axis",
-    "confirm_feeding_pickup",
     "bite_dipping_preference",
     "bite_ordering",
     "transfer_mode",
@@ -165,7 +164,19 @@ TABLE_PREF_DIMS = [
     "detect_user_completed_transfer_wiping",
     "retract_between_bites",
     "wait_before_autocontinue_bite_selection",
+    "confirm_feeding_pickup",
     "wait_before_autocontinue_task_selection",
+]
+
+
+# Settings-overlay display order: mirror the order the dims are ASKED in during
+# the meal (INITIAL_PREF_DIMS, then the prep-time microwave ask, then
+# TABLE_PREF_DIMS) so the pane lists prefs in the same sequence the user saw
+# them predicted. Any bundle field not covered by a staged ask list is appended
+# in bundle order so it can never silently drop out of the pane.
+_SETTINGS_ASK_ORDER = INITIAL_PREF_DIMS + ["microwave_time"] + TABLE_PREF_DIMS
+_SETTINGS_DISPLAY_ORDER = _SETTINGS_ASK_ORDER + [
+    f for f in PREF_FIELDS if f not in _SETTINGS_ASK_ORDER
 ]
 
 
@@ -847,7 +858,7 @@ class PreferenceSession:
         marked ``editable=False``. Safe to call from the WebInterface thread."""
         out: List[Dict[str, Any]] = []
         with self._lock:
-            for field in PREF_FIELDS:  # stable display order
+            for field in _SETTINGS_DISPLAY_ORDER:  # match the ask order
                 # Color dims use the live-camera picker; text dims (e.g.
                 # bite_ordering) have no option list to render as chips and are
                 # only editable at their ask() step; nav-offset dims are
