@@ -722,17 +722,40 @@ class KinovaArm:
         assert not self.cyclic_running, "Arm must be in high-level servoing mode to choose speed preset"
         assert speed_preset in ["low", "medium", "high"], "Invalid speed preset"
         
-        self.speed_preset = speed_preset
+        # Each preset sets the full velocity envelope -- joint-space AND
+        # end-effector -- so a tier feels equally fast whether the robot is doing a
+        # joint move or a Cartesian move. joint_speed and twist_angular share units
+        # (deg/s) and are kept equal so EE reorientation keeps up with joint motion;
+        # twist_linear (m/s) scales with the tier too. joint accel keeps the
+        # historical 2x-of-speed ratio.
         if speed_preset == "low":
-            speed_limits = [12.5, 12.5, 12.5, 12.5, 12.5, 12.5, 12.5]
-            acceleration_limits = [25, 25, 25, 25, 25, 25, 25]
+            joint_speed, joint_accel, twist_linear, twist_angular = 30.0, 60.0, 0.15, 30.0
         elif speed_preset == "medium":
-            speed_limits = [25, 25, 25, 25, 25, 25, 25]
-            acceleration_limits = [50, 50, 50, 50, 50, 50, 50]
-        else:
-            speed_limits = [50, 50, 50, 50, 50, 50, 50]
-            acceleration_limits = [100, 100, 100, 100, 100, 100, 100]
-        self.set_joint_limits(speed_limits, acceleration_limits)
+            joint_speed, joint_accel, twist_linear, twist_angular = 40.0, 80.0, 0.20, 40.0
+        else:  # high
+            joint_speed, joint_accel, twist_linear, twist_angular = 50.0, 100.0, 0.25, 50.0
+
+        # Clamp everything to the arm's true kinematic hard limits -- a safety net
+        # that also guards against a units mismatch (e.g. if twist_angular were
+        # rad/s rather than the assumed deg/s, this caps it instead of overspeeding).
+        hard = self.control_config.GetKinematicHardLimits()
+        speed_limits = [min(joint_speed, hard.joint_speed_limits[i]) for i in range(self.actuator_count)]
+        acceleration_limits = [min(joint_accel, hard.joint_acceleration_limits[i]) for i in range(self.actuator_count)]
+        twist_linear = min(twist_linear, hard.twist_linear)
+        twist_angular = min(twist_angular, hard.twist_angular)
+
+        # Joint-space limits (governs move_angular / move_angular_trajectory).
+        self.set_joint_limits(speed_limits, acceleration_limits, cartesian=False)
+        # Cartesian-mode per-joint speed, so a low joint soft limit doesn't
+        # bottleneck end-effector moves.
+        self.set_joint_limits(speed_limits, acceleration_limits, cartesian=True)
+        # End-effector twist limits (governs move_cartesian / move_cartesian_trajectory).
+        self.set_twist_linear_limit(twist_linear)
+        self.set_twist_angular_limit(twist_angular)
+
+        # set_joint_limits() sets speed_preset to "custom"; record the real preset last
+        # so get_speed_preset() reports the chosen tier.
+        self.speed_preset = speed_preset
 
     def get_speed_preset(self):
         return self.speed_preset
@@ -794,6 +817,21 @@ class KinovaArm:
         control_mode_information = ControlConfig_pb2.ControlModeInformation()
         control_mode_information.control_mode = ControlConfig_pb2.CARTESIAN_TRAJECTORY
         self.control_config.ResetTwistLinearSoftLimit(control_mode_information)
+
+    def set_twist_angular_limit(self, limit):
+        twist_angular_soft_limit = ControlConfig_pb2.TwistAngularSoftLimit()
+        twist_angular_soft_limit.control_mode = ControlConfig_pb2.CARTESIAN_TRAJECTORY
+        twist_angular_soft_limit.twist_angular_soft_limit = limit
+        self.control_config.SetTwistAngularSoftLimit(twist_angular_soft_limit)
+
+    def set_max_twist_angular_limit(self):
+        limit = self.control_config.GetKinematicHardLimits().twist_angular
+        self.set_twist_angular_limit(limit)
+
+    def reset_twist_angular_limit(self):
+        control_mode_information = ControlConfig_pb2.ControlModeInformation()
+        control_mode_information.control_mode = ControlConfig_pb2.CARTESIAN_TRAJECTORY
+        self.control_config.ResetTwistAngularSoftLimit(control_mode_information)
 
     # Rajat ToDo: Check how the following work:
     def pause_action(self):
