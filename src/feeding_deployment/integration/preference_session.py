@@ -150,7 +150,6 @@ def bt_consumes_predictions(bt_name: str) -> bool:
 # Preference dimensions asked at the table, just before feeding begins.
 TABLE_PREF_DIMS = [
     "skewering_axis",
-    "confirm_feeding_pickup",
     "bite_dipping_preference",
     "bite_ordering",
     "transfer_mode",
@@ -165,6 +164,7 @@ TABLE_PREF_DIMS = [
     "detect_user_completed_transfer_wiping",
     "retract_between_bites",
     "wait_before_autocontinue_bite_selection",
+    "confirm_feeding_pickup",
     "wait_before_autocontinue_task_selection",
 ]
 
