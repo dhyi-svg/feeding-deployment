@@ -744,14 +744,25 @@ class KinovaArm:
         twist_linear = min(twist_linear, hard.twist_linear)
         twist_angular = min(twist_angular, hard.twist_angular)
 
-        # Joint-space limits (governs move_angular / move_angular_trajectory).
+        # Joint-space limits (governs move_angular / move_angular_trajectory). This is
+        # the historical behaviour and caps the dominant motion, so treat it as required.
         self.set_joint_limits(speed_limits, acceleration_limits, cartesian=False)
-        # Cartesian-mode per-joint speed, so a low joint soft limit doesn't
-        # bottleneck end-effector moves.
-        self.set_joint_limits(speed_limits, acceleration_limits, cartesian=True)
-        # End-effector twist limits (governs move_cartesian / move_cartesian_trajectory).
-        self.set_twist_linear_limit(twist_linear)
-        self.set_twist_angular_limit(twist_angular)
+
+        # Cartesian-envelope limits (govern move_cartesian / move_cartesian_trajectory).
+        # Apply each independently: if the firmware rejects one (ERROR_DEVICE /
+        # METHOD_FAILED), log it and keep going rather than aborting the whole speed
+        # change -- the joint-space cap is already in place, so a rejected EE limit just
+        # falls back to the arm's previous/default value (no overspeed risk).
+        cartesian_limit_calls = (
+            ("cartesian-mode joint speeds", lambda: self.set_joint_limits(speed_limits, acceleration_limits, cartesian=True)),
+            ("twist linear limit", lambda: self.set_twist_linear_limit(twist_linear)),
+            ("twist angular limit", lambda: self.set_twist_angular_limit(twist_angular)),
+        )
+        for label, call in cartesian_limit_calls:
+            try:
+                call()
+            except Exception as e:  # noqa: BLE001 -- surface which limit the arm refused
+                print(f"choose_from_speed_presets: arm refused {label}: {e}")
 
         # set_joint_limits() sets speed_preset to "custom"; record the real preset last
         # so get_speed_preset() reports the chosen tier.
