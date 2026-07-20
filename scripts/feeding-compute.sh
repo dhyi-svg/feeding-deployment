@@ -40,7 +40,7 @@ INTER_DELAY="${INTER_DELAY:-5}"                   # after cartographer (6), befo
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
 INTEGRATION_DIR="$HOME/deployment_ws/src/feeding-deployment/src/feeding_deployment/integration"
-MAP_FILE="$HOME/deployment_ws/src/feeding-deployment/maps/aimee-7-1.pbstream"
+MAP_FILE="$HOME/deployment_ws/src/feeding-deployment/maps/aimee-7-15-2.pbstream"
 
 # Shared pane-logging helper (deployed on both machines via the repo).
 SCRIPT_DIR="$(dirname "$SELF")"
@@ -55,7 +55,7 @@ CMD4='launch_utensil'
 CMD5='launch_watchdog'
 CMD6="roslaunch feeding_deployment cartographer_localization.launch load_state_filename:=$MAP_FILE"
 CMD7='roslaunch feeding_deployment shared_autonomy.launch'
-CMD8='python run.py --user bohan_jun27 --run_on_robot --use_interface --resume_from_state 21_stow_utensil --no_waits --day 1'
+CMD8='python run.py --user aimee --run_on_robot --use_interface --no_waits --day 1'
 
 # Drift-trace tooling, PRE-TYPED (never auto-run) in a separate 'trace' window
 # (see build_trace_window). Two panes because drift_lock.py needs its own stdin

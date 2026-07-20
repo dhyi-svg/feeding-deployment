@@ -68,13 +68,12 @@ assert {d.field for d in MANUAL_DIMS} == {
 }, "webapp ask order and PREFERENCE_BUNDLE manual dims diverged"
 
 # The first days of every manual run use this fixed context sequence instead
-# of the seeded random draw ("night" is not in TIMES_OF_DAY; evening is the
-# closest catalog value). The transient affective state is still drawn from
+# of the seeded random draw. The transient affective state is still drawn from
 # the seeded rng. Later days go back to random sampling.
 FIXED_FIRST_CONTEXTS: List[Dict[str, str]] = [
     {"meal": "chicken nuggets", "setting": "Personal", "time_of_day": "evening"},
-    {"meal": "general tso's chicken and broccoli", "setting": "Watching TV with TV in Front", "time_of_day": "noon"},
-    {"meal": "chicken breast strips and hash brown", "setting": "Watching TV with TV in Front", "time_of_day": "noon"},
+    {"meal": "general tso's chicken and broccoli", "setting": "Watching TV with TV in Front", "time_of_day": "afternoon"},
+    {"meal": "chicken breast strips and hash brown", "setting": "Watching TV with TV in Front", "time_of_day": "afternoon"},
 ]
 for _ctx in FIXED_FIRST_CONTEXTS:
     assert _ctx["meal"] in MEALS, f"fixed meal not in catalog: {_ctx['meal']!r}"

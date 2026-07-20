@@ -9,15 +9,16 @@ SETTINGS = [
     "Watching TV with TV on Left",
     "Watching TV with TV in Front",
     "Watching TV with TV on Right",
-    "Working on laptop with laptop on Left",
-    "Working on laptop with laptop in Front",
-    "Working on laptop with laptop on Right",
+    # "Working on laptop with laptop on Left",
+    # "Working on laptop with laptop in Front",
+    # "Working on laptop with laptop on Right",
 ]
 
 TIMES_OF_DAY = [
     "morning", 
-    "noon", 
-    "evening"
+    "afternoon", 
+    "evening",
+    "night"
 ]
 
 @dataclass(frozen=True)

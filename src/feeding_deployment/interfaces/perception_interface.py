@@ -784,7 +784,7 @@ class PerceptionInterface:
 
             behind_pull_closing_waypoint = pull_closing_waypoints[-1]
             offset = np.eye(4)
-            offset[:3, 3] = np.array([0, 0.0, -0.03])
+            offset[:3, 3] = np.array([0, 0.0, -0.05])
             behind_pull_closing_waypoint_mat = self.pose_to_matrix(behind_pull_closing_waypoint) @ offset
             behind_pull_closing_waypoint = self.matrix_to_pose(behind_pull_closing_waypoint_mat)
 
