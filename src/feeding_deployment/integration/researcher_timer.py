@@ -297,13 +297,13 @@ PAGE = r"""<!DOCTYPE html>
   :root {
     --bg:#f4f5f7; --surface:#ffffff; --text:#1b2130; --muted:#667085;
     --border:#e3e6ec; --shadow:0 1px 2px rgba(16,24,40,.05), 0 2px 6px rgba(16,24,40,.06);
-    --intervention:#d64545; --explanation:#2f6fed; --start:#12805c; --danger:#b42318;
+    --intervention:#d64545; --explanation:#2f6fed; --note:#f2a01f; --note-strong:#c2620c; --start:#12805c; --danger:#b42318;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg:#0f1216; --surface:#171b22; --text:#e7e9ee; --muted:#98a1b0;
       --border:#272c36; --shadow:none;
-      --intervention:#e5605f; --explanation:#5b8bf5; --start:#1f9d72; --danger:#e5605f;
+      --intervention:#e5605f; --explanation:#5b8bf5; --note:#f4b13f; --note-strong:#f4b13f; --start:#1f9d72; --danger:#e5605f;
     }
   }
   * { box-sizing:border-box; margin:0; -webkit-tap-highlight-color:transparent; }
@@ -346,20 +346,19 @@ PAGE = r"""<!DOCTYPE html>
   .btn.start { background:var(--start); box-shadow:var(--shadow); }
 
   #screen-main { gap:16px; }
-  .action { display:flex; align-items:center; gap:14px; text-align:left;
-         background:var(--surface); color:var(--text); border:1px solid var(--border);
-         box-shadow:var(--shadow); padding:22px 20px; font-size:19px; }
-  .action::before { content:''; width:12px; height:12px; border-radius:50%; flex:0 0 auto; }
-  .action.intervention::before { background:var(--intervention); }
-  .action.explanation::before { background:var(--explanation); }
-  .action.finish { margin-top:8px; justify-content:center; color:var(--muted);
-         font-size:16px; padding:16px; }
-  .action.finish::before { display:none; }
+  .action { display:flex; align-items:center; justify-content:center; text-align:center;
+         color:#fff; box-shadow:var(--shadow); padding:22px 20px; font-size:19px; }
+  .action.intervention { background:var(--intervention); }
+  .action.explanation { background:var(--explanation); }
+  .action.note { background:var(--note); color:#1b2130; }
+  .action.finish { margin-top:56px; background:var(--surface); color:var(--muted);
+         border:1px solid var(--border); font-size:16px; padding:16px; }
 
   .event-head { display:flex; align-items:baseline; justify-content:space-between; }
   .event-kind { font-size:21px; font-weight:700; }
   .event-kind.intervention { color:var(--intervention); }
   .event-kind.explanation { color:var(--explanation); }
+  .event-kind.note { color:var(--note-strong); }
   .event-clock { font-size:18px; font-weight:600; color:var(--muted);
          font-variant-numeric:tabular-nums; }
   #event-note { width:100%; flex:1; min-height:160px; resize:none; font-family:inherit;
@@ -369,6 +368,7 @@ PAGE = r"""<!DOCTYPE html>
   #event-note:focus { outline:2px solid var(--border); outline-offset:0; }
   .btn.primary.intervention { background:var(--intervention); }
   .btn.primary.explanation { background:var(--explanation); }
+  .btn.primary.note { background:var(--note); color:#1b2130; }
 
   #banner { display:none; background:var(--danger); color:#fff; border-radius:12px;
          padding:12px 14px; margin-top:16px; font-size:14px; text-align:center; }
@@ -398,6 +398,7 @@ PAGE = r"""<!DOCTYPE html>
   <section class="screen" id="screen-main">
     <button class="btn action intervention" id="btn-intervention">Intervention</button>
     <button class="btn action explanation" id="btn-explanation">Explanation</button>
+    <button class="btn action note" id="btn-note">Note</button>
     <button class="btn action finish" id="btn-finish">Finish Feeding</button>
   </section>
 
@@ -485,7 +486,7 @@ function render() {
       eventId = iv.id;
       const note = $('event-note');
       note.value = '';
-      note.placeholder = `Describe the ${iv.kind}…`;
+      note.placeholder = iv.kind === 'note' ? 'Write your note…' : `Describe the ${iv.kind}…`;
       $('event-kind').textContent = cap(iv.kind);
       $('event-kind').className = 'event-kind ' + iv.kind;
       $('btn-finish-event').textContent = 'Finish ' + cap(iv.kind);
@@ -515,6 +516,7 @@ async function act(fn) {
 $('btn-start').onclick = () => act(() => api('/api/meal', {phase: 'start'}));
 $('btn-intervention').onclick = () => act(() => api('/api/press', {kind: 'intervention'}));
 $('btn-explanation').onclick = () => act(() => api('/api/press', {kind: 'explanation'}));
+$('btn-note').onclick = () => act(() => api('/api/press', {kind: 'note'}));
 $('btn-finish-event').onclick = () => {
   if (!st || !st.open_interval) return;
   const kind = st.open_interval.kind, note = $('event-note').value;
