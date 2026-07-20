@@ -4,13 +4,13 @@
       <div class="av"><img src="../assets/user_avatar.svg" alt="User"></div>
       <div>
         <div class="tb-n">{{ username }}</div>
-        <div class="tb-s">A few quick questions about today's meal</div>
+        <div class="tb-s">{{ subtitle }}</div>
       </div>
     </div>
 
     <div class="bd">
       <div v-if="!current" class="waiting-card">
-        <p class="eyebrow">End-of-Meal Survey</p>
+        <p class="eyebrow">{{ eyebrow }}</p>
         <h1>{{ waitingMessage }}</h1>
       </div>
 
@@ -57,6 +57,19 @@
               <span v-if="voiceStatus">{{ voiceStatus }}</span>
               <span v-else>&nbsp;</span>
             </p>
+          </div>
+
+          <!-- Choice question: pick one option, then Continue. -->
+          <div v-else-if="current.kind === 'choice'" class="survey-answer">
+            <div class="choice">
+              <button
+                class="ch"
+                v-for="opt in current.options"
+                :key="opt"
+                :class="{ sel: selected === opt }"
+                @click="selected = opt"
+              >{{ opt }}</button>
+            </div>
           </div>
 
           <!-- Likert question: pick a number, then Continue. -->
@@ -113,6 +126,8 @@ export default {
       lastAnswered: null,
       step: 0,
       total: 9,
+      subtitle: "A few quick questions about today's meal",
+      eyebrow: 'End-of-Meal Survey',
       isSubmitting: false,
       waitingMessage: 'Waiting for the first question...'
     }
@@ -189,6 +204,8 @@ export default {
         // Jump received while already mounted (the backend's resend beat our
         // ready): just re-ack; falling through to routeMap would self-push.
         if (parsedMessage.state === 'survey' && parsedMessage.status === 'jump') {
+          if (parsedMessage.subtitle) this.subtitle = parsedMessage.subtitle
+          if (parsedMessage.eyebrow) this.eyebrow = parsedMessage.eyebrow
           this.sendReady()
           return
         }
@@ -204,11 +221,14 @@ export default {
     loadStep(message) {
       this.step = Number.isInteger(message.step) ? message.step : 0
       this.total = Number.isInteger(message.total) ? message.total : 1
+      if (message.subtitle) this.subtitle = message.subtitle
+      if (message.eyebrow) this.eyebrow = message.eyebrow
       this.current = {
         field: message.field,
         title: message.title || '',
         question: message.question || '',
-        kind: message.kind === 'text' ? 'text' : 'likert',
+        kind: (message.kind === 'text' || message.kind === 'choice') ? message.kind : 'likert',
+        options: Array.isArray(message.options) ? message.options : [],
         scaleMin: Number.isInteger(message.scale_min) ? message.scale_min : 1,
         scaleMax: Number.isInteger(message.scale_max) ? message.scale_max : 7,
         minLabel: message.min_label || 'Very Low',
@@ -378,6 +398,30 @@ export default {
 }
 
 .lk.sel {
+  border-color: var(--a);
+  background: rgba(240, 165, 0, .12);
+}
+
+.choice {
+  display: flex;
+  flex-direction: column;
+  gap: 1.2vh;
+}
+
+.ch {
+  width: 100%;
+  min-height: 9vh;
+  font-size: 3.2vh;
+  font-weight: 600;
+  font-family: inherit;
+  border-radius: 1.5vh;
+  background: var(--s2);
+  border: 2px solid var(--s3);
+  color: var(--t);
+  cursor: pointer;
+}
+
+.ch.sel {
   border-color: var(--a);
   background: rgba(240, 165, 0, .12);
 }

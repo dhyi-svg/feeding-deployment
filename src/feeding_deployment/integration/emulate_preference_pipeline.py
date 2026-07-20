@@ -244,8 +244,17 @@ def _print_explanations(session: PreferenceSession) -> None:
     session.wait_for_reprediction()
     latent = getattr(session, "last_latent_inference", "") or ""
     expl = getattr(session, "last_explanations", None) or {}
+    scores = getattr(session, "last_latent_scores", None) or {}
     if latent:
         print(f"  [why] latent-factor inference: {latent}")
+    if scores:
+        print("  [why] latent scores (pace/trust/proximity/communication):")
+        for k in ("pace", "trust", "proximity", "communication"):
+            v = scores.get(k)
+            if isinstance(v, dict):
+                print(f"    - {k}: score={v.get('score')} conf={v.get('confidence')} — {v.get('why')}")
+            elif v is not None:
+                print(f"    - {k}: {v}")
     if not expl:
         return
     print("  [why] model reasoning for open dims:")

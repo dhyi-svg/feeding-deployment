@@ -76,6 +76,7 @@ def get_bundle_prediction_prompt(
     *,
     memory_mode: str = "three_layer",
     full_history_block: str = "",
+    prior_predictions_block: str = "(none — this is your first prediction this meal)",
     physical_profile_description: str | None = None,
 ) -> str:
     template = BUNDLE_PREDICTION_PROMPT_PATH.read_text(encoding="utf-8")
@@ -105,6 +106,7 @@ def get_bundle_prediction_prompt(
         meal_contents=meal_contents,
         confirmed_block=confirmed_block,
         corrected_block=corrected_block,
+        prior_predictions_block=prior_predictions_block,
         options_block=options_block,
         pref_fields_csv=", ".join(_PREF_FIELDS),
     )

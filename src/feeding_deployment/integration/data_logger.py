@@ -131,6 +131,10 @@ class DataLogger:
         self._events_path = self.day_dir / "events.jsonl"
         self._images_index_path = self.day_dir / "images_index.jsonl"
         self._metadata_path = self.day_dir / "metadata.json"
+        # Held-out pre-meal latent self-report (see integration/pre_meal_survey.py).
+        # Its own per-day file, isolated from events.jsonl and from the
+        # preference-learning memory tree, so it can never leak into prediction.
+        self._pre_meal_path = self.day_dir / "pre_meal.jsonl"
 
         # Relaunch into an existing day (mid-run restart): resume the monotonic
         # counters from what prior sessions wrote so we don't reset to 0 and
@@ -335,6 +339,23 @@ class DataLogger:
                 self._append_jsonl(self._events_path, record)
         except Exception as e:  # noqa: BLE001
             print(f"[data_logger] Failed to log event '{category}': {e}")
+
+    def log_pre_meal(self, **fields: Any) -> None:
+        """Append a held-out pre-meal latent self-report record to pre_meal.jsonl.
+
+        Deliberately NOT mirrored to /deployment/annotations and kept in its own
+        per-day file (separate from events.jsonl and the preference-learning
+        memory): these self-reports are validation ground truth and must never be
+        fed back into prediction. Best-effort; never raises.
+        """
+        if not self.enabled:
+            return
+        try:
+            record = {**self._timestamp(), **fields}
+            with self._lock:
+                self._append_jsonl(self._pre_meal_path, record)
+        except Exception as e:  # noqa: BLE001
+            print(f"[data_logger] Failed to log pre-meal record: {e}")
 
     def begin_hla(self, hla_name: str) -> None:
         """Mark ``hla_name`` as the active skill for subsequent ``log_image`` calls.

@@ -123,8 +123,10 @@ from feeding_deployment.integration.preference_context import build_preference_c
 from feeding_deployment.integration.checkpoint import CheckpointStore
 from feeding_deployment.integration.data_logger import DataLogger
 from feeding_deployment.integration.survey import run_end_of_meal_survey
+from feeding_deployment.integration.pre_meal_survey import run_pre_meal_survey
 from feeding_deployment.integration.preference_session import (
     DEFAULT_PHYSICAL_PROFILE,
+    DEFAULT_PROVIDE_PRIOR_PREDICTIONS,
     INITIAL_PREF_DIMS as _INITIAL_PREF_DIMS,
     PreferenceSession,
     TABLE_PREF_DIMS as _TABLE_PREF_DIMS,
@@ -185,6 +187,7 @@ class _Runner:
                  physical_profile_label: str | None = None,
                  pref_mode: str = "none",
                  pref_memory_mode: str = DEFAULT_MEMORY_MODE,
+                 pref_prior_predictions: bool = DEFAULT_PROVIDE_PRIOR_PREDICTIONS,
                  day: int | None = None) -> None:
         self.run_on_robot = run_on_robot
         self.use_interface = use_interface
@@ -198,6 +201,7 @@ class _Runner:
         self._day = day
         self._pref_mode = pref_mode
         self._pref_memory_mode = pref_memory_mode
+        self._pref_prior_predictions = pref_prior_predictions
         self._prediction_model: PredictionModel | None = None
         self._pref_session: PreferenceSession | None = None
         self.predicted_bundle: dict[str, str] | None = None
@@ -617,6 +621,7 @@ class _Runner:
             # Persist the session on every locked correction so a crash before the
             # next sub-skill checkpoint loses nothing (see _save_state / resume).
             on_change=self._ckpt.save_pref,
+            provide_prior_predictions=self._pref_prior_predictions,
         )
         # Wire the settings overlay to this session (single site covering both the
         # fresh and resume paths). Guarded: terminal/no-interface runs have no
@@ -659,6 +664,16 @@ class _Runner:
         else:
             ctx = self._collect_preference_context()
             print("Preference context (meal / setting / time_of_day):", ctx)
+            # Pre-meal latent questionnaire (web-interface deployments only):
+            # capture the user's self-report of the four latent traits BEFORE any
+            # prediction. Held out -- logged to pre_meal.jsonl only, never fed
+            # into prediction or the preference-learning memory. Best-effort: a
+            # questionnaire failure must never block the meal.
+            if self._pref_mode == "interface":
+                try:
+                    run_pre_meal_survey(self.web_interface, self.data_logger)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[pre-meal survey] error (skipping): {e}")
             self._prediction_model = self._build_prediction_model()
             self._pref_session = self._build_preference_session(self._prediction_model, dict(ctx))
             # Predict everything before asking the initial dims (speed + the two
@@ -1436,6 +1451,15 @@ if __name__ == "__main__":
              "fresh user or after backfilling the mode's day_*.json history.",
     )
     parser.add_argument(
+        "--pref_prior_predictions",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_PROVIDE_PRIOR_PREDICTIONS,
+        help="Feed the model its OWN earlier predictions from THIS meal back into "
+             "each reprediction so it can self-correct same-context bias "
+             "(within-meal only; never persisted across days). On by default; use "
+             "--no-pref_prior_predictions to disable (for A/B testing).",
+    )
+    parser.add_argument(
         "--pref_meal",
         type=str,
         default="",
@@ -1512,6 +1536,7 @@ if __name__ == "__main__":
                      physical_profile_label=physical_profile_label,
                      pref_mode=args.pref_mode,
                      pref_memory_mode=args.pref_memory_mode,
+                     pref_prior_predictions=args.pref_prior_predictions,
                      day=args.day)
 
     if args.pref_mode == "interface" and args.pref_meal.strip():

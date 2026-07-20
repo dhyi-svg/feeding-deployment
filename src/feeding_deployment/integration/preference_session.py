@@ -112,6 +112,13 @@ DEFAULT_PHYSICAL_PROFILE = (
     "personal device using their arms."
 )
 
+# Default for within-meal prior-prediction feedback: feed the model its own
+# earlier predictions from THIS meal back into each reprediction so it can
+# self-diagnose same-context bias. On by default; toggled per run (A/B) via the
+# --pref_prior_predictions / --no-pref_prior_predictions CLI flag. Within-meal
+# only -- never persisted across days.
+DEFAULT_PROVIDE_PRIOR_PREDICTIONS = True
+
 # Preference dimensions asked at the start of the meal (before fetching the
 # plate). The two confirmation dims fire first during the fridge leg (navigation
 # arrival page, handle-detection page), so they are asked up front. Each confirm
@@ -219,6 +226,7 @@ class PreferenceSession:
         data_logger: Any = None,
         flair: Any = None,
         on_change: Optional[Callable[[Dict[str, Any]], None]] = None,
+        provide_prior_predictions: bool = DEFAULT_PROVIDE_PRIOR_PREDICTIONS,
     ) -> None:
         self._model = prediction_model
         self._bt_dir = Path(run_behavior_tree_dir)
@@ -240,6 +248,19 @@ class PreferenceSession:
         # (re)prediction.
         self.last_explanations: Dict[str, str] = {}
         self.last_latent_inference: str = ""
+        # Model's scored latent-trait estimate (pace/trust/proximity/communication)
+        # from the most recent (re)prediction; mirrored from the model and logged
+        # for offline validation against the user's held-out pre-meal self-report.
+        self.last_latent_scores: Dict[str, Any] = {}
+
+        # Within-meal prior-prediction feedback (see DEFAULT_PROVIDE_PRIOR_PREDICTIONS):
+        # _prediction_history accumulates this meal's (re)predictions in memory so a
+        # later reprediction can see what the model already guessed and how it
+        # reasoned, to self-diagnose same-context bias. Reset per meal (the session
+        # is per-meal) and NEVER persisted -- not in capture_state(), not passed to
+        # finalize_meal/update, so it cannot cross days.
+        self._provide_prior_predictions = bool(provide_prior_predictions)
+        self._prediction_history: List[Dict[str, Any]] = []
 
         # Guards the in-memory bundle/finalized/corrected against the settings-edit
         # path (a separate WebInterface worker thread calling settings_view()/edit())
@@ -386,17 +407,25 @@ class PreferenceSession:
     def _pinned_split(self) -> tuple[Dict[str, Any], Dict[str, Any]]:
         """Finalized values split into (corrected, confirmed), both pinned during
         (re)prediction so they never flip. Corrected = dims the user actively
-        changed this meal; confirmed = dims they accepted as-predicted."""
+        changed this meal; confirmed = dims they accepted as-predicted.
+
+        Both dicts are ordered by ``_SETTINGS_DISPLAY_ORDER`` -- the fixed order the
+        dims are ASKED to the user during the meal -- rather than by the hash order
+        of the ``finalized`` set. This makes the rendered prompt blocks deterministic
+        (stable across runs / prompt-cache friendly) and lists the user's responses
+        in the sequence they were actually made (see the ordering note in
+        bundle_prediction.txt). ``_SETTINGS_DISPLAY_ORDER`` covers all bundle fields,
+        so no finalized dim is dropped."""
         with self._lock:
             corrected = {
                 f: self.bundle[f]
-                for f in self.finalized
-                if f in self.corrected and f in self.bundle
+                for f in _SETTINGS_DISPLAY_ORDER
+                if f in self.finalized and f in self.corrected and f in self.bundle
             }
             confirmed = {
                 f: self.bundle[f]
-                for f in self.finalized
-                if f not in self.corrected and f in self.bundle
+                for f in _SETTINGS_DISPLAY_ORDER
+                if f in self.finalized and f not in self.corrected and f in self.bundle
             }
         return corrected, confirmed
 
@@ -423,6 +452,7 @@ class PreferenceSession:
         color_seeds: Optional[Dict[str, Any]] = None,
         nav_offset_seeds: Optional[Dict[str, Any]] = None,
         activity_msg: str = "Thinking about your food preferences… (this can take ~30s)",
+        trigger: Optional[str] = None,
     ) -> Dict[str, Any]:
         # predict_bundle may call an LLM (slow). Callers must NOT hold self._lock
         # across this (see _repredict_open) so the settings worker / execution
@@ -430,6 +460,11 @@ class PreferenceSession:
         # seeds so they can later detect external YAML writes that landed while
         # the LLM call was in flight.
         corrected, confirmed = self._pinned_split()
+        # Within-meal only: feed the model its own earlier predictions from THIS
+        # meal (never crosses days). None disables the prompt block entirely.
+        prior_predictions = (
+            list(self._prediction_history) if self._provide_prior_predictions else None
+        )
         # Surface the slow Opus reasoning as a concrete "why we're waiting" line
         # (claude-opus-4-8 at PREDICTION_EFFORT: ~30 s mean at medium -- keep
         # the estimate in the default activity_msg in sync with llm_config).
@@ -440,13 +475,40 @@ class PreferenceSession:
             confirmed=confirmed,
             color_seeds=color_seeds if color_seeds is not None else self._color_seeds(),
             nav_offset_seeds=nav_offset_seeds if nav_offset_seeds is not None else self._nav_offset_seeds(),
+            prior_predictions=prior_predictions,
         )
         # Per-open-dim reasons + latent-factor inference from this prediction
         # (logged at start(); shown by the terminal emulator). Best-effort:
         # absent on models without them.
         self.last_explanations = dict(getattr(self._model, "last_explanations", {}) or {})
         self.last_latent_inference = str(getattr(self._model, "last_latent_inference", "") or "")
+        self.last_latent_scores = dict(getattr(self._model, "last_latent_scores", {}) or {})
+        self._record_prediction(trigger, pred)
         return pred
+
+    def _record_prediction(self, trigger: Optional[str], pred: Dict[str, Any]) -> None:
+        """Append this (re)prediction to the within-meal history so later
+        repredicts can self-diagnose same-context bias. Stores the latent-trait
+        scores + latent-factor inference (the compact, bias-relevant reasoning)
+        and the predicted values of the still-open categorical/text dims (color
+        and nav-offset dims are context, not latent-bias signals, so they are
+        omitted). In-memory only; never persisted (see _prediction_history)."""
+        with self._lock:
+            open_predicted = {
+                f: pred[f]
+                for f in pred
+                if f not in self.finalized
+                and f not in _COLOR_FIELD_SET
+                and f not in _NAV_OFFSET_FIELD_SET
+            }
+        self._prediction_history.append(
+            {
+                "trigger": trigger,
+                "latent_scores": dict(self.last_latent_scores),
+                "latent_inference": self.last_latent_inference,
+                "predicted": open_predicted,
+            }
+        )
 
     def _repredict_open(self, triggers: Optional[List[str]] = None) -> None:
         """Refresh predictions for all still-open dims (finalized dims pinned).
@@ -466,6 +528,7 @@ class PreferenceSession:
         pred = self._predict(  # LLM OUTSIDE all locks
             color_seeds, nav_offset_seeds,
             activity_msg="Updating your preferences in the background…",
+            trigger="; ".join(triggers) if triggers else "reprediction",
         )
         with self._bt_write_mutex:
             with self._lock:
@@ -644,7 +707,7 @@ class PreferenceSession:
         self._apply_food_items()
         with self._lock:
             finalized_before = set(self.finalized)
-        pred = self._predict()
+        pred = self._predict(trigger="initial")
         with self._bt_write_mutex:
             with self._lock:
                 # Merge rather than replace: a settings edit racing start()'s
@@ -672,6 +735,8 @@ class PreferenceSession:
             stage="start",
             predicted_bundle=self._loggable_bundle(),
             explanations=dict(self.last_explanations),
+            latent_inference=self.last_latent_inference,
+            latent_scores=dict(self.last_latent_scores),
         )
         # Stop the "thinking about your preferences" timer now that the initial
         # prediction is done (a scheduled background repredict, if any, sets and

@@ -175,6 +175,41 @@ def _format_corrected_block(corrected: Dict[str, Any]) -> str:
             out.append(f"{k}={v}")
     return "\n".join(out)
 
+
+def _format_prior_predictions_block(prior_predictions: Optional[List[Dict[str, Any]]]) -> str:
+    """Render THIS meal's earlier model predictions (the session's in-memory
+    within-meal history) so a reprediction can self-diagnose same-context bias.
+    One entry per (re)prediction, oldest first: the latent-trait scores it
+    asserted, its latent-factor inference, and the open-dim values it predicted.
+    Returns an empty sentinel when feedback is disabled or this is the first
+    prediction of the meal."""
+    if not prior_predictions:
+        return "(none — this is your first prediction this meal)"
+    rounds = []
+    for i, entry in enumerate(prior_predictions, start=1):
+        trig = entry.get("trigger") or "initial"
+        scores = entry.get("latent_scores") or {}
+        score_bits = []
+        for k in ("pace", "trust", "proximity", "communication"):
+            v = scores.get(k)
+            if isinstance(v, dict):
+                score_bits.append(f"{k}={v.get('score')}")
+            elif v is not None:
+                score_bits.append(f"{k}={v}")
+        score_line = ", ".join(score_bits) if score_bits else "(none)"
+        inference_txt = entry.get("latent_inference") or ""
+        predicted = entry.get("predicted") or {}
+        pred_line = (
+            "; ".join(f"{k}={val}" for k, val in predicted.items()) if predicted else "(none)"
+        )
+        rounds.append(
+            f"Prediction {i} (after: {trig}):\n"
+            f"  latent_scores: {score_line}\n"
+            f"  latent_inference: {inference_txt}\n"
+            f"  predicted open dims: {pred_line}"
+        )
+    return "\n".join(rounds)
+
 def _day_path(dir_path: Path, day: int) -> Path:
     return dir_path / f"day_{day:04d}.json"
 
@@ -302,6 +337,13 @@ class PredictionModel:
         # "latent_inference" sentence(s) ride along in last_latent_inference.
         self.last_explanations: Dict[str, str] = {}
         self.last_latent_inference: str = ""
+        # The LLM's scored predictions over the four stable latent user-traits
+        # (pace / trust / proximity / communication), each
+        # {"score": 1-5, "confidence": ..., "why": ...}; {} when absent/malformed.
+        # This is the model's inferred latent state, graded offline against the
+        # user's held-out pre-meal self-report. Extra response key, not a
+        # preference field (the validation loop only reads PREF_FIELDS).
+        self.last_latent_scores: Dict[str, Any] = {}
 
     @staticmethod
     def _scan_day_files(dir_path: Path, current_day: int):
@@ -513,6 +555,7 @@ class PredictionModel:
         confirmed: Optional[Dict[str, Any]] = None,
         color_seeds: Optional[Dict[str, Any]] = None,
         nav_offset_seeds: Optional[Dict[str, Any]] = None,
+        prior_predictions: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Returns predicted_bundle.
@@ -555,6 +598,7 @@ class PredictionModel:
         corrected_block = _format_corrected_block(corrected)
         confirmed_block = _format_corrected_block(confirmed)
         meal_contents_block = _build_meal_contents_block(str(context.get("meal", "")))
+        prior_predictions_block = _format_prior_predictions_block(prior_predictions)
 
         prompt = get_bundle_prediction_prompt(
             physical_profile_label=self.physical_profile_label,
@@ -567,6 +611,7 @@ class PredictionModel:
             confirmed_block=confirmed_block,
             options_block=options_block,
             meal_contents=meal_contents_block,
+            prior_predictions_block=prior_predictions_block,
             physical_profile_description=self.physical_profile_description,
         )
 
@@ -621,6 +666,8 @@ class PredictionModel:
         expl = data.get("explanations")
         self.last_explanations = dict(expl) if isinstance(expl, dict) else {}
         self.last_latent_inference = str(data.get("latent_inference") or "")
+        ls = data.get("latent_scores")
+        self.last_latent_scores = dict(ls) if isinstance(ls, dict) else {}
 
         # Validate each field; categorical -> allowed option (fallback to
         # pinned/default), color -> parsed HSV (fallback to seed), nav

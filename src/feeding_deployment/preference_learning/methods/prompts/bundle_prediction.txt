@@ -24,11 +24,18 @@ Context for current meal:
 Contents of the current meal (use these exact food/dip names when predicting any ordering or dipping-pairing preference):
 {meal_contents}
 
+The dimensions in the CONFIRMED and CORRECTED lists below are listed in the fixed order they are asked to the user during the meal (earliest-asked first) — read them as the sequence in which the user actually confirmed or corrected them this meal.
+
 Dimensions the user CONFIRMED this meal (accepted the prediction as-is):
 {confirmed_block}
 
 Dimensions the user CORRECTED this meal (replaced the prediction with the value they want):
 {corrected_block}
+
+Your OWN earlier predictions this meal (oldest first) — NOT user input; this is what YOU predicted and how you reasoned earlier this same meal:
+{prior_predictions_block}
+
+Use these to catch and correct your OWN bias: where one of your earlier predictions was contradicted by a correction listed above, treat the gap as a same-context signal that you have been mis-reading a latent trait this meal (e.g. under- or over-estimating how hands-off, trusting, close, or communicative the user wants things) — move your latent_scores and open-dim predictions in the direction the correction indicates. Do NOT restate or defend an earlier prediction just to stay consistent with it. These earlier predictions are from THIS meal only; do not carry this self-correction across meals.
 
 IMPORTANT — PREFERENCES ARE CORRELATED: the user's preferences co-vary through latent factors that are not directly observed: the user's current state (e.g., hurried, fatigued, relaxed), the physical conditions of this meal (setting, time of day, lighting and similar environmental factors), and properties of the meal itself. Each CORRECTION is a direct observation of what those latent factors are doing right now. A dimension does NOT need its own correction to change: when the user corrects one dimension, infer which latent factor most plausibly produced that correction, and update every OPEN dimension that same factor influences — categorical and continuous alike. Do not fall back on "this dimension was not itself corrected, so keep its previous value": a seed or memory value carried over from previous meals cannot reflect anything the user revealed DURING this meal, so where a this-meal correction bears on a dimension — even indirectly, through a shared latent factor — it outweighs the carried-over value. Similar prior meals in the memory blocks above (when present) show what the user actually preferred when those latent factors were in a comparable state; weigh them accordingly. Confirmations are weaker evidence: they tell you the prediction was acceptable, not that the latent factors changed.
 
@@ -54,7 +61,14 @@ Output ONLY a valid JSON object (strict JSON: double-quoted keys and values, no 
 
 The JSON object's FIRST key must be "latent_inference": one to three sentences inferring, from the CORRECTED dimensions of this meal (if any), what the meal's latent factors currently are (the user's state, the environmental/observation conditions, the meal) — write this BEFORE any prediction, and make the predictions that follow consistent with it. If nothing has been corrected yet, state the most likely latent factors from the context and memory instead.
 
-After "latent_inference", the object must contain exactly these keys (categorical fields take a string value; plate_color_* fields take an HSV object as described above; nav_offset_* fields take a dx/dy/dyaw object as described above):
+The SECOND key must be "latent_scores": your estimate of the user's four stable latent traits, inferred from this meal's corrections/confirmations, the context, and memory. (These are traits you INFER — the user does not tell you them.) Output an object with exactly these four keys, each mapping to {{"score": <integer 1-5>, "confidence": "low"|"medium"|"high", "why": "<one short sentence>"}}:
+- "pace": how fast-paced the user wants the meal. 1 = slow and unhurried; 5 = quick and efficient. (Expressed through robot_speed, retract_between_bites, and the wait_before_autocontinue_* dims.)
+- "trust": how much the user wants the robot to check with them before/after acting vs. trust it to act on its own. 1 = check with me most of the time; 5 = trust it, no need to check. (Expressed through the confirm_* dims and detect_user_completed_transfer_*.)
+- "proximity": how comfortable the user is with the robot close to them and in their line of sight. 1 = keep its distance and out of my view; 5 = close and in-view is fine. (Expressed through transfer_mode, outside_mouth_distance, retract_between_bites.)
+- "communication": how much of a heads-up / signalling the user wants from the robot. 1 = stay quiet and just proceed; 5 = clearly signal every time. (Expressed through the convey_robot_ready_* dims.)
+Make "latent_scores" consistent with your "latent_inference" and with the bundle you predict below.
+
+After "latent_inference" and "latent_scores", the object must contain exactly these preference-bundle keys (categorical fields take a string value; plate_color_* fields take an HSV object as described above; nav_offset_* fields take a dx/dy/dyaw object as described above):
 {pref_fields_csv}
 
 plus ONE final key "explanations": an object whose keys are exactly the OPEN dimensions (every dimension NOT listed in the CONFIRMED or CORRECTED blocks above — include every one of them, omit none) and whose values are ONE short sentence each, naming the evidence behind that prediction (a correction made this meal, a similar prior meal, a long-term tendency, the physical profile, or the seed/default) and — when any correction exists this meal — whether it changes this dimension through a shared latent factor.

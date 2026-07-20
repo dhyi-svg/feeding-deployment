@@ -46,13 +46,20 @@ class FakeModel:
     def __init__(self):
         self.predict_calls = []
         self.update_calls = []
+        # Mirrored by PreferenceSession after each predict (via getattr); present
+        # so the session picks up a real (empty) value rather than the default.
+        self.last_latent_scores = {}
+        self.last_latent_inference = ""
+        self.last_explanations = {}
 
-    def predict_bundle(self, context, corrected, confirmed=None, color_seeds=None, nav_offset_seeds=None):
+    def predict_bundle(self, context, corrected, confirmed=None, color_seeds=None,
+                       nav_offset_seeds=None, prior_predictions=None):
         self.predict_calls.append({
             "corrected": dict(corrected),
             "confirmed": dict(confirmed or {}),
             "color_seeds": dict(color_seeds or {}),
             "nav_offset_seeds": dict(nav_offset_seeds or {}),
+            "prior_predictions": list(prior_predictions or []),
         })
         out = {}
         for f in PREF_FIELDS:
@@ -270,6 +277,65 @@ def test_finalize_meal_one_update_with_full_bundle(bt_dir):
     assert set(call["gt"].keys()) >= set(PREF_FIELDS)
     # Every dim is finalized (unasked dims confirmed at the prediction).
     assert all(f in s.finalized for f in PREF_FIELDS)
+
+
+def test_pinned_split_orders_by_ask_order(bt_dir):
+    # _pinned_split must render corrected/confirmed in the fixed ASK order
+    # (_SETTINGS_DISPLAY_ORDER), not the hash order of the ``finalized`` set, so
+    # the prompt blocks are deterministic and read in the order the user was asked.
+    from feeding_deployment.integration.preference_session import _SETTINGS_DISPLAY_ORDER
+    web = FakeWeb({"robot_speed": "fast"})
+    s = PreferenceSession(FakeModel(), bt_dir, CTX, web_interface=web)
+    s.start()
+    # Ask out of ask-order (skewering_axis is late, robot_speed/confirm are early).
+    s.ask(["skewering_axis", "robot_speed", "confirm_manipulation"])
+    s.wait_for_reprediction(5.0)
+    corrected, confirmed = s._pinned_split()
+    for block in (list(corrected.keys()), list(confirmed.keys())):
+        idx = [_SETTINGS_DISPLAY_ORDER.index(f) for f in block]
+        assert idx == sorted(idx), f"{block} not in ask-order"
+    assert set(corrected) | set(confirmed) == set(s.finalized)
+
+
+def test_prediction_history_is_never_persisted(bt_dir):
+    # Within-meal prior-prediction history is in-memory only: it must not appear
+    # in capture_state() (crash-resume) nor reach the cross-day update() payload.
+    model = FakeModel()
+    web = FakeWeb({"robot_speed": "fast"})
+    s = PreferenceSession(model, bt_dir, CTX, web_interface=web)
+    s.start()
+    s.ask(["robot_speed"])
+    s.wait_for_reprediction(5.0)
+    assert s._prediction_history  # accumulates within the meal
+    snap = s.capture_state()
+    assert "prediction_history" not in str(snap)  # not in crash-resume state
+    s.finalize_meal(day=3)
+    call = model.update_calls[-1]
+    assert set(call.keys()) == {"day", "corrected", "gt"}  # no history crosses days
+
+
+def test_prior_predictions_flag_on_feeds_history(bt_dir):
+    # Default ON: the reprediction after a correction receives the earlier
+    # this-meal prediction(s) as prior_predictions.
+    model = FakeModel()
+    web = FakeWeb({"robot_speed": "fast"})
+    s = PreferenceSession(model, bt_dir, CTX, web_interface=web)
+    s.start()
+    s.ask(["robot_speed"])
+    s.wait_for_reprediction(5.0)
+    assert any(c["prior_predictions"] for c in model.predict_calls[1:])
+
+
+def test_prior_predictions_flag_off_sends_none(bt_dir):
+    # Flag OFF: no prediction ever receives prior-prediction feedback.
+    model = FakeModel()
+    web = FakeWeb({"robot_speed": "fast"})
+    s = PreferenceSession(model, bt_dir, CTX, web_interface=web,
+                          provide_prior_predictions=False)
+    s.start()
+    s.ask(["robot_speed"])
+    s.wait_for_reprediction(5.0)
+    assert all(c["prior_predictions"] == [] for c in model.predict_calls)
 
 
 # ---------------------------------------------------------------------------
