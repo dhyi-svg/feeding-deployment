@@ -119,9 +119,11 @@ python compute_feeding_time.py --user <user> --day 3    # one day
 
 ## Meal review — edit the log after the meal (port 8082)
 
-After a meal, run `review_meal.py` to reopen a day's log in the browser and edit
-the note on each intervention / explanation / note, add entries you missed live,
-and write free-form end-of-meal notes and your own thoughts:
+`launch_app.sh` starts `review_meal.py` in the background too, so it is always
+live at `http://192.168.1.2:8082` for the whole session — reopen a day's log in
+the browser to edit the note on each intervention / explanation / note, add
+entries you missed live, and write free-form end-of-meal notes and your own
+thoughts. (It can also be run standalone afterwards:)
 
 ```bash
 cd ../src/feeding_deployment/integration
@@ -132,9 +134,7 @@ Pick a session, edit, and **Save**. Everything is written to a *separate*
 `log/<user>/day_NN/researcher_review.json`; the original append-only
 `researcher_events.jsonl` is never modified. The first open of a session is
 seeded from the original marks; after that it loads your saved review. Removing
-an entry tombstones it (`deleted: true`) rather than dropping it. It is
-deliberately **not** started by `launch_app` (review happens after the meal, with
-the live timer no longer running), so run it on demand.
+an entry tombstones it (`deleted: true`) rather than dropping it.
 
 ---
 
