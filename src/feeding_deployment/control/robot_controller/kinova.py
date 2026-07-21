@@ -246,7 +246,8 @@ class KinovaArm:
 
         def check_for_end_or_abort(e):
             def check(notification, e=e):
-                # print("EVENT : " + Base_pb2.ActionEvent.Name(notification.action_event))
+                print("EVENT : " + Base_pb2.ActionEvent.Name(notification.action_event))
+                print("NOTIFICATION DETAIL:", notification, flush=True)
                 if notification.action_event in (
                     Base_pb2.ACTION_END,
                     Base_pb2.ACTION_ABORT,

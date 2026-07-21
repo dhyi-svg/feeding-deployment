@@ -80,6 +80,13 @@ class ArmInterface:
                         self.emergency_stop()
                     break
 
+    def get_arm_state(self):
+        """Diagnostic, read-only: raw Kortex ARMSTATE_* (int + name)."""
+        from kortex_api.autogen.messages import Base_pb2
+        val = self.arm.base.GetArmState().active_state
+        name = next((n for n in dir(Base_pb2) if n.startswith("ARMSTATE") and getattr(Base_pb2, n) == val), str(val))
+        return {"active_state": val, "name": name}
+
     def get_state(self):
         try:
             current_state = self.arm.get_state()
