@@ -37,6 +37,144 @@ the bypass (fresh server re-locks motion). Verify with `get_state()` → expect
 
 ---
 
+## 2026-07-21 (later) — Pachirisu: first commanded motion + GPU vision pipeline
+
+Follow-on session, same day as the read-only bring-up below. Two goals: (1) the
+**first-ever commanded motion** on this box, done as a small/cautious rung-by-rung
+ladder, and (2) get the repo's **real vision model** (GroundingDINO, not a stub)
+running against the live RealSense feed. Both succeeded. Container churned through
+several recreates along the way — details below so the next session doesn't have to
+rediscover any of this.
+
+### First motion: J5 wrist tilt, ±5° then 20°
+
+Goal was specifically a wrist pitch-up move, not a base-joint sweep. Reasoned which
+joint from the *current* pose rather than assuming: seeded PyBullet FK (same
+`resetJointState`-from-real-joints pattern as the Jetson's seeded-IK fix) from
+`assets/robot/robot.urdf`, perturbed J5/J6/J7 by ±5° each, and compared each one's
+effect on the `tool_frame` local-Z axis's world-Z component (i.e. does the gripper's
+pointing direction tilt away from straight-down). Findings:
+- **J7 structurally can't tilt the gripper at all, at any configuration** — the fixed
+  joint chain `bracelet_link → end_effector_link → tool_frame` only flips/translates
+  along `bracelet_link`'s own Z axis, and J7 rotates *about* that same axis (pure
+  roll). Confirmed numerically: Δ(approach-Z) = 0.0000 for both directions.
+- **J5 (continuous, no joint limit) beat J6 (limited, but with huge margin here)** on
+  tilt-per-degree, so J5 was picked. Sanity-checked the FK model first: PyBullet's
+  seeded FK vs the real `get_state()` EE quaternion were nearly identical (quat
+  distance 0.0084), confirming the URDF is trustworthy for this kind of reasoning.
+- Also flagged as a live safety check: J4's *current* reading (-151.8°) is already
+  past the URDF's own stated soft limit for that joint (-147.3°) — ruled out J2/J4/J6
+  as candidates for this reason alone, independent of the tilt-effectiveness result.
+
+**First attempt: `ACTION_ABORT` / `abort_details: METHOD_FAILED`, on every
+`REACH_JOINT_ANGLES` call — even a zero-delta one** (commanding the arm to its own
+current position also aborted the same way). `GetArmState().active_state` read
+`ARMSTATE_SERVOING_READY` throughout — no fault, not manually-controlled, telemetry
+fine. Added a temporary diagnostic (`ArmInterface.get_arm_state()` in
+`arm_interface.py`, plus an uncommented notification-event print in `kinova.py`'s
+`check_for_end_or_abort` — both left in place, harmless/read-only) to get the actual
+abort reason. Never fully root-caused: it started working right after the user
+interacted with the arm's web dashboard (`http://192.168.1.10`) — the pose had also
+visibly shifted between attempts (consistent with a manual jog), suggesting the
+dashboard was holding some kind of implicit control lock or advisory that
+`GetArmState()` doesn't surface. **Worth checking the dashboard for an open
+manual-control panel before assuming a `METHOD_FAILED` abort is a code bug.**
+
+Once unblocked: J5 -5° (target -20.14°, actual -20.14°, wrong on the first try only),
+then -5° again, +5° reverse, then a 20° move — every one landed within ~0.02° of
+target, with all 6 other joints exactly 0.000° delta each time. Full rung ladder
+(propose → explicit go → execute → poll-for-settle → re-verify) held throughout.
+
+### Vision: real GroundingDINO on the RTX 5070, not a stub
+
+Repo's own entry point is `AppliancePerception.detect_items` (via `GroundedSAM` +
+`RealSenseInterface`) in
+`src/feeding_deployment/perception/appliance_perception/appliance_perception.py` —
+note the directory-vs-file collision: the *module* path is
+`feeding_deployment.perception.appliance_perception.appliance_perception`, not the
+flat `feeding_deployment.perception.appliance_perception` it looks like at a glance
+(there's a package dir and a same-named `.py` file inside it). Also: don't
+redundantly `sys.path.insert()` the `msgs_ws` path on top of it already being in
+`PYTHONPATH` — the duplicate entry made `feeding_deployment.perception` resolve as a
+broken multi-origin namespace package and produced a confusing
+`cannot import name ... (unknown location)` error that looks unrelated to the real
+cause.
+
+**Container recreated three times** to get here (each time via `docker commit` first
+so nothing installed got lost — `ros_env`/`kortex_api`/`msgs_ws` live in the
+container's writable layer, not a bind mount):
+1. `--privileged` — for `/dev/video*` + USB access (originally missing entirely:
+   `Privileged: false`, no `--device`, camera invisible inside the container even
+   though present on the host).
+2. `--gpus all` added — for the RTX 5070 (nvidia container runtime was available on
+   the host, just not attached to this container). First recreate attempt **forgot
+   this flag** (copy-paste from the previous recreate) — caught immediately via
+   `nvidia-smi` coming back empty inside the container; fixed by recreating again
+   from the same snapshot with the flag added, no state lost.
+3. `-v /dev:/dev` added — `--privileged` alone does **not** make the container's
+   `/dev` track the host live; it's a snapshot taken at container start. A mid-session
+   power event (arm's plug pulled, camera also affected) caused the RealSense to
+   re-enumerate on the USB bus with a new device number; the container kept serving
+   the *old* stale `/dev/bus/usb/002/NNN` node, so the camera process failed with
+   `RS2_USB_STATUS_NO_DEVICE` / `acquire_power failed` even after a physical
+   replug + fresh process restart. Only fixed by bind-mounting `/dev` live. **This
+   is now permanent** — future USB replugs should Just Work without another rebuild.
+
+Final container: `feed-noetic`, from image `feed-noetic-snapshot3`, run with
+`--network host --privileged --gpus all -v /dev:/dev -v /tmp/.X11-unix:/tmp/.X11-unix
+-v ~/deployment_ws:/root/deployment_ws`. Old intermediate containers/images cleaned
+up at end of session; kept `feed-noetic-snapshot3` (current) and the original
+`osrf/ros:noetic-desktop-full` base as a from-scratch fallback.
+
+**Package installs, into `ros_env` (RoboStack, Python 3.11):**
+| package | note |
+|---|---|
+| `torch` / `torchvision` | plain `pip install`, no special index needed — latest stable (2.13.0+cu130) already supports Blackwell (RTX 5070, sm_120) out of the box. Verified with a real `@` matmul on `cuda`, not just `is_available()` (per `grounded_sam.py`'s own documented gotcha about that lying). |
+| `groundingdino-py` | PyPI package (not a cloned repo). Installs as a **pure-Python wheel** — no compiled CUDA extension to fight Blackwell over; the deformable-attention op just runs through standard PyTorch ops on GPU. |
+| `transformers` | **must pin `<5`** — latest 5.x removed `get_head_mask`, which GroundingDINO's `BertModelWarper` still calls; install resolved to `4.57.6`. |
+| `supervision` | `groundingdino-py` pins `==0.6.0`, but this repo's `appliance_perception.py` unpacks `Detections` iteration as a 6-tuple (`for _, _, confidence, class_id, _, _ in detections`), which only exists from roughly 0.14+ onward (the `data` field). Overrode to `0.21.0` — pip warns about the conflict with `groundingdino-py`'s pin, harmless in practice. |
+| `segment_anything` | `pip install git+https://github.com/facebookresearch/segment-anything.git` — only needed for the module-level import in `grounded_sam.py`; SAM itself stays lazy-loaded (appliance/handle path never touches it). |
+| `open3d`, `scikit-learn` | plain installs, no issues. |
+| `ros-noetic-realsense2-camera` | RoboStack (`robostack-staging`), pulls in `ros-noetic-librealsense2` 2.50.0. |
+
+**Checkpoint:** `groundingdino_swinb_cogcoor.pth` (938 MB, Swin-B) downloaded from
+`https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha2/` to
+`~/Grounded-Segment-Anything/` inside the container — not in the repo, not cached
+anywhere, has to be fetched fresh per box.
+
+**Result:** `GroundedSAM()` loads with `DEVICE: cuda`. Live frame from
+`/camera/color/image_raw` (30 Hz, confirmed via `rostopic hz`) fed into
+`detect_items()` with the actual microwave placed in view:
+`microwave: 0.61`, `microwave handle: 0.56`, `door handle: 0.40` — all landing on the
+same correct bounding box (visually confirmed via the annotated overlay), consistent
+with the Jetson rig's documented 0.59–0.81 range for the same prompt.
+
+### Not done this session
+- **No camera→arm-base calibration on this box.** The Jetson's detect→grasp pipeline
+  depends on an `easy_handeye2` eye-in-hand calibration file plus empirically-tuned
+  corrections (`DEPTH_CORR=0.16`, `LAT_CORR=0.07`, `GRIP_EXT=0.065`) tuned to *that*
+  rig's specific camera mount — none of that exists or has been verified here.
+  Explicitly decided **not** to attempt any detect→move-the-arm-toward-it step today
+  without it; that's real, separate calibration work, not something to stack onto a
+  first-motion + first-vision session.
+- Depth (`/camera/depth/image_rect_raw`) was streamed and confirmed at 30 Hz, but
+  `RealSenseInterface` (the repo's own consumer class) expects
+  `/camera/aligned_depth_to_color/image_raw` specifically — need
+  `align_depth:=true` on the `rs_camera.launch` invocation (or `rs_aligned_depth.launch`)
+  before `RealSenseInterface`/`detect_handle_and_placement`'s full 3D pipeline will
+  work; today's detection test used `detect_items` directly (RGB-only) to sidestep
+  this.
+- `stub_base_server.py` / real `bulldog` still not exercised on this box.
+
+### End-of-session state
+Everything stopped cleanly: `bulldog_bypass.py` + `arm_server.py` (SIGINT, lock file
+released, arm re-locked), `roscore` + `realsense2_camera` (SIGINT/SIGKILL as needed).
+Container `feed-noetic` left running but idle — next session can skip essentially all
+of today's setup (`ros_env`, GPU, live `/dev`, checkpoint, all pins) and go straight
+to bring-up.
+
+---
+
 ## 2026-07-21 — Pachirisu read-only arm bring-up (RoboStack + kortex_api)
 
 **New host, same arm.** First-ever connection from `Pachirisu` (RTX/24.04 desktop, separate
