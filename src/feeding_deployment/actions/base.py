@@ -431,7 +431,7 @@ class HighLevelAction(abc.ABC):
         if not np.isclose(norm, 1.0, atol=1e-3):
             raise ValueError(f"Invalid EE-pose quaternion (norm {norm:.4f}, expected unit): {pose.orientation}")
 
-    def move_to_ee_pose(self, pose: Pose) -> None:
+    def move_to_ee_pose(self, pose: Pose, soft_stop: bool = True) -> None:
 
         plan = None
         # if not self.no_waits:
@@ -440,7 +440,14 @@ class HighLevelAction(abc.ABC):
             self.sim.visualize_plan(plan)
         else:
             self._validate_ee_pose(pose)
-            self.execute_robot_command(CartesianCommand(pos=pose.position, quat=pose.orientation), plan)
+            # soft_stop (default on): ease into the target instead of the abrupt reach_pose
+            # stop that makes the EE jerk. move_cartesian handles it -- a short straight-line
+            # interpolation through the tapered waypoint path, falling back to a plain
+            # reach_pose if that path can't be validated -- so this is never worse than the
+            # old behaviour. Cruise speed on the way in is unchanged.
+            self.execute_robot_command(
+                CartesianCommand(pos=pose.position, quat=pose.orientation, soft_stop=soft_stop), plan
+            )
 
     def move_to_ee_pose_trajectory(self, traj: list[Pose]) -> None:
 

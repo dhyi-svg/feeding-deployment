@@ -294,7 +294,7 @@ class ArmInterface:
             raise Exception(f"Error in set_joint_trajectory: {str(e)}") from None # suppress original exception
         return success
 
-    def set_ee_pose(self, xyz, xyz_quat):
+    def set_ee_pose(self, xyz, xyz_quat, soft_stop=False):
         self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert not self.in_compliant_mode, "In compliant mode"
@@ -304,7 +304,7 @@ class ArmInterface:
         print(f"Received cartesian pose command: {xyz}, {xyz_quat}")
 
         try:
-            success = self.arm.move_cartesian(xyz, xyz_quat)
+            success = self.arm.move_cartesian(xyz, xyz_quat, soft_stop=soft_stop)
         except Exception as e:
             print(f"Error in set_ee_pose: {e}")
             # Re-raise a simplified exception to avoid pickling issues

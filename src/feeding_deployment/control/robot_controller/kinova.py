@@ -42,7 +42,7 @@ try:
     from kortex_api.UDPTransport import UDPTransport
 except ModuleNotFoundError:
     pass
-from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import Rotation as R, Slerp
 
 # for joint space compliant control
 from feeding_deployment.control.robot_controller.compliant_controller import CompliantController
@@ -568,9 +568,19 @@ class KinovaArm:
                 return True
 
 
-    def move_cartesian(self, xyz, xyz_quat, blocking=True):
+    def move_cartesian(self, xyz, xyz_quat, blocking=True, soft_stop=False):
 
         assert not self.cyclic_running, "Arm must be in high-level servoing mode"
+
+        # soft_stop: ease into the target instead of the abrupt reach_pose stop that makes
+        # the EE jerk. Run a short straight-line interpolation through the tapered waypoint
+        # path; if that trajectory can't be validated (or the pose is unavailable), fall
+        # through to the plain reach_pose below -- so this is never worse than a plain move.
+        if soft_stop:
+            traj = self._interpolate_cartesian_path(xyz, xyz_quat)
+            if traj is not None and self.move_cartesian_trajectory(traj, blocking):
+                return True
+            print("soft_stop: interpolated trajectory unavailable/invalid; using reach_pose")
 
         theta_xyz = R.from_quat(xyz_quat).as_euler("xyz")
 
@@ -597,6 +607,32 @@ class KinovaArm:
             else:
                 print("Cartesian movement completed")
                 return True
+
+    def _interpolate_cartesian_path(self, tgt_xyz, tgt_quat, spacing_m=0.03):
+        """Straight-line Cartesian interpolation from the current tool pose to the target,
+        returned as an (xyz, quat) list for move_cartesian_trajectory so a point-to-point
+        move can ease into its stop via the trajectory taper. Returns None (caller uses a
+        plain reach_pose) if the current pose is unavailable or the move is < 2 cm."""
+        try:
+            cur = np.asarray(self.get_state()["ee_pos"], dtype=float)
+        except Exception:
+            return None
+        if cur.shape[0] < 7:
+            return None
+        cur_pos, cur_quat = cur[:3], cur[3:7]
+        tgt_pos = np.asarray(tgt_xyz, dtype=float)
+        tgt_q = np.asarray(tgt_quat, dtype=float)
+        dist = float(np.linalg.norm(tgt_pos - cur_pos))
+        if dist < 0.02:  # tiny move: reach_pose is fine and too short to taper
+            return None
+        n = int(np.clip(round(dist / spacing_m), 3, 15))
+        slerp = Slerp([0.0, 1.0], R.from_quat([cur_quat, tgt_q]))
+        traj = []
+        for i in range(1, n + 1):  # exclude current pose; end exactly at the target
+            s = i / n
+            pos = (1.0 - s) * cur_pos + s * tgt_pos
+            traj.append((pos, slerp(s).as_quat()))
+        return traj
 
     def move_cartesian_trajectory(self, trajectory, blocking=True):
         assert not self.cyclic_running, "Arm must be in high-level servoing mode"
@@ -628,6 +664,7 @@ class KinovaArm:
         cruise_linear = cruise.twist_linear if cruise.twist_linear > 0 else 0.25
         cruise_angular = cruise.twist_angular if cruise.twist_angular > 0 else 40.0
         taper = min(TAPER_WAYPOINTS, n - 1) if n >= 2 else 0
+        positions = [np.asarray(p[0], dtype=float) for p in trajectory]
 
         for index, point in enumerate(trajectory):
             cartesian_pose = point[0]
@@ -647,7 +684,14 @@ class KinovaArm:
             if index == 0 or index == n - 1:
                 waypoint.cartesian_waypoint.blending_radius = 0.0
             else:
-                waypoint.cartesian_waypoint.blending_radius = 0.01
+                # Cap the blend to a fraction of the shorter adjacent segment so densely
+                # spaced (e.g. interpolated) waypoints don't trip "blending radius overlaps
+                # with previous waypoint". Well-spaced trajectories keep the usual 0.01 m.
+                seg = min(
+                    np.linalg.norm(positions[index] - positions[index - 1]),
+                    np.linalg.norm(positions[index + 1] - positions[index]),
+                )
+                waypoint.cartesian_waypoint.blending_radius = float(min(0.01, 0.4 * seg))
 
             # Ramp the max velocity down over the last `taper` waypoints (linearly from
             # cruise at the start of the taper to ARRIVAL_* at the final waypoint); leave
