@@ -1231,12 +1231,12 @@ class WebInterface:
     #       app -> BE: {"state":"thank_you","status":"ready"}
 
     def start_survey(self, total: int, subtitle: str | None = None,
-                     eyebrow: str | None = None) -> None:
+                     eyebrow: str | None = None, note: str | None = None) -> None:
         """Navigate to the survey page and wait until it has mounted/subscribed.
 
-        ``subtitle``/``eyebrow`` override the page's default header text and are
-        used by the pre-meal latent questionnaire, which reuses this page; the
-        end-of-meal survey omits them and keeps its defaults."""
+        ``subtitle``/``eyebrow``/``note`` override the page's default header text
+        and are used by the pre-meal latent questionnaire, which reuses this page;
+        the end-of-meal survey omits them and keeps its defaults."""
         # If the user has the settings overlay open, stall until they close it.
         self.wait_until_settings_closed("robot_waiting", raise_on_takeover=True)
         self.current_page = "survey"
@@ -1247,6 +1247,8 @@ class WebInterface:
             jump_msg["subtitle"] = subtitle
         if eyebrow is not None:
             jump_msg["eyebrow"] = eyebrow
+        if note is not None:
+            jump_msg["note"] = note
         self._send_message(jump_msg)
         # Resend until the page mounts and reports ready: /robot_to_webapp is
         # not latched and the page re-subscribes asynchronously on mount.
@@ -1267,9 +1269,9 @@ class WebInterface:
         scale_max: int = 7,
         min_label: str = "Very Low",
         max_label: str = "Very High",
-        options: list[str] | None = None,
         subtitle: str | None = None,
         eyebrow: str | None = None,
+        note: str | None = None,
     ) -> dict[str, Any] | None:
         """Show one survey question and block for the user's answer.
 
@@ -1292,12 +1294,12 @@ class WebInterface:
             "min_label": min_label,
             "max_label": max_label,
         }
-        if options is not None:
-            step_msg["options"] = list(options)
         if subtitle is not None:
             step_msg["subtitle"] = subtitle
         if eyebrow is not None:
             step_msg["eyebrow"] = eyebrow
+        if note is not None:
+            step_msg["note"] = note
         self._send_message(step_msg)
         return self.get_required_web_interface_message(
             lambda m: m.get("state") == "survey_response" and m.get("field") == field,
