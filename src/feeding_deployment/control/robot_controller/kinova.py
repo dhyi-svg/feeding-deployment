@@ -728,21 +728,23 @@ class KinovaArm:
         assert not self.cyclic_running, "Arm must be in high-level servoing mode to choose speed preset"
         assert speed_preset in ["low", "medium", "high"], "Invalid speed preset"
         
-        # Each preset sets the full velocity envelope -- joint-space AND
-        # end-effector -- so a tier feels equally fast whether the robot is doing a
-        # joint move or a Cartesian move. joint_speed and twist_angular share units
-        # (deg/s) and are kept equal so EE reorientation keeps up with joint motion;
-        # twist_linear (m/s) scales with the tier too. joint accel keeps the
-        # historical 2x-of-speed ratio. NOTE: the twist ANGULAR limit only applies to
-        # CARTESIAN_WAYPOINT_TRAJECTORY (move_cartesian_trajectory) -- the reach_pose
-        # CARTESIAN_TRAJECTORY mode does not support it, so there EE rotation is capped
-        # by the cartesian-mode joint speed instead.
+        # Each preset sets the full velocity envelope -- joint-space AND end-effector
+        # -- so a tier feels similarly fast whether the robot is doing a joint move or a
+        # Cartesian move. joint accel keeps the historical 2x-of-speed ratio, and
+        # twist_linear (m/s) scales with the tier. EE twist-angular shares units (deg/s)
+        # with joint speed but runs at EE_ANGULAR_RATIO x joint speed -- a 1:1 match felt
+        # a touch fast, so it is scaled down (high tops out at 40 deg/s). NOTE: the twist
+        # ANGULAR limit only applies to CARTESIAN_WAYPOINT_TRAJECTORY
+        # (move_cartesian_trajectory) -- the reach_pose CARTESIAN_TRAJECTORY mode does not
+        # support it, so there EE rotation is capped by the cartesian-mode joint speed.
+        EE_ANGULAR_RATIO = 0.8
         if speed_preset == "low":
-            joint_speed, joint_accel, twist_linear, twist_angular = 30.0, 60.0, 0.15, 30.0
+            joint_speed, joint_accel, twist_linear = 30.0, 60.0, 0.15
         elif speed_preset == "medium":
-            joint_speed, joint_accel, twist_linear, twist_angular = 40.0, 80.0, 0.20, 40.0
+            joint_speed, joint_accel, twist_linear = 40.0, 80.0, 0.20
         else:  # high
-            joint_speed, joint_accel, twist_linear, twist_angular = 50.0, 100.0, 0.25, 50.0
+            joint_speed, joint_accel, twist_linear = 50.0, 100.0, 0.25
+        twist_angular = EE_ANGULAR_RATIO * joint_speed
 
         # Clamp everything to the arm's true kinematic hard limits -- a safety net
         # that also guards against a units mismatch (e.g. if twist_angular were
