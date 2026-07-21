@@ -8,7 +8,7 @@ been verified to work on this box, the exact commands, and what's broken/blocked
 > file is the *deviations* for the single-machine rig. Contains machine-specific
 > values (IPs, user-site paths) — not intended for `upstream`.
 
-Last updated: 2026-07-14.
+Last updated: 2026-07-21.
 
 ---
 
@@ -32,8 +32,52 @@ E="PYTHONPATH=$HOME/.local/lib/python3.10/site-packages ARM_RPC_HOST=127.0.0.1"
 PY=$HOME/feeding-deployment/.venv/bin/python
 ```
 
-> `ARM_RPC_HOST` requires the local edit to `arm_interface.py` (env-var override of
-> `NUC_HOSTNAME`, default still the lab NUC). **Uncommitted** as of 2026-07-14.
+> `ARM_RPC_HOST` overrides `NUC_HOSTNAME` in `arm_interface.py` (default still the lab
+> NUC). **Committed** as of 2026-07-21 (`2c0e3498`) — was an uncommitted local edit here
+> before that.
+
+---
+
+## Alternate box: Pachirisu (RTX desktop, Ubuntu 24.04) — RoboStack + kortex_api
+
+A second, separate rig from the Jetson above: `Pachirisu` connects to the **same physical
+Gen3 arm** at `192.168.1.10`, but through a Docker container (`feed-noetic`,
+`osrf/ros:noetic-desktop-full`, `--network host`) running a
+[RoboStack](https://robostack.github.io/) conda env instead of a venv — this gets **real
+`rospy` and the PRPL/py3.10+ deps into the same interpreter** (Python 3.11), which was
+impossible on the Jetson (no ROS at all there). See the native-install-blocker entry in
+`TESTING_LOG.md` (2026-07-21) for how the env was built, and the Pachirisu bring-up entry
+(same date) for the read-only arm verification below.
+
+| Thing | Value |
+|---|---|
+| Box | Pachirisu, RTX GPU, Ubuntu 24.04 host |
+| Container | `feed-noetic` (`osrf/ros:noetic-desktop-full`, Ubuntu 20.04), `--network host` |
+| ROS env | Miniforge `ros_env`, **Python 3.11**, `ros-noetic-ros-base` (robostack-staging) |
+| Arm | same Kinova Gen3 at `192.168.1.10` as the Jetson rig. Box's ethernet (`enp4s0`) is `192.168.1.11/24` — already on-subnet, no static IP needed. |
+| Kortex SDK | `kortex_api-2.8.0.post5-py3-none-any.whl` (pure-Python wheel, no version/platform tag) pip-installed into `ros_env` from Kinova's Artifactory — **pins `protobuf==3.20.0`**, a latent (benign so far) conflict with the repo's `google-generativeai`/`anthropic` deps, which want newer protobuf. |
+| Extra apt dep | `iputils-ping` — `KinovaArm.__init__` shells out to `ping` as a pre-flight; missing from the base ROS image. |
+
+**Command prefix** (inside the container, `conda activate ros_env` first):
+```bash
+export PYTHONPATH=/opt/msgs_ws/devel/lib/python3.11/site-packages:$PYTHONPATH  # feeding_deployment_msgs, built standalone -- see TESTING_LOG.md
+export ARM_RPC_HOST=127.0.0.1
+python -u src/feeding_deployment/control/robot_controller/arm_server.py  # -u / PYTHONUNBUFFERED=1: avoid the stdout-buffering blind spot, see TESTING_LOG.md
+```
+
+**Verified (read-only only, no motion this session):** network reachable (ping,
+dashboard, raw TCP to 10000), `arm_server.py` starts and binds `127.0.0.1:5000`, a direct
+`ArmManager` client (bypassing `ArmInterfaceClient`'s `rospy.wait_for_message` watchdog
+gate, mirroring `scripts/real_gen3_*.py`) reads `get_state()` cleanly — 7 finite joint
+angles, unit-norm EE quaternion, gripper at the documented "0.009 = open" reading, no
+fault. Clean `SIGINT` shutdown releases `/tmp/kinova.lock` both times tested.
+
+**Not yet done here:** any motion rungs (this box has only done Jetson's rung-1/2
+equivalent), the real `bulldog`/watchdog (rospy is finally available, so the bypass may
+no longer be necessary — untested), and the full perception stack (`torch`,
+`groundingdino`, `supervision`, and the lab's `netft_rdt_driver` F/T sensor ROS package
+are all still missing from `ros_env` — same gap as the Jetson's hand-installed
+perception deps, `netft_rdt_driver` has no public distribution at all).
 
 ---
 

@@ -37,6 +37,101 @@ the bypass (fresh server re-locks motion). Verify with `get_state()` → expect
 
 ---
 
+## 2026-07-21 — Pachirisu read-only arm bring-up (RoboStack + kortex_api)
+
+**New host, same arm.** First-ever connection from `Pachirisu` (RTX/24.04 desktop, separate
+from the Jetson rig) to the Kinova Gen3 at `192.168.1.10`, using the RoboStack `ros_env`
+set up earlier this session (see the native-install-blocker entry below). Goal: read-only
+telemetry only — no motion, no gripper, no mode changes beyond what `arm_server.py`'s own
+init already does. Treated as an unverified fresh bring-up throughout.
+
+### Network
+`enp4s0` already on `192.168.1.11/24` (same subnet, no static-IP change needed); arm
+pings in <0.3 ms (direct link) and its web dashboard (`http://192.168.1.10`) answers
+`HTTP/1.1 200 OK`. The `feed-noetic` container runs with **`--network host`**, so it has
+identical access — confirmed with a raw Python `socket.connect()` to port 10000 (Kortex
+Base RPC) and port 80, both succeeding, independent of any `ping` binary.
+
+### Prerequisites installed into `ros_env`
+- **`kortex_api-2.8.0.post5-py3-none-any.whl`** — Kinova's Kortex Python SDK, not on
+  PyPI. Pulled from their Artifactory (`generic-local-public/kortex/API/2.8.0/`, found via
+  the JFrog storage API since the UI is JS-rendered). It's a **pure-Python wheel** (no
+  `cpXY`/platform tag), so the "does py3.11 have a matching build" question doesn't
+  apply — one wheel, any CPython 3.5+, any platform.
+  **Latent conflict, not fixed:** `kortex_api` hard-pins `protobuf==3.20.0`, downgrading
+  the env from `5.29.6` and conflicting with the *declared* requirements of
+  `google-ai-generativelanguage`/`grpcio-status`/`proto-plus`/`googleapis-common-protos`
+  (pulled in by `anthropic`/`openai`/`google-generativeai`). Checked empirically:
+  `rospy`, `feeding_deployment`, `anthropic`, `openai`, and `google.generativeai` all
+  still import fine at 3.20.0 — benign for the arm-control path, but flagged as a
+  pip-warned, unresolved conflict that could bite if something later exercises a
+  newer-protobuf-only code path.
+- **`iputils-ping`** (`apt-get install`) — `KinovaArm.__init__` (`kinova.py:114-123`)
+  does its own `subprocess.run(["ping", "-c", "1", "192.168.1.10"])` pre-flight before
+  touching Kortex at all; the base `osrf/ros:noetic-desktop-full` image doesn't ship it.
+  Missing `ping` crashed `arm_server.py` with `FileNotFoundError: [Errno 2] No such file
+  or directory: 'ping'` before any Kortex connection was attempted — not a networking
+  problem, purely the missing binary. Installing it (container-local, no arm interaction)
+  was the only blocker.
+
+### `ARM_RPC_HOST` mechanism (commit `2c0e3498`)
+Re-created the same fix the Jetson rig carries as an uncommitted local patch: NOW
+committed as an env-var read with the lab default preserved --
+`NUC_HOSTNAME = os.environ.get("ARM_RPC_HOST", "192.168.1.3")` in `arm_interface.py`.
+`ARM_RPC_HOST=127.0.0.1` lets `arm_server.py`/its clients bind/connect on localhost when
+client and server share a box, instead of the unreachable lab-NUC address. Verified both
+the default (`192.168.1.3`, unset) and overridden (`127.0.0.1`) values resolve correctly.
+
+### First launch: looked hung, wasn't — stdout buffering
+First `arm_server.py` launch (buffered stdout, redirected to a log file) showed **zero
+output for ~2.5 minutes** despite the process being alive and past the lock-file step —
+looked exactly like a hang (leading candidate: the `clear_faults()` poll loop spinning
+forever on a persistent fault). Sent `SIGINT` to investigate; the *entire* log --
+including the eventual `"Arm manager server started"` line **and** the shutdown
+sequence -- flushed out in one burst right at the kill. Diagnosis: `arm_server.py`
+never sets `flush=True` and Python block-buffers stdout when it's not a TTY, so nothing
+hits disk until the buffer fills or the process exits. It had actually completed
+construction on its own **before** the kill arrived; real first-connection Kortex
+session/actuator-enumeration latency, not an infinite loop. Confirmed by re-running with
+`PYTHONUNBUFFERED=1`/`python -u`: the same sequence now streams live, and completed in a
+few seconds on the (no-longer-first) reconnect.
+
+### Read-only telemetry, verified sane
+Connected via the same direct `ArmManager` pattern the existing `scripts/real_gen3_*.py`
+already use (not `ArmInterfaceClient`, which blocks forever on
+`rospy.wait_for_message("/watchdog_status", ...)` with no watchdog process running), and
+called **only** `get_state()`:
+```
+joint positions (rad): [-0.0225 -0.2067  3.0458 -2.6496 -0.2642 -0.6645  1.7631]
+joint velocity:        [0. 0. 0. 0. 0. 0. 0.]
+EE pose (x,y,z,qx,qy,qz,qw): [0.1247 0.0562 0.1688 0.6676 0.7412 0.0634 -0.0288]
+gripper_pos: 0.0087
+```
+Sanity checks all pass: 7 finite joint values, EE quaternion norm exactly 1.0, gripper
+reads ~0.009 (matches the documented "0.009 = open" convention), `get_state()` returned
+with no exception. Fault state: `clear_faults()`'s poll loop only exits once
+`GetArmState().active_state == ARMSTATE_SERVOING_READY` — since construction completed,
+the arm was fault-free at that point (no separate fault query needed/attempted).
+
+### Clean shutdown, twice
+Both sessions ended with `kill -INT <pid>` → `arm_interface_instance.close()` -->
+`Base.Stop()` (no-op, nothing was moving) → session close → `/tmp/kinova.lock` removed.
+Verified the lock file is gone after each stop. **No motion, no gripper action, no mode
+change beyond what `KinovaArm.__init__` itself performs** (`SetControlMode(POSITION)`,
+`SetServoingMode(high/SINGLE_LEVEL)`, `SetSafetyErrorThreshold(10 deg)` -- config writes,
+not motion) was issued at any point this session.
+
+### Also this session (same RoboStack env, see commits)
+- `open_door.py:202` — added the `rviz_interface is not None` guard around
+  `visualize_poses(...)` in `open_microwave()` (commit `a16222fb`). Verified: the real
+  `execute_action()` dispatch (YAML load -> tree build -> tick, not a direct method call)
+  now runs `open_microwave()` to completion in replay mode (`NullSimulator`,
+  `robot_interface=None`, a synthetic `handle_opening_pos.pkl`) with no exception --
+  previously hit exactly this line as `AttributeError: 'NoneType' object has no attribute
+  'visualize_poses'`.
+
+---
+
 ## 2026-07-21 — native install blocker: Noetic-3.8 vs PRPL-3.10 (feed-noetic container)
 
 **Not the arm/microwave rig** — this session used a separate Docker container,
