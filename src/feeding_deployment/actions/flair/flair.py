@@ -13,13 +13,17 @@ HOME_ORIENTATION = Rotation.from_quat([1/math.sqrt(2), 1/math.sqrt(2), 0, 0]).as
 DEFAULT_FORCE_THRESHOLD = [30.0, 30.0, 30.0, 30.0, 30.0, 30.0]
 
 class FLAIR:
-    def __init__(self, log_dir, grounded_sam=None):
+    def __init__(self, log_dir, grounded_sam=None, history_dir=None):
 
         self.inference_server = BiteAcquisitionInference(mode='ours', grounded_sam=grounded_sam)
         print("inf server init")
 
-        self.new_meal_parser = NewMealParser(log_dir)   
-        self.history_path = log_dir / "flair_history.txt"
+        self.new_meal_parser = NewMealParser(log_dir)
+        # Bite history is scoped to the per-day release dir (history_dir) so it
+        # does not carry across deployment days; falls back to the user-level
+        # log_dir when day logging is disabled. The llm_cache used by
+        # NewMealParser stays user-level (log_dir).
+        self.history_path = (history_dir if history_dir is not None else log_dir) / "flair_history.txt"
         
         if not os.path.exists(self.history_path):
             self.bite_history = []
