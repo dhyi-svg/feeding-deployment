@@ -78,6 +78,23 @@ def _safe_json_load(s: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _bundle_present(data: Optional[Dict[str, Any]]) -> bool:
+    """True when a parsed response actually carries a preference bundle. Guards
+    against valid-JSON-but-no-bundle responses (e.g. the model derails on the
+    nested latent_scores object and closes the JSON before emitting any
+    preference keys) -- treated the same as unparseable JSON so the caller
+    retries instead of silently defaulting every dimension. Requires at least
+    half of the categorical dims to be present, tolerating a stray omission
+    (which the per-field validator backfills) while catching a missing bundle."""
+    if not data:
+        return False
+    required = [f for f in PREF_FIELDS if PREF_KIND.get(f) == "categorical"]
+    if not required:
+        return True
+    present = sum(1 for f in required if f in data)
+    return present >= max(1, len(required) // 2)
+
+
 def _get_meal_info(meal: str) -> Dict[str, Any]:
     known_meal = meal in root_config.MEAL_STRUCTURE
     info = root_config.MEAL_STRUCTURE.get(meal, {})
@@ -640,13 +657,19 @@ class PredictionModel:
 
         resp = self._retry(_call)
         data = _parse_response(resp)
-        if data is None:
-            # Malformed JSON is usually transient -- one fresh attempt before
-            # falling back to seeds/pinned/defaults (which silently discards
-            # the model's actual prediction).
-            print("Warning: bundle prediction was not valid JSON; retrying once ...", flush=True)
+        if not _bundle_present(data):
+            # Either unparseable JSON (data is None) or valid JSON that omitted
+            # the preference bundle (e.g. the model derails on the nested
+            # latent_scores object and closes early). Both would otherwise fall
+            # back to seeds/pinned/defaults, silently discarding the prediction
+            # for the whole meal -- one fresh attempt first.
+            print("Warning: bundle prediction missing or malformed (bad JSON or absent preference keys); retrying once ...", flush=True)
             resp = self._retry(_call)
-            data = _parse_response(resp)
+            data2 = _parse_response(resp)
+            if _bundle_present(data2):
+                data = data2
+            else:
+                data = data or data2
         data = data or {}
 
         if self.working_memory_calls_dir:

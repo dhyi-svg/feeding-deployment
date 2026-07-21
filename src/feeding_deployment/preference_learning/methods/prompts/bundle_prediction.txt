@@ -59,16 +59,18 @@ Determine the most likely value for each preference dimension while satisfying a
 
 Output ONLY a valid JSON object (strict JSON: double-quoted keys and values, no trailing commas, no entries without a key). Do NOT include markdown formatting or any text outside the JSON.
 
-The JSON object's FIRST key must be "latent_inference": one to three sentences inferring, from the CORRECTED dimensions of this meal (if any), what the meal's latent factors currently are (the user's state, the environmental/observation conditions, the meal) — write this BEFORE any prediction, and make the predictions that follow consistent with it. If nothing has been corrected yet, state the most likely latent factors from the context and memory instead.
+Emit the keys in exactly the order described below. This order matters: predict the preference bundle first (it is what the system consumes), then the meta fields.
 
-The SECOND key must be "latent_scores": your estimate of the user's four stable latent traits, inferred from this meal's corrections/confirmations, the context, and memory. (These are traits you INFER — the user does not tell you them.) Each is scored on a 1-7 scale (the same scale the user self-reports on). Output an object with exactly these four keys, each mapping to {{"score": <integer 1-7>, "confidence": "low"|"medium"|"high", "why": "<one short sentence>"}}:
+The FIRST key must be "latent_inference": one to three sentences inferring, from the CORRECTED dimensions of this meal (if any), what the meal's latent factors currently are (the user's state, the environmental/observation conditions, the meal) — write this BEFORE any prediction, and make the predictions that follow consistent with it. If nothing has been corrected yet, state the most likely latent factors from the context and memory instead.
+
+NEXT, immediately after "latent_inference", emit the preference bundle: exactly these preference-bundle keys (categorical fields take a string value; plate_color_* fields take an HSV object as described above; nav_offset_* fields take a dx/dy/dyaw object as described above). Every one of these keys MUST be present — never end the object before all of them are written:
+{pref_fields_csv}
+
+After the preference bundle, add the key "explanations": an object whose keys are exactly the OPEN dimensions (every dimension NOT listed in the CONFIRMED or CORRECTED blocks above — include every one of them, omit none) and whose values are ONE short sentence each, naming the evidence behind that prediction (a correction made this meal, a similar prior meal, a long-term tendency, the physical profile, or the seed/default) and — when any correction exists this meal — whether it changes this dimension through a shared latent factor.
+
+The FINAL key must be "latent_scores": your estimate of the user's four stable latent traits, inferred from this meal's corrections/confirmations, the context, and memory. (These are traits you INFER — the user does not tell you them.) Each is scored on a 1-7 scale (the same scale the user self-reports on). Output an object with exactly these four keys, and map EACH one to its own nested object of the form {{"score": <integer 1-7>, "confidence": "low"|"medium"|"high", "why": "<one short sentence>"}} — do not flatten "score"/"confidence"/"why" up to the "latent_scores" level, and do not promote "pace"/"trust"/"proximity"/"communication" out to the top level:
 - "pace": how fast-paced the user wants the meal. 1 = slow and unhurried; 7 = quick and efficient. (Expressed through robot_speed, retract_between_bites, and the wait_before_autocontinue_* dims.)
 - "trust": how much the user wants the robot to check with them before/after acting vs. trust it to act on its own. 1 = check with me most of the time; 7 = trust it, no need to check. (Expressed through the confirm_* dims and detect_user_completed_transfer_*.)
 - "proximity": how comfortable the user is with the robot close to them and in their line of sight. 1 = keep its distance and out of my view; 7 = close and in-view is fine. (Expressed through transfer_mode, outside_mouth_distance, retract_between_bites.)
 - "communication": how much of a heads-up / signalling the user wants from the robot. 1 = stay quiet and just proceed; 7 = clearly signal every time. (Expressed through the convey_robot_ready_* dims.)
-Make "latent_scores" consistent with your "latent_inference" and with the bundle you predict below.
-
-After "latent_inference" and "latent_scores", the object must contain exactly these preference-bundle keys (categorical fields take a string value; plate_color_* fields take an HSV object as described above; nav_offset_* fields take a dx/dy/dyaw object as described above):
-{pref_fields_csv}
-
-plus ONE final key "explanations": an object whose keys are exactly the OPEN dimensions (every dimension NOT listed in the CONFIRMED or CORRECTED blocks above — include every one of them, omit none) and whose values are ONE short sentence each, naming the evidence behind that prediction (a correction made this meal, a similar prior meal, a long-term tendency, the physical profile, or the seed/default) and — when any correction exists this meal — whether it changes this dimension through a shared latent factor.
+Make "latent_scores" consistent with your "latent_inference" and with the bundle you predicted above.
