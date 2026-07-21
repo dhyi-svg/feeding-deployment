@@ -20,6 +20,7 @@ import uuid
 import yaml
 
 import numpy as np
+from scipy.spatial.transform import Rotation as R, Slerp
 import time
 
 
@@ -431,7 +432,7 @@ class HighLevelAction(abc.ABC):
         if not np.isclose(norm, 1.0, atol=1e-3):
             raise ValueError(f"Invalid EE-pose quaternion (norm {norm:.4f}, expected unit): {pose.orientation}")
 
-    def move_to_ee_pose(self, pose: Pose) -> None:
+    def move_to_ee_pose(self, pose: Pose, soft_stop: bool = False) -> None:
 
         plan = None
         # if not self.no_waits:
@@ -440,7 +441,46 @@ class HighLevelAction(abc.ABC):
             self.sim.visualize_plan(plan)
         else:
             self._validate_ee_pose(pose)
-            self.execute_robot_command(CartesianCommand(pos=pose.position, quat=pose.orientation), plan)
+            # A plain reach_pose (move_cartesian) has no per-waypoint velocity control,
+            # so it snaps to a stop and the EE jerks on arrival. With soft_stop, route the
+            # move through the waypoint path instead -- a short straight-line interpolation
+            # current -> target -- so move_cartesian_trajectory's soft-landing taper eases
+            # the final approach. Cruise speed on the way in is unchanged. Falls back to a
+            # plain reach_pose when the current pose is unavailable or the move is tiny.
+            traj = self._soft_stop_trajectory(pose) if soft_stop else None
+            if traj is not None:
+                for p in traj:
+                    self._validate_ee_pose(p)
+                self.execute_robot_command(CartesianTrajectoryCommand(traj=traj), plan)
+            else:
+                self.execute_robot_command(CartesianCommand(pos=pose.position, quat=pose.orientation), plan)
+
+    def _soft_stop_trajectory(self, target: Pose, spacing_m: float = 0.03) -> list[Pose] | None:
+        """Straight-line Cartesian interpolation from the current EE pose to `target`, so
+        a point-to-point move can run through the tapered move_cartesian_trajectory path
+        and ease into its stop instead of snapping. Waypoints are spaced ~spacing_m apart
+        (kept coarse so trajectory blending stays valid). Returns None -- caller uses a
+        plain reach_pose -- when the current pose can't be read or the move is < 2 cm."""
+        try:
+            cur = np.asarray(self.robot_interface.get_state()["ee_pos"], dtype=float)
+        except Exception:
+            return None
+        if cur.shape[0] < 7:
+            return None
+        cur_pos, cur_quat = cur[:3], cur[3:7]
+        tgt_pos = np.asarray(target.position, dtype=float)
+        tgt_quat = np.asarray(target.orientation, dtype=float)
+        dist = float(np.linalg.norm(tgt_pos - cur_pos))
+        if dist < 0.02:  # tiny move: reach_pose is fine, and too short to taper
+            return None
+        n = int(np.clip(round(dist / spacing_m), 3, 15))
+        slerp = Slerp([0.0, 1.0], R.from_quat([cur_quat, tgt_quat]))
+        traj = []
+        for i in range(1, n + 1):  # 1..n: exclude current pose, end exactly at target
+            s = i / n
+            pos = (1.0 - s) * cur_pos + s * tgt_pos
+            traj.append(Pose(tuple(pos), tuple(slerp(s).as_quat())))
+        return traj
 
     def move_to_ee_pose_trajectory(self, traj: list[Pose]) -> None:
 

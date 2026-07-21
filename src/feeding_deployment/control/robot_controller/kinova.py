@@ -628,6 +628,7 @@ class KinovaArm:
         cruise_linear = cruise.twist_linear if cruise.twist_linear > 0 else 0.25
         cruise_angular = cruise.twist_angular if cruise.twist_angular > 0 else 40.0
         taper = min(TAPER_WAYPOINTS, n - 1) if n >= 2 else 0
+        positions = [np.asarray(p[0], dtype=float) for p in trajectory]
 
         for index, point in enumerate(trajectory):
             cartesian_pose = point[0]
@@ -647,7 +648,14 @@ class KinovaArm:
             if index == 0 or index == n - 1:
                 waypoint.cartesian_waypoint.blending_radius = 0.0
             else:
-                waypoint.cartesian_waypoint.blending_radius = 0.01
+                # Cap the blend to a fraction of the shorter adjacent segment so densely
+                # spaced (e.g. interpolated) waypoints don't trip "blending radius overlaps
+                # with previous waypoint". Well-spaced trajectories keep the usual 0.01 m.
+                seg = min(
+                    np.linalg.norm(positions[index] - positions[index - 1]),
+                    np.linalg.norm(positions[index + 1] - positions[index]),
+                )
+                waypoint.cartesian_waypoint.blending_radius = float(min(0.01, 0.4 * seg))
 
             # Ramp the max velocity down over the last `taper` waypoints (linearly from
             # cruise at the start of the taper to ARRIVAL_* at the final waypoint); leave
