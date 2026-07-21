@@ -694,12 +694,18 @@ class KinovaArm:
     ):
         self.speed_preset = "custom"
         if cartesian:
-            joint_speed_soft_limits = ControlConfig_pb2.JointSpeedSoftLimits()
-            joint_speed_soft_limits.control_mode = (
-                ControlConfig_pb2.CARTESIAN_TRAJECTORY
-            )
-            joint_speed_soft_limits.joint_speed_soft_limits.extend(speed_limits)
-            self.control_config.SetJointSpeedSoftLimits(joint_speed_soft_limits)
+            # Cartesian moves execute as CARTESIAN_TRAJECTORY (reach_pose /
+            # move_cartesian) or CARTESIAN_WAYPOINT_TRAJECTORY (waypoint lists /
+            # move_cartesian_trajectory); cap the per-joint speed in both so neither
+            # path is bottlenecked.
+            for control_mode in (
+                ControlConfig_pb2.CARTESIAN_TRAJECTORY,
+                ControlConfig_pb2.CARTESIAN_WAYPOINT_TRAJECTORY,
+            ):
+                joint_speed_soft_limits = ControlConfig_pb2.JointSpeedSoftLimits()
+                joint_speed_soft_limits.control_mode = control_mode
+                joint_speed_soft_limits.joint_speed_soft_limits.extend(speed_limits)
+                self.control_config.SetJointSpeedSoftLimits(joint_speed_soft_limits)
         else:
             joint_speed_soft_limits = ControlConfig_pb2.JointSpeedSoftLimits()
             joint_speed_soft_limits.control_mode = ControlConfig_pb2.ANGULAR_TRAJECTORY
@@ -727,7 +733,10 @@ class KinovaArm:
         # joint move or a Cartesian move. joint_speed and twist_angular share units
         # (deg/s) and are kept equal so EE reorientation keeps up with joint motion;
         # twist_linear (m/s) scales with the tier too. joint accel keeps the
-        # historical 2x-of-speed ratio.
+        # historical 2x-of-speed ratio. NOTE: the twist ANGULAR limit only applies to
+        # CARTESIAN_WAYPOINT_TRAJECTORY (move_cartesian_trajectory) -- the reach_pose
+        # CARTESIAN_TRAJECTORY mode does not support it, so there EE rotation is capped
+        # by the cartesian-mode joint speed instead.
         if speed_preset == "low":
             joint_speed, joint_accel, twist_linear, twist_angular = 30.0, 60.0, 0.15, 30.0
         elif speed_preset == "medium":
@@ -755,8 +764,9 @@ class KinovaArm:
         # falls back to the arm's previous/default value (no overspeed risk).
         cartesian_limit_calls = (
             ("cartesian-mode joint speeds", lambda: self.set_joint_limits(speed_limits, acceleration_limits, cartesian=True)),
-            ("twist linear limit", lambda: self.set_twist_linear_limit(twist_linear)),
-            ("twist angular limit", lambda: self.set_twist_angular_limit(twist_angular)),
+            ("twist linear limit (reach_pose)", lambda: self.set_twist_linear_limit(twist_linear, ControlConfig_pb2.CARTESIAN_TRAJECTORY)),
+            ("twist linear limit (waypoint trajectory)", lambda: self.set_twist_linear_limit(twist_linear, ControlConfig_pb2.CARTESIAN_WAYPOINT_TRAJECTORY)),
+            ("twist angular limit (waypoint trajectory)", lambda: self.set_twist_angular_limit(twist_angular, ControlConfig_pb2.CARTESIAN_WAYPOINT_TRAJECTORY)),
         )
         for label, call in cartesian_limit_calls:
             try:
@@ -814,9 +824,11 @@ class KinovaArm:
                 control_mode_information
             )
 
-    def set_twist_linear_limit(self, limit):
+    def set_twist_linear_limit(self, limit, control_mode=None):
+        if control_mode is None:
+            control_mode = ControlConfig_pb2.CARTESIAN_TRAJECTORY
         twist_linear_soft_limit = ControlConfig_pb2.TwistLinearSoftLimit()
-        twist_linear_soft_limit.control_mode = ControlConfig_pb2.CARTESIAN_TRAJECTORY
+        twist_linear_soft_limit.control_mode = control_mode
         twist_linear_soft_limit.twist_linear_soft_limit = limit
         self.control_config.SetTwistLinearSoftLimit(twist_linear_soft_limit)
 
@@ -829,9 +841,15 @@ class KinovaArm:
         control_mode_information.control_mode = ControlConfig_pb2.CARTESIAN_TRAJECTORY
         self.control_config.ResetTwistLinearSoftLimit(control_mode_information)
 
-    def set_twist_angular_limit(self, limit):
+    def set_twist_angular_limit(self, limit, control_mode=None):
+        # Only CARTESIAN_WAYPOINT_TRAJECTORY (and the joystick modes) accept a twist
+        # angular soft limit on this firmware -- CARTESIAN_TRAJECTORY rejects it with
+        # METHOD_FAILED ("Mode does not support twist angular limit"). Default to the
+        # waypoint-trajectory mode, which is what move_cartesian_trajectory executes as.
+        if control_mode is None:
+            control_mode = ControlConfig_pb2.CARTESIAN_WAYPOINT_TRAJECTORY
         twist_angular_soft_limit = ControlConfig_pb2.TwistAngularSoftLimit()
-        twist_angular_soft_limit.control_mode = ControlConfig_pb2.CARTESIAN_TRAJECTORY
+        twist_angular_soft_limit.control_mode = control_mode
         twist_angular_soft_limit.twist_angular_soft_limit = limit
         self.control_config.SetTwistAngularSoftLimit(twist_angular_soft_limit)
 
@@ -841,7 +859,7 @@ class KinovaArm:
 
     def reset_twist_angular_limit(self):
         control_mode_information = ControlConfig_pb2.ControlModeInformation()
-        control_mode_information.control_mode = ControlConfig_pb2.CARTESIAN_TRAJECTORY
+        control_mode_information.control_mode = ControlConfig_pb2.CARTESIAN_WAYPOINT_TRAJECTORY
         self.control_config.ResetTwistAngularSoftLimit(control_mode_information)
 
     # Rajat ToDo: Check how the following work:
