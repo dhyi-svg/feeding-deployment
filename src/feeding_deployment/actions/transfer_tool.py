@@ -313,32 +313,29 @@ class TransferToolHLA(HighLevelAction):
 
         print("Transferring bite with utensil ...")
 
-        if self.robot_interface is not None:
-            # self.robot_interface.set_speed(speed)
-            self.robot_interface.set_speed("low")  # safety boundary
+        with self.low_speed(restore=speed):
+            if self.web_interface is not None:
+                self.web_interface.set_bite_autocontinue_timeout(task_reselection_autocontinue_seconds)
 
-        if self.web_interface is not None:
-            self.web_interface.set_bite_autocontinue_timeout(task_reselection_autocontinue_seconds)
+            if self.wrist_interface is not None:
+                # start the horizontal spoon thread if it is not already running
+                self.wrist_interface.start_horizontal_spoon_thread()
 
-        if self.wrist_interface is not None:
-            # start the horizontal spoon thread if it is not already running
-            self.wrist_interface.start_horizontal_spoon_thread()
+            self.move_to_joint_positions(self.sim.scene_description.before_transfer_pos)
 
-        self.move_to_joint_positions(self.sim.scene_description.before_transfer_pos)
+            if self.wrist_interface is not None:
+                # stop the keep horizontal thread
+                self.wrist_interface.stop_horizontal_spoon_thread()
 
-        if self.wrist_interface is not None:
-            # stop the keep horizontal thread
-            self.wrist_interface.stop_horizontal_spoon_thread()
+            self.set_tool("fork")
+            self.execute_transfer(
+                ready_to_initiate, initiate, ready_for_transfer, transfer_complete,
+                outside_mouth_distance,
+            )
 
-        self.set_tool("fork")
-        self.execute_transfer(
-            ready_to_initiate, initiate, ready_for_transfer, transfer_complete,
-            outside_mouth_distance,
-        )
-
-        if retract_after_transfer == 1:
-            print("Retracting to rest position after bite transfer.")
-            self.move_to_joint_positions(self.sim.scene_description.retract_pos)
+            if retract_after_transfer == 1:
+                print("Retracting to rest position after bite transfer.")
+                self.move_to_joint_positions(self.sim.scene_description.retract_pos)
 
     def transfer_drink(
         self, speed: str,
@@ -349,25 +346,22 @@ class TransferToolHLA(HighLevelAction):
     ) -> None:
         assert self.sim.held_object_name == "drink"
 
-        if self.robot_interface is not None:
-            # self.robot_interface.set_speed(speed)
-            self.robot_interface.set_speed("low")  # safety boundary
+        with self.low_speed(restore=speed):
+            if self.web_interface is not None:
+                self.web_interface.set_drink_autocontinue_timeout(task_reselection_autocontinue_seconds)
+                # pickup_confirm (PickupConfirm, from confirm_feeding_pickup):
+                # sentinel-encoded -> (mode, seconds). mode 0 = skip the page.
+                mode, autocontinue_s = self._confirm_page_args(pickup_confirm)
+                if mode != 0:
+                    self.web_interface.get_drink_transfer_confirmation(autocontinue_s)
 
-        if self.web_interface is not None:
-            self.web_interface.set_drink_autocontinue_timeout(task_reselection_autocontinue_seconds)
-            # pickup_confirm (PickupConfirm, from confirm_feeding_pickup):
-            # sentinel-encoded -> (mode, seconds). mode 0 = skip the page.
-            mode, autocontinue_s = self._confirm_page_args(pickup_confirm)
-            if mode != 0:
-                self.web_interface.get_drink_transfer_confirmation(autocontinue_s)
+            self.move_to_joint_positions(self.sim.scene_description.before_transfer_pos)
 
-        self.move_to_joint_positions(self.sim.scene_description.before_transfer_pos)
-
-        self.set_tool("drink")
-        self.execute_transfer(
-            ready_to_initiate, initiate, ready_for_transfer, transfer_complete,
-            outside_mouth_distance, maintain_position_at_goal=True,
-        )
+            self.set_tool("drink")
+            self.execute_transfer(
+                ready_to_initiate, initiate, ready_for_transfer, transfer_complete,
+                outside_mouth_distance, maintain_position_at_goal=True,
+            )
 
     def transfer_wipe(
         self, speed: str,
@@ -377,20 +371,17 @@ class TransferToolHLA(HighLevelAction):
     ) -> None:
         assert self.sim.held_object_name == "wipe"
 
-        if self.robot_interface is not None:
-            # self.robot_interface.set_speed(speed)
-            self.robot_interface.set_speed("low")  # safety boundary
+        with self.low_speed(restore=speed):
+            self.move_to_joint_positions(self.sim.scene_description.before_transfer_pos)
 
-        self.move_to_joint_positions(self.sim.scene_description.before_transfer_pos)
+            # pickup_confirm semantics as in transfer_drink above.
+            if self.web_interface is not None:
+                mode, autocontinue_s = self._confirm_page_args(pickup_confirm)
+                if mode != 0:
+                    self.web_interface.get_wipe_transfer_confirmation(autocontinue_s)
 
-        # pickup_confirm semantics as in transfer_drink above.
-        if self.web_interface is not None:
-            mode, autocontinue_s = self._confirm_page_args(pickup_confirm)
-            if mode != 0:
-                self.web_interface.get_wipe_transfer_confirmation(autocontinue_s)
-
-        self.set_tool("wipe")
-        self.execute_transfer(
-            ready_to_initiate, initiate, ready_for_transfer, transfer_complete,
-            outside_mouth_distance, maintain_position_at_goal=True,
-        )
+            self.set_tool("wipe")
+            self.execute_transfer(
+                ready_to_initiate, initiate, ready_for_transfer, transfer_complete,
+                outside_mouth_distance, maintain_position_at_goal=True,
+            )

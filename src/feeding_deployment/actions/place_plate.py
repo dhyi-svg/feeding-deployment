@@ -159,16 +159,10 @@ class PlacePlateOnHolderHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.intermediate_plate_holder_pos)
         self.move_to_joint_positions(self.sim.scene_description.above_plate_holder_pos)
 
-        if self.robot_interface is not None:
-            self.robot_interface.set_speed("low")  # safety boundary
-
-        with holder_threshold:
+        with self.low_speed(restore=speed), holder_threshold:
             self.report_activity("Setting the plate down on the stand")
             self.move_to_ee_pose(self.sim.scene_description.inside_plate_holder_pose)
             self.close_gripper()
-
-        if self.robot_interface is not None:
-            self.robot_interface.set_speed(speed)  # safety boundary
 
         self.move_to_ee_pose(self.sim.scene_description.above_plate_holder_pose)
         self.move_to_joint_positions(self.sim.scene_description.behind_intermediate_pos)
@@ -305,14 +299,11 @@ class PlacePlateOnTableHLA(HighLevelAction):
         self.report_activity("Lowering the plate onto the table")
         self.move_to_ee_pose(placement_poses["pre_table_placement_pose"])
 
-        if self.robot_interface is not None:
-            self.robot_interface.set_speed("low")  # safety boundary
-        self.move_to_ee_pose(placement_poses["table_placement_pose"])
-        self.confirm_plate_release("table", manip_confirm)
-        self.close_gripper()
-        self.move_to_ee_pose(placement_poses["behind_table_placement_pose"])
-        if self.robot_interface is not None:
-            self.robot_interface.set_speed(speed)  # safety boundary
+        with self.low_speed(restore=speed):
+            self.move_to_ee_pose(placement_poses["table_placement_pose"])
+            self.confirm_plate_release("table", manip_confirm)
+            self.close_gripper()
+            self.move_to_ee_pose(placement_poses["behind_table_placement_pose"])
             
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.retract_pos)
