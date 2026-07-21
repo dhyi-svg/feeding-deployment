@@ -37,6 +37,101 @@ the bypass (fresh server re-locks motion). Verify with `get_state()` → expect
 
 ---
 
+## 2026-07-21 — native install blocker: Noetic-3.8 vs PRPL-3.10 (feed-noetic container)
+
+**Not the arm/microwave rig** — this session used a separate Docker container,
+`feed-noetic` (`osrf/ros:noetic-desktop-full` image, Ubuntu 20.04, **Python 3.8.10**)
+on host `Pachirisu` (Ubuntu 24.04), repo bind-mounted at the same path inside the
+container. Goal: get `pip install -e ".[robot]"` to succeed under stock ROS Noetic's
+system Python. No arm hardware touched.
+
+### Result: genuine, unfixable-via-pins blocker found, then unblocked via RoboStack
+
+`pyproject.toml`'s `[robot]` extra is unversioned, so pip on a 2026 index backtracks
+into source builds / unbuildable transitive deps. Fixed those first (see
+[`constraints.txt`](constraints.txt), repo root):
+
+| pin | reason |
+|---|---|
+| `pin==2.7.0` | newest releases dropped py3.8 wheel support here → source build |
+| `ruckig==0.9.2` | same — no cp38 wheel for newest releases |
+| `openai==1.55.0` | unpinned dep resolves to newest releases with a huge transitive graph → slow/failing backtracking |
+| `tokenizers==0.20.3` | pulled in transitively by `anthropic` (unpinned). Newest `tokenizers` (0.21.0) has no cp38 wheel here, so pip builds from source; that build backend then requires `puccinialin` (a Rust-toolchain bootstrapper with **no PyPI distribution at all**) → hard failure. 0.20.3 has a prebuilt cp38 wheel, avoiding the source build entirely. |
+| `anthropic==0.34.2` | unpinned, backtracks through ~70 historical releases (down to 0.2.x) resolving transitive deps — minutes of wasted resolution time per attempt |
+
+With those pins, resolution succeeds and fails at exactly **one** remaining error:
+```
+ERROR: Package 'prpl-utils' requires a different Python: 3.8.10 not in '>=3.10'
+```
+Checked and confirmed this is not pin-fixable:
+- `prpl-utils` / `pybullet_helpers` / `relational_structs` are pulled via **direct git
+  URL** in `pyproject.toml` (from the `prpl-mono` monorepo), not resolved from PyPI —
+  constraints.txt can't override what a URL-pinned requirement installs.
+- Checked **every commit** in each package's history (via GitHub API, back to their
+  first commit) and **every PyPI release** (0.0.1–0.1.1, they're also published
+  there): `requires-python = ">=3.10"` in 100% of them, no exceptions.
+- `tomsutils` (separate repo, `tomsilver/toms-utils`, also git-URL-pinned): `>=3.9` at
+  its oldest commit, tightened to `>=3.10` later — never compatible with py3.8 either.
+- Container only has `/usr/bin/python3.8` — no 3.9/3.10/3.11 installed (expected: ROS
+  Noetic's Ubuntu 20.04 base ships py3.8 as system Python).
+
+So: **stock Noetic (py3.8) and the PRPL deps (py3.10+) are irreconcilable in the same
+native environment.** No version pin, git ref, or PyPI release bridges that gap.
+
+### Fix: RoboStack (conda-forge-packaged ROS) on Python 3.11
+
+RoboStack packages ROS distros against modern conda-forge Python builds, decoupling
+the ROS version from the OS's system Python. Verified end-to-end in the same
+container:
+
+1. Miniforge → `/opt/miniforge3`.
+2. `mamba create -n ros_env python=3.11` (not 3.10 — `robostack-staging`'s
+   `ros-noetic-desktop-full`/`ros-noetic-ros-base` builds only target py3.9/3.11/3.12,
+   no py3.10 build exists; 3.11 still satisfies PRPL's `>=3.10`).
+3. Channels: `robostack-staging` (priority) + `conda-forge`.
+4. `mamba install ros-noetic-ros-base` — used the lighter `ros-base` metapackage, not
+   `desktop-full` (don't need rviz/gazebo/GUI tooling for rospy/roscomm). **Gotcha:**
+   the first `desktop-full` attempt aborted mid-transaction on a transient download
+   timeout (two packages, `roswtf`/`rqt-robot-steering`) and mamba silently rolled
+   back the whole env — `rospy` wasn't actually installed despite the wrapping shell
+   command reporting exit 0 (a trailing `echo` after the real command masked mamba's
+   failure). Bumped `remote_max_retries`/`remote_read_timeout_secs` and switched to
+   `ros-base`; it completed cleanly on retry.
+5. `python -m pip install -e ".[robot]" -c constraints.txt` inside `ros_env` —
+   **succeeded outright**, including editable-building `prpl-utils`, `pybullet_helpers`,
+   `relational_structs`, `tomsutils` (they're pure Python; `>=3.10` was the only gate).
+
+Re-verified explicitly, all four in the **same** interpreter:
+```
+$ python -c "import rospy; print(rospy.__file__)"
+/opt/miniforge3/envs/ros_env/lib/python3.11/site-packages/rospy/__init__.py
+$ python -c "import pybullet_helpers, relational_structs, prpl_utils; print('prpl ok')"
+prpl ok
+$ python -c "import feeding_deployment; print('repo ok')"
+repo ok
+$ python --version
+Python 3.11.15
+$ which roscore
+/opt/miniforge3/envs/ros_env/bin/roscore
+```
+`rospy`, the PRPL deps, and the repo itself all import from the same
+`/opt/miniforge3/envs/ros_env/` interpreter — genuinely unblocked. This is the path to
+running the real `bulldog`/rospy-based executive (not the bypass) and the full HLA
+system, without droppping either Noetic or the PRPL deps.
+
+### Not yet done
+- Only `ros-base` installed, not `desktop-full` — `rviz_interface.py` will still need
+  `rviz` (not in `ros-base`) if/when that's exercised; separate from the existing
+  `rviz` `None`-guard TODO at `open_door.py:202`.
+- This env is untested against real ROS master / catkin workspace builds (`roscore`,
+  `catkin_make`, message generation for `feeding_deployment_msgs`) — only Python-level
+  imports were verified here.
+- Not yet tried on the Jetson rig (`LOCAL_DEPLOYMENT.md`'s box) — that one already has
+  a working py3.10 `.venv` path via user-site Kortex SDK; RoboStack would be an
+  alternative there too if a real rospy/bulldog is ever needed on that box.
+
+---
+
 ## 2026-07-14 — autonomous detect → grasp → open
 
 ### Result
