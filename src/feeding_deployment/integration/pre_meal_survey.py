@@ -22,7 +22,7 @@ from typing import Any
 
 from feeding_deployment.interfaces.web_interface import WebInterfaceTakeoverInterrupt
 
-PRE_MEAL_SCALE = {"scale_min": 1, "scale_max": 5}
+PRE_MEAL_SCALE = {"scale_min": 1, "scale_max": 7}
 _PRE_MEAL_SUBTITLE = "A few quick questions before we start"
 _PRE_MEAL_EYEBROW = "Before We Start"
 # Held-out reassurance shown on every question: these answers do not feed the
@@ -58,7 +58,7 @@ PRE_MEAL_QUESTIONS: list[dict[str, Any]] = [
 
 
 def _coerce_value(raw: Any) -> Any:
-    """Sanitize a webapp Likert answer: int within the 1-5 scale (else None)."""
+    """Sanitize a webapp Likert answer: int within the 1-7 scale (else None)."""
     try:
         value = int(raw)
     except (TypeError, ValueError):
