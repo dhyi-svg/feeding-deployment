@@ -124,8 +124,7 @@ class OpenDoorHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.microwave_plate_staging_pos)
 
         self.report_activity("Reaching for the fridge handle")
-        # soft_stop: ease into the pregrasp instead of a reach_pose snap (the jerk site).
-        self.move_to_ee_pose(handle_opening_poses["pre_grasp_pose"], soft_stop=True)
+        self.move_to_ee_pose(handle_opening_poses["pre_grasp_pose"])
         self.open_gripper()
 
         with pull_threshold:
