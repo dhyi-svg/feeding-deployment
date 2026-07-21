@@ -662,18 +662,19 @@ class _Runner:
             ctx = self.ensure_preference_context()
             print("Resuming preference session; context:", ctx)
         else:
-            ctx = self._collect_preference_context()
-            print("Preference context (meal / setting / time_of_day):", ctx)
-            # Pre-meal latent questionnaire (web-interface deployments only):
-            # capture the user's self-report of the four latent traits BEFORE any
-            # prediction. Held out -- logged to pre_meal.jsonl only, never fed
-            # into prediction or the preference-learning memory. Best-effort: a
-            # questionnaire failure must never block the meal.
+            # Pre-meal latent questionnaire (web-interface deployments only): the
+            # meal OPENS with this -- before the user sets up the meal context and
+            # before the robot predicts anything. Held out: logged to
+            # pre_meal.jsonl only, never fed into prediction or the
+            # preference-learning memory. Best-effort: a questionnaire failure
+            # must never block the meal.
             if self._pref_mode == "interface":
                 try:
                     run_pre_meal_survey(self.web_interface, self.data_logger)
                 except Exception as e:  # noqa: BLE001
                     print(f"[pre-meal survey] error (skipping): {e}")
+            ctx = self._collect_preference_context()
+            print("Preference context (meal / setting / time_of_day):", ctx)
             self._prediction_model = self._build_prediction_model()
             self._pref_session = self._build_preference_session(self._prediction_model, dict(ctx))
             # Predict everything before asking the initial dims (speed + the two
