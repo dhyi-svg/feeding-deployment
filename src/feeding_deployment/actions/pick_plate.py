@@ -236,16 +236,10 @@ class PickPlateFromHolderHLA(HighLevelAction):
         self.report_activity("Picking up the plate")
         self.move_to_ee_pose(self.sim.scene_description.inside_plate_holder_pose)
 
-        if self.robot_interface is not None:
-            self.robot_interface.set_speed("low")  # safety boundary
-
-        with holder_threshold:
+        with self.low_speed(restore=speed), holder_threshold:
             self.open_gripper()
             self.report_activity("Lifting the plate off the stand")
             self.move_to_ee_pose(self.sim.scene_description.above_plate_holder_pose)
-
-        if self.robot_interface is not None:
-            self.robot_interface.set_speed(speed)  # safety boundary
 
         self.move_to_ee_pose(self.sim.scene_description.intermediate_plate_holder_pose)
         self.move_to_joint_positions(self.sim.scene_description.behind_intermediate_pos)
@@ -329,14 +323,11 @@ class PickPlateFromTableHLA(HighLevelAction):
         self.move_to_ee_pose(pre_pickup_pose)
         self.close_gripper()
 
-        if self.robot_interface is not None:
-            self.robot_interface.set_speed("low")  # safety boundary
-        self.move_to_ee_pose(pickup_pose)
-        self.open_gripper()
-        self.report_activity("Lifting the plate off the table")
-        self.move_to_ee_pose(above_pickup_pose)
-        if self.robot_interface is not None:
-            self.robot_interface.set_speed(speed)  # safety boundary
+        with self.low_speed(restore=speed):
+            self.move_to_ee_pose(pickup_pose)
+            self.open_gripper()
+            self.report_activity("Lifting the plate off the table")
+            self.move_to_ee_pose(above_pickup_pose)
 
         self.move_to_ee_pose(self.sim.scene_description.table_intermediate_pose)
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)

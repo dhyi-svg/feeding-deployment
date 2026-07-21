@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import abc
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -482,6 +483,24 @@ class HighLevelAction(abc.ABC):
             self.sim.robot.close_fingers()
         else:
             self.execute_robot_command(CloseGripperCommand())
+
+    @contextmanager
+    def low_speed(self, restore: str):
+        """Run a safety-critical section at "low" arm speed, restoring ``restore`` on exit.
+
+        Sets the arm to "low" on entry and back to ``restore`` when the block
+        exits -- including if the wrapped code raises -- so a fault mid-section
+        can never leave the arm stuck at low speed. A no-op when there is no real
+        robot (``robot_interface`` is None).
+        """
+        if self.robot_interface is None:
+            yield
+            return
+        self.robot_interface.set_speed("low")  # safety boundary
+        try:
+            yield
+        finally:
+            self.robot_interface.set_speed(restore)  # safety boundary
 
     def _confirm_page_args(self, confirm) -> tuple:
         """Decode a single sentinel-encoded confirmation BT param into
