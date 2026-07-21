@@ -25,12 +25,16 @@ from feeding_deployment.interfaces.web_interface import WebInterfaceTakeoverInte
 PRE_MEAL_SCALE = {"scale_min": 1, "scale_max": 5}
 _PRE_MEAL_SUBTITLE = "A few quick questions before we start"
 _PRE_MEAL_EYEBROW = "Before We Start"
+# Held-out reassurance shown on every question: these answers do not feed the
+# robot's predictions (which happen after, from the meal's corrections); they
+# are only the yardstick used offline to check those predictions.
+_PRE_MEAL_NOTE = ("The robot won't be able to see these answers — they only check "
+                  "how well it understood you from your corrections during the meal.")
 
-# The four latent traits, context-free / trait-level. The four "likert" items
-# are scored 1-5 and graded offline against the model's latent_scores; the
-# communication modality is a captured "choice" field (not part of the 1-5
-# grade). Field keys pace/trust/proximity/communication match the model's
-# latent_scores keys so the offline join is trivial.
+# The four latent traits, context-free / trait-level. Each is a "likert" item
+# scored 1-5 and graded offline against the model's latent_scores. Field keys
+# pace/trust/proximity/communication match the model's latent_scores keys so the
+# offline join is trivial.
 PRE_MEAL_QUESTIONS: list[dict[str, Any]] = [
     {"key": "pace", "title": "Pace", "kind": "likert",
      "min_label": "Slow & unhurried", "max_label": "Quick & efficient",
@@ -50,17 +54,11 @@ PRE_MEAL_QUESTIONS: list[dict[str, Any]] = [
      "question": "How much of a heads-up do you want from the robot — should it "
                  "clearly signal when it's about to act or is waiting on you, or "
                  "stay quiet and just get on with it?"},
-    {"key": "communication_modality", "title": "How it signals", "kind": "choice",
-     "options": ["Sound", "A light", "Both"],
-     "question": "When it does signal, what works best — a sound, a light, or both?"},
 ]
 
 
-def _coerce_value(kind: str, raw: Any) -> Any:
-    """Sanitize a webapp answer: choice -> the option string (or None); likert ->
-    int within the 1-5 scale (else None)."""
-    if kind == "choice":
-        return None if raw is None else str(raw)
+def _coerce_value(raw: Any) -> Any:
+    """Sanitize a webapp Likert answer: int within the 1-5 scale (else None)."""
     try:
         value = int(raw)
     except (TypeError, ValueError):
@@ -84,7 +82,8 @@ def run_pre_meal_survey(web_interface, data_logger) -> dict[str, Any]:
     aborted = None
     try:
         web_interface.start_survey(
-            total=total, subtitle=_PRE_MEAL_SUBTITLE, eyebrow=_PRE_MEAL_EYEBROW
+            total=total, subtitle=_PRE_MEAL_SUBTITLE, eyebrow=_PRE_MEAL_EYEBROW,
+            note=_PRE_MEAL_NOTE,
         )
         for step, q in enumerate(PRE_MEAL_QUESTIONS):
             msg_dict = web_interface.send_survey_question(
@@ -93,15 +92,15 @@ def run_pre_meal_survey(web_interface, data_logger) -> dict[str, Any]:
                 scale_min=PRE_MEAL_SCALE["scale_min"],
                 scale_max=PRE_MEAL_SCALE["scale_max"],
                 min_label=q.get("min_label", ""), max_label=q.get("max_label", ""),
-                options=q.get("options"),
                 subtitle=_PRE_MEAL_SUBTITLE, eyebrow=_PRE_MEAL_EYEBROW,
+                note=_PRE_MEAL_NOTE,
             )
             if msg_dict is None:
                 aborted = "task_selection_jump"
                 data_logger.log_pre_meal(field=q["key"], value=None, step=step,
                                          total=total, user_action="jump")
                 break
-            value = _coerce_value(q["kind"], msg_dict.get("value"))
+            value = _coerce_value(msg_dict.get("value"))
             action = msg_dict.get("user_action", "tap")
             responses[q["key"]] = value
             user_actions[q["key"]] = action

@@ -30,6 +30,7 @@
           <div class="survey-q">
             <h1 class="pq">{{ current.title }}</h1>
             <p class="survey-sub">{{ current.question }}</p>
+            <p v-if="note" class="survey-note">{{ note }}</p>
           </div>
 
           <!-- Open-ended question: type or dictate an answer (may be left empty). -->
@@ -57,19 +58,6 @@
               <span v-if="voiceStatus">{{ voiceStatus }}</span>
               <span v-else>&nbsp;</span>
             </p>
-          </div>
-
-          <!-- Choice question: pick one option, then Continue. -->
-          <div v-else-if="current.kind === 'choice'" class="survey-answer">
-            <div class="choice">
-              <button
-                class="ch"
-                v-for="opt in current.options"
-                :key="opt"
-                :class="{ sel: selected === opt }"
-                @click="selected = opt"
-              >{{ opt }}</button>
-            </div>
           </div>
 
           <!-- Likert question: pick a number, then Continue. -->
@@ -128,6 +116,7 @@ export default {
       total: 9,
       subtitle: "A few quick questions about today's meal",
       eyebrow: 'End-of-Meal Survey',
+      note: '',
       isSubmitting: false,
       waitingMessage: 'Waiting for the first question...'
     }
@@ -206,6 +195,7 @@ export default {
         if (parsedMessage.state === 'survey' && parsedMessage.status === 'jump') {
           if (parsedMessage.subtitle) this.subtitle = parsedMessage.subtitle
           if (parsedMessage.eyebrow) this.eyebrow = parsedMessage.eyebrow
+          if (parsedMessage.note) this.note = parsedMessage.note
           this.sendReady()
           return
         }
@@ -223,12 +213,12 @@ export default {
       this.total = Number.isInteger(message.total) ? message.total : 1
       if (message.subtitle) this.subtitle = message.subtitle
       if (message.eyebrow) this.eyebrow = message.eyebrow
+      if (message.note) this.note = message.note
       this.current = {
         field: message.field,
         title: message.title || '',
         question: message.question || '',
-        kind: (message.kind === 'text' || message.kind === 'choice') ? message.kind : 'likert',
-        options: Array.isArray(message.options) ? message.options : [],
+        kind: message.kind === 'text' ? 'text' : 'likert',
         scaleMin: Number.isInteger(message.scale_min) ? message.scale_min : 1,
         scaleMax: Number.isInteger(message.scale_max) ? message.scale_max : 7,
         minLabel: message.min_label || 'Very Low',
@@ -402,28 +392,12 @@ export default {
   background: rgba(240, 165, 0, .12);
 }
 
-.choice {
-  display: flex;
-  flex-direction: column;
-  gap: 1.2vh;
-}
-
-.ch {
-  width: 100%;
-  min-height: 9vh;
-  font-size: 3.2vh;
-  font-weight: 600;
-  font-family: inherit;
-  border-radius: 1.5vh;
-  background: var(--s2);
-  border: 2px solid var(--s3);
-  color: var(--t);
-  cursor: pointer;
-}
-
-.ch.sel {
-  border-color: var(--a);
-  background: rgba(240, 165, 0, .12);
+.survey-note {
+  font-size: 2.1vh;
+  color: var(--tm);
+  font-style: italic;
+  margin-top: 1.2vh;
+  opacity: 0.85;
 }
 
 .likert-anchors {
