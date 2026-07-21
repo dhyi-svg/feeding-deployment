@@ -299,7 +299,11 @@ class _Runner:
 
         print("Initializing FLAIR...")
         grounded_sam = self.perception_interface._grounded_sam if hasattr(self.perception_interface, '_grounded_sam') else None
-        self.flair = FLAIR(self.log_dir, grounded_sam=grounded_sam)
+        # Scope bite history to the per-day dir so it resets each deployment day
+        # (resuming the same --day reuses that dir and restores the history).
+        # Falls back to the user-level dir when day logging is disabled (no --day).
+        history_dir = self.data_logger.day_dir or self.log_dir
+        self.flair = FLAIR(self.log_dir, grounded_sam=grounded_sam, history_dir=history_dir)
 
         if self.run_on_robot:
             self.rviz_interface = RVizInterface(self.scene_description)

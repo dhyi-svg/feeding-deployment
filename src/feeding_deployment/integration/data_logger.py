@@ -566,20 +566,19 @@ class DataLogger:
     def _snapshot_actuated_state(self) -> None:
         """Copy end-of-run actuated state into the day dir.
 
-        ``behavior_trees/`` (the parameters skills actually ran with) and
-        ``flair_history.txt`` live at the user level and are mutated in place
-        across days; copying them at close preserves each day's final state.
-        Overwrites earlier copies from the same day, so a day with several
-        run.py sessions keeps its last state.
+        ``behavior_trees/`` (the parameters skills actually ran with) lives at
+        the user level and is mutated in place across days; copying it at close
+        preserves each day's final state. Overwrites earlier copies from the
+        same day, so a day with several run.py sessions keeps its last state.
+
+        ``flair_history.txt`` is written directly into this day dir by FLAIR
+        (scoped per day), so it needs no snapshot copy here.
         """
         try:
             bt_src = self.state_dir / "behavior_trees"
             if bt_src.is_dir():
                 shutil.copytree(bt_src, self.day_dir / "behavior_trees",
                                 dirs_exist_ok=True)
-            flair_src = self.state_dir / "flair_history.txt"
-            if flair_src.exists():
-                shutil.copy2(flair_src, self.day_dir / "flair_history.txt")
         except Exception as e:  # noqa: BLE001
             print(f"[data_logger] Failed to snapshot actuated state: {e}")
 
