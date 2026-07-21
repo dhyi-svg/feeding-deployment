@@ -36,22 +36,22 @@
     },
     "outside_mouth_distance": "near",
     "plate_color_fridge": {
-      "h": 9,
-      "range": 0.1,
-      "s": 188,
-      "v": 155
+      "h": 11,
+      "range": 0.18,
+      "s": 190,
+      "v": 138
     },
     "plate_color_microwave": {
       "h": 10,
       "range": 0.24,
       "s": 201,
-      "v": 240
+      "v": 235
     },
     "plate_color_table": {
-      "h": 6,
-      "range": 0.19,
-      "s": 133,
-      "v": 149
+      "h": 19,
+      "range": 0.22,
+      "s": 190,
+      "v": 226
     },
     "retract_between_bites": "no",
     "robot_speed": "fast",
@@ -61,22 +61,22 @@
     "wait_before_autocontinue_task_selection": "countdown (30 sec)"
   },
   "context": {
-    "meal": "chicken nuggets",
+    "meal": "beef bitesa and broccoli",
     "setting": "Personal",
-    "time_of_day": "evening"
+    "time_of_day": "night"
   },
   "corrected": {
     "plate_color_fridge": {
-      "h": 9,
-      "range": 0.1,
-      "s": 188,
-      "v": 155
+      "h": 11,
+      "range": 0.18,
+      "s": 190,
+      "v": 138
     },
     "plate_color_table": {
-      "h": 6,
-      "range": 0.19,
-      "s": 133,
-      "v": 149
+      "h": 19,
+      "range": 0.22,
+      "s": 190,
+      "v": 226
     }
   },
   "finalized": [

@@ -102,7 +102,7 @@ NUC_REPO="${NUC_REPO:-/home/emprise/feeding-deployment}"
 NUC_SESS_ROOT="$NUC_REPO/src/feeding_deployment/integration/log/system_logs"
 # Use `python` for both (the workspace/conda interpreter active in every pane).
 # Both scripts mkdir their output dir, so log/system_logs/ is created as needed.
-CMD_HEALTH="python $INTEGRATION_DIR/compute_health_monitor.py --no-kill --window-seconds $LOGGER_CYCLE --logfile $LOGGER_LOG_DIR/health_monitor.log"
+CMD_HEALTH="python $INTEGRATION_DIR/compute_health_monitor.py --no-kill --no-sound --no-popup --window-seconds $LOGGER_CYCLE --logfile $LOGGER_LOG_DIR/health_monitor.log"
 # Distinct 'sensorlog_' prefix so the prune can NEVER match the existing
 # 'sensor_diag_*' analysis runs (or anything else) in the log dir.
 CMD_SENSORLOG="until rostopic list >/dev/null 2>&1; do sleep 3; done; while true; do python $SAFETY_DIR/sensor_diag_logger.py --duration $LOGGER_CYCLE --outdir $LOGGER_LOG_DIR/sensorlog_\$(date +%Y%m%d_%H%M%S); ls -dt $LOGGER_LOG_DIR/sensorlog_* 2>/dev/null | tail -n +$((LOGGER_KEEP+1)) | xargs -r rm -rf; done"

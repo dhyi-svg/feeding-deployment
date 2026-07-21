@@ -65,7 +65,10 @@ class PickToolHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.retract_pos)
         self.close_gripper()
         self.move_to_joint_positions(self.sim.scene_description.utensil_above_mount_pos)
-        self.move_to_ee_pose(self.sim.scene_description.utensil_inside_mount_pose)
+
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed("low")  # safety boundary
+        self.move_to_ee_pose(self.sim.scene_description.utensil_inside_mount_pose) 
         self.grasp_tool("utensil")
 
         if self.wrist_interface is not None:
@@ -75,6 +78,9 @@ class PickToolHLA(HighLevelAction):
             self.wrist_interface.reset()
 
         self.move_to_ee_pose(self.sim.scene_description.utensil_outside_mount_pose)
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed) 
+
         self.move_to_ee_pose(self.sim.scene_description.utensil_outside_above_mount_pose)
         self.move_to_joint_positions(self.sim.scene_description.retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.before_transfer_pos)
@@ -95,10 +101,16 @@ class PickToolHLA(HighLevelAction):
         self.report_activity("Picking up the drink")
         self.move_to_joint_positions(self.sim.scene_description.drink_staging_pos)
         self.move_to_ee_pose(drink_poses['pre_grasp_pose'])
+
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed("low")  # safety boundary
         self.move_to_ee_pose(drink_poses['inside_bottom_pose'])
         self.move_to_ee_pose(drink_poses['inside_top_pose'])
+
         self.grasp_tool("drink")
         self.move_to_ee_pose(drink_poses['post_grasp_pose'])
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed)  # safety boundary
 
         self.perception_interface.record_drink_pickup_joint_pos()
 
@@ -112,9 +124,15 @@ class PickToolHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.retract_pos)
         self.close_gripper()
         self.move_to_joint_positions(self.sim.scene_description.wipe_above_mount_pos)
+
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed("low")  # safety boundary
         self.move_to_ee_pose(self.sim.scene_description.wipe_inside_mount_pose)
         self.grasp_tool("wipe")
         self.move_to_ee_pose(self.sim.scene_description.wipe_outside_mount_pose)
+        if self.robot_interface is not None:
+            self.robot_interface.set_speed(speed)  # safety boundary
+
         self.move_to_ee_pose(self.sim.scene_description.wipe_outside_above_mount_pose)
         self.move_to_joint_positions(self.sim.scene_description.retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.before_transfer_pos)

@@ -52,7 +52,7 @@ _COUNTDOWN_MAP = {
 
 _RETRACT_MAP = {"yes": 1, "no": 0}
 
-_OUTSIDE_MOUTH_DISTANCE_MAP = {"near": 0.05, "medium": 0.07, "far": 0.1}
+_OUTSIDE_MOUTH_DISTANCE_MAP = {"near": 0.05, "medium": 0.06, "far": 0.07}
 
 _CONVEY_READY_MAP = {
     "no cue": "silent",

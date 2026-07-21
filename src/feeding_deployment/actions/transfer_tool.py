@@ -314,7 +314,8 @@ class TransferToolHLA(HighLevelAction):
         print("Transferring bite with utensil ...")
 
         if self.robot_interface is not None:
-            self.robot_interface.set_speed(speed)
+            # self.robot_interface.set_speed(speed)
+            self.robot_interface.set_speed("low")  # safety boundary
 
         if self.web_interface is not None:
             self.web_interface.set_bite_autocontinue_timeout(task_reselection_autocontinue_seconds)
@@ -349,7 +350,8 @@ class TransferToolHLA(HighLevelAction):
         assert self.sim.held_object_name == "drink"
 
         if self.robot_interface is not None:
-            self.robot_interface.set_speed(speed)
+            # self.robot_interface.set_speed(speed)
+            self.robot_interface.set_speed("low")  # safety boundary
 
         if self.web_interface is not None:
             self.web_interface.set_drink_autocontinue_timeout(task_reselection_autocontinue_seconds)
@@ -376,7 +378,8 @@ class TransferToolHLA(HighLevelAction):
         assert self.sim.held_object_name == "wipe"
 
         if self.robot_interface is not None:
-            self.robot_interface.set_speed(speed)
+            # self.robot_interface.set_speed(speed)
+            self.robot_interface.set_speed("low")  # safety boundary
 
         self.move_to_joint_positions(self.sim.scene_description.before_transfer_pos)
 

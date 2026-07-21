@@ -39,6 +39,13 @@ MEAL_CONTENTS: List[MealContents] = [
         intended_serving_temp="hot",
     ),
     MealContents(
+        label="beef bitesa and broccoli",
+        dippable_items=["beef bites", "broccoli"],
+        sauces=[],
+        storage_condition="refrigerated_leftover",
+        intended_serving_temp="hot",
+    ),
+    MealContents(
         label="buffalo chicken bites, potato wedges, and ranch dressing",
         dippable_items=["buffalo chicken bites", "potato wedges"],
         sauces=["ranch dressing"],
