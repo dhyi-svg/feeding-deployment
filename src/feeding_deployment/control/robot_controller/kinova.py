@@ -609,6 +609,26 @@ class KinovaArm:
         waypoints.use_optimal_blending = False
 
         n = len(trajectory)
+
+        # --- Soft-landing deceleration taper -----------------------------------------
+        # This runs as CARTESIAN_WAYPOINT_TRAJECTORY, whose only velocity governor is the
+        # twist soft limit -- the Kinova API has no Cartesian acceleration limit, so a
+        # fast cruise decelerates abruptly into the final pose and the EE visibly jerks.
+        # CartesianWaypoint.maximum_{linear,angular}_velocity caps the per-waypoint speed,
+        # so we ramp it down over the last few waypoints: the arm eases into the goal
+        # while the cruise waypoints stay uncapped (= the full twist soft limit), leaving
+        # top speed unchanged. maximum_*_velocity == 0 means "use the soft limit". Tune
+        # ARRIVAL_* / TAPER_WAYPOINTS on-arm.
+        TAPER_WAYPOINTS = 4      # trailing waypoints to ramp the velocity down over
+        ARRIVAL_LINEAR = 0.04    # m/s at the final waypoint
+        ARRIVAL_ANGULAR = 10.0   # deg/s at the final waypoint
+        cruise_info = ControlConfig_pb2.ControlModeInformation()
+        cruise_info.control_mode = ControlConfig_pb2.CARTESIAN_WAYPOINT_TRAJECTORY
+        cruise = self.control_config.GetKinematicSoftLimits(cruise_info)
+        cruise_linear = cruise.twist_linear if cruise.twist_linear > 0 else 0.25
+        cruise_angular = cruise.twist_angular if cruise.twist_angular > 0 else 40.0
+        taper = min(TAPER_WAYPOINTS, n - 1) if n >= 2 else 0
+
         for index, point in enumerate(trajectory):
             cartesian_pose = point[0]
             cartesian_quat = point[1]
@@ -628,6 +648,19 @@ class KinovaArm:
                 waypoint.cartesian_waypoint.blending_radius = 0.0
             else:
                 waypoint.cartesian_waypoint.blending_radius = 0.01
+
+            # Ramp the max velocity down over the last `taper` waypoints (linearly from
+            # cruise at the start of the taper to ARRIVAL_* at the final waypoint); leave
+            # earlier waypoints at 0 so they cruise at the full twist soft limit.
+            from_end = (n - 1) - index
+            if taper > 0 and from_end < taper:
+                frac = from_end / taper  # 0.0 at the final waypoint
+                waypoint.cartesian_waypoint.maximum_linear_velocity = (
+                    ARRIVAL_LINEAR + frac * (cruise_linear - ARRIVAL_LINEAR)
+                )
+                waypoint.cartesian_waypoint.maximum_angular_velocity = (
+                    ARRIVAL_ANGULAR + frac * (cruise_angular - ARRIVAL_ANGULAR)
+                )
 
         result = self.base.ValidateWaypointList(waypoints)
         if len(result.trajectory_error_report.trajectory_error_elements) != 0:
