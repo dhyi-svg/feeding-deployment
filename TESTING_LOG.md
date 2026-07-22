@@ -37,6 +37,144 @@ the bypass (fresh server re-locks motion). Verify with `get_state()` → expect
 
 ---
 
+## 2026-07-22 — Pachirisu: eye-in-hand calibration done + validated, USB controller failure/recovery
+
+Follow-on session. Goal was the camera→arm-base calibration flagged as the blocker at the end of the
+prior session. Got it done and validated to 1.1mm on a real robot move, but a full detect→grasp→open
+attempt is **not** ready this session — see gap list at the end. Also: the box's USB host controller
+genuinely died mid-session and needed a kernel-level recovery, worth knowing about if cameras/USB
+devices vanish again in a future session.
+
+### Calibration approach — plain OpenCV, not easy_handeye
+
+`easy_handeye` (ROS1) isn't a RoboStack binary package and would need an untested-on-this-box catkin
+source build, plus it normally drives calibration poses via MoveIt, which this repo doesn't use.
+Skipped it entirely in favor of `cv2.calibrateHandEye()` directly: move the arm through a series of
+poses (low speed, poll-for-settle, independent re-verify — same discipline as every real-arm move this
+session), record `get_state()`'s EE pose (gripper2base) at each one, detect the calibration target and
+`solvePnP` its pose (target2cam) at the same pose, feed the paired lists into
+`cv2.calibrateHandEye(method=cv2.CALIB_HAND_EYE_TSAI)`. No new packages, no MoveIt integration.
+
+**Target:** a physical board taped in front of the arm — 12 ArUco markers (`cv2.aruco.DICT_5X5_50`,
+IDs 0–11) in a 4×3 grid, identified from a captured frame by brute-force trying `cv2.aruco`
+dictionaries until one matched all 12. Marker size taken as the user's estimate (2 in / 0.0508 m,
+unverified by ruler) — this sets the *absolute* scale of the whole calibration; worth double-checking
+if later grasp attempts show a consistent scale-like error.
+
+### First attempt failed validation — single-marker depth noise
+
+Using only one marker (ID 0) per pose gave a calibration that looked plausible but failed a real
+check: since the board is physically stationary, computing "target position in base frame" from every
+collected pose should agree closely across poses. It didn't — Z (depth) axis had 15cm std / 48cm max
+spread across 11 poses, X/Y were fine (~2-3cm). Root cause: a single ~5cm marker viewed from ~50cm has
+poor depth/tilt constraint from `solvePnP` — small pixel corner noise blows up along the camera's
+viewing axis. This is exactly why the physical target has 12 markers, not 1 — just wasn't using them.
+
+### Fix — full-board multi-marker pose, empirically derived (not assumed) spacing
+
+Rather than assume a uniform grid pitch, derived the board's true local geometry from vision itself:
+solve marker 0's pose via `solvePnP`, fit its plane (point=t0, normal=R0's local +Z in camera frame),
+then for every other visible marker's 4 corners, ray-cast the pixel through the camera's
+inverse-intrinsics and intersect with that plane, express the result in marker-0's local frame. This
+needs no spacing measurement beyond the one marker-size number, only planarity (true — it's a flat
+printed board). Per-pose target pose is then one combined `solvePnP` over all currently-visible
+markers' corners (8-12 of 12, depending on pose) instead of 4 points from one marker.
+
+**Also found: J6 is the dominant "aim" joint here** (not J5, unlike the wrist-tilt finding earlier
+this session — the effective joint is pose-dependent). First re-collection attempt (±10-20° J5/J6/J7
+combos) tanked marker counts on any pose touching J6 (a lone ±15° J6 move alone: 12 markers → 0-4),
+while J5/J7 stayed at 10-12 markers even at ±20° (near-pure roll at this configuration). Refit range:
+J5/J7 pushed to ±15-20° for rotational diversity, J6 capped at ±5°. Result across 17 poses (all kept
+8-12 markers): **X std 6.2mm/spread 2.4cm, Y std 16.7mm/spread 6.3cm, Z std 5.0mm/spread 1.9cm** —
+self-consistent, usable. Saved to (persisted on host, bind-mounted, survives container recreation):
+```
+~/deployment_ws/pachirisu_wrist_camera_calib/wrist_camera_calib_fullboard.json   # R_cam2gripper, t_cam2gripper (~20cm magnitude, physically un-sanity-checked)
+~/deployment_ws/pachirisu_wrist_camera_calib/handeye_raw_samples.json           # raw per-pose samples + derived board geometry, for re-solving without new arm motion
+```
+
+Also learned the hard way: **`ARMSTATE_SERVOING_MANUALLY_CONTROLLED` reads as a persistent-looking
+state for ~5s after almost every `REACH_JOINT_ANGLES` call on this rig**, then clears to `READY` on
+its own — not a fault, just needs patience (poll for ~6s before treating it as real). An earlier, less
+patient version of this check caused a false-abort mid-calibration.
+
+### Live validation on the real robot: 1.1mm
+
+Computed a hover target 15cm off the board's center (detected board → transform through the
+calibration → base frame), IK'd to it (seeded PyBullet FK from real joints, unconstrained), commanded
+a 3-substep approach. First substep landed **1.1mm** from the predicted point — strong direct evidence
+the calibration is correct, not just internally consistent.
+
+**Second substep hit a real J4-proximity issue, unresolved.** J4 was already sitting close to its
+flagged soft-limit region (-145° to -150°, limit is -152.4°) from an earlier e-stop event nudging the
+arm. The unconstrained IK's solution for substep 2 pushed J4 to -149.5°, and the move aborted (arm
+read stuck `MANUALLY_CONTROLLED`, didn't clear — possibly the firmware protecting the limit, possibly
+something else, couldn't fully distinguish). Tried fixing via null-space IK
+(`calculateInverseKinematics` with `lowerLimits`/`upperLimits`/`jointRanges`/`restPoses` tightened on
+J2/J4/J6) — **first attempt silently no-op'd**: the URDF has 13 non-fixed joints (7 arm + 6 gripper
+fingers) and only 7-length arrays were passed, so pybullet likely ignored the null-space branch on the
+size mismatch (same J4=-149.5° result). Fixed the array lengths (13, using the gripper joints' own
+real limits + current position as their rest pose) — this genuinely moved J4 away from the limit
+(-136°) but **accuracy regressed to 5.9cm tracking error**, i.e. the DLS null-space solver traded off
+primary-objective accuracy for the added constraints without enough iterations/tuning to converge
+properly. Not resolved — stopped here rather than continuing to fight the IK solver.
+
+### USB host controller died mid-session — not camera-specific, needed a kernel-level fix
+
+While cycling the RealSense through several forceful `pkill -9` restarts (chasing an `align_depth`
+relaunch), the *entire xHCI USB host controller* (PCI `0000:00:14.0`) crashed
+(`kernel: xHCI host controller not responding, assume dead`) and the kernel force-disconnected every
+device on it at once (not just the camera — 8 devices across two bus trees). Confirmed via
+`sudo dmesg` (needs sudo — `dmesg_restrict` blocks it otherwise, even for the invoking user, not just
+this box's sandboxed shell). Neither a container restart nor several camera replugs (including trying
+a different port) fixed it, because the fault was upstream of all of that. Fix:
+`echo -n "0000:00:14.0" | sudo tee /sys/bus/pci/drivers/xhci_hcd/unbind` then the same with `bind` —
+after several attempts, this worked and all USB devices re-enumerated with fresh device numbers.
+**Takeaway: if USB devices vanish entirely (not just the camera) and replugging into a different port
+doesn't help, suspect the host controller itself before assuming it's a per-device problem** —
+`sudo dmesg | tail -30` right after a failed replug is the fastest way to tell (a genuine device-level
+failure looks different in the log from a `xHCI host controller ... assume dead` line).
+
+### Also this session: accidental e-stop, clean recovery
+
+A physical e-stop was pressed (accidental). Recovery matched the documented procedure exactly —
+`arm_server.py`'s TCP session hit a `BrokenPipeError` (e-stop severs the Kortex connection hard), which
+also broke `ArmInterface.close()`'s clean-shutdown path (same broken pipe), leaving a stale
+`/tmp/kinova.lock`. No manual cleanup needed: `KinovaArm.__init__` already self-heals stale locks
+(checks if the PID in the lock file is still alive via `os.kill(pid, 0)`, removes it if not) — a plain
+restart of `arm_server.py` handled it.
+
+### Not done / real gaps before a full detect→grasp→open attempt
+
+- **Handle localization.** `AppliancePerception.detect_items` reliably detects the `microwave` class
+  (0.39-0.61 confidence, consistent with the Jetson's documented range) but **never** fired on
+  `microwave handle`/`door handle` in any test this session, even with the handle clearly, closely
+  visible — a prompt/threshold sensitivity issue at this camera's viewing angles, not a scene problem.
+  The Jetson's real pipeline doesn't depend on that prompt working either — it detects `microwave`,
+  then finds the handle via depth plane-fitting + DBSCAN "protruding cluster" (see the 2026-07-14 entry
+  below). That depth-based step is unbuilt on Pachirisu; `align_depth:=true` was smoke-tested working
+  once this session (before the USB controller died) but not exercised against a real
+  handle-localization attempt.
+- **No empirical corrections tuned for this rig** — the Jetson's `DEPTH_CORR`/`LAT_CORR`/`GRIP_EXT` are
+  specific to *that* camera mount and don't transfer; this rig needs its own, which normally takes
+  several real grasp attempts compared against ground truth.
+- **Only validated at small range (7cm, 1 substep).** The J4-proximity/null-space-IK issue above is
+  unresolved for larger moves.
+- **The microwave itself needs to physically replace the calibration board** in front of the arm
+  before any of this can be attempted for real.
+
+### End-of-session state
+
+Everything stopped cleanly: `bulldog_bypass.py`/`arm_server.py` (SIGINT, lock released),
+`roscore`/`realsense2_camera` (SIGINT/SIGKILL as needed), verified no leftover processes and no stale
+lock file. Container `feed-noetic` left running but idle (note: it was also found unexpectedly *not*
+running at the start of this session despite last session's doc note saying so — the prior session's
+own teardown apparently did stop it via `docker stop`, contradicting what got written down; worth a
+`docker ps` gut-check at the start of any session rather than trusting this note blindly). Calibration
+files persisted to the host at `~/deployment_ws/pachirisu_wrist_camera_calib/`, independent of
+container lifecycle.
+
+---
+
 ## 2026-07-21 (later) — Pachirisu: first commanded motion + GPU vision pipeline
 
 Follow-on session, same day as the read-only bring-up below. Two goals: (1) the
