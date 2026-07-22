@@ -37,6 +37,81 @@ the bypass (fresh server re-locks motion). Verify with `get_state()` → expect
 
 ---
 
+## 2026-07-22 (later) — Pachirisu: recurring USB controller failures block depth work; handle detection re-confirmed
+
+Follow-on session, same day as the calibration entry below. Goal was to run the repo's
+real `AppliancePerception.detect_handle_and_placement` (the plane-fit + DBSCAN
+3D handle-localization method, not just `detect_items`) against the microwave, using a
+monkeypatched `get_frame_to_frame_transform` that substitutes the prior session's
+`cv2.calibrateHandEye()` result for the live tf2 lookup this repo normally expects
+(nothing on this box publishes a TF tree — see the plan written for this at
+`~/.claude/plans/quiet-herding-puzzle.md`, not yet executed). **Did not get there** —
+repeated USB/camera hardware failures ate the session. Recovered a working visual
+result (plain detection, no depth) before time ran out.
+
+### `align_depth:=true` is unreliable on this box — but so, eventually, is plain streaming
+
+Attempting to bring up the camera with `align_depth:=true` (needed for the
+depth-based handle-localization work — `pixel2World` requires depth aligned to the
+color pixel grid) hit the same `xhci_hcd 0000:00:14.0: xHCI host controller not
+responding, assume dead` full-controller crash **twice**, each requiring the same
+`sudo` PCI unbind/rebind fix from the previous session
+(`echo -n "0000:00:14.0" | sudo tee /sys/bus/pci/drivers/xhci_hcd/unbind` then
+`.../bind`) plus a physical replug to fully recover. A third `align_depth` attempt
+showed the same runaway `messenger-libusb.cpp` `control_transfer` warning spike that
+preceded both crashes, but was caught early with a SIGINT before it took the
+controller down — first evidence the pattern is at least somewhat predictable
+in advance (a burst of `control_transfer` errors a few seconds after "Sync Mode: On"
+appears in the log), not purely instantaneous.
+
+**This session's new, worse finding: it's not `align_depth`-specific.** A subsequent
+plain (non-`align_depth`) launch — the exact mode that streamed rock-solid at 30Hz for
+the entire previous session with zero incidents — also crashed the same way
+(`usb device disconnected`, full controller death). This downgrades the earlier
+"only `align_depth` triggers it" theory to "the camera's USB connection is degrading
+with repeated cycling, and `align_depth` (heavier USB traffic / `Sync Mode: On`) just
+makes it more likely, not exclusively responsible." Each recovery cycle also seemed to
+take a bit more coaxing than the last (one attempt needed unbind/rebind **and** a
+physical replug before the device would even enumerate at the USB/SDK level again,
+where earlier in the same session unbind/rebind alone had sufficed).
+
+**Not resolved.** Suspect the physical USB cable/port/hub chain itself may be marginal
+(the earlier session's dmesg output showed the camera connected via `2-1.1` a
+sub-hub port, not directly on a root port) — worth trying a different cable and/or a
+direct motherboard port (bypassing any hub) before the next attempt at depth work,
+rather than continuing to treat each crash as independent and re-running the same
+recovery.
+
+### Recovered: a clean, stable visual result before time ran out
+
+After the last recovery cycle (unbind/rebind + physical replug), plain (non-aligned)
+streaming came back solid (30Hz, `rostopic hz` clean) and stayed stable for the rest
+of the session. Re-ran the same `detect_items` smoke test as the prior session, with
+the actual microwave swapped back into frame: **`microwave: 0.57`** confidence, clean
+single bounding box — consistent with both this rig's and the Jetson's previously
+documented confidence range. Annotated + raw frames from both this session and the
+prior one saved to `~/deployment_ws/pachirisu_detection_trials/` (host-persisted, not
+in the repo).
+
+### Not done — carried forward to next session
+
+- The actual goal (`detect_handle_and_placement` with the no-tf2 monkeypatch) was
+  never executed — a full plan for it exists at `~/.claude/plans/quiet-herding-puzzle.md`
+  (monkeypatch design, two-tier `handle_type` retry — try `"microwave handle"` single-class
+  first since every previous test used a 3-class combined prompt, fall back to
+  `"microwave"`'s whole-appliance box otherwise, mirroring the Jetson script's proven
+  approach) and can likely be executed largely as-written once `align_depth` (or a
+  software-alignment substitute) is usable again.
+- Camera hardware fragility itself needs attention before more depth work — see above.
+
+### End-of-session state
+
+Stopped cleanly, SIGINT-only throughout (camera → `arm_server.py` → `roscore`),
+verified no leftover processes and no stale `/tmp/kinova.lock`. Camera was in a
+stable, working state at the moment of shutdown (not mid-failure).
+
+---
+
 ## 2026-07-22 — Pachirisu: eye-in-hand calibration done + validated, USB controller failure/recovery
 
 Follow-on session. Goal was the camera→arm-base calibration flagged as the blocker at the end of the
