@@ -37,6 +37,125 @@ the bypass (fresh server re-locks motion). Verify with `get_state()` → expect
 
 ---
 
+## 2026-07-22 (evening) — Pachirisu: depth stable this session, full handle localization succeeded, but ~20cm base-frame error found in the eye-in-hand calibration
+
+Follow-on session. Goal was to retry `align_depth` (blocked twice before by USB controller
+crashes) and, if stable, finally run the repo's real `detect_handle_and_placement` per the
+plan at `~/.claude/plans/quiet-herding-puzzle.md`. Both succeeded — but a real-hardware
+comparison surfaced a large, unexplained position error in the current calibration that
+still needs root-causing.
+
+### Depth held up this time — no USB crash
+
+Same `align_depth:=true` launch that crashed 3 times last session ran for the entire
+session (10+ min continuous, plus GPU/CPU load from repeated detection runs) with zero
+xhci_hcd incidents. The runaway `control_transfer` warning burst that preceded every past
+crash showed up once at startup (right after "Sync Mode: On", exactly as before) but this
+time settled into steady low-rate background noise instead of escalating — both
+`/camera/color/image_raw` and `/camera/aligned_depth_to_color/image_raw` held a clean,
+low-jitter 30Hz throughout. **Not root-caused / not necessarily fixed** — this may just be
+this session's luck rather than the fragility being resolved. **Action item for next
+session: plug the RealSense into a confirmed USB3 port/cable directly** (last session's
+dmesg showed it enumerating through a sub-hub port, `2-9-4` this session — still not a
+verified root port) rather than continuing to treat each session's outcome as informative
+on its own.
+
+### `detect_handle_and_placement` ran for real, and is repeatable
+
+Built `scripts/scratch/test_detect_handle_and_placement.py` per the plan: monkeypatches
+`AppliancePerception.get_frame_to_frame_transform` on one instance (no repo source
+touched) to build the base<-camera transform at call time from the prior session's
+`cv2.calibrateHandEye()` result composed with a fresh `arm.get_state()["ee_pos"]` read,
+exactly the composition validated to 1.1mm last session. Read-only arm connection
+throughout (`ArmManager` direct-connect, only `get_state()` calls — `arm_server.py` up,
+no `bulldog_bypass.py`, motion stayed locked the whole time).
+
+**`handle_type="microwave handle"` (single-class prompt) succeeded on the first try** —
+0.65-0.68 confidence across 3 runs from 2 different arm/camera viewpoints, no need for the
+planned `"microwave"` whole-appliance fallback. This is notable: every session before this
+one used a 3-class combined prompt (`["microwave", "microwave handle", "door handle"]`)
+and the handle class never fired at all. Two full runs from different arm poses (the arm
+moved between them, incidentally, from the manual-touch tests below) agreed on the
+computed handle pose to within **2.4cm** — good evidence the detection + transform
+composition is self-consistent, which matters for what comes next.
+
+Hit one merge-carried regression along the way: `AppliancePerception.__init__` (from
+today's `main`-merge) eagerly reads `grounded_sam.sam_predictor`, forcing a ViT-H load the
+appliance/handle path never needs — and the SAM checkpoint isn't even present on this box.
+Worked around in the scratch script only (`gsam._sam_predictor = object()` stub before
+constructing `AppliancePerception`), not in the merged source. Images (input frame +
+detection overlay) saved to `~/deployment_ws/pachirisu_handle_detection/`
+(host-persisted).
+
+### Real-hardware comparison found a ~20-27cm error — root cause still open
+
+User manually touched the arm to the physical handle twice (once at a natural grasp
+height, once at the lowest reachable point on the handle, 5.6cm lower) and we read back
+`get_state()["ee_pos"]` both times, comparing against the computed handle pose:
+
+| | measured EE pos | delta vs computed handle | distance |
+|---|---|---|---|
+| touch | (0.675, -0.173, 0.510) | (+0.093, -0.087, +0.236) | 26.8cm |
+| lowest reachable point | (0.675, -0.173, 0.455) | (+0.093, -0.087, +0.180) | 22.1cm |
+
+Both measurements shared identical dx/dy (only z differed, by exactly the 5.6cm the arm
+was physically lowered) — a consistent, systematic bias, not noise. Ruled out several
+candidate explanations one at a time:
+
+- **Gripper fingertip vs wrist-frame offset** (~2-2.5in / 5-6.4cm): applying it made the
+  gap slightly *worse* (approach axis at this orientation points almost entirely along
+  world x, barely touches z) — not the explanation.
+- **Re-running detection from scratch**: two independent detections (different arm poses)
+  agreed to within 2.4cm on the computed handle pose, ruling out "one bad frame."
+- **Camera-mount translation magnitude**: `t_cam2gripper` in the calibration has a norm of
+  20.4cm; user's physical measurement of the actual wrist-to-camera distance is ~5cm — a
+  4x discrepancy that looked like a smoking gun. **Tested directly** (rescaled
+  `t_cam2gripper` to 5cm, same direction, via a `CALIB_TCAM_NORM_OVERRIDE` env var added
+  to the scratch script) — this made the gap *worse* (24.4cm -> 29.0cm; 19.7cm -> 24.0cm),
+  ruling out the translation magnitude as the (sole) cause despite the suspicious number.
+- **Raw depth sensing**: user tape-measured the actual camera-to-microwave-door distance
+  at 54cm; the detection's own `Plane depth` printout read 0.542-0.57m across the 3 runs —
+  within 2-3cm. **Depth/plane-fit itself is accurate**, ruled out as a contributor.
+- **Rotation validity**: `R_cam2gripper` is a proper rotation (orthonormal, det=1) and
+  physically plausible (camera's looking direction expressed in the wrist frame is
+  `(0.075, -0.110, 0.991)` — almost exactly the wrist's own forward axis, as expected for a
+  forward-facing wrist camera). Not obviously broken, but not yet cleared either.
+
+**Leading hypothesis, not yet confirmed:** a reference-frame mismatch between whatever
+robot pose the original calibration script fed into `cv2.calibrateHandEye()` and what
+`get_state()["ee_pos"]` reports today. That original calibration script no longer exists
+(only its JSON output survived, per last session's note), so this can't be verified from
+the artifact alone — the rotation can look individually valid and directionally sensible
+while still being paired with a translation solved against a different origin, which would
+produce exactly this "small rotation error, big position error at range" signature.
+
+### Not done / next session
+
+- **Redo the calibration.** This time, capture the robot-pose half of every hand-eye sample
+  directly from `get_state()["ee_pos"]` (not a separately-derived FK), so no
+  reference-frame mismatch is possible. **User will move the arm by hand for the
+  calibration poses next time** rather than a scripted pose sweep.
+- **Plug the RealSense into a confirmed USB3 port before starting**, per the depth-stability
+  note above.
+- Re-run `detect_handle_and_placement` + the manual-touch comparison after recalibrating,
+  to confirm the ~20cm error actually closes.
+- The approach-only reach test (compute a hover pose from the detected handle, command a
+  single Cartesian move, no grasp) was planned for this session but never attempted — correctly
+  deferred once the manual-touch comparison surfaced the calibration error; redo after
+  recalibration, not before.
+
+### End-of-session state
+
+Stopped cleanly, SIGINT-only throughout in this order: `arm_server.py` (arm disconnected
+cleanly), `realsense2_camera` (killed on exit, clean), `roscore`. No stale
+`/tmp/kinova.lock`, no leftover roscore/realsense/nodelet processes (one pre-existing
+defunct `[nodelet]` zombie from a prior session was already present at this session's
+start, unrelated, harmless). Container `feed-noetic` left running but idle. No motion was
+ever commanded to the arm this session — read-only `get_state()` only; all actual motion
+was the user manually moving the arm by hand.
+
+---
+
 ## 2026-07-22 (later) — Pachirisu: recurring USB controller failures block depth work; handle detection re-confirmed
 
 Follow-on session, same day as the calibration entry below. Goal was to run the repo's
