@@ -95,6 +95,49 @@ Serve the `dist/` folder from any static file server or point the robot's web se
 
 ---
 
+## Researcher intervention timer (port 8081)
+
+`launch_app.sh` (what the `launch_app` alias runs) starts this webapp **plus**
+`src/feeding_deployment/integration/researcher_timer.py` — a standalone Flask
+page at `http://192.168.1.2:8081` where the researcher timestamps
+interventions and explanations during a meal (events outside the system, so
+the robot can't log them itself). It writes append-only records to
+`log/<user>/day_NN/researcher_events.jsonl` on the robot's clock and depends
+on nothing (no roscore / rosbridge / run.py), since interventions happen
+exactly when the system is down. Ctrl-C on `launch_app` stops both servers.
+
+Total feeding time is then computed offline:
+
+```bash
+cd ../src/feeding_deployment/integration
+python compute_feeding_time.py --user <user>            # all days
+python compute_feeding_time.py --user <user> --day 3    # one day
+# feeding time = meal window - union(marked intervals)
+```
+
+---
+
+## Meal review — edit the log after the meal (port 8082)
+
+`launch_app.sh` starts `review_meal.py` in the background too, so it is always
+live at `http://192.168.1.2:8082` for the whole session — reopen a day's log in
+the browser to edit the note on each intervention / explanation / note, add
+entries you missed live, and write free-form end-of-meal notes and your own
+thoughts. (It can also be run standalone afterwards:)
+
+```bash
+cd ../src/feeding_deployment/integration
+python review_meal.py                 # then open http://192.168.1.2:8082
+```
+
+Pick a session, edit, and **Save**. Everything is written to a *separate*
+`log/<user>/day_NN/researcher_review.json`; the original append-only
+`researcher_events.jsonl` is never modified. The first open of a session is
+seeded from the original marks; after that it loads your saved review. Removing
+an entry tombstones it (`deleted: true`) rather than dropping it.
+
+---
+
 ## Useful ROS commands (debugging)
 
 ```bash

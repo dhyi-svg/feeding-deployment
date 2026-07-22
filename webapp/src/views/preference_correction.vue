@@ -30,8 +30,6 @@
           <div class="pref-q">
             <h1 class="pq">{{ current.label }}</h1>
             <p v-if="current.description" class="pref-sub">{{ current.description }}</p>
-            <p v-if="current.kind !== 'text'" class="pred">Predicted: <strong>{{ current.predicted }}</strong></p>
-            <p class="pref-help">Change it if this doesn't match what you'd like — the robot learns from each correction.</p>
           </div>
 
           <!-- Free-text dim (e.g. bite ordering): accept the predicted sentence, or write your own. -->
@@ -65,7 +63,7 @@
                 <img alt="clear" src="../assets/clear.png">
               </button>
             </div>
-            <p v-if="!userInteracted" class="cdown auto-note">Auto-confirming the predicted ordering in <span>{{ countdown }}s</span></p>
+            <p class="cdown auto-note" :class="{ 'cdown-hidden': userInteracted || !countdownTimer }">Auto-confirming the predicted ordering in <span>{{ countdown }}s</span></p>
           </div>
 
           <!-- Categorical dim: option chips. -->
@@ -82,7 +80,7 @@
                 <div class="och" v-if="selected === option">✓</div>
               </div>
             </div>
-            <p v-if="!userInteracted" class="cdown auto-note">Auto-confirming <em>{{ selected }}</em> in <span>{{ countdown }}s</span></p>
+            <p class="cdown auto-note" :class="{ 'cdown-hidden': userInteracted || !countdownTimer }">Auto-confirming <em>{{ selected }}</em> in <span>{{ countdown }}s</span></p>
           </div>
         </div>
 
@@ -123,6 +121,10 @@ export default {
       otherText: '',
       isRecognizingOther: false,
       recognitionOther: null,
+      // Set ONLY by the countdown-expiry path so the response carries
+      // user_action: 'tap' | 'autocontinue' (engaged vs passive confirms are
+      // otherwise indistinguishable to the robot -- needed for learning analysis).
+      autoSubmit: false,
       step: 0,
       total: 0,
       autocontinueSeconds: DEFAULT_AUTOCONTINUE_SECONDS,
@@ -145,8 +147,11 @@ export default {
     // Tell the backend we've mounted/subscribed so it can send the (non-latched)
     // step data without racing our subscription. Sent on every (re)connection.
     this.ros.on('connection', () => this.sendReady())
+    // any tap anywhere (incl. App.vue chrome/overlays outside .page) cancels auto-confirm
+    window.addEventListener('pointerdown', this.cancelAutocontinue, true)
   },
   beforeUnmount() {
+    window.removeEventListener('pointerdown', this.cancelAutocontinue, true)
     this.teardownRos()
   },
   beforeRouteLeave(to, from, next) {
@@ -163,12 +168,18 @@ export default {
     },
     restartCountdown() {
       this.clearCountdownTimer()
+      // A non-positive wait means "no autocontinue": leave the page unarmed and
+      // wait for the user (never reachable via the mealprep options today, but
+      // every other countdown page guards this and self-confirming preference
+      // questions would be the worst possible failure mode).
+      if (!Number.isFinite(this.autocontinueSeconds) || this.autocontinueSeconds <= 0) return
       this.countdown = this.autocontinueSeconds
       this.countdownTimer = setInterval(() => {
         if (this.countdown > 0) {
           this.countdown--
         } else {
           this.clearCountdownTimer()
+          this.autoSubmit = true
           this.confirmStep()
         }
       }, 1000)
@@ -321,9 +332,11 @@ export default {
         data: JSON.stringify({
           state: 'preference_correction_response',
           field: this.current.field,
-          value
+          value,
+          user_action: this.autoSubmit ? 'autocontinue' : 'tap'
         })
       }))
+      this.autoSubmit = false
       // Wait for the next step (or "done"); clear the current dim so the
       // waiting card shows until then.
       this.current = null
@@ -379,16 +392,6 @@ export default {
   color: var(--tm);
   line-height: 1.5;
   margin-top: 1vh;
-}
-
-.pred {
-  font-size: 2.3vh;
-  color: var(--tm);
-  margin-top: 1vh;
-}
-
-.pred strong {
-  color: var(--a2);
 }
 
 .pref-options {

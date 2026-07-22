@@ -1,4 +1,9 @@
 <?xml version="1.0"?>
+<!-- LEGACY (standalone description.launch / base_sensors.launch only): still
+     assumes the ZED owns odom (inverted zed->vention joint). The production
+     tree (combined.urdf.xacro via sensors.launch) flipped this Jul 2026 when
+     ekf_fused_imu_wheel took over odom->base. NEVER run these legacy launches
+     alongside sensors.launch: vention_base_link would get two TF parents. -->
 <robot name="my_robot">
 
   <!-- Root link -->

@@ -9,6 +9,7 @@ from relational_structs import (
 )
 from feeding_deployment.actions.base import (
     HighLevelAction,
+    TeleopTakeoverException,
     microwave_type,
     GripperFree,
     InFrontOf,
@@ -64,10 +65,7 @@ class PressMicrowaveButtonHLA(HighLevelAction):
         )
         return "press_microwave_button.yaml"
 
-    # manip_confirm_mode defaults to None so per-user behavior trees that
-    # predate the AskForManipulationConfirmation parameter still execute
-    # (today's wait-for-the-user button-detection page).
-    def press_microwave_button(self, speed: str, duration: float, manip_confirm_mode=None) -> None:
+    def press_microwave_button(self, speed: str, duration: float, manip_confirm) -> None:
         assert self.sim.held_object_name is None
 
         if self.robot_interface is not None:
@@ -87,11 +85,27 @@ class PressMicrowaveButtonHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.left_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.microwave_closeup_gaze_pos)
 
-        time.sleep(2.0) # wait for the robot to stabilize before perception
-        confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm_mode)
-        press_button_poses = self.perception_interface.perceive_button_pressing_poses(
-            web_interface=self.web_interface, confirm_mode=confirm_mode,
-            confirm_autocontinue_s=confirm_autocontinue_s)
+        self.settle_camera()
+        confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm)
+        try:
+            press_button_poses = self.perception_interface.perceive_button_pressing_poses(
+                web_interface=self.web_interface, confirm_mode=confirm_mode,
+                confirm_autocontinue_s=confirm_autocontinue_s)
+        except RuntimeError as e:
+            # Button detection failed (molmo/ngrok down, or no camera frames).
+            # Hand control to the user like the joint-limit path in base.py:
+            # they press the button themselves and choose "next" (skill counts
+            # as done -> FoodHeated) or "redo" (retry, tunnel may be back).
+            if self.web_interface is None:
+                raise
+            print(f"Button detection failed ({e}); handing control to the user.")
+            post_action = self._run_takeover_recovery_and_get_choice(
+                failure_context="button_detection_failure"
+            )
+            raise TeleopTakeoverException(
+                "Button detection failed; user recovered via teleop",
+                redo_current=(post_action == "redo"),
+            )
 
         self.move_to_joint_positions(self.sim.scene_description.fridge_door_staging_pos)
         self.close_gripper() # just in case the gripper is open

@@ -11,7 +11,7 @@
     <div class="bd">
       <div class="simple-confirm">
         <p>The robot has picked up the mouth wipe.<br>Click 'Continue' to wipe your mouth when ready.</p>
-        <p v-if="!userInteracted && countdown !== null" class="cdown">Auto-continuing in <span>{{ countdown }}s</span></p>
+        <p class="cdown" :class="{ 'cdown-hidden': userInteracted || countdown === null }">Auto-continuing in <span>{{ countdown }}s</span></p>
         <button class="btn lg amber" style="min-width:24vw" @click="redirectToChangeItem()">Continue</button>
       </div>
     </div>
@@ -32,12 +32,19 @@ export default {
       countdown: null,
       countdownInterval: null,
       userInteracted: false,
+      // Set ONLY on countdown expiry: responses carry user_action tap|autocontinue.
+      autoSubmit: false,
     }
   },
   mounted () {
     this.ros = new ROSLIB.Ros({ url: ROS_URL })
     this.initPublisher();
     this.initSubscriber()
+    // any tap anywhere (incl. App.vue chrome/overlays outside .page) cancels autocontinue
+    window.addEventListener('pointerdown', this.cancelAutocontinue, true)
+  },
+  beforeUnmount () {
+    window.removeEventListener('pointerdown', this.cancelAutocontinue, true)
   },
   beforeRouteLeave (to, from, next) {
     this.stopCountdown()
@@ -90,6 +97,7 @@ export default {
         } else {
           this.stopCountdown()
           // Unattended: confirm and let the transfer proceed.
+          this.autoSubmit = true
           this.redirectToChangeItem()
         }
       }, 1000);
@@ -122,10 +130,12 @@ export default {
         const message = new ROSLIB.Message({
           data: JSON.stringify({
             state: 'wipe_confirm_transfer',
-            status: 'confirm'
+            status: 'confirm',
+            user_action: this.autoSubmit ? 'autocontinue' : 'tap'
           })
         });
         this.publisher.publish(message);
+        this.autoSubmit = false;
       } else {
       }
     },

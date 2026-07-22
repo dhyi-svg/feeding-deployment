@@ -1,0 +1,21 @@
+# Params for the global_planner/GlobalPlanner plugin (base_global_planner in
+# navigation.launch, switched off the navfn default 2026-07-13). move_base
+# exposes this plugin under the "GlobalPlanner" namespace.
+GlobalPlanner:
+
+  # Cost model. Each cell scores ~ neutral_cost + cost_factor * costmap_cost,
+  # clamped at lethal_cost. cost_factor is the "detour" knob: higher -> paths
+  # bow further around obstacles, lower -> paths hug them. This trio is the
+  # well-tested set from the ROS Navigation Tuning Guide (Kaiyu Zheng) that
+  # yields an evenly-spread cost cloud; the bare GlobalPlanner defaults are
+  # cost_factor 0.8 / neutral_cost 50.
+  cost_factor: 0.55
+  neutral_cost: 66
+  lethal_cost: 253
+
+  # Dijkstra + quadratic approximation = navfn-equivalent expansion, so the
+  # switch off navfn only changes the cost model above, not the search.
+  use_dijkstra: true
+  use_quadratic: true
+  use_grid_path: false
+  old_navfn_behavior: false

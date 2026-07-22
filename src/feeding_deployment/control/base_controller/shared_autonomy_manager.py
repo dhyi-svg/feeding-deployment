@@ -217,15 +217,27 @@ class SharedAutonomyManager:
                     "human in control. Waiting for 'done' or 'resume'."
                 )
 
-            if done and state == TELEOP:
-                rospy.loginfo(
-                    "shared_autonomy_manager: DONE -> reporting SUCCEEDED "
-                    "(human-completed)."
+            if done:
+                if state == TELEOP:
+                    rospy.loginfo(
+                        "shared_autonomy_manager: DONE -> reporting SUCCEEDED "
+                        "(human-completed)."
+                    )
+                    self.server.set_succeeded(
+                        MoveBaseResult(), "Goal completed by human teleoperation."
+                    )
+                    return
+                # DONE while AUTONOMOUS: the takeover that should have preceded it
+                # never registered, so move_base still owns the goal and we cannot
+                # honestly claim a human completion. Don't fail the goal (the human
+                # may well have parked it fine), but surface the dropped takeover
+                # instead of swallowing DONE silently -- the caller (navigate.py)
+                # latches the Done on its own side and skips the confirm re-drive.
+                rospy.logwarn(
+                    "shared_autonomy_manager: DONE received while AUTONOMOUS -- no "
+                    "takeover was registered, so move_base still owns the goal. The "
+                    "takeover was likely dropped; ignoring this DONE."
                 )
-                self.server.set_succeeded(
-                    MoveBaseResult(), "Goal completed by human teleoperation."
-                )
-                return
 
             if cancel and state == TELEOP:
                 # Human ended the takeover without reaching the goal. Report

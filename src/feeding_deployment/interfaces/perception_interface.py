@@ -18,6 +18,13 @@ import copy
 LED_SERIAL_PORT = '/dev/serial/by-id/usb-UnexpectedMaker_FeatherS2_Neo_84722E753121-if00'
 LED_BAUD_RATE = 115200
 
+# Central fraction (per dimension) of the RealSense frame kept for pick-plate
+# detection + confirmation. The plate is ~always centered, so the periphery only adds
+# color-mask false positives and shrinks the plate on the confirm screen. 0.70 keeps
+# the central 70% of width and height (~49% of pixels). Applies ONLY to the pick-plate
+# (attachment) flow -- see _center_crop_rgbd / perceive_attachment_poses.
+ATTACHMENT_CROP_FRAC = 0.65
+
 try:
     import rospy
     from sensor_msgs.msg import JointState
@@ -215,6 +222,34 @@ class PerceptionInterface:
             -gripper_position,
         ]
         return joint_state
+
+    @staticmethod
+    def _center_crop_rgbd(rgb, depth, camera_info, frac=ATTACHMENT_CROP_FRAC):
+        """Center-crop RGB+depth to ``frac`` of each dimension and return a CameraInfo
+        copy whose principal point is shifted by the crop origin, so 3D deprojection is
+        numerically unchanged: for a full-frame pixel u with cropped index u-x0 and
+        cx' = cx - x0, (u-x0) - cx' == u - cx (fx/fy unchanged). detect_attachment then
+        runs, and draws its overlays, entirely in the cropped frame -- and the resulting
+        confirmation vis is the zoomed 70% view sent to the iPad.
+
+        Only the pick-plate (attachment) flow uses this. Returns
+        (rgb_c, depth_c, camera_info_c); a None/whole-frame input is returned unchanged.
+        """
+        if rgb is None or depth is None or camera_info is None or frac >= 1.0:
+            return rgb, depth, camera_info
+        h, w = rgb.shape[:2]
+        cw, ch = int(round(w * frac)), int(round(h * frac))
+        x0, y0 = (w - cw) // 2, (h - ch) // 2
+        rgb_c = rgb[y0:y0 + ch, x0:x0 + cw]
+        depth_c = depth[y0:y0 + ch, x0:x0 + cw]
+        # detect_attachment reads only camera_info.K (fx=K0, fy=K4, cx=K2, cy=K5);
+        # shift the principal point by the crop origin. Keep P consistent if present.
+        ci = copy.deepcopy(camera_info)
+        K = list(ci.K); K[2] -= x0; K[5] -= y0; ci.K = K
+        if getattr(ci, "P", None):
+            P = list(ci.P); P[2] -= x0; P[6] -= y0; ci.P = P
+        ci.width, ci.height = cw, ch
+        return rgb_c, depth_c, ci
 
     def get_camera_data(self):  # Rajat ToDo: Add return type
         cam_data = self._realsense.get_camera_data()
@@ -749,7 +784,7 @@ class PerceptionInterface:
 
             behind_pull_closing_waypoint = pull_closing_waypoints[-1]
             offset = np.eye(4)
-            offset[:3, 3] = np.array([0, 0.0, -0.03])
+            offset[:3, 3] = np.array([0, 0.0, -0.05])
             behind_pull_closing_waypoint_mat = self.pose_to_matrix(behind_pull_closing_waypoint) @ offset
             behind_pull_closing_waypoint = self.matrix_to_pose(behind_pull_closing_waypoint_mat)
 
@@ -817,6 +852,8 @@ class PerceptionInterface:
         if self.log_dir is not None:
             with open(self.log_dir / 'handle_opening_pos.pkl', 'wb') as f:
                 pickle.dump({"last_handle_poses": handle_poses}, f)
+            if self.data_logger is not None:
+                self.data_logger.snapshot_state_file(self.log_dir / 'handle_opening_pos.pkl')
         self.sync_rviz()
 
         return handle_poses
@@ -883,7 +920,12 @@ class PerceptionInterface:
         entry_cam = self._realsense.get_camera_data()
         pick_rgb = entry_cam.get("rgb_image")
         if pick_rgb is None:
-            pick_rgb = rgb_image
+            pick_rgb = rgb_image  # already cropped by the caller
+        else:
+            # Crop the picker image to the same ROI detection uses, so the user can't
+            # sample a color from a region that detection ignores.
+            pick_rgb, _, _ = self._center_crop_rgbd(
+                pick_rgb, entry_cam.get("depth_image"), entry_cam.get("camera_info"))
 
         # Land the user directly on pixel selection -- no initial detection/result is
         # pre-populated, so they pick a color first instead of having to Reset away
@@ -945,7 +987,11 @@ class PerceptionInterface:
                 fresh_info  = fresh_cam.get("camera_info")
                 fresh_depth = fresh_cam.get("depth_image")
                 if fresh_rgb is None or fresh_info is None or fresh_depth is None:
-                    fresh_rgb, fresh_info, fresh_depth = rgb_image, camera_info, depth_image
+                    fresh_rgb, fresh_info, fresh_depth = rgb_image, camera_info, depth_image  # already cropped
+                else:
+                    # Re-detect on the same central 70% ROI as the initial detection.
+                    fresh_rgb, fresh_depth, fresh_info = self._center_crop_rgbd(
+                        fresh_rgb, fresh_depth, fresh_info)
 
                 new_pose = self._attachment_perception.detect_attachment(
                     fresh_rgb, fresh_info, fresh_depth, handle_orientation,
@@ -999,15 +1045,9 @@ class PerceptionInterface:
         current_color = list(handle_color) if hasattr(handle_color, '__iter__') else handle_color
         current_range = float(color_range)
 
-        # Let the RealSense auto-exposure / auto-white-balance settle on this scene
-        # before the first detection. The robot has just moved to the detection pose,
-        # so the first frames are often mis-lit; detecting on them gives a dark frame
-        # that also throws off color picking. This waits once per call (i.e. once per
-        # microwave/fridge/table pickup) -- redo retries re-enter the loop below
-        # without re-waiting, and color-correction reruns are a separate method.
-        CAMERA_SETTLE_SECONDS = 5.0
-        time.sleep(CAMERA_SETTLE_SECONDS)
-
+        # No settle wait here: callers run Action.settle_camera() right after the
+        # last arm move -- redo/rerun re-detections happen without movement and
+        # must not re-wait.
         while True:
             attachment_pose = None
             last_rgb_image = None
@@ -1020,6 +1060,12 @@ class PerceptionInterface:
                 depth_image = cam_data["depth_image"]
 
                 if rgb_image is not None and camera_info is not None and depth_image is not None:
+                    # Center-crop to the pick-plate ROI: detection AND the confirmation
+                    # vis run on the central 70% of the frame (see _center_crop_rgbd).
+                    # The stored last_* frames are therefore already cropped and are used
+                    # as-is as the color-correction fallback below.
+                    rgb_image, depth_image, camera_info = self._center_crop_rgbd(
+                        rgb_image, depth_image, camera_info)
                     # Keep the newest valid frame even when detection fails, so a
                     # total failure below can still enter color correction with a
                     # usable fallback frame.
@@ -1152,6 +1198,8 @@ class PerceptionInterface:
         }
         with open(self.log_dir / 'attachment_poses.pkl', 'wb') as f:
             pickle.dump(attachment_poses, f)
+        if self.data_logger is not None:
+            self.data_logger.snapshot_state_file(self.log_dir / 'attachment_poses.pkl')
 
         return attachment_poses
 
@@ -1209,6 +1257,8 @@ class PerceptionInterface:
 
             with open(self.log_dir / 'sink_placement_poses.pkl', 'wb') as f:
                 pickle.dump(sink_placement_poses, f)
+            if self.data_logger is not None:
+                self.data_logger.snapshot_state_file(self.log_dir / 'sink_placement_poses.pkl')
 
         return sink_placement_poses
 
@@ -1283,6 +1333,8 @@ class PerceptionInterface:
 
             with open(self.log_dir / 'table_placement_poses.pkl', 'wb') as f:
                 pickle.dump(table_placement_poses, f)
+            if self.data_logger is not None:
+                self.data_logger.snapshot_state_file(self.log_dir / 'table_placement_poses.pkl')
 
         return table_placement_poses
 

@@ -1,0 +1,51 @@
+<launch>
+  <!-- Debug-only visualization aid: a standalone occupancy grid of cells the
+       lidars CURRENTLY mark as occupied — obstacle layer only, no static map,
+       no inflation. Overlay it on /map in RViz ("Lidar Cell Map" display,
+       costmap color scheme) to compare live lidar occupancy (purple cells)
+       against the frozen Cartographer map (grayscale). Completely separate
+       from move_base; running or killing this changes nothing in nav.
+
+       Publishes: /lidar_cell_map/costmap/costmap (nav_msgs/OccupancyGrid)
+
+       track_unknown_space stays false so unobserved cells render transparent
+       (occupancy 0) instead of covering the map in unknown-gray. -->
+  <node pkg="costmap_2d" type="costmap_2d_node" name="lidar_cell_map" output="screen">
+    <rosparam>
+      costmap:
+        global_frame: map
+        robot_base_frame: vention_base_link
+        update_frequency: 10.0
+        publish_frequency: 5.0
+        transform_tolerance: 0.5
+        rolling_window: true
+        width: 12.0
+        height: 12.0
+        resolution: 0.05
+        track_unknown_space: false
+        footprint: [[0.37, 0.295], [0.37, -0.295], [-0.37, -0.295], [-0.37, 0.295]]
+        plugins:
+          - {name: obstacle_layer, type: "costmap_2d::ObstacleLayer"}
+        obstacle_layer:
+          observation_sources: lidar_l lidar_r
+          lidar_l:
+            data_type: LaserScan
+            topic: /lidar_l/scan
+            marking: true
+            clearing: true
+            obstacle_range: 8.0
+            raytrace_range: 10.0
+            min_obstacle_height: -2.0
+            max_obstacle_height: 2.0
+          lidar_r:
+            data_type: LaserScan
+            topic: /lidar_r/scan
+            marking: true
+            clearing: true
+            obstacle_range: 8.0
+            raytrace_range: 10.0
+            min_obstacle_height: -2.0
+            max_obstacle_height: 2.0
+    </rosparam>
+  </node>
+</launch>

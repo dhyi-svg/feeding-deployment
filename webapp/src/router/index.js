@@ -61,6 +61,11 @@ const routes = [
     component: () => import('../views/plate_release_confirm.vue')
   },
   {
+    path: '/feeding_ready_confirm',
+    name: 'feeding_ready_confirm',
+    component: () => import('../views/feeding_ready_confirm.vue')
+  },
+  {
     path: '/gesture_test',
     name: 'gesture_test',
     component: () => import('../views/gesture_test.vue')
@@ -144,6 +149,16 @@ const routes = [
     path: '/nav_adjust_confirm',
     name: 'nav_adjust_confirm',
     component: () => import('../views/nav_adjust_confirm.vue')
+  },
+  {
+    path: '/survey',
+    name: 'survey',
+    component: () => import('../views/survey.vue')
+  },
+  {
+    path: '/thank_you',
+    name: 'thank_you',
+    component: () => import('../views/thank_you.vue')
   }
 ]
 

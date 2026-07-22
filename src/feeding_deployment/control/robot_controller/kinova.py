@@ -42,7 +42,7 @@ try:
     from kortex_api.UDPTransport import UDPTransport
 except ModuleNotFoundError:
     pass
-from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import Rotation as R, Slerp
 
 # for joint space compliant control
 from feeding_deployment.control.robot_controller.compliant_controller import CompliantController
@@ -569,9 +569,19 @@ class KinovaArm:
                 return True
 
 
-    def move_cartesian(self, xyz, xyz_quat, blocking=True):
+    def move_cartesian(self, xyz, xyz_quat, blocking=True, soft_stop=False):
 
         assert not self.cyclic_running, "Arm must be in high-level servoing mode"
+
+        # soft_stop: ease into the target instead of the abrupt reach_pose stop that makes
+        # the EE jerk. Run a short straight-line interpolation through the tapered waypoint
+        # path; if that trajectory can't be validated (or the pose is unavailable), fall
+        # through to the plain reach_pose below -- so this is never worse than a plain move.
+        if soft_stop:
+            traj = self._interpolate_cartesian_path(xyz, xyz_quat)
+            if traj is not None and self.move_cartesian_trajectory(traj, blocking):
+                return True
+            print("soft_stop: interpolated trajectory unavailable/invalid; using reach_pose")
 
         theta_xyz = R.from_quat(xyz_quat).as_euler("xyz")
 
@@ -599,6 +609,32 @@ class KinovaArm:
                 print("Cartesian movement completed")
                 return True
 
+    def _interpolate_cartesian_path(self, tgt_xyz, tgt_quat, spacing_m=0.03):
+        """Straight-line Cartesian interpolation from the current tool pose to the target,
+        returned as an (xyz, quat) list for move_cartesian_trajectory so a point-to-point
+        move can ease into its stop via the trajectory taper. Returns None (caller uses a
+        plain reach_pose) if the current pose is unavailable or the move is < 2 cm."""
+        try:
+            cur = np.asarray(self.get_state()["ee_pos"], dtype=float)
+        except Exception:
+            return None
+        if cur.shape[0] < 7:
+            return None
+        cur_pos, cur_quat = cur[:3], cur[3:7]
+        tgt_pos = np.asarray(tgt_xyz, dtype=float)
+        tgt_q = np.asarray(tgt_quat, dtype=float)
+        dist = float(np.linalg.norm(tgt_pos - cur_pos))
+        if dist < 0.02:  # tiny move: reach_pose is fine and too short to taper
+            return None
+        n = int(np.clip(round(dist / spacing_m), 3, 15))
+        slerp = Slerp([0.0, 1.0], R.from_quat([cur_quat, tgt_q]))
+        traj = []
+        for i in range(1, n + 1):  # exclude current pose; end exactly at the target
+            s = i / n
+            pos = (1.0 - s) * cur_pos + s * tgt_pos
+            traj.append((pos, slerp(s).as_quat()))
+        return traj
+
     def move_cartesian_trajectory(self, trajectory, blocking=True):
         assert not self.cyclic_running, "Arm must be in high-level servoing mode"
         assert len(trajectory) > 0, "Invalid trajectory"
@@ -610,6 +646,27 @@ class KinovaArm:
         waypoints.use_optimal_blending = False
 
         n = len(trajectory)
+
+        # --- Soft-landing deceleration taper -----------------------------------------
+        # This runs as CARTESIAN_WAYPOINT_TRAJECTORY, whose only velocity governor is the
+        # twist soft limit -- the Kinova API has no Cartesian acceleration limit, so a
+        # fast cruise decelerates abruptly into the final pose and the EE visibly jerks.
+        # CartesianWaypoint.maximum_{linear,angular}_velocity caps the per-waypoint speed,
+        # so we ramp it down over the last few waypoints: the arm eases into the goal
+        # while the cruise waypoints stay uncapped (= the full twist soft limit), leaving
+        # top speed unchanged. maximum_*_velocity == 0 means "use the soft limit". Tune
+        # ARRIVAL_* / TAPER_WAYPOINTS on-arm.
+        TAPER_WAYPOINTS = 4      # trailing waypoints to ramp the velocity down over
+        ARRIVAL_LINEAR = 0.04    # m/s at the final waypoint
+        ARRIVAL_ANGULAR = 10.0   # deg/s at the final waypoint
+        cruise_info = ControlConfig_pb2.ControlModeInformation()
+        cruise_info.control_mode = ControlConfig_pb2.CARTESIAN_WAYPOINT_TRAJECTORY
+        cruise = self.control_config.GetKinematicSoftLimits(cruise_info)
+        cruise_linear = cruise.twist_linear if cruise.twist_linear > 0 else 0.25
+        cruise_angular = cruise.twist_angular if cruise.twist_angular > 0 else 40.0
+        taper = min(TAPER_WAYPOINTS, n - 1) if n >= 2 else 0
+        positions = [np.asarray(p[0], dtype=float) for p in trajectory]
+
         for index, point in enumerate(trajectory):
             cartesian_pose = point[0]
             cartesian_quat = point[1]
@@ -628,7 +685,27 @@ class KinovaArm:
             if index == 0 or index == n - 1:
                 waypoint.cartesian_waypoint.blending_radius = 0.0
             else:
-                waypoint.cartesian_waypoint.blending_radius = 0.01
+                # Cap the blend to a fraction of the shorter adjacent segment so densely
+                # spaced (e.g. interpolated) waypoints don't trip "blending radius overlaps
+                # with previous waypoint". Well-spaced trajectories keep the usual 0.01 m.
+                seg = min(
+                    np.linalg.norm(positions[index] - positions[index - 1]),
+                    np.linalg.norm(positions[index + 1] - positions[index]),
+                )
+                waypoint.cartesian_waypoint.blending_radius = float(min(0.01, 0.4 * seg))
+
+            # Ramp the max velocity down over the last `taper` waypoints (linearly from
+            # cruise at the start of the taper to ARRIVAL_* at the final waypoint); leave
+            # earlier waypoints at 0 so they cruise at the full twist soft limit.
+            from_end = (n - 1) - index
+            if taper > 0 and from_end < taper:
+                frac = from_end / taper  # 0.0 at the final waypoint
+                waypoint.cartesian_waypoint.maximum_linear_velocity = (
+                    ARRIVAL_LINEAR + frac * (cruise_linear - ARRIVAL_LINEAR)
+                )
+                waypoint.cartesian_waypoint.maximum_angular_velocity = (
+                    ARRIVAL_ANGULAR + frac * (cruise_angular - ARRIVAL_ANGULAR)
+                )
 
         result = self.base.ValidateWaypointList(waypoints)
         if len(result.trajectory_error_report.trajectory_error_elements) != 0:
@@ -695,12 +772,18 @@ class KinovaArm:
     ):
         self.speed_preset = "custom"
         if cartesian:
-            joint_speed_soft_limits = ControlConfig_pb2.JointSpeedSoftLimits()
-            joint_speed_soft_limits.control_mode = (
-                ControlConfig_pb2.CARTESIAN_TRAJECTORY
-            )
-            joint_speed_soft_limits.joint_speed_soft_limits.extend(speed_limits)
-            self.control_config.SetJointSpeedSoftLimits(joint_speed_soft_limits)
+            # Cartesian moves execute as CARTESIAN_TRAJECTORY (reach_pose /
+            # move_cartesian) or CARTESIAN_WAYPOINT_TRAJECTORY (waypoint lists /
+            # move_cartesian_trajectory); cap the per-joint speed in both so neither
+            # path is bottlenecked.
+            for control_mode in (
+                ControlConfig_pb2.CARTESIAN_TRAJECTORY,
+                ControlConfig_pb2.CARTESIAN_WAYPOINT_TRAJECTORY,
+            ):
+                joint_speed_soft_limits = ControlConfig_pb2.JointSpeedSoftLimits()
+                joint_speed_soft_limits.control_mode = control_mode
+                joint_speed_soft_limits.joint_speed_soft_limits.extend(speed_limits)
+                self.control_config.SetJointSpeedSoftLimits(joint_speed_soft_limits)
         else:
             joint_speed_soft_limits = ControlConfig_pb2.JointSpeedSoftLimits()
             joint_speed_soft_limits.control_mode = ControlConfig_pb2.ANGULAR_TRAJECTORY
@@ -723,17 +806,57 @@ class KinovaArm:
         assert not self.cyclic_running, "Arm must be in high-level servoing mode to choose speed preset"
         assert speed_preset in ["low", "medium", "high"], "Invalid speed preset"
         
-        self.speed_preset = speed_preset
+        # Each preset sets the full velocity envelope -- joint-space AND end-effector
+        # -- so a tier feels similarly fast whether the robot is doing a joint move or a
+        # Cartesian move. joint accel keeps the historical 2x-of-speed ratio, and
+        # twist_linear (m/s) scales with the tier. EE twist-angular shares units (deg/s)
+        # with joint speed but runs at EE_ANGULAR_RATIO x joint speed -- a 1:1 match felt
+        # a touch fast, so it is scaled down (high tops out at 40 deg/s). NOTE: the twist
+        # ANGULAR limit only applies to CARTESIAN_WAYPOINT_TRAJECTORY
+        # (move_cartesian_trajectory) -- the reach_pose CARTESIAN_TRAJECTORY mode does not
+        # support it, so there EE rotation is capped by the cartesian-mode joint speed.
+        EE_ANGULAR_RATIO = 0.8
         if speed_preset == "low":
-            speed_limits = [12.5, 12.5, 12.5, 12.5, 12.5, 12.5, 12.5]
-            acceleration_limits = [25, 25, 25, 25, 25, 25, 25]
+            joint_speed, joint_accel, twist_linear = 30.0, 60.0, 0.15
         elif speed_preset == "medium":
-            speed_limits = [25, 25, 25, 25, 25, 25, 25]
-            acceleration_limits = [50, 50, 50, 50, 50, 50, 50]
-        else:
-            speed_limits = [50, 50, 50, 50, 50, 50, 50]
-            acceleration_limits = [100, 100, 100, 100, 100, 100, 100]
-        self.set_joint_limits(speed_limits, acceleration_limits)
+            joint_speed, joint_accel, twist_linear = 40.0, 80.0, 0.20
+        else:  # high
+            joint_speed, joint_accel, twist_linear = 50.0, 100.0, 0.25
+        twist_angular = EE_ANGULAR_RATIO * joint_speed
+
+        # Clamp everything to the arm's true kinematic hard limits -- a safety net
+        # that also guards against a units mismatch (e.g. if twist_angular were
+        # rad/s rather than the assumed deg/s, this caps it instead of overspeeding).
+        hard = self.control_config.GetKinematicHardLimits()
+        speed_limits = [min(joint_speed, hard.joint_speed_limits[i]) for i in range(self.actuator_count)]
+        acceleration_limits = [min(joint_accel, hard.joint_acceleration_limits[i]) for i in range(self.actuator_count)]
+        twist_linear = min(twist_linear, hard.twist_linear)
+        twist_angular = min(twist_angular, hard.twist_angular)
+
+        # Joint-space limits (governs move_angular / move_angular_trajectory). This is
+        # the historical behaviour and caps the dominant motion, so treat it as required.
+        self.set_joint_limits(speed_limits, acceleration_limits, cartesian=False)
+
+        # Cartesian-envelope limits (govern move_cartesian / move_cartesian_trajectory).
+        # Apply each independently: if the firmware rejects one (ERROR_DEVICE /
+        # METHOD_FAILED), log it and keep going rather than aborting the whole speed
+        # change -- the joint-space cap is already in place, so a rejected EE limit just
+        # falls back to the arm's previous/default value (no overspeed risk).
+        cartesian_limit_calls = (
+            ("cartesian-mode joint speeds", lambda: self.set_joint_limits(speed_limits, acceleration_limits, cartesian=True)),
+            ("twist linear limit (reach_pose)", lambda: self.set_twist_linear_limit(twist_linear, ControlConfig_pb2.CARTESIAN_TRAJECTORY)),
+            ("twist linear limit (waypoint trajectory)", lambda: self.set_twist_linear_limit(twist_linear, ControlConfig_pb2.CARTESIAN_WAYPOINT_TRAJECTORY)),
+            ("twist angular limit (waypoint trajectory)", lambda: self.set_twist_angular_limit(twist_angular, ControlConfig_pb2.CARTESIAN_WAYPOINT_TRAJECTORY)),
+        )
+        for label, call in cartesian_limit_calls:
+            try:
+                call()
+            except Exception as e:  # noqa: BLE001 -- surface which limit the arm refused
+                print(f"choose_from_speed_presets: arm refused {label}: {e}")
+
+        # set_joint_limits() sets speed_preset to "custom"; record the real preset last
+        # so get_speed_preset() reports the chosen tier.
+        self.speed_preset = speed_preset
 
     def get_speed_preset(self):
         return self.speed_preset
@@ -781,9 +904,11 @@ class KinovaArm:
                 control_mode_information
             )
 
-    def set_twist_linear_limit(self, limit):
+    def set_twist_linear_limit(self, limit, control_mode=None):
+        if control_mode is None:
+            control_mode = ControlConfig_pb2.CARTESIAN_TRAJECTORY
         twist_linear_soft_limit = ControlConfig_pb2.TwistLinearSoftLimit()
-        twist_linear_soft_limit.control_mode = ControlConfig_pb2.CARTESIAN_TRAJECTORY
+        twist_linear_soft_limit.control_mode = control_mode
         twist_linear_soft_limit.twist_linear_soft_limit = limit
         self.control_config.SetTwistLinearSoftLimit(twist_linear_soft_limit)
 
@@ -795,6 +920,27 @@ class KinovaArm:
         control_mode_information = ControlConfig_pb2.ControlModeInformation()
         control_mode_information.control_mode = ControlConfig_pb2.CARTESIAN_TRAJECTORY
         self.control_config.ResetTwistLinearSoftLimit(control_mode_information)
+
+    def set_twist_angular_limit(self, limit, control_mode=None):
+        # Only CARTESIAN_WAYPOINT_TRAJECTORY (and the joystick modes) accept a twist
+        # angular soft limit on this firmware -- CARTESIAN_TRAJECTORY rejects it with
+        # METHOD_FAILED ("Mode does not support twist angular limit"). Default to the
+        # waypoint-trajectory mode, which is what move_cartesian_trajectory executes as.
+        if control_mode is None:
+            control_mode = ControlConfig_pb2.CARTESIAN_WAYPOINT_TRAJECTORY
+        twist_angular_soft_limit = ControlConfig_pb2.TwistAngularSoftLimit()
+        twist_angular_soft_limit.control_mode = control_mode
+        twist_angular_soft_limit.twist_angular_soft_limit = limit
+        self.control_config.SetTwistAngularSoftLimit(twist_angular_soft_limit)
+
+    def set_max_twist_angular_limit(self):
+        limit = self.control_config.GetKinematicHardLimits().twist_angular
+        self.set_twist_angular_limit(limit)
+
+    def reset_twist_angular_limit(self):
+        control_mode_information = ControlConfig_pb2.ControlModeInformation()
+        control_mode_information.control_mode = ControlConfig_pb2.CARTESIAN_WAYPOINT_TRAJECTORY
+        self.control_config.ResetTwistAngularSoftLimit(control_mode_information)
 
     # Rajat ToDo: Check how the following work:
     def pause_action(self):

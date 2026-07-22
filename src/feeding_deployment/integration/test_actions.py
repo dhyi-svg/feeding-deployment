@@ -90,7 +90,7 @@ def test_PickPlateHLA(location, sim, robot_interface, perception_interface, rviz
 
     plate_obj = Object("plate", plate_type)
     location_obj = Object(location, table_type if location == "table" else appliance_type)
-    # Speed / HandleColor / ColorRange come from the behavior tree's parameter defaults.
+    # Speed / PlateHandleColor / PlateHandleColorTolerance come from the behavior tree's parameter defaults.
     high_level_action.execute_action(objects=[plate_obj, location_obj], params={})
 
 
@@ -246,7 +246,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--scene_config", type=str, default="vention")
-    parser.add_argument("--transfer_type", type=str, default="inside")
+    parser.add_argument("--transfer_type", type=str, default="outside")
     parser.add_argument("--run_on_robot", action="store_true")
     parser.add_argument("--use_interface", action="store_true")
     parser.add_argument("--simulate_head_perception", action="store_true")

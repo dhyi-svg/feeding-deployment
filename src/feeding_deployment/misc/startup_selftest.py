@@ -37,14 +37,14 @@ from std_msgs.msg import String
 LED_SERIAL_PORT = "/dev/serial/by-id/usb-UnexpectedMaker_FeatherS2_Neo_84722E753121-if00"
 LED_BAUD_RATE = 115200
 
-# The molmo URL is a rotating ngrok tunnel hard-coded in appliance_perception.py.
+# The molmo URL is a static ngrok domain hard-coded in appliance_perception.py.
 # We read it from there at runtime so this test tracks the real deployment value
 # instead of drifting out of date. This literal is only the last-resort fallback.
 APPLIANCE_PERCEPTION_PY = (
     Path(__file__).resolve().parent.parent
     / "perception" / "appliance_perception" / "appliance_perception.py"
 )
-MOLMO_URL_FALLBACK = "https://c0fd-128-84-97-177.ngrok-free.app/predict"
+MOLMO_URL_FALLBACK = "https://exponent-sediment-professed.ngrok-free.dev/predict"
 
 WEBAPP_TO_ROBOT_TOPIC = "/webapp_to_robot"   # iPad -> robot
 ROBOT_TO_WEBAPP_TOPIC = "/robot_to_webapp"   # robot -> iPad
@@ -120,7 +120,10 @@ def test_transfer_button(timeout_s):
     print("  and showing the 'Waiting for button press' prompt (as the real transfer does).")
     print(f"  >>> The iPad should show 'Waiting for button press'; press the button (timeout {timeout_s:.0f}s) ...")
 
-    to_robot = rospy.Publisher(ROBOT_TO_WEBAPP_TOPIC, String, queue_size=1)
+    # queue_size must cover the jump+arm+expl burst below: at 1, rospy's outbound
+    # queue drops the older messages and only 'explanation' reaches subscribers
+    # (the arm then only gets through by luck). WebInterface uses 10 for this topic.
+    to_robot = rospy.Publisher(ROBOT_TO_WEBAPP_TOPIC, String, queue_size=10)
     pressed = {"ok": False}
 
     def on_msg(msg):
@@ -217,6 +220,14 @@ def test_molmo(timeout_s):
         return False
 
     code = resp.status_code
+    # An ngrok error (ERR_NGROK_3200 etc.) means the tunnel itself is offline.
+    # ngrok serves these as HTTP 404, so check the header BEFORE trusting the
+    # status code -- otherwise a dead tunnel false-passes as "app answered 404".
+    ngrok_error = resp.headers.get("ngrok-error-code")
+    if ngrok_error:
+        print(f"  [x] HTTP {code} with ngrok-error-code={ngrok_error}: tunnel is OFFLINE.")
+        print("      Restart ngrok on the molmo machine, or the URL rotated in appliance_perception.py.")
+        return False
     # 502/503/504 from ngrok => tunnel is up but the molmo backend behind it isn't.
     if code in (502, 503, 504):
         print(f"  [x] HTTP {code}: tunnel reachable but molmo backend appears DOWN.")

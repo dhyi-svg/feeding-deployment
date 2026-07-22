@@ -715,6 +715,211 @@ class TestUpdateWritesLogs:
 
 
 # ===================================================================
+# Memory modes — three_layer / single_full_history / no_memory
+# ===================================================================
+
+
+class TestMemoryModes:
+    """The memory_mode backend switch inside PredictionModel. The staged
+    session / corrections / finalize flow is untouched; only the cross-day
+    memory a prediction sees differs per mode."""
+
+    @staticmethod
+    def _model(tmp_path, **kwargs):
+        from feeding_deployment.preference_learning.methods.prediction_model import (
+            PredictionModel,
+        )
+        return PredictionModel(
+            user="u", physical_profile_label="p",
+            logs_dir=tmp_path / "pref",
+            physical_profile_description="Test profile.",
+            **kwargs,
+        )
+
+    @staticmethod
+    def _ctx():
+        return {"meal": MEALS[0], "setting": SETTINGS[0], "time_of_day": TIMES_OF_DAY[0]}
+
+    @staticmethod
+    def _write_full_history_record(model, day: int, episode_text: str) -> None:
+        (model.full_history_memory_dir / f"day_{day:04d}.json").write_text(
+            json.dumps({"day": day, "episode_text": episode_text})
+        )
+
+    @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
+    @patch(f"{_PM_MODULE}.OpenAI")
+    def test_invalid_mode_raises(self, mock_openai_cls, _key, tmp_path):
+        with pytest.raises(ValueError, match="Unknown memory_mode"):
+            self._model(tmp_path, memory_mode="bogus")
+
+    @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
+    @patch(f"{_PM_MODULE}.OpenAI")
+    def test_booleans_rejected_outside_three_layer(self, mock_openai_cls, _key, tmp_path):
+        for mode in ("single_full_history", "no_memory"):
+            with pytest.raises(ValueError, match="three-layer"):
+                self._model(tmp_path, memory_mode=mode, use_long_term_memory=True)
+            with pytest.raises(ValueError, match="three-layer"):
+                self._model(tmp_path, memory_mode=mode, use_episodic_memory=False)
+
+    @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
+    @patch(f"{_PM_MODULE}.OpenAI")
+    def test_single_full_history_instantiates_only_full_history(
+        self, mock_openai_cls, _key, tmp_path
+    ):
+        model = self._model(tmp_path, memory_mode="single_full_history")
+        assert model.memory_mode == "single_full_history"
+        assert model.full_history_memory_model is not None
+        assert model.long_term_memory_model is None
+        assert model.episodic_memory_model is None
+        # No episodic retrieval -> no OpenAI embeddings client at all.
+        assert model.embed_client is None
+        mock_openai_cls.assert_not_called()
+        assert model.full_history_memory_dir.is_dir()
+
+    @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
+    @patch(f"{_PM_MODULE}.OpenAI")
+    def test_single_full_history_loads_all_prior_days(self, mock_openai_cls, _key, tmp_path):
+        model = self._model(tmp_path, memory_mode="single_full_history")
+        for d in (1, 2, 3):
+            self._write_full_history_record(model, d, f"day={d}; meal=eggs; preferences: ...")
+
+        model.load_prior_memory(3)  # strictly-before cutoff: day 3 excluded
+
+        block = model.full_history_memory_model.get_memory_block()
+        assert "day=1;" in block
+        assert "day=2;" in block
+        assert "day=3;" not in block
+
+    @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
+    @patch(f"{_PM_MODULE}.OpenAI")
+    def test_single_full_history_prompt_contains_all_days(
+        self, mock_openai_cls, _key, _mock_anthropic, tmp_path
+    ):
+        _mock_anthropic.messages.create.return_value = _fake_anthropic_response(_default_bundle())
+        model = self._model(tmp_path, memory_mode="single_full_history")
+        self._write_full_history_record(model, 1, "day=1; meal=eggs; preferences: ...")
+        self._write_full_history_record(model, 2, "day=2; meal=pasta; preferences: ...")
+        model.load_prior_memory(3)
+
+        model.predict_bundle(self._ctx(), {})
+
+        prompt = _mock_anthropic.messages.create.call_args.kwargs["messages"][0]["content"]
+        assert "=== FULL HISTORY MEMORY" in prompt
+        assert "day=1; meal=eggs" in prompt
+        assert "day=2; meal=pasta" in prompt
+        assert "SEMANTIC MEMORY" not in prompt
+        assert "EPISODIC MEMORY" not in prompt
+        assert "3. FULL HISTORY MEMORY" in prompt
+
+    @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
+    @patch(f"{_PM_MODULE}.OpenAI")
+    def test_single_full_history_update_writes_both_memories(
+        self, mock_openai_cls, _key, _mock_anthropic, tmp_path
+    ):
+        model = self._model(tmp_path, memory_mode="single_full_history")
+        ctx = self._ctx()
+        bundle = _default_bundle()
+        corrected = {PREF_FIELDS[0]: PREF_OPTIONS[PREF_FIELDS[0]][-1]}
+
+        model.update(day=1, context=ctx, corrected=corrected, ground_truth_bundle=bundle)
+
+        # No LTM summarization call in this mode.
+        _mock_anthropic.messages.create.assert_not_called()
+
+        fh_file = model.full_history_memory_dir / "day_0001.json"
+        assert fh_file.exists()
+        data = json.loads(fh_file.read_text())
+        assert data["day"] == 1
+        assert data["context"] == ctx
+        assert data["corrected"] == corrected
+        assert data["episode_text"].startswith("day=1;")
+        assert set(data["ground_truth_bundle"]) == set(PREF_FIELDS)
+
+        # working_memory stays the canonical finalize marker in every mode.
+        assert (model.working_memory_dir / "day_0001.json").exists()
+        assert model.existing_days() == {1}
+        # And the in-memory history now feeds the next prediction.
+        assert data["episode_text"] in model.full_history_memory_model.get_memory_block()
+
+    @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
+    @patch(f"{_PM_MODULE}.OpenAI")
+    def test_no_memory_prompt_and_update(self, mock_openai_cls, _key, _mock_anthropic, tmp_path):
+        _mock_anthropic.messages.create.return_value = _fake_anthropic_response(_default_bundle())
+        model = self._model(tmp_path, memory_mode="no_memory")
+        assert model.long_term_memory_model is None
+        assert model.episodic_memory_model is None
+        assert model.full_history_memory_model is None
+
+        model.predict_bundle(self._ctx(), {})
+        prompt = _mock_anthropic.messages.create.call_args.kwargs["messages"][0]["content"]
+        assert "(no prior memory)" in prompt
+        assert "SEMANTIC MEMORY" not in prompt
+        assert "EPISODIC MEMORY" not in prompt
+        assert "FULL HISTORY MEMORY" not in prompt
+        assert "=== WORKING MEMORY" in prompt  # live state survives in every mode
+
+        model.update(day=1, context=self._ctx(), corrected={}, ground_truth_bundle=_default_bundle())
+        user_dir = tmp_path / "pref" / "u"
+        assert (user_dir / "working_memory" / "day_0001.json").exists()
+        for sub in ("long_term_memory", "episodic_memory", "full_history_memory"):
+            assert not (user_dir / sub).exists()
+
+    @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
+    @patch(f"{_PM_MODULE}.OpenAI")
+    def test_default_mode_resolution(self, mock_openai_cls, _key, tmp_path):
+        from feeding_deployment.preference_learning.methods.prediction_model import (
+            DEFAULT_MEMORY_MODE,
+        )
+        assert DEFAULT_MEMORY_MODE == "single_full_history"
+        # Bare construction resolves to the default backend ...
+        model = self._model(tmp_path)
+        assert model.memory_mode == "single_full_history"
+        # ... but passing a three-layer sub-ablation boolean implies three_layer
+        # (backward-compatible with pre-memory_mode callers).
+        model = self._model(
+            tmp_path, use_long_term_memory=False, use_episodic_memory=False
+        )
+        assert model.memory_mode == "three_layer"
+        assert model.full_history_memory_model is None
+
+    @patch(f"{_PM_MODULE}._resolve_api_key", return_value="fake-key")
+    @patch(f"{_PM_MODULE}.OpenAI")
+    def test_three_layer_prompt_unchanged(self, mock_openai_cls, _key, _mock_anthropic, tmp_path):
+        # Three-layer mode: both layers on, prompt keeps the semantic + episodic
+        # blocks and the original priority ordering.
+        mock_client = MagicMock()
+        mock_client.embeddings.create.return_value = MagicMock(
+            data=[MagicMock(embedding=[0.1] * 1536)]
+        )
+        mock_openai_cls.return_value = mock_client
+        _mock_anthropic.messages.create.return_value = _fake_anthropic_response(_default_bundle())
+
+        model = self._model(tmp_path, memory_mode="three_layer")
+        assert model.memory_mode == "three_layer"
+        assert model.long_term_memory_model is not None
+        assert model.episodic_memory_model is not None
+        assert model.full_history_memory_model is None
+
+        model.predict_bundle(self._ctx(), {})
+        prompt = _mock_anthropic.messages.create.call_args.kwargs["messages"][0]["content"]
+        assert "=== SEMANTIC MEMORY" in prompt
+        assert "=== EPISODIC MEMORY" in prompt
+        assert "FULL HISTORY MEMORY" not in prompt
+        assert "3. EPISODIC MEMORY" in prompt
+        assert "4. SEMANTIC MEMORY" in prompt
+
+    def test_full_history_max_days_keeps_most_recent(self):
+        from feeding_deployment.preference_learning.methods.full_history_memory import (
+            FullHistoryMemoryModel,
+        )
+        m = FullHistoryMemoryModel(max_days=2)
+        m.load_history(["e1", "e2"])
+        m.add_episode("e3")
+        assert m.get_memory_block() == "e2\n\ne3"
+        assert FullHistoryMemoryModel().get_memory_block() == ""
+
+
+# ===================================================================
 # Terminal interaction: context collection + preference correction
 # ===================================================================
 

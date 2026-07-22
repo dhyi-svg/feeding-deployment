@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import abc
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -15,6 +16,7 @@ import string
 import traceback
 import re
 import inspect
+import uuid
 
 import yaml
 
@@ -77,6 +79,11 @@ import feeding_deployment.perception.gestures_perception.static_gesture_detector
 # able to preempt a blocking move (verify on hardware); without preemption it
 # still works, just at the next move boundary. Set False to disable entirely.
 MID_SKILL_TAKEOVER_ENABLED = True
+
+# Wait after the last arm move to a perception config before capturing, so the
+# RealSense auto-exposure / auto-white-balance settles on the new scene (the
+# first frames after a large viewpoint change are often mis-lit).
+CAMERA_SETTLE_SECONDS = 5.0
 
 # Things the robot can hold.
 object_type = Type("object")
@@ -142,7 +149,6 @@ class HighLevelAction(abc.ABC):
         gesture_detectors_dir: Path,
         register_gesture_detector=None,
         load_synthesized_gestures=None,
-        get_autocontinue_seconds=None,
     ) -> None:
         self.sim = sim
         self.robot_interface = robot_interface
@@ -159,10 +165,6 @@ class HighLevelAction(abc.ABC):
         self.gesture_detectors_dir = gesture_detectors_dir
         self.register_gesture_detector = register_gesture_detector
         self.load_synthesized_gestures = load_synthesized_gestures
-        # Zero-arg callable returning the current autocontinue timeout in
-        # seconds (wired by run.py to the preference session's
-        # wait_before_autocontinue_seconds); None -> HLA-specific fallback.
-        self.get_autocontinue_seconds = get_autocontinue_seconds
         # NOTE: assuming 7-dof and that first 7 entries are arm joints (not gripper).
         self.arm_joint_lower_limits = self.sim.robot.joint_lower_limits[:7]
         self.arm_joint_upper_limits = self.sim.robot.joint_upper_limits[:7]
@@ -430,7 +432,7 @@ class HighLevelAction(abc.ABC):
         if not np.isclose(norm, 1.0, atol=1e-3):
             raise ValueError(f"Invalid EE-pose quaternion (norm {norm:.4f}, expected unit): {pose.orientation}")
 
-    def move_to_ee_pose(self, pose: Pose) -> None:
+    def move_to_ee_pose(self, pose: Pose, soft_stop: bool = False) -> None:
 
         plan = None
         # if not self.no_waits:
@@ -439,7 +441,14 @@ class HighLevelAction(abc.ABC):
             self.sim.visualize_plan(plan)
         else:
             self._validate_ee_pose(pose)
-            self.execute_robot_command(CartesianCommand(pos=pose.position, quat=pose.orientation), plan)
+            # soft_stop (opt-in): ease into the target instead of the abrupt reach_pose stop,
+            # by routing through a short interpolated tapered trajectory (falls back to
+            # reach_pose if it can't be validated). OFF by default -- a multi-waypoint move
+            # can feel stop-and-go on fast free-space reaches -- so enable it per-call only
+            # where the eased stop matters (e.g. the fridge pregrasp).
+            self.execute_robot_command(
+                CartesianCommand(pos=pose.position, quat=pose.orientation, soft_stop=soft_stop), plan
+            )
 
     def move_to_ee_pose_trajectory(self, traj: list[Pose]) -> None:
 
@@ -475,33 +484,49 @@ class HighLevelAction(abc.ABC):
         else:
             self.execute_robot_command(CloseGripperCommand())
 
-    def _confirm_autocontinue_seconds(self) -> float:
-        """Countdown for confirmation pages in autocontinue mode, from the live
-        wait_before_autocontinue_seconds preference (the provider run.py injects
-        into every HLA); 20 s when no preference session is wired in."""
-        provider = getattr(self, "get_autocontinue_seconds", None)
-        if provider is None:
-            return 20.0
+    @contextmanager
+    def low_speed(self, restore: str):
+        """Run a safety-critical section at "low" arm speed, restoring ``restore`` on exit.
+
+        Sets the arm to "low" on entry and back to ``restore`` when the block
+        exits -- including if the wrapped code raises -- so a fault mid-section
+        can never leave the arm stuck at low speed. A no-op when there is no real
+        robot (``robot_interface`` is None).
+        """
+        if self.robot_interface is None:
+            yield
+            return
+        self.robot_interface.set_speed("low")  # safety boundary
         try:
-            return float(provider())
-        except Exception:
-            return 20.0
+            yield
+        finally:
+            self.robot_interface.set_speed(restore)  # safety boundary
 
-    def _confirm_page_args(self, confirm_mode) -> tuple:
-        """Normalize a confirmation-mode BT param value into
+    def _confirm_page_args(self, confirm) -> tuple:
+        """Decode a single sentinel-encoded confirmation BT param into
         ``(mode, autocontinue_seconds)`` for the detection/confirmation pages.
-        None (per-user YAML predating the param) means today's blocking
-        behavior (mode 2); autocontinue seconds are only non-zero in mode 1."""
-        mode = 2 if confirm_mode is None else int(confirm_mode)
-        return mode, (self._confirm_autocontinue_seconds() if mode == 1 else 0.0)
 
-    def confirm_plate_release(self, location: str, confirm_mode=None) -> None:
+        The confirm dims (confirm_navigation_arrival / confirm_manipulation /
+        confirm_feeding_pickup) each write ONE float param: -1 = skip the page,
+        0 = show and wait for the user, >0 = show and count down that many
+        seconds. This returns the legacy (mode, seconds) tuple the pages consume
+        -- mode 0 = skip, 1 = autocontinue (seconds>0), 2 = wait -- so the web
+        interface / perception layer are unchanged. None -> wait (mode 2)."""
+        if confirm is None:
+            return 2, 0.0
+        confirm = float(confirm)
+        if confirm < 0:
+            return 0, 0.0
+        if confirm == 0:
+            return 2, 0.0
+        return 1, confirm
+
+    def confirm_plate_release(self, location: str, confirm) -> None:
         """Confirm plate release on the webapp per confirm_manipulation; no-op in sim.
 
-        ``confirm_mode`` (AskForManipulationConfirmation BT param): 0 = release
-        without asking, 1 = page with autocontinue (timeout => release), 2 = wait
-        for the user. None (per-user YAML predating the param) keeps today's
-        wait-for-the-user behavior.
+        ``confirm`` (ManipulationConfirm BT param, sentinel-encoded per
+        _confirm_page_args): skip = release without asking, wait = block for the
+        user, countdown = page with autocontinue (timeout => release).
 
         Deliberately no try/except: a WebInterfaceTakeoverInterrupt raised while
         blocked must propagate to execute_action, which converts it into the
@@ -509,11 +534,10 @@ class HighLevelAction(abc.ABC):
         """
         if self.web_interface is None:
             return
-        mode = 2 if confirm_mode is None else int(confirm_mode)
+        mode, autocontinue_s = self._confirm_page_args(confirm)
         if mode == 0:
             print(f"Plate release at {location}: confirmation disabled by preference; releasing.")
             return
-        autocontinue_s = self._confirm_autocontinue_seconds() if mode == 1 else 0.0
         self.web_interface.get_plate_release_confirmation(location, autocontinue_s)
 
     def reset_wrist(self) -> None:
@@ -540,6 +564,13 @@ class HighLevelAction(abc.ABC):
         if self.robot_interface is None or self.web_interface is None:
             print("Manual teleop recovery requested but robot/web interface is unavailable; skipping.")
             return None
+        # Stamp every teleop session with a unique id so its log rows can be
+        # joined to the skill it interrupted (previously session_id was always
+        # null -- no call site passed one). All teleop entry points funnel
+        # through here, so defaulting it once covers them all. Timestamp prefix
+        # keeps the id sortable and human-readable in the log.
+        if session_id is None:
+            session_id = f"{time.strftime('%Y%m%dT%H%M%S')}_{uuid.uuid4().hex[:8]}"
         from feeding_deployment.actions.teleop_recovery import TeleopRecoverySession
         session = TeleopRecoverySession(
             robot_interface=self.robot_interface,
@@ -577,6 +608,37 @@ class HighLevelAction(abc.ABC):
 
     def pause(self, duration: float) -> None:
         time.sleep(duration)
+
+    def settle_camera(self, seconds: float = CAMERA_SETTLE_SECONDS) -> None:
+        """Wait after the last arm move before a perception capture so the
+        RealSense auto-exposure/white-balance settles on the new scene.
+        Call-site only (right after movement) -- webapp redo/rerun
+        re-detections happen without movement and must not re-wait.
+        No-op in simulation (no robot)."""
+        if self.robot_interface is not None:
+            time.sleep(seconds)
+
+    def log_camera_image(self, name: str, settle_s: float = 0.0, **metadata: Any) -> None:
+        """Capture the current RealSense color frame and save it via the data logger.
+
+        ``settle_s`` waits before grabbing the frame so auto-exposure can settle
+        after a large viewpoint change. No-op in simulation (no robot) or when
+        the data logger is absent; never raises -- logging must not abort a skill.
+        """
+        if self.robot_interface is None or self.perception_interface is None:
+            return
+        try:
+            if settle_s > 0:
+                time.sleep(settle_s)
+            color_image, _, _ = self.perception_interface.get_camera_data()
+            if color_image is None:
+                print(f"No camera frame available to log image '{name}'.")
+                return
+            data_logger = getattr(self.perception_interface, "data_logger", None)
+            if data_logger is not None:
+                data_logger.log_image(name, color_image, **metadata)
+        except Exception as e:  # noqa: BLE001
+            print(f"Failed to log camera image '{name}': {e}")
 
     def wait_for_gesture(self, gesture_fn_name: str) -> None:
         static_gestures = inspect.getmembers(static_gesture_detectors, inspect.isfunction)

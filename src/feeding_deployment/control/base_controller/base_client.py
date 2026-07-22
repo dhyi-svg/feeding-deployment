@@ -31,3 +31,9 @@ class BaseInterfaceClient:
 
     def stop(self):
         return self._base_interface.stop()
+
+    def get_encoders(self):
+        """Encoder snapshot dict or None (see VentionBase.read_encoders).
+        Raises AttributeError if the NUC is still running a pre-encoder
+        base_server (the proxy's exposed list comes from the server)."""
+        return self._base_interface.get_encoders()

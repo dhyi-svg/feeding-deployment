@@ -16,7 +16,7 @@
               <div class="tc-i"><img src="../assets/for.png" alt="Bite"></div>
               <div class="tc-l">Take a Bite</div>
             </div>
-            <p v-if="!autocontinueCancelled" class="cdown">Auto-confirming in <span>{{ countdown }}s</span></p>
+            <p class="cdown" :class="{ 'cdown-hidden': autocontinueCancelled || !countdownInterval }">Auto-confirming in <span>{{ countdown }}s</span></p>
           </div>
           <div class="tc" @click="handleButtonClickR">
             <div class="tc-i"><img src="../assets/drin.png" alt="Sip"></div>
@@ -46,22 +46,29 @@ export default {
     return {
       ros: null,
       username: USER,
-      countdown: 1000,
+      // Armed ONLY by the backend's auto_time message (see handleRosMessage):
+      // a missed/dropped auto_time means no countdown and the page waits for
+      // the user -- never a default countdown that could ghost-fire.
+      countdown: null,
       countdownInterval: null,
       // Set when the user opens the settings overlay: cancels the on-screen
       // autocontinue for this page visit (not re-engaged on close).
       autocontinueCancelled: false,
+      // Set ONLY on countdown expiry: responses carry user_action tap|autocontinue.
+      autoSubmit: false,
     }
   },
   mounted () {
     this.ros = new ROSLIB.Ros({ url: ROS_URL })
-    this.startCountdown();
     this.initSubscriber()
     this.initPublisher()
     window.addEventListener('settings-open', this.onSettingsOpen)
+    // any tap anywhere (incl. App.vue chrome/overlays outside .page) cancels autocontinue
+    window.addEventListener('pointerdown', this.cancelAutocontinue, true)
   },
   beforeUnmount () {
     window.removeEventListener('settings-open', this.onSettingsOpen)
+    window.removeEventListener('pointerdown', this.cancelAutocontinue, true)
     if (this.countdownInterval) {
       clearInterval(this.countdownInterval);
       this.countdownInterval = null;
@@ -93,6 +100,7 @@ export default {
           this.countdown -= 1;
         } else {
           clearInterval(this.countdownInterval);
+          this.autoSubmit = true;
           this.handleButtonClick();
         }
       }, 1000);
@@ -130,9 +138,15 @@ export default {
             this.countdownInterval = null;
           }
 
-          this.countdown = parseInt(parsedMessage.status, 10);
-
-          this.startCountdown();
+          const secs = parseInt(parsedMessage.status, 10);
+          if (!Number.isFinite(secs) || secs <= 0) {
+            // "no autocontinue" preference: cancel the mount-time default
+            // countdown and hide the line; the page waits for the user.
+            this.autocontinueCancelled = true;
+          } else {
+            this.countdown = secs;
+            this.startCountdown();
+          }
         }
         const route = routeMap[parsedMessage.state]?.[parsedMessage.status];
         if (route) {
@@ -170,10 +184,12 @@ export default {
       const message = new ROSLIB.Message({
         data: JSON.stringify({
           state: 'task_selection',
-          status: 'take_bite'
+          status: 'take_bite',
+          user_action: this.autoSubmit ? 'autocontinue' : 'tap'
         })
       })
       this.publisher.publish(message);
+      this.autoSubmit = false;
     },
     publishMessagePhysical() {
       const message = new ROSLIB.Message({

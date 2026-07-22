@@ -99,6 +99,20 @@ class BaseInterface:
             print(f"Error in stop: {e}")
             raise Exception(f"Error in stop: {str(e)}") from None
 
+    def get_encoders(self):
+        """Read-only encoder snapshot (or None -- see VentionBase.read_encoders).
+
+        Deliberately NOT bulldog-gated: reading counts is safe and useful even
+        while base commands are locked. Never touches serial on this path --
+        it returns the reader thread's cached snapshot, so RPC pollers (e.g.
+        wheel_odom_publisher at 20 Hz) cannot perturb the command link.
+        """
+        try:
+            return self.base.read_encoders()
+        except Exception as e:
+            print(f"Error in get_encoders: {e}")
+            raise Exception(f"Error in get_encoders: {str(e)}") from None
+
     def emergency_stop(self):
         """Latched stop. Stays in effect until base_server is restarted."""
         if self.emergency_stop_active:

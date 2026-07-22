@@ -1,0 +1,44 @@
+<launch>
+  <!-- Drift-trace OBSERVER only: the map-anchored trace comparator
+       (+ optional dedicated RViz window and rosbag).
+
+       Safe to run ALONGSIDE the full production stack (sensors +
+       cartographer + navigation.launch + shared_autonomy.launch): no node
+       names or topics overlap; these nodes only observe. Lock/re-lock the
+       anchor anytime with:
+         rosrun feeding_deployment drift_lock.py
+       Traces appear in vention.rviz under the "Drift traces" group (or pass
+       rviz:=true for the dedicated top-down window from the drift test).
+
+       NOTE: /wheel_odom comes from sensors.launch (wheel_odom_publisher is
+       part of the authoritative fused-odometry stack there since Jul 2026;
+       do NOT start a second copy here).
+
+       zed_drift_test.launch includes this file and adds its own drive
+       pieces (teleop/bridge/cartographer) for the standalone teleop-only
+       test. ZED VIO trace topics retired 2026-07-15 (IMU-only ZED). -->
+
+  <arg name="rviz"    default="false"/>
+  <arg name="record"  default="false"/>
+  <arg name="log_dir"
+       default="$(find feeding_deployment)/src/feeding_deployment/integration/log/system_logs"/>
+
+  <!-- The tracer: /drift_test/{carto,wheel,fused_imu_wheel}_path + anchor.
+       Draws nothing until /drift_test/lock (see drift_lock.py). -->
+  <node pkg="feeding_deployment"
+        type="drift_trace_compare.py"
+        name="drift_trace_compare"
+        output="screen"/>
+
+  <node if="$(arg rviz)" pkg="rviz" type="rviz" name="drift_test_rviz"
+        args="-d $(find feeding_deployment)/rviz/drift_test.rviz"/>
+
+  <!-- Optional bag for post-analysis (no images, no Path topics; traces are
+       reconstructable from the odoms + tf + anchor). -->
+  <node if="$(arg record)" pkg="rosbag" type="record" name="drift_test_record"
+        args="record -o $(arg log_dir)/drift_test
+              /tf /tf_static /cmd_vel_teleop
+              /odometry/fused_imu_wheel
+              /wheel_odom /wheel_odom/counts /wheel_odom/side_disagreement
+              /drift_test/anchor /lidar_r/scan /lidar_l/scan"/>
+</launch>

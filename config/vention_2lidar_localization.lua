@@ -27,6 +27,16 @@ options = {
   pose_publish_period_sec = 0.01,
   trajectory_publish_period_sec = 0.05,
 
+  -- Post-date the published map->odom TF by 50 ms so move_base/TEB, which looks
+  -- up map->odom at a global plan freshly stamped ros::Time::now(), never asks
+  -- for a transform ~1 ms ahead of Cartographer's freshest stamp. That future-
+  -- extrapolation was self-locking the controller for the full 15 s
+  -- controller_patience and aborting goals (session_20260713_173433, table
+  -- refinement replan). 50 ms is ~30x the measured 1.5 ms max deficit; at our
+  -- 0.05 m/s cap the correction lands <=2.5 mm early. Needs the custom Cartographer
+  -- option tf_publish_lookahead_sec (cartographer_ws fork). 0.0/absent = upstream.
+  tf_publish_lookahead_sec = 0.05,
+
   rangefinder_sampling_ratio = 1.0,
   odometry_sampling_ratio = 1.0,
   imu_sampling_ratio = 0.0,

@@ -53,11 +53,11 @@ import { ROS_URL, USER } from '@/config/parameterConfig'
 import { skillLabel } from '@/config/skillLabels'
 import { categoryOf } from '@/config/skillCategories'
 
-// Takeover driving is human-supervised, so these are intentionally faster than
-// the autonomy's TEB limits (0.2 m/s / 0.5 rad/s). Published on /cmd_vel_teleop,
-// which the cmd_vel bridge executes with priority and without the ZED hold gate.
-const MAX_LIN = 0.6
-const MAX_ANG = 1.0
+// Takeover driving is human-supervised, kept above the autonomy's TEB limits.
+// Teleop cap 0.10 m/s / 0.1667 rad/s (2026-07-10, 5/3 ratio). Published on
+// /cmd_vel_teleop, executed with priority and without the ZED hold gate.
+const MAX_LIN = 0.10
+const MAX_ANG = 0.1667
 const SEND_HZ = 10
 const R = 96
 const KCENTER = 96

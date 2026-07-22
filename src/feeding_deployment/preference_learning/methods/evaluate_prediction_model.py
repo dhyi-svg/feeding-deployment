@@ -17,7 +17,7 @@ from feeding_deployment.preference_learning.methods.utils import (
     _retry_on_rate_limit,
 )
 
-from feeding_deployment.preference_learning.methods.prediction_model import PredictionModel
+from feeding_deployment.preference_learning.methods.prediction_model import PredictionModel, MEMORY_MODES, DEFAULT_MEMORY_MODE
 from feeding_deployment.preference_learning.methods.utils import PREF_FIELDS
 from feeding_deployment.utils.llm_config import PREDICTION_CLAUDE_MODEL
 
@@ -46,7 +46,19 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--openai-model", default=PREDICTION_CLAUDE_MODEL)
     p.add_argument("--embed-model", default="text-embedding-3-small")
-    p.add_argument("--ablation", choices=["full", "ltm_only", "em_only", "no_memory"], default="full")
+    p.add_argument(
+        "--memory-mode", choices=list(MEMORY_MODES), default=None,
+        help="Memory backend (PredictionModel.memory_mode); matches run.py's "
+             "--pref_memory_mode so offline comparisons mirror deployment. "
+             f"Default: {DEFAULT_MEMORY_MODE} (a non-'full' --ablation implies "
+             "its mode instead).",
+    )
+    p.add_argument(
+        "--ablation", choices=["full", "ltm_only", "em_only", "no_memory"], default="full",
+        help="Three-layer sub-ablation (which of LTM/EM to enable); implies/"
+             "requires --memory-mode three_layer. 'no_memory' is a legacy "
+             "alias for --memory-mode no_memory.",
+    )
     p.add_argument("--days", type=int, default=0, help="Evaluate only the first N days (0 = use all days in dataset).")
 
     return p.parse_args()
@@ -80,9 +92,29 @@ def main() -> int:
 
     logs_dir = report_dir / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
-    
-    use_long_term_memory = args.ablation not in ("em_only", "no_memory")
-    use_episodic_memory = args.ablation not in ("ltm_only", "no_memory")
+
+    # An unset --memory-mode resolves from the ablation (ltm_only/em_only are
+    # three-layer sub-ablations; no_memory is the legacy alias for that mode)
+    # and otherwise falls back to the deployment default.
+    memory_mode = args.memory_mode
+    if args.ablation == "no_memory":
+        if memory_mode not in (None, "three_layer", "no_memory"):
+            raise SystemExit("--ablation no_memory conflicts with --memory-mode " + memory_mode)
+        memory_mode = "no_memory"
+    elif args.ablation != "full":
+        if memory_mode is None:
+            memory_mode = "three_layer"
+        elif memory_mode != "three_layer":
+            raise SystemExit("--ablation ltm_only/em_only only applies to --memory-mode three_layer")
+    if memory_mode is None:
+        memory_mode = DEFAULT_MEMORY_MODE
+
+    # The LTM/EM booleans are three-layer sub-ablations; the other modes derive
+    # them internally and reject explicit values.
+    memory_kwargs: Dict[str, Any] = {"memory_mode": memory_mode}
+    if memory_mode == "three_layer":
+        memory_kwargs["use_long_term_memory"] = args.ablation != "em_only"
+        memory_kwargs["use_episodic_memory"] = args.ablation != "ltm_only"
 
     try:
         user_reports: List[Dict[str, Any]] = []
@@ -143,9 +175,8 @@ def main() -> int:
                     embed_model=args.embed_model,
                     retry_fn=_retry_on_rate_limit,
                     logs_dir=logs_dir,
-                    use_long_term_memory=use_long_term_memory,
-                    use_episodic_memory=use_episodic_memory,
                     k_retrieve=args.k_retrieve,
+                    **memory_kwargs,
                 )
 
                 meals_this_rollout = 0
@@ -322,6 +353,7 @@ def main() -> int:
                 {
                     "users": user_reports,
                     "run_timestamp": run_ts,
+                    "memory_mode": memory_mode,
                     "ablation": args.ablation,
                     "k_retrieve": args.k_retrieve,
                     "num_rollouts": args.num_rollouts,

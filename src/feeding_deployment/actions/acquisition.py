@@ -91,7 +91,7 @@ class AcquireBiteHLA(HighLevelAction):
         assert table.name == "table"
         return "acquire_bite.yaml"
     
-    def acquire_bite(self, speed: str, dipping_depth: float, skewering_depth: float, skewering_orientation: str, autocontinue_timeout: float, ask_confirmation: bool) -> None:
+    def acquire_bite(self, speed: str, dipping_depth: float, skewering_depth: float, skewering_orientation: str, bite_selection_autocontinue_seconds: float, pickup_confirm) -> None:
 
         # assert self.sim.held_object_name == "utensil"
 
@@ -106,9 +106,14 @@ class AcquireBiteHLA(HighLevelAction):
 
         # self.move_to_joint_positions(self.sim.scene_description.before_transfer_pos) # leads to safer motion
         self.move_to_joint_positions(self.sim.scene_description.above_plate_pos)
+        self.settle_camera()
 
         consecutive_failed_detections = 0
+        data_logger = getattr(self.perception_interface, "data_logger", None)
         while True:
+            # One bite_event per acquisition attempt, accumulated across the
+            # branches below and emitted after the skill runs (or errors).
+            bite_event: dict = {}
             if self.wrist_interface is not None:
                 self.wrist_interface.set_velocity_mode()
                 self.wrist_interface.reset()
@@ -239,6 +244,13 @@ class AcquireBiteHLA(HighLevelAction):
                     print(" --- Next Food Item Prediction:", next_action_prediction['labels_list'][next_action_prediction['food_id']])
                     print(" --- Next Action Prediction:", next_action_prediction['action_type'])
 
+                    bite_event.update(
+                        predicted_item=next_food_item,
+                        predicted_action=next_action_prediction['action_type'],
+                        plate_items=dict(zip(items_detection['labels_list'],
+                                             items_detection['category_list'])),
+                    )
+
                     # remove next_food_item from data
                     solid_food_type_to_data = {}
                     for id in range(0, len(items_detection['labels_list'])):
@@ -270,7 +282,7 @@ class AcquireBiteHLA(HighLevelAction):
                     n_dip_food_types = len(dip_data)
 
                     if self.web_interface is not None:
-                        skill_type, skill_params, dip_type = self.web_interface.get_next_bite_selection(items_detection['plate_image'], n_food_types, data, predicted_bite, n_dip_food_types, dip_data, autocontinue_timeout=autocontinue_timeout)   
+                        skill_type, skill_params, dip_type = self.web_interface.get_next_bite_selection(items_detection['plate_image'], n_food_types, data, predicted_bite, n_dip_food_types, dip_data, autocontinue_timeout=bite_selection_autocontinue_seconds)
                     else:
                         # params must be set to the autonomously selected values
                         skill_type = "autonomous"
@@ -291,6 +303,11 @@ class AcquireBiteHLA(HighLevelAction):
                     mask = food_type_to_masks[food_type][item_id]
                     skill = food_type_to_skill[food_type]
 
+                    bite_event.update(
+                        mode="autonomous", chosen_item=food_type, skill=skill,
+                        dip=None if dip_type == "No dip" else dip_type,
+                    )
+
                     if skill == "Skewer":
                         skewer_point, skewer_angle = self.flair.inference_server.get_skewer_action(mask)
                         if skewering_orientation == "horizontal":
@@ -298,13 +315,15 @@ class AcquireBiteHLA(HighLevelAction):
                         skill_success = self.food_manipulation_skill_library.skewering_skill(camera_color_data, camera_depth_data, camera_info_data, keypoint = skewer_point, major_axis = skewer_angle, skewering_depth=skewering_depth)
                     elif skill == "Scoop":
                         raise NotImplementedError("Scoop skill not yet implemented")
-                    
+                    bite_event["skewer_success"] = bool(skill_success)
+
                     if dip_type != "No dip" and skill_success:
                         self.flair.update_bite_history(dip_type)
                         dip_mask = food_type_to_masks[dip_type][0]
                         dip_point = self.flair.inference_server.get_dip_action(dip_mask)
                         self.food_manipulation_skill_library.robot_reset()
                         skill_success = self.food_manipulation_skill_library.dipping_skill(camera_color_data, camera_depth_data, camera_info_data, keypoint = dip_point, dipping_depth=dipping_depth)
+                        bite_event["dip_success"] = bool(skill_success)
                 
                 elif skill_type == "manual_skewering":
 
@@ -332,7 +351,9 @@ class AcquireBiteHLA(HighLevelAction):
                     skewer_center = (point_x, point_y)
                     skewer_angle = -np.pi/2
 
-                    skill_success = self.food_manipulation_skill_library.skewering_skill(camera_color_data, camera_depth_data, camera_info_data, keypoint = skewer_center, major_axis = skewer_angle, skewering_depth=skewering_depth)            
+                    bite_event.update(mode="manual_skewering",
+                                      point=[point_x, point_y])
+                    skill_success = self.food_manipulation_skill_library.skewering_skill(camera_color_data, camera_depth_data, camera_info_data, keypoint = skewer_center, major_axis = skewer_angle, skewering_depth=skewering_depth)
                 elif skill_type == "manual_scooping":
                     raise NotImplementedError("Scoop skill not yet implemented")
                 elif skill_type == "manual_dipping":
@@ -360,11 +381,25 @@ class AcquireBiteHLA(HighLevelAction):
 
                     dip_point = (point_x, point_y)
 
+                    bite_event.update(mode="manual_dipping",
+                                      point=[point_x, point_y])
                     skill_success = self.food_manipulation_skill_library.dipping_skill(camera_color_data, camera_depth_data, camera_info_data, keypoint = dip_point, dipping_depth=dipping_depth)
+
+                # The bite-level agency record: one event per attempt, logged
+                # only when a skill actually ran (mode set above; a page jump
+                # that dispatched nothing logs nothing). Joins to this
+                # detection's images by folder=acquire_bite + epoch.
+                if data_logger is not None and "mode" in bite_event:
+                    data_logger.log_event("bite_event", success=bool(skill_success),
+                                          **bite_event)
 
                 self.move_to_joint_positions(self.sim.scene_description.above_plate_pos)
                 if not skill_success:
                     print("Skill failed. Retrying ...")
+                    # The loop re-captures next iteration and the arm just moved
+                    # back above the plate; not on the success path, which would
+                    # delay the bite hand-off.
+                    self.settle_camera()
                     continue
             except Exception as e:
                 print(
@@ -373,24 +408,28 @@ class AcquireBiteHLA(HighLevelAction):
                     else f"Failed to acquire bite: {type(e).__name__} (no message)"
                 )
                 traceback.print_exc()
+                if data_logger is not None and bite_event:
+                    data_logger.log_event("bite_event", success=False,
+                                          error=f"{type(e).__name__}: {e}",
+                                          **bite_event)
                 continue
             
-            # ask_confirmation (TransferAskForConfirmation, from the
-            # confirm_feeding_pickup preference): 0 = skip the page, 1 = show
-            # with autocontinue (timeout => confirm), 2 = wait for the user.
-            if self.web_interface is not None and ask_confirmation:
-                autocontinue_s = (
-                    self._confirm_autocontinue_seconds()
-                    if int(ask_confirmation) == 1 else 0.0
-                )
-                get_success_confirmation = self.web_interface.get_successful_food_acquisition_confirmation(autocontinue_s)
+            # pickup_confirm (PickupConfirm, from the confirm_feeding_pickup
+            # preference): sentinel-encoded -> (mode, seconds). mode 0 = skip the
+            # page, 1 = autocontinue (seconds>0, timeout => confirm), 2 = wait.
+            pickup_mode, pickup_autocontinue_s = self._confirm_page_args(pickup_confirm)
+            if self.web_interface is not None and pickup_mode != 0:
+                get_success_confirmation = self.web_interface.get_successful_food_acquisition_confirmation(pickup_autocontinue_s)
                 if get_success_confirmation:
                     break
             else:
                 break
 
-        # set the wrist controller to always keep utensil horizontal
+        # set the wrist controller to always keep utensil horizontal; slowly
+        # bring the twirl DoF back to neutral first, otherwise the horizontal-
+        # spoon controller position-snaps it from the skewer angle.
         if self.wrist_interface is not None:
+            self.wrist_interface.twirl_to_neutral()
             self.wrist_interface.start_horizontal_spoon_thread()
 
         return []

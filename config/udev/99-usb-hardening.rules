@@ -1,0 +1,22 @@
+# USB hardening for the arm RealSense and the devices it shares the PCH xHCI
+# controller (0000:00:14.0) with.
+#
+# The arm-mounted RealSense D435i can stall its depth stream; the realsense2
+# nodelet's USBDEVFS_CLEAR_HALT recovery then escalates to a controller-wide
+# reset that tears down and re-enumerates both lidars. Disabling USB autosuspend
+# on these devices keeps a transient from suspending/flapping them and widening
+# that blast radius. (The ZED is on a separate controller and already has its
+# autosuspend disabled via 99-slabs.rules — it is intentionally not touched here.)
+#
+# Install: copy to /etc/udev/rules.d/ and `udevadm control --reload-rules`
+# (scripts/usb_hardening.sh does this and also applies it live).
+
+# Intel RealSense D435i
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="8086", ATTR{idProduct}=="0b3a", TEST=="power/control", ATTR{power/control}="on"
+
+# Silicon Labs CP210x UART bridges (the two lidars)
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="10c4", ATTR{idProduct}=="ea60", TEST=="power/control", ATTR{power/control}="on"
+
+# Realtek USB hubs carrying the lidar tree on the PCH controller
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="0bda", ATTR{idProduct}=="5411", TEST=="power/control", ATTR{power/control}="on"
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="0bda", ATTR{idProduct}=="0411", TEST=="power/control", ATTR{power/control}="on"

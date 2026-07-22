@@ -40,7 +40,7 @@ INTER_DELAY="${INTER_DELAY:-5}"                   # after cartographer (6), befo
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
 INTEGRATION_DIR="$HOME/deployment_ws/src/feeding-deployment/src/feeding_deployment/integration"
-MAP_FILE="$HOME/deployment_ws/src/feeding-deployment/maps/aimee-7-1.pbstream"
+MAP_FILE="$HOME/deployment_ws/src/feeding-deployment/maps/aimee-7-15-2.pbstream"
 
 # Shared pane-logging helper (deployed on both machines via the repo).
 SCRIPT_DIR="$(dirname "$SELF")"
@@ -55,7 +55,26 @@ CMD4='launch_utensil'
 CMD5='launch_watchdog'
 CMD6="roslaunch feeding_deployment cartographer_localization.launch load_state_filename:=$MAP_FILE"
 CMD7='roslaunch feeding_deployment shared_autonomy.launch'
-CMD8='python run.py --user bohan_jun27 --run_on_robot --use_interface --resume_from_state 21_stow_utensil --no_waits --day 1'
+CMD8='python run.py --user aimee --run_on_robot --use_interface --no_waits --day 1'
+
+# Drift-trace tooling, PRE-TYPED (never auto-run) in a separate 'trace' window
+# (see build_trace_window). Two panes because drift_lock.py needs its own stdin
+# (roslaunch gives nodes none) and the trace launch runs continuously.
+# drift_traces.launch standalone IS correct now: the fused_odom_observer
+# ablation harness was DELETED 2026-07-15 (it fed on ZED VIO, retired with
+# IMU-only ZED), which also removes the jul13 name-collision hazard.
+# NOTE: an already-running tmux server keeps the OLD
+# pre-typed text -- kill the trace window and rebuild after changing this.
+TRACE_CMD_LAUNCH='roslaunch feeding_deployment drift_traces.launch record:=true'
+TRACE_CMD_LOCK='rosrun feeding_deployment drift_lock.py'
+
+# Dataset recording tooling, PRE-TYPED (never auto-run) in a 'recording' window
+# (see build_recording_window). Panes in execution order: TOP = pre-meal checks
+# (disk/clock/rates/SVO + interactive peripherals self-test; fire BEFORE run.py
+# -- LED serial contention), BOTTOM = per-meal rosbag recorders (fire once
+# preflight passes).
+RECORD_CMD="$SCRIPT_DIR/record_meal.sh"
+PREFLIGHT_CMD="$SCRIPT_DIR/preflight_check.sh"
 
 # ----- 'logger' tmux session (separate from 'feeding') ---------------------- #
 # Two stacked panes: top = system near-hang watchdog, bottom = ROS sensor logger.
@@ -83,7 +102,7 @@ NUC_REPO="${NUC_REPO:-/home/emprise/feeding-deployment}"
 NUC_SESS_ROOT="$NUC_REPO/src/feeding_deployment/integration/log/system_logs"
 # Use `python` for both (the workspace/conda interpreter active in every pane).
 # Both scripts mkdir their output dir, so log/system_logs/ is created as needed.
-CMD_HEALTH="python $INTEGRATION_DIR/compute_health_monitor.py --no-kill --window-seconds $LOGGER_CYCLE --logfile $LOGGER_LOG_DIR/health_monitor.log"
+CMD_HEALTH="python $INTEGRATION_DIR/compute_health_monitor.py --no-kill --no-sound --no-popup --window-seconds $LOGGER_CYCLE --logfile $LOGGER_LOG_DIR/health_monitor.log"
 # Distinct 'sensorlog_' prefix so the prune can NEVER match the existing
 # 'sensor_diag_*' analysis runs (or anything else) in the log dir.
 CMD_SENSORLOG="until rostopic list >/dev/null 2>&1; do sleep 3; done; while true; do python $SAFETY_DIR/sensor_diag_logger.py --duration $LOGGER_CYCLE --outdir $LOGGER_LOG_DIR/sensorlog_\$(date +%Y%m%d_%H%M%S); ls -dt $LOGGER_LOG_DIR/sensorlog_* 2>/dev/null | tail -n +$((LOGGER_KEEP+1)) | xargs -r rm -rf; done"
@@ -128,12 +147,58 @@ build_logger_session() {
   echo "Built tmux session '$LOGGER_SESSION' (health / sensors / nav_diag; ${LOGGER_CYCLE}s rolling)."
 }
 
+# Build a separate 'trace' window in the feeding session with the drift-trace
+# commands PRE-TYPED (no Enter). It's a distinct window so it never disturbs the
+# 2x4 bringup grid or the 'prefix + r' restart (both scoped to the main window).
+# Idempotent: leaves an existing 'trace' window alone.
+build_trace_window() {
+  tmux has-session -t "$SESSION" 2>/dev/null || return 0
+  if tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qx trace; then
+    return 0
+  fi
+  local top bot
+  top="$(tmux new-window -d -t "$SESSION:" -n trace -P -F '#{pane_id}')"
+  bot="$(tmux split-window -v -t "$top" -P -F '#{pane_id}')"
+  tmux select-layout -t "$SESSION:trace" even-vertical
+  tmux set-option -w -t "$SESSION:trace" pane-border-status top
+  tmux set-option -w -t "$SESSION:trace" pane-border-format ' #{pane_title} '
+  tmux select-pane -t "$top" -T 'drift_traces.launch'
+  tmux send-keys   -t "$top" "$TRACE_CMD_LAUNCH"          # pre-typed, NO Enter
+  tmux select-pane -t "$bot" -T 'drift_lock.py'
+  tmux send-keys   -t "$bot" "$TRACE_CMD_LOCK"            # pre-typed, NO Enter
+  echo "Built 'trace' window (drift_traces.launch + drift_lock.py pre-typed; nothing run)."
+}
+
+# Build a 'recording' window: top pane = per-meal rosbag recorders, bottom pane
+# = pre-flight checks. Both PRE-TYPED (no Enter) like the rest of the bringup.
+# Distinct window so it never disturbs the 2x4 grid or 'prefix + r'.
+# Idempotent: leaves an existing 'recording' window alone.
+build_recording_window() {
+  tmux has-session -t "$SESSION" 2>/dev/null || return 0
+  if tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qx recording; then
+    return 0
+  fi
+  local top bot
+  top="$(tmux new-window -d -t "$SESSION:" -n recording -P -F '#{pane_id}')"
+  bot="$(tmux split-window -v -t "$top" -P -F '#{pane_id}')"
+  tmux select-layout -t "$SESSION:recording" even-vertical
+  tmux set-option -w -t "$SESSION:recording" pane-border-status top
+  tmux set-option -w -t "$SESSION:recording" pane-border-format ' #{pane_title} '
+  tmux select-pane -t "$top" -T 'preflight_check.sh'
+  tmux send-keys   -t "$top" "$PREFLIGHT_CMD"             # pre-typed, NO Enter
+  tmux select-pane -t "$bot" -T 'record_meal.sh'
+  tmux send-keys   -t "$bot" "$RECORD_CMD"                # pre-typed, NO Enter
+  echo "Built 'recording' window (preflight_check.sh + record_meal.sh pre-typed; nothing run)."
+}
+
 # ----- session-logging helpers ---------------------------------------------- #
 # Fresh per-run bundle; point current_session at it; prune old bundles.
 new_bundle() {
   local stamp bundle
   stamp="$(printf '%(%Y%m%d_%H%M%S)T' -1)"
-  bundle="$SESS_ROOT/session_$stamp"
+  # Optional run label (set via SESSION_LABEL env, e.g. from the feeding_start
+  # alias) appended to the bundle name for easy identification later.
+  bundle="$SESS_ROOT/session_${stamp}${SESSION_LABEL:+_$SESSION_LABEL}"
   mkdir -p "$bundle/compute/tmux" "$bundle/compute/ros" "$bundle/nuc"
   printf '%(%Y-%m-%dT%H:%M:%S)T' -1 > "$bundle/.started_iso"
   # Point current_session at the new bundle. If a stray REAL dir sits there,
@@ -371,6 +436,8 @@ do_build() {
 
   if (( ! fresh )); then
     echo "session '$SESSION' already exists -- attaching."
+    build_trace_window
+    build_recording_window
     attach_or_switch
   fi
 
@@ -421,6 +488,8 @@ do_build() {
 
   echo "Built tmux session '$SESSION' (2x4 grid; commands pre-typed, no Enter)."
   echo "Restart bottom row (5-8) anytime with 'prefix + r'."
+  build_trace_window
+  build_recording_window
   attach_or_switch
 }
 

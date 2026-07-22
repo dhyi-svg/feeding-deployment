@@ -178,8 +178,11 @@ export default {
       username: USER,
       countdownInterval: null,
       countdownCancelled: false,
-      countdownText: "Auto-confirming in 15s",
-      countdown: 1000,
+      // Armed ONLY by the backend's auto_time message (see handleRosMessage):
+      // a missed/dropped auto_time means no countdown and the page waits for
+      // the user -- never a default countdown that could ghost-fire.
+      countdownText: "",
+      countdown: null,
       Pwidth: 0,
       Pheight: 0,
       BoxWRatio: 0,
@@ -269,6 +272,9 @@ export default {
       imageHeight2: 1,
       activeIndex: null,
       previousSelectedOption: null,
+      // Set ONLY on countdown expiry: the acquire_food response carries
+      // user_action tap|autocontinue.
+      autoSubmit: false,
     }
   },
   watch: {
@@ -293,12 +299,13 @@ export default {
     this.initPublisher()
     this.sizeCheckInterval = setInterval(this.checkSizes, 500);
     this.initSubscriber()
-    this.startCountdown();
     this.publishMessageOnLoad()
     window.addEventListener('resize', this.getImageDimensions)
     // Opening the settings overlay cancels the autocontinue for this visit (reuses
     // the same stopCountdown the user's own interaction triggers).
     window.addEventListener('settings-open', this.stopCountdown)
+    // any tap anywhere (incl. App.vue chrome/overlays outside .page) stops autocontinue
+    window.addEventListener('pointerdown', this.stopCountdown, true)
     this.activeIndex = 0
   },
   beforeUnmount () {
@@ -309,6 +316,7 @@ export default {
 
     window.removeEventListener('resize', this.getImageDimensions)
     window.removeEventListener('settings-open', this.stopCountdown)
+    window.removeEventListener('pointerdown', this.stopCountdown, true)
   },
   beforeRouteLeave (to, from, next) {
     if (this.countdownInterval) {
@@ -353,6 +361,7 @@ export default {
           this.updateCountdownText();
         } else {
           clearInterval(this.countdownInterval);
+          this.autoSubmit = true;
           this.redirectToChangeItem();
         }
       }, 1000);
@@ -415,15 +424,23 @@ export default {
           // resurrect the auto-continue the user just dismissed (the timer would
           // expire and publish acquire_food).
           if (!this.countdownCancelled) {
-            if (this.countdownInterval) {
-              clearInterval(this.countdownInterval);
-              this.countdownInterval = null;
+            const secs = parseInt(parsedMessage.status, 10);
+            if (!Number.isFinite(secs) || secs <= 0) {
+              // "no autocontinue" preference: cancel the mount-time default
+              // countdown (sets countdownCancelled, clears the text); the
+              // page waits for the user to pick a bite.
+              this.stopCountdown();
+            } else {
+              if (this.countdownInterval) {
+                clearInterval(this.countdownInterval);
+                this.countdownInterval = null;
+              }
+
+              this.countdown = secs;
+              this.updateCountdownText();
+
+              this.startCountdown();
             }
-
-            this.countdown = parseInt(parsedMessage.status, 10);
-            this.updateCountdownText();
-
-            this.startCountdown();
           }
         } else {
         }
@@ -768,11 +785,13 @@ export default {
           data: JSON.stringify({
             state: 'bite_selection',
             status: 'acquire_food',
-            data: [this.currentItem.name, this.selectedBox + 1] 
+            data: [this.currentItem.name, this.selectedBox + 1],
+            user_action: this.autoSubmit ? 'autocontinue' : 'tap'
           })
         });
 
         this.publisher.publish(message);
+        this.autoSubmit = false;
       } else {
       }
       if (this.selectedOption !== null && this.selectedOption !== 0) {

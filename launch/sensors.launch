@@ -9,6 +9,9 @@
   <arg name="map_frame"         default="map"/>
   <arg name="camera_name"       default="zed_mini"/>
   <arg name="camera_base_frame" default="zed_mini_base_link"/>
+  <!-- Record raw ZED stereo+IMU to SVO for the navigation dataset (see the
+       IMU-only ZED block below). -->
+  <arg name="zed_svo_record"    default="true"/>
 
   <!-- ===== Lidar poses w.r.t. vention_base_link ===== -->
   <arg name="lidar_r_x"   default="0.2575"/>
@@ -71,37 +74,150 @@
     </node>
   </group>
 
-  <!-- ===== ZED Mini VIO odometry (from base_sensors.launch) ===== -->
-  <!-- The ZED publishes odom -> zed_mini_base_link.
-       Combined URDF provides zed_mini_base_link -> vention_base_link -> world -> base_link chain.
-       NOTE: Must explicitly set base_frame to zed_mini_base_frame (not the default base_link)
-             to avoid TF conflict with robot_state_publisher's world -> base_link. -->
+  <!-- ===== ZED Mini (passive witness; publishes NO TF) ===== -->
+  <!-- Since Jul 2026 the fused wheel+IMU EKF (ekf_fused_imu_wheel, below) owns
+       odom -> vention_base_link. The ZED's VIO odom TOPIC keeps publishing
+       (drift traces / sanitizer / health monitor witness) but publish_tf=false
+       keeps its estimate out of the TF tree entirely.
+
+       The camera MOUNT transform (vention_base_link -> zed_mini_base_link,
+       measured +0.3176/0/+0.386) is owned by the ZED's own description
+       publisher via base_frame + cam_pos_* below; it is deliberately NOT in
+       combined.urdf.xacro (two static publishers of the same child frame
+       fight, last-writer-wins -> "unconnected trees"; bit us 2026-07-13 when
+       the wrapper's default base_frame:=base_link rooted the camera under an
+       orphan frame).
+
+       NOTE the nodelet reads general/base_frame (pos_tracking/base_frame is
+       NOT a real param); it must stay zed_mini_base_link so the odom topic's
+       child_frame_id and the camera_center->base lookup
+       (getCamera2BaseTransform) keep their semantics. -->
   <include file="$(find zed_wrapper)/launch/zedm.launch">
     <arg name="camera_name"  value="$(arg camera_name)"/>
     <arg name="camera_model" value="zedm"/>
+    <arg name="base_frame"   value="vention_base_link"/>
+    <arg name="cam_pos_x"    value="0.3176"/>
+    <arg name="cam_pos_z"    value="0.386"/>
   </include>
 
-  <param name="/$(arg camera_name)/zed_node/pos_tracking/publish_tf"     value="true"/>
+  <param name="/$(arg camera_name)/zed_node/pos_tracking/publish_tf"     value="false"/>
   <param name="/$(arg camera_name)/zed_node/pos_tracking/publish_map_tf" value="false"/>
   <param name="/$(arg camera_name)/zed_node/pos_tracking/odometry_frame" value="$(arg odom_frame)"/>
   <param name="/$(arg camera_name)/zed_node/pos_tracking/map_frame"      value="$(arg map_frame)"/>
-  <param name="/$(arg camera_name)/zed_node/pos_tracking/base_frame"     value="$(arg camera_base_frame)"/>
+  <param name="/$(arg camera_name)/zed_node/general/base_frame"          value="$(arg camera_base_frame)"/>
+  <!-- Disable ZED spatial memory / loop closure. With area_memory on, the SDK
+       detects previously-visited areas and applies discrete pose corrections.
+       Those corrections land in the map/pose output (map->odom), NOT the odom
+       topic; since publish_map_tf=false and we consume /zed_node/odom, they are
+       mostly unused anyway, but keeping it off guarantees no loop-closure
+       machinery runs and saves SDK compute. Also ensure no saved map is
+       loaded/re-saved (both already default off in common.yaml). -->
+  <param name="/$(arg camera_name)/zed_node/pos_tracking/area_memory"              value="false"/>
+  <param name="/$(arg camera_name)/zed_node/pos_tracking/save_area_memory_db_on_exit" value="false"/>
+  <param name="/$(arg camera_name)/zed_node/pos_tracking/area_memory_db_path"      value=""/>
+  <param name="/$(arg camera_name)/zed_node/pos_tracking/floor_alignment"          value="false"/>
+  <!-- Constrain VIO to the ground plane: fix z=0, roll=pitch=0. Under bright
+       light (sunlight/flashlight) the ZED loses visual features and its 6-DOF
+       pose drifts OUT OF PLANE (observed: z->-0.77 m, pitch ~-52 deg, frame
+       flips), which Cartographer then absorbs into map->odom. This clamps the
+       out-of-plane DOF so odom stays planar. NOTE: does NOT constrain yaw;
+       in-plane yaw can still drift with no visual features (needs wheel+IMU or
+       a yaw vs gyro gate). See navlog_20260709_144001. -->
+  <param name="/$(arg camera_name)/zed_node/pos_tracking/two_d_mode"     value="true"/>
+  <param name="/$(arg camera_name)/zed_node/pos_tracking/fixed_z_value"  value="0.0"/>
 
-  <!-- Convert ZED odom pose deltas into odom feedback for move_base (from base_sensors.launch) -->
-  <node pkg="feeding_deployment"
-        type="zed_pose_to_odom_feedback.py"
-        name="zed_pose_to_odom_feedback"
-        output="screen">
-    <param name="input_odom_topic" value="/$(arg camera_name)/zed_node/odom"/>
-    <param name="output_odom_topic" value="/move_base/odom_feedback"/>
-    <!-- Sanitized full-pose odom consumed by Cartographer (its `odom` remap
-         points here). Single-frame VIO teleports are dropped before they reach
-         the localizer. -->
-    <param name="sanitized_odom_topic" value="/$(arg camera_name)/zed_node/odom_sanitized"/>
-    <!-- Ablation switches + tunables (enable_sanitizer, enable_windowed_diff,
-         gate thresholds, vel_diff_window). Flip either flag false to reproduce
-         original behavior for that stage. -->
-    <rosparam command="load" file="$(find feeding_deployment)/config/nav/odom_pipeline.yaml"/>
+  <!-- ===== IMU-only ZED [2026-07-15] ===== -->
+  <!-- depth_mode NONE hard-disables the depth pipeline AND blocks positional
+       tracking from ever starting (the nodelet's start_pos_tracking() refuses
+       with depth NONE). Motivation: 4 zed_wrapper segfaults since Jun 21 (2x
+       an identical libsl_zed.so tracking-internals site, 2x pthread_mutex_lock
+       on a freed object; SDK 5.0.7); the Jul 15 16:23 one killed a feeding run
+       mid-drive. Nothing live needs the visual products: the EKF below fuses
+       ONLY vyaw from imu/data_debiased, and IMU publishing is an independent
+       sensors thread (~200 Hz) unaffected by depth/tracking. Color/depth for
+       the navigation dataset are recorded raw via SVO (zed_svo_recorder
+       below) and recomputed offline, reproducibly, from the replay.
+       The pos_tracking params above are inert while tracking is off; kept as
+       the safe config should VIO ever be re-enabled.
+       NOTE: any subscriber to /zed_node/odom or pose makes the wrapper retry
+       and WARN "Cannot start Positional Tracking" every grab cycle; keep
+       odom/pose topics unsubscribed (watchdog + diag logger were cleaned of
+       their zed_odom subscribers along with this change). -->
+  <param name="/$(arg camera_name)/zed_node/depth/depth_mode"                  value="NONE"/>
+  <param name="/$(arg camera_name)/zed_node/pos_tracking/pos_tracking_enabled" value="false"/>
+
+  <!-- pub_frame_rate maps to SDK grab_compute_capping_fps: it caps the whole
+       grab loop, so it is also the EFFECTIVE SVO recording rate. The wrapper
+       common.yaml default of 15 silently halved the nav dataset (15 fps in a
+       30 fps container; verified on the Jul 15 full-session SVO). With depth
+       and tracking off nothing live consumes published frames, so run the
+       grab loop at the camera's native 30 fps and let the SVO capture every
+       frame. Expected cost: SVO ~2.8 to ~5.5 GB/h plus H265 encode load;
+       sanity-check sensorlog gpu columns on first bringup after this. -->
+  <param name="/$(arg camera_name)/zed_node/general/pub_frame_rate"            value="30.0"/>
+
+  <!-- zed_pose_to_odom_feedback RETIRED [2026-07-15] with IMU-only ZED: it
+       subscribed to /zed_node/odom (VIO), which no longer publishes, and its
+       subscription alone would trigger the WARN spam above. Its outputs
+       (/move_base/odom_feedback, /zed_node/odom_sanitized) end here; nothing
+       authoritative consumed them since Jul 2026 (Cartographer rides
+       /odometry/fused_imu_wheel), and offline SVO replay replaces the drift
+       witness. Script + config survive in git: scripts/zed_pose_to_odom_feedback.py,
+       config/nav/odom_pipeline.yaml. -->
+
+  <!-- Start one SVO recording per bringup (raw stereo + IMU, wrapper-side
+       H.265/H.264 via general/svo_compression). Waits for the zed_node
+       recording service, then names the file by wall-clock timestamp.
+       Deliberately NO restart logic: if the ZED dies the whole launch exits
+       (zed_node is required=true) and the next bringup starts a fresh file. -->
+  <node if="$(arg zed_svo_record)"
+        pkg="feeding_deployment" type="zed_svo_recorder.py"
+        name="zed_svo_recorder" output="screen">
+    <param name="camera_name" value="$(arg camera_name)"/>
+    <!-- Dataset disk (ext4 NVMe, label "robot-data"), NOT the near-full OS
+         drive; sibling of the rosbag output (see scripts/record_meal.sh). -->
+    <param name="output_dir" value="/data/feeding_dataset/svo"/>
+  </node>
+
+  <!-- ===== Fused wheel+IMU odometry (AUTHORITATIVE odom->base) ===== -->
+  <!-- Encoder odometry from the NUC base RPC. Blocks retrying the RPC at
+       startup if base_server isn't up yet; respawn covers crashes only. -->
+  <node pkg="feeding_deployment" type="wheel_odom_publisher.py"
+        name="wheel_odom_publisher" output="screen"
+        respawn="true" respawn_delay="2"/>
+
+  <!-- Stillness-calibrated debiasing of the ZED gyro (the raw gyro carries a
+       per-boot bias lottery, measured -131 deg/h on Jul 10). Wait for its
+       "first calibration complete" log (needs >=15 s of stillness with fresh
+       /wheel_odom) before trusting yaw. -->
+  <node pkg="feeding_deployment" type="gyro_bias_estimator.py"
+        name="gyro_bias_estimator" output="screen"
+        respawn="true" respawn_delay="2"/>
+
+  <!-- The authoritative EKF: wheel vx (+advisory wheel vyaw) + debiased gyro
+       yaw-rate. Owns odom->vention_base_link (publish_tf override below); the
+       ZED VIO is excluded by pointing odom0 at a topic nobody publishes.
+       Cartographer's odom topic and TEB's odom feedback both consume
+       /odometry/fused_imu_wheel.
+       Deliberately NO respawn: an auto-restarted EKF resumes at the odom
+       origin, a silent unsanitized teleport into Cartographer's extrapolator
+       (jul02 corruption class). If it ever dies, the stack goes loudly dead
+       (carto collator stalls, TEB loses odom); restart sensors (pane 2),
+       then prefix+r. The wheel/gyro nodes above DO respawn safely: the EKF
+       fuses only the wheel TWIST (reset-proof) and the estimator simply
+       re-calibrates at the next stillness. -->
+  <node pkg="robot_localization" type="ekf_localization_node"
+        name="ekf_fused_imu_wheel" clear_params="true" output="screen">
+    <rosparam command="load"
+              file="$(find feeding_deployment)/config/nav/ekf_zed_wheel.yaml"/>
+    <param name="publish_tf" value="true"/>
+    <param name="odom0" value="/odometry/_zed_vio_disabled"/>
+    <param name="imu0" value="/$(arg camera_name)/zed_node/imu/data_debiased"/>
+    <rosparam param="imu0_config">[false, false, false, false, false, false, false, false, false, false, false, true, false, false, false]</rosparam>
+    <param name="imu0_differential" value="false"/>
+    <param name="imu0_relative" value="false"/>
+    <param name="imu0_queue_size" value="20"/>
+    <remap from="odometry/filtered" to="/odometry/fused_imu_wheel"/>
   </node>
 
   <!-- ===== Arm-specific TFs (from robot.launch, with arm_ prefix) ===== -->
@@ -120,17 +236,25 @@
   <!-- ===== Arm RealSense camera driver (from robot.launch) ===== -->
   <!-- D435: run color and depth at 1280x720 @ 30 Hz (depth's max-at-30Hz),
        so both streams are at native res for depth alignment / pointcloud. -->
+  <!-- DISABLED [2026-07-10]: turned off to test hypothesis that RealSense and ZED
+       compete for USB bandwidth/resources, causing the ZED to die. If confirmed,
+       the fix is to move them to separate USB controllers rather than leave this off.
+       NOTE: when this is disabled, the camera frequency + resolution checks in
+       watchdog.py MUST also be disabled or the watchdog E-stops the arm immediately. -->
   <include file="$(find realsense2_camera)/launch/rs_camera.launch">
     <arg name="align_depth" value="true"/>
     <arg name="enable_sync" value="true"/>
     <arg name="filters" value="pointcloud"/>
     <arg name="color_width"  value="1280"/>
     <arg name="color_height" value="720"/>
-    <arg name="color_fps"    value="30"/>
+    <arg name="color_fps"    value="15"/>
     <arg name="depth_width"  value="1280"/>
     <arg name="depth_height" value="720"/>
-    <arg name="depth_fps"    value="30"/>
+    <arg name="depth_fps"    value="15"/>
   </include>
+ 
+  <!-- END RealSense disable -->
+
 
   <!-- ===== Arm FT sensor driver (from robot.launch) ===== -->
   <include file="$(find netft_rdt_driver)/launch/ft_sensor.launch">

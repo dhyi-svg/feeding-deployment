@@ -12,7 +12,7 @@ touchpoint replaced by a terminal prompt:
                        accept an optional ``h,s,v[,range]`` correction, written
                        back to the YAML exactly like the on-robot color picker,
                        then ``session.record_color(location)``
-- navigations       -> print the applied PositionOffset and accept an optional
+- navigations       -> print the applied ParkingOffset and accept an optional
                        ``dx dy dyaw`` teleop adjustment, composed onto the
                        total in SE(2) and written back to the YAML exactly like
                        the on-robot post-arrival adjustment, then
@@ -45,7 +45,6 @@ import math
 import os
 import shutil
 from pathlib import Path
-from types import SimpleNamespace
 
 from feeding_deployment.integration.apply_preferences import (
     _load_yaml,
@@ -77,6 +76,8 @@ from feeding_deployment.preference_learning.config.preference_bundle import (
     parse_color,
 )
 from feeding_deployment.preference_learning.methods.prediction_model import (
+    DEFAULT_MEMORY_MODE,
+    MEMORY_MODES,
     PredictionModel,
 )
 
@@ -94,12 +95,12 @@ def _read_param(bt_path: Path, name: str):
 
 
 def _write_params(bt_path: Path, values: dict) -> None:
-    """Set parameter values in a BT YAML, upserting PositionOffset if absent
+    """Set parameter values in a BT YAML, upserting ParkingOffset if absent
     (mirrors PreferenceSession._write_nav_offset_to_bt for pre-offset trees)."""
     data = _load_yaml(bt_path)
     for name, value in values.items():
         if not _set_param_value(data, name, value):
-            if name == "PositionOffset":
+            if name == "ParkingOffset":
                 data.setdefault("parameters", []).append(
                     {**_NAV_OFFSET_PARAM, "value": value}
                 )
@@ -141,20 +142,20 @@ def _emulate_pickup_color(session: PreferenceSession, bt_dir: Path, location: st
     session.wait_for_reprediction()
     bt_path = bt_dir / _pickup_yaml_name(location)
     current = color_from_bt(
-        _read_param(bt_path, "HandleColor"), _read_param(bt_path, "ColorRange")
+        _read_param(bt_path, "PlateHandleColor"), _read_param(bt_path, "PlateHandleColorTolerance")
     )
     print(f"\n=== [skill] pick_plate_from_{location} (emulated) ===")
     print(f"  Detecting handle with color {format_color(current)}")
-    # confirm_manipulation preference: "no" skips the detection page entirely
-    # (the color picker is unreachable, exactly as on-robot); auto-continue is
-    # only annotated -- a terminal prompt has no real countdown.
-    confirm_mode = str(session.bundle.get("confirm_manipulation", "yes (without any auto-continue)"))
-    if confirm_mode == "no":
-        print("  (detection page skipped: manipulation confirmation is 'no')")
+    # confirm_manipulation preference: "skip" skips the detection page entirely
+    # (the color picker is unreachable, exactly as on-robot); a countdown is only
+    # annotated -- a terminal prompt has no real countdown.
+    confirm = str(session.bundle.get("confirm_manipulation", "wait for me"))
+    if confirm == "skip":
+        print("  (detection page skipped: manipulation confirmation is 'skip')")
         session.record_color(location)
         return
-    if confirm_mode == "yes (with auto-continue countdown)":
-        print(f"  (page would auto-confirm after {session.wait_seconds:.0f}s on-robot)")
+    if confirm.startswith("countdown"):
+        print(f"  (page would auto-confirm after the '{confirm}' countdown on-robot)")
     while True:
         raw = input(
             "  [Enter] = detection confirmed  |  h,s,v[,range] = corrected color: "
@@ -174,32 +175,32 @@ def _emulate_pickup_color(session: PreferenceSession, bt_dir: Path, location: st
             continue
         corrected = parse_color(corrected, seed=current)  # clip into valid ranges
         handle_color, color_range = color_to_bt(corrected)
-        _write_params(bt_path, {"HandleColor": handle_color, "ColorRange": color_range})
+        _write_params(bt_path, {"PlateHandleColor": handle_color, "PlateHandleColorTolerance": color_range})
         print(f"  Corrected color written to {bt_path.name}: {format_color(corrected)}")
         break
     session.record_color(location)
 
 
 def _emulate_navigation(session: PreferenceSession, bt_dir: Path, location: str) -> None:
-    """Emulate a navigation to ``location``: show the PositionOffset applied to
+    """Emulate a navigation to ``location``: show the ParkingOffset applied to
     the goal, optionally take a teleop adjustment (composed onto the total in
     the arrived pose's local frame, as on-robot), write it back, and record the
     dim."""
     # Pre-skill join, mirroring run.py (navigate_to_* consumes predictions).
     session.wait_for_reprediction()
     bt_path = bt_dir / _nav_yaml_name(location)
-    prev = nav_offset_from_bt(_read_param(bt_path, "PositionOffset"))
+    prev = nav_offset_from_bt(_read_param(bt_path, "ParkingOffset"))
     print(f"\n=== [skill] navigate_to_{location} (emulated) ===")
     print(f"  Applied learned offset to goal: {format_nav_offset(prev)}")
     # confirm_navigation_arrival preference: "no" skips the arrival page (the
     # offset stays frozen, exactly as on-robot); auto-continue is annotated only.
-    confirm_mode = str(session.bundle.get("confirm_navigation_arrival", "yes (with auto-continue countdown)"))
-    if confirm_mode == "no":
-        print("  (arrival page skipped: navigation confirmation is 'no')")
+    confirm = str(session.bundle.get("confirm_navigation_arrival", "wait for me"))
+    if confirm == "skip":
+        print("  (arrival page skipped: navigation confirmation is 'skip')")
         session.record_nav_offset(location)
         return
-    if confirm_mode == "yes (with auto-continue countdown)":
-        print(f"  (page would auto-accept after {session.wait_seconds:.0f}s on-robot)")
+    if confirm.startswith("countdown"):
+        print(f"  (page would auto-accept after the '{confirm}' countdown on-robot)")
     while True:
         raw = input(
             "  [Enter] = position OK  |  dx dy dyaw = teleop adjustment (m, m, rad): "
@@ -226,7 +227,7 @@ def _emulate_navigation(session: PreferenceSession, bt_dir: Path, location: str)
         ]
         if clamped != list(total):
             print("  NOTE: total offset saturated at the +/-0.5 m / +/-45 deg bounds.")
-        _write_params(bt_path, {"PositionOffset": clamped})
+        _write_params(bt_path, {"ParkingOffset": clamped})
         print(
             f"  New total offset written to {bt_path.name}: "
             f"dx={clamped[0]:+.3f},dy={clamped[1]:+.3f},dyaw={clamped[2]:+.3f}"
@@ -243,8 +244,17 @@ def _print_explanations(session: PreferenceSession) -> None:
     session.wait_for_reprediction()
     latent = getattr(session, "last_latent_inference", "") or ""
     expl = getattr(session, "last_explanations", None) or {}
+    scores = getattr(session, "last_latent_scores", None) or {}
     if latent:
         print(f"  [why] latent-factor inference: {latent}")
+    if scores:
+        print("  [why] latent scores (pace/trust/proximity/communication):")
+        for k in ("pace", "trust", "proximity", "communication"):
+            v = scores.get(k)
+            if isinstance(v, dict):
+                print(f"    - {k}: score={v.get('score')} conf={v.get('confidence')} — {v.get('why')}")
+            elif v is not None:
+                print(f"    - {k}: {v}")
     if not expl:
         return
     print("  [why] model reasoning for open dims:")
@@ -295,12 +305,16 @@ def _seed_user_dir(log_dir: Path) -> None:
     shutil.copy(original_gestures, gestures_dir)
 
 
-def _build_prediction_model(user: str, profile: str, log_dir: Path, day: int) -> PredictionModel:
+def _build_prediction_model(
+    user: str, profile: str, log_dir: Path, day: int,
+    memory_mode: str = DEFAULT_MEMORY_MODE,
+) -> PredictionModel:
     model = PredictionModel(
         user=user,
         physical_profile_label="deployment_physical_profile",
         logs_dir=log_dir / "preference_learning",
         physical_profile_description=profile,
+        memory_mode=memory_mode,
     )
     model.validate_sequential_day(day)
     model.load_prior_memory(day)
@@ -387,12 +401,21 @@ def main() -> int:
                         help="Optional preset meal label (skips the terminal context pickers).")
     parser.add_argument("--pref_setting", type=str, default="Personal")
     parser.add_argument("--pref_time_of_day", type=str, default="morning")
+    parser.add_argument(
+        "--pref_memory_mode", type=str, choices=list(MEMORY_MODES), default=DEFAULT_MEMORY_MODE,
+        help="Cross-day preference memory backend (mirrors run.py's "
+             "--pref_memory_mode). Default: %(default)s.",
+    )
     args = parser.parse_args()
 
     if args.user == "":
         raise ValueError("Please provide a user name.")
 
-    for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+    # OpenAI is only used for episodic-retrieval embeddings, i.e. three_layer mode.
+    required_keys = ["ANTHROPIC_API_KEY"]
+    if args.pref_memory_mode == "three_layer":
+        required_keys.append("OPENAI_API_KEY")
+    for key in required_keys:
         if not os.environ.get(key, "").strip():
             print(f"ERROR: {key} is not set. The emulator makes real LLM/embedding calls.")
             return 1
@@ -426,12 +449,15 @@ def main() -> int:
             )
         print("Preference context (meal / setting / time_of_day):", context)
 
-        model = _build_prediction_model(args.user, profile, log_dir, args.day)
+        model = _build_prediction_model(
+            args.user, profile, log_dir, args.day, memory_mode=args.pref_memory_mode
+        )
         existing = model.working_memory_dir / f"day_{args.day:04d}.json"
         if existing.exists():
             print(
                 f"[learn] NOTE: day {args.day} memory already exists; finalizing will "
-                f"OVERWRITE day_{args.day:04d}.json (working/episodic/long_term)."
+                f"OVERWRITE day_{args.day:04d}.json (working memory plus this mode's "
+                f"cross-day memory)."
             )
 
         session = PreferenceSession(
@@ -440,10 +466,6 @@ def main() -> int:
             dict(context),
             web_interface=TerminalCorrectionInterface(),
             data_logger=data_logger,
-            # Minimal stand-in so apply_transfer_mode's scene update runs; with
-            # hla_map={} there is no transfer object to reconstruct.
-            scene_description=SimpleNamespace(transfer_type="outside"),
-            hla_map={},
             flair=None,
         )
 

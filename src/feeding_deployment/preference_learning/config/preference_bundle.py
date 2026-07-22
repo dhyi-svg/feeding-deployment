@@ -13,19 +13,19 @@ class PreferenceDim:
     #                seeded from / validated against the per-user BT YAML color.
     # "nav_offset":  value is a continuous goal-pose correction (LLM emits
     #                {"dx","dy","dyaw"}); `options` is empty and the dim is
-    #                seeded from / validated against the PositionOffset value in
+    #                seeded from / validated against the ParkingOffset value in
     #                the per-user navigate BT YAML.
     kind: str = "categorical"
-    # One plain-language sentence shown as the subtitle under the label on the
-    # iPad ask page (the full `description` is written for the LLM and only
-    # appears in the settings overlay). Empty = no subtitle.
+    # One plain-language sentence shown under the label on the iPad ask page and
+    # in the settings overlay (the full `description` is written for the LLM and
+    # never shown to the user). Empty = no subtitle / blank overlay line.
     short_description: str = ""
 
 PREFERENCE_BUNDLE: List[PreferenceDim] = [
     PreferenceDim(
         field="microwave_time",
         label="Microwave time",
-        options=["no microwave", "1 min", "2 min", "3 min"],
+        options=["no microwave", "30 secs", "1 min", "2 min"],
         description="How long food should be reheated before being served. Some users may prefer hotter food, while others prefer food closer to room temperature. Many meals begin refrigerated and are intended to be served warm or hot. Fruit and dessert meals with an intended serving temperature of cold are usually eaten without microwaving.",
         short_description="How long to reheat your food before it is served.",
     ),
@@ -45,30 +45,30 @@ PREFERENCE_BUNDLE: List[PreferenceDim] = [
     ),
     PreferenceDim(
         field="confirm_feeding_pickup",
-        label="Should the robot check with you before bringing food, drink, or wipe to you?",
-        options=["no", "yes (with auto-continue countdown)", "yes (without any auto-continue)"],
-        short_description="After picking up your food, drink, or wipe, the robot can check with you before bringing it to you.",
-        description="Whether the robot shows a web-interface confirmation page after picking up the bite, drink, or mouth wipe, before bringing it toward the user. These pages let the user retry a failed pickup (e.g., an empty fork). 'no' skips the pages entirely to reduce interaction time, even if it means the robot might transfer a failed pickup; 'yes (with auto-continue countdown)' shows the page but proceeds automatically after the auto-continue wait if the user does not intervene; 'yes (without any auto-continue)' waits indefinitely for the user's explicit confirmation. A user might be comfortable skipping confirmation in some contexts (e.g., eating alone in a personal setting) and prefer it in others (e.g., a social setting where repeated empty-fork transfers would be awkward). Users who trust the robot more tend to relax confirmation across the board."
+        label="After picking up each bite, sip, or wipe — how should the check page behave?",
+        options=["skip", "countdown (15 sec)", "countdown (30 sec)", "countdown (60 sec)", "wait for me"],
+        short_description="Whether the robot checks each bite/sip/wipe pickup with you before bringing it over.",
+        description="How the robot handles the web-interface confirmation page shown after picking up a bite, drink, or mouth wipe, before bringing it toward the user. This page lets the user retry a failed pickup (e.g., an empty fork). 'skip' does not show the page at all to reduce interaction time, even if it means the robot might transfer a failed pickup; 'countdown (N sec)' shows the page but proceeds automatically after N seconds if the user does not intervene; 'wait for me' shows the page and waits indefinitely for the user's explicit confirmation. A user might be comfortable skipping confirmation in some contexts (e.g., eating alone in a personal setting) and prefer it in others (e.g., a social setting where repeated empty-fork transfers would be awkward). Users who trust the robot more tend to use a shorter countdown or skip across the board."
     ),
     PreferenceDim(
         field="confirm_navigation_arrival",
-        label="Should the robot check its parking with you after driving somewhere?",
-        options=["no", "yes (with auto-continue countdown)", "yes (without any auto-continue)"],
-        short_description="After driving somewhere, the robot can ask you to check and fix where it parked.",
-        description="Whether the robot shows the position check page after driving to a location (fridge, microwave, table, sink), where the user can approve the parked position or fine-adjust it by teleoperating the base. This page is also how the robot learns the user's preferred parking spots over time. 'no' skips the page and drives on with the learned parking positions (they stop being refined); 'yes (with auto-continue countdown)' shows the page but accepts the position automatically after the auto-continue wait; 'yes (without any auto-continue)' waits indefinitely. Users typically start with confirmation on and relax it as the robot's parking proves reliable."
+        label="After the robot drives somewhere — how should the parking check behave?",
+        options=["skip", "countdown (15 sec)", "countdown (30 sec)", "countdown (60 sec)", "wait for me"],
+        short_description="Whether the robot checks its parking with you after driving to a location.",
+        description="How the robot handles the position check page shown after driving to a location (fridge, microwave, table, sink), where the user can approve the parked position or fine-adjust it by teleoperating the base. This page is also how the robot learns the user's preferred parking spots over time. 'skip' does not show the page and drives on with the learned parking positions (they stop being refined); 'countdown (N sec)' shows the page but accepts the position automatically after N seconds; 'wait for me' shows the page and waits indefinitely. Users typically start with a countdown or 'wait for me' and move toward skipping as the robot's parking proves reliable."
     ),
     PreferenceDim(
         field="confirm_manipulation",
-        label="Should the robot check with you before it grabs, presses, or places things?",
-        options=["no", "yes (with auto-continue countdown)", "yes (without any auto-continue)"],
-        short_description="Before grabbing, pressing, or placing something, the robot can show you what its camera sees and ask before letting go of the plate.",
-        description="Whether the robot shows web-interface confirmation pages around manipulation: verifying a detection before acting on it (the plate handle before a pickup, the fridge/microwave door handle before opening, the microwave button before pressing, the placement spot before setting the plate down) and confirming it is safe to release the plate at the microwave, table, or sink. The detection pages are also where the user can redo a detection or correct the plate-handle color. 'no' skips these pages (successful detections are accepted automatically and the plate is released without asking; detection colors stop being refined); 'yes (with auto-continue countdown)' shows each page but proceeds automatically after the auto-continue wait; 'yes (without any auto-continue)' waits indefinitely. Users who trust the robot's perception tend to relax this over time."
+        label="During meal prep and cleaning — how should the grab/press/place checks behave?",
+        options=["skip", "countdown (15 sec)", "countdown (30 sec)", "countdown (60 sec)", "wait for me"],
+        short_description="Whether the robot checks with you before grabbing, pressing, or placing things during meal prep.",
+        description="How the robot handles the web-interface confirmation pages around manipulation: verifying a detection before acting on it (the plate handle before a pickup, the fridge/microwave door handle before opening, the microwave button before pressing, the placement spot before setting the plate down) and confirming it is safe to release the plate at the microwave, table, or sink. The detection pages are also where the user can redo a detection or correct the plate-handle color. 'skip' does not show these pages (successful detections are accepted automatically and the plate is released without asking; detection colors stop being refined); 'countdown (N sec)' shows each page but proceeds automatically after N seconds; 'wait for me' waits indefinitely. Users who trust the robot's perception tend to use a shorter countdown or skip over time."
     ),
     PreferenceDim(
         field="transfer_mode",
         label="Outside mouth vs inside mouth transfer",
         options=["outside mouth transfer", "inside mouth transfer"],
-        description="How food is delivered to the mouth: outside-mouth transfer (the robot stops just outside the mouth, and the user leans forward to take the bite) versus inside-mouth transfer (the robot inserts the food directly into the mouth). Preference may depend on the user's physical capabilities (e.g., whether they can lean forward comfortably), their comfort with the robot moving close to their mouth, or their affective state (e.g., preferring inside-mouth transfer when fatigued).",
+        description="How food is delivered to the mouth: outside-mouth transfer (the robot stops just outside the mouth, and the user leans forward to take the bite) versus inside-mouth transfer (the robot inserts the food directly into the mouth). Preference may depend on the user's physical capabilities (e.g., whether they can lean forward comfortably), their comfort with the robot moving close to their mouth, or their affective state (e.g., preferring inside-mouth transfer when fatigued). This deployment only performs outside-mouth transfer; predict 'inside mouth transfer' only if the user has explicitly asked for it.",
         short_description="Whether food stops just outside your mouth or is placed inside your mouth.",
     ),
     PreferenceDim(
@@ -80,59 +80,59 @@ PREFERENCE_BUNDLE: List[PreferenceDim] = [
     ),
     PreferenceDim(
         field="convey_robot_ready_for_initiating_transfer",
-        label="Convey robot is ready for initiating transfer",
+        label="How should the robot signal it's ready to bring a bite, sip, or wipe?",
         options=["speech", "LED", "speech + LED", "no cue"],
         description="How the robot signals to the user that it is ready to initiate transfer of a bite, sip, or mouth wiping.",
-        short_description="How the robot tells you it is ready to bring you a bite, sip, or wipe.",
+        short_description="",
     ),
     PreferenceDim(
         field="detect_user_ready_for_initiating_transfer_feeding",
-        label="Detect User Ready for Initiating Transfer - FEEDING",
-        options=["open mouth", "button", "autocontinue"],
-        description="How the robot determines that the user is ready to initiate bite transfer. open mouth: readiness is detected from the user opening their mouth (this can be a challenge in social settings when a user tends to open their mouth for talking); button: the user explicitly presses a physical button (this can be cumbersome if the user is fatigued); autocontinue: the robot proceeds automatically after waiting for a certain timeout.",
-        short_description="How you tell the robot you are ready for a bite.",
+        label="How do you tell the robot you're ready for a bite?",
+        options=["open mouth", "button", "proceed automatically after a pause"],
+        description="How the robot determines that the user is ready to initiate bite transfer. open mouth: readiness is detected from the user opening their mouth (this can be a challenge in social settings when a user tends to open their mouth for talking); button: the user explicitly presses a physical button (this can be cumbersome if the user is fatigued); proceed automatically after a pause: the robot proceeds on its own after a short (5 second) pause, without waiting for a mouth-open or button press.",
+        short_description="",
     ),
     PreferenceDim(
         field="detect_user_ready_for_initiating_transfer_drinking",
-        label="Detect User Ready for Initiating Transfer - DRINKING",
-        options=["open mouth", "button", "autocontinue"],
-        description="How the robot determines that the user is ready to initiate sip transfer. open mouth: readiness is detected from the user opening their mouth (this can be a challenge in social settings when a user tends to open their mouth for talking); button: the user explicitly presses a physical button (this can be cumbersome if the user is fatigued); autocontinue: the robot proceeds automatically after waiting for a certain timeout.",
-        short_description="How you tell the robot you are ready for a sip.",
+        label="How do you tell the robot you're ready for a sip?",
+        options=["open mouth", "button", "proceed automatically after a pause"],
+        description="How the robot determines that the user is ready to initiate sip transfer. open mouth: readiness is detected from the user opening their mouth (this can be a challenge in social settings when a user tends to open their mouth for talking); button: the user explicitly presses a physical button (this can be cumbersome if the user is fatigued); proceed automatically after a pause: the robot proceeds on its own after a short (5 second) pause, without waiting for a mouth-open or button press.",
+        short_description="",
     ),
     PreferenceDim(
         field="detect_user_ready_for_initiating_transfer_wiping",
-        label="Detect User Ready for Initiating Transfer - MOUTH WIPING",
-        options=["open mouth", "button", "autocontinue"],
-        description="How the robot determines that the user is ready to initiate transfer of mouth wiper. open mouth: readiness is detected from the user opening their mouth (this can be a challenge in social settings when a user tends to open their mouth for talking); button: the user explicitly presses a physical button (this can be cumbersome if the user is fatigued); autocontinue: the robot proceeds automatically after waiting for a certain timeout.",
-        short_description="How you tell the robot you are ready for a mouth wipe.",
+        label="How do you tell the robot you're ready for a mouth wipe?",
+        options=["open mouth", "button", "proceed automatically after a pause"],
+        description="How the robot determines that the user is ready to initiate transfer of mouth wiper. open mouth: readiness is detected from the user opening their mouth (this can be a challenge in social settings when a user tends to open their mouth for talking); button: the user explicitly presses a physical button (this can be cumbersome if the user is fatigued); proceed automatically after a pause: the robot proceeds on its own after a short (5 second) pause, without waiting for a mouth-open or button press.",
+        short_description="",
     ),
     PreferenceDim(
         field="convey_robot_ready_for_completing_transfer",
-        label="Convey robot is ready for completing transfer",
+        label="How should the robot signal you can take the bite, sip, or wipe?",
         options=["speech", "LED", "speech + LED", "no cue"],
         description="How the robot signals to the user that the tool has reached the transfer location and the user can complete the transfer by taking a bite, sip, or mouth wiping.",
-        short_description="How the robot tells you it has arrived and you can take the bite, sip, or wipe.",
+        short_description="",
     ),
     PreferenceDim(
         field="detect_user_completed_transfer_feeding",
-        label="Detect User Completed Transfer - FEEDING",
-        options=["perception", "button", "autocontinue"],
-        description="How the robot determines that the user has finished taking a bite. perception: the robot detects completion using a force-torque sensor on the fork (very reliable); button: the user explicitly signals completion by physically pressing a button; autocontinue: the robot proceeds automatically after a certain timeout.",
-        short_description="How the robot knows you have finished taking the bite.",
+        label="How does the robot know you've finished a bite?",
+        options=["perception", "button", "proceed automatically after a pause"],
+        description="How the robot determines that the user has finished taking a bite. perception: the robot detects completion using a force-torque sensor on the fork (very reliable); button: the user explicitly signals completion by physically pressing a button; proceed automatically after a pause: the robot proceeds on its own after a short (5 second) pause, without waiting for a button press or head nod.",
+        short_description="",
     ),
     PreferenceDim(
         field="detect_user_completed_transfer_drinking",
-        label="Detect User Completed Transfer - DRINKING",
-        options=["perception", "button", "autocontinue"],
-        description="How the robot determines that the user has finished drinking. perception: the robot detects completion using a head-nod gesture (which may feel unnatural in social settings); button: the user explicitly signals completion by physically pressing a button; autocontinue: the robot proceeds automatically after a certain timeout.",
-        short_description="How the robot knows you have finished your sip.",
+        label="How does the robot know you've finished a sip?",
+        options=["perception", "button", "proceed automatically after a pause"],
+        description="How the robot determines that the user has finished drinking. perception: the robot detects completion using a head-nod gesture (which may feel unnatural in social settings); button: the user explicitly signals completion by physically pressing a button; proceed automatically after a pause: the robot proceeds on its own after a short (5 second) pause, without waiting for a button press or head nod.",
+        short_description="",
     ),
     PreferenceDim(
         field="detect_user_completed_transfer_wiping",
-        label="Detect User Completed Transfer - MOUTH WIPING",
-        options=["perception", "button", "autocontinue"],
-        description="How the robot determines that the user has finished mouth wiping. perception: the robot detects completion using a head-nod gesture (which may feel unnatural in social settings); button: the user explicitly signals completion by physically pressing a button; autocontinue: the robot proceeds automatically after a certain timeout.",
-        short_description="How the robot knows you are done wiping.",
+        label="How does the robot know you've finished wiping?",
+        options=["perception", "button", "proceed automatically after a pause"],
+        description="How the robot determines that the user has finished mouth wiping. perception: the robot detects completion using a head-nod gesture (which may feel unnatural in social settings); button: the user explicitly signals completion by physically pressing a button; proceed automatically after a pause: the robot proceeds on its own after a short (5 second) pause, without waiting for a button press or head nod.",
+        short_description="",
     ),
     PreferenceDim(
         field="retract_between_bites",
@@ -157,11 +157,18 @@ PREFERENCE_BUNDLE: List[PreferenceDim] = [
         short_description="The order your foods are fed, and which dips go with which items.",
     ),
     PreferenceDim(
-        field="wait_before_autocontinue_seconds",
-        label="How long should the robot wait before continuing automatically?",
-        options=["15 sec", "30 sec", "60 sec"],
-        short_description="How long pages wait for your answer before continuing on their own.",
-        description="How long the robot waits before automatically continuing if the user does not intervene — on the next-bite/sip/wipe pages and on every confirmation page set to 'yes (with auto-continue countdown)' (navigation arrivals, manipulation detections and plate releases, feeding pickups). Some users may prefer a shorter wait time to reduce meal time, while others may prefer a longer wait time to give themselves more time to intervene if needed, especially in contexts where they might be more distracted (e.g., when eating in a social setting with a partner or when watching TV)."
+        field="wait_before_autocontinue_bite_selection",
+        label="The bite-choice page: how should it behave?",
+        options=["countdown (15 sec)", "countdown (30 sec)", "countdown (60 sec)", "wait for me"],
+        short_description="How long the robot waits on the bite-choice page before going with the predicted bite.",
+        description="How the robot handles the bite-selection page, where the user can confirm or change the predicted next bite. 'countdown (N sec)' shows the page but goes with the predicted bite automatically after N seconds; 'wait for me' waits indefinitely for the user to choose. Users who trust the robot's bite predictions prefer a short countdown to reduce meal time; users who like to choose each bite, or are often distracted (e.g., social settings, watching TV), prefer a longer countdown or 'wait for me'. This governs only the bite-choice page; the pickup check is confirm_feeding_pickup and the next-task page is wait_before_autocontinue_task_selection."
+    ),
+    PreferenceDim(
+        field="wait_before_autocontinue_task_selection",
+        label="The next-task page (after a bite or sip): how should it behave?",
+        options=["countdown (15 sec)", "countdown (30 sec)", "countdown (60 sec)", "wait for me"],
+        short_description="How long the robot waits before auto-selecting the next task after a bite or sip.",
+        description="How the robot handles the next-task page after finishing a bite or a sip before automatically starting another of the same (the page pre-selects 'take a bite' after a bite and 'take a sip' after a sip). 'wait for me' means the page never advances on its own — the robot waits for the user to pick the next task, useful for users who chat between bites or dislike being rushed; 'countdown (N sec)' auto-selects after N seconds, keeping the meal moving for users who eat steadily. This governs only the between-tasks page; the bite-choice page is wait_before_autocontinue_bite_selection and the pickup check is confirm_feeding_pickup."
     ),
     # --- Color dimensions (kind="color") -------------------------------------
     # The robot picks up the plate by detecting a colored handle. The detection
@@ -202,7 +209,7 @@ PREFERENCE_BUNDLE: List[PreferenceDim] = [
     # pose's local frame (dx meters forward, dy meters left, dyaw radians
     # counter-clockwise). The next navigation to that location composes the
     # offset onto the nominal goal. Predictions are seeded from the current
-    # PositionOffset saved in the per-user navigate BT YAML (zero on day 1) and
+    # ParkingOffset saved in the per-user navigate BT YAML (zero on day 1) and
     # the user corrects them physically, not through a form. Unlike the plate
     # colors, the four locations are independent: a correction at one location
     # is only weak evidence for the others.
@@ -242,8 +249,8 @@ PREFERENCE_BUNDLE: List[PreferenceDim] = [
 # A color value is the canonical dict {"h": int, "s": int, "v": int,
 # "range": float} (HSV, H in [0,179], S/V in [0,255], range in [0,1]). This is
 # what the LLM emits for kind="color" dims and what flows through the bundle,
-# episode text, and the per-user behavior-tree YAML (HandleColor=[H,S,V],
-# ColorRange=range). The factory default matches
+# episode text, and the per-user behavior-tree YAML (PlateHandleColor=[H,S,V],
+# PlateHandleColorTolerance=range). The factory default matches
 # AttachmentPerception.detect_attachment_color.
 # ---------------------------------------------------------------------------
 
@@ -321,13 +328,13 @@ def format_color(c: dict) -> str:
 
 
 def color_to_bt(c: dict):
-    """Canonical color dict -> (HandleColor list [H,S,V], ColorRange float)."""
+    """Canonical color dict -> (PlateHandleColor list [H,S,V], PlateHandleColorTolerance float)."""
     c = parse_color(c)
     return [c["h"], c["s"], c["v"]], c["range"]
 
 
 def color_from_bt(handle_color, color_range) -> dict:
-    """(HandleColor [H,S,V], ColorRange) from the BT YAML -> canonical color dict."""
+    """(PlateHandleColor [H,S,V], PlateHandleColorTolerance) from the BT YAML -> canonical color dict."""
     hc = list(handle_color) if handle_color is not None else [DEFAULT_COLOR["h"], DEFAULT_COLOR["s"], DEFAULT_COLOR["v"]]
     if len(hc) < 3:
         hc = (hc + [0, 0, 0])[:3]
@@ -341,8 +348,8 @@ def color_from_bt(handle_color, color_range) -> dict:
 # "dyaw": float} (meters, meters, radians; expressed in the goal pose's local
 # frame, each clipped to +/- NAV_OFFSET_BOUNDS). This is what the LLM emits for
 # kind="nav_offset" dims and what flows through the bundle, episode text, and
-# the per-user navigate BT YAML (PositionOffset=[dx, dy, dyaw]). The bounds
-# must match the PositionOffset Box space in the navigate_to_*.yaml behavior
+# the per-user navigate BT YAML (ParkingOffset=[dx, dy, dyaw]). The bounds
+# must match the ParkingOffset Box space in the navigate_to_*.yaml behavior
 # trees and NavigateHLA's clamp.
 # ---------------------------------------------------------------------------
 
@@ -393,13 +400,13 @@ def format_nav_offset(o: dict) -> str:
 
 
 def nav_offset_to_bt(o: dict) -> list:
-    """Canonical nav-offset dict -> PositionOffset list [dx, dy, dyaw]."""
+    """Canonical nav-offset dict -> ParkingOffset list [dx, dy, dyaw]."""
     o = parse_nav_offset(o)
     return [o["dx"], o["dy"], o["dyaw"]]
 
 
 def nav_offset_from_bt(value) -> dict:
-    """PositionOffset [dx, dy, dyaw] from the BT YAML -> canonical offset dict."""
+    """ParkingOffset [dx, dy, dyaw] from the BT YAML -> canonical offset dict."""
     v = list(value) if value is not None else []
     v = (v + [0.0, 0.0, 0.0])[:3]
     return parse_nav_offset({"dx": v[0], "dy": v[1], "dyaw": v[2]})

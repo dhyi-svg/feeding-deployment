@@ -7,5 +7,5 @@ global_costmap:
   rolling_window: false
   transform_tolerance: 0.5
   inflation_layer:
-    inflation_radius: 0.5
-    cost_scaling_factor: 5.0
+    inflation_radius: 1.2
+    cost_scaling_factor: 2.0

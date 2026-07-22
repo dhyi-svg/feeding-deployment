@@ -37,14 +37,13 @@
     <origin xyz="0.3176 0.0 0.386" rpy="0.0 0.0 0.0"/>
   </joint>
 
-  <!-- ZED Mini is the odom anchor; URDF inverts it so robot_state_publisher
-       provides vention_base_link as a child of the ZED frame. -->
-  <link name="zed_mini_base_link"/>
-  <joint name="zed_base_link_to_vention_base_link" type="fixed">
-    <parent link="zed_mini_base_link"/>
-    <child link="vention_base_link"/>
-    <origin xyz="-0.3176 0.0 -0.386" rpy="0.0 0.0 0.0"/>
-  </joint>
+  <!-- ZED mount (vention_base_link -> zed_mini_base_link) is deliberately NOT
+       here: the ZED wrapper's own description publisher owns that edge, via
+       base_frame + cam_pos_* args on the zedm.launch include in
+       sensors.launch. Two static publishers of the same child frame fight
+       (last-writer-wins per listener -> "unconnected trees"). The fused
+       wheel+IMU EKF (sensors.launch) owns odom -> vention_base_link. -->
+
 
   <!-- ===== Arm mount: connect mobile base to arm root ===== -->
   <!-- The kortex macro creates: world -> base_link (fixed, identity).         -->
