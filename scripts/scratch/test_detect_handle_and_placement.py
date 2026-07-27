@@ -30,8 +30,11 @@ from feeding_deployment.perception.appliance_perception.appliance_perception imp
 )
 from feeding_deployment.perception.grounded_sam import GroundedSAM
 
-CALIB_PATH = os.path.expanduser(
-    "~/deployment_ws/pachirisu_wrist_camera_calib/wrist_camera_calib_fullboard.json"
+CALIB_PATH = os.environ.get(
+    "CALIB_PATH",
+    os.path.expanduser(
+        "~/deployment_ws/pachirisu_wrist_camera_calib/wrist_camera_calib_fullboard.json"
+    ),
 )
 
 

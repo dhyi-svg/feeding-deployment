@@ -37,6 +37,147 @@ the bypass (fresh server re-locks motion). Verify with `get_state()` → expect
 
 ---
 
+## 2026-07-27 — Pachirisu: recalibration root-caused and fixed (5.3cm), approach-hover attempt hit a real motion incident + unresolved IK convergence
+
+Follow-on session, continuing from the ~20-27cm calibration error found 2026-07-22. Goal:
+recalibrate, validate, then attempt the deferred approach-only (no grasp) hover test.
+Recalibration succeeded and is now validated to ~5cm; the hover test did not complete --
+a real-arm incident (unexpected jerky motion from a cartesian move) and then an
+unconverged IK solve stopped it short.
+
+### Recalibration: the real bug was TSAI instability, not (primarily) pose diversity or frame mismatch
+
+Before recapturing anything, the old calibration's raw sample dump
+(`~/deployment_ws/pachirisu_wrist_camera_calib/handeye_raw_samples.json`, still on disk
+even though the script that produced it is gone) was inspected directly: the 17 samples
+had a max pairwise gripper-translation distance of only **5.0cm** -- effectively a
+rotate-in-place pose set, which starves `cv2.calibrateHandEye()`'s translation solve.
+
+Recaptured with a new one-shot capture script (`scripts/scratch/capture_calib_sample.py`,
+non-interactive -- appends one sample per invocation so it can be driven by chat command
+while the user moves the arm by hand; an earlier interactive/`input()`-loop version was
+rejected for exactly this reason). Board geometry (12-marker ArUco board, `DICT_5X5_250`,
+marker 0 as reference, 5.08cm markers) reused as-is from the old JSON. Each sample reads
+`arm.get_state()['ee_pos']` directly at capture time (ruling out any reference-frame
+mismatch in a separately-derived FK, the leading theory from last session).
+
+Live camera preview: this container's `cv2` build is headless (no `imshow`) and no ROS
+image-viewer package (`image_view`/`rqt_image_view`) is installed in `ros_env`
+(`ros-base`, not `desktop-full`). Built a tiny MJPEG HTTP server instead
+(`scripts/scratch/mjpeg_preview.py`, serves `/camera/color/image_raw` on
+`:8095`) and opened it in a host browser via `DISPLAY=:3 xdg-open` -- simplest live view
+without adding GUI packages to the container.
+
+First 9-sample set (max translation 57.2cm, up from 5.0cm) made things **worse**, not
+better: TSAI gave a `t_cam2gripper` norm of 57.8cm (vs the old calibration's 20.4cm) and
+self-consistency spread of 15-22cm (vs the old set's 2-6cm). Comparing all 5 of OpenCV's
+hand-eye methods on the same samples isolated the actual cause: PARK/HORAUD/ANDREFF/
+DANIILIDIS all agreed closely (6.6-8.4cm norm, near the user's measured ~5cm ), while
+**TSAI alone was the outlier** -- both this time and, very likely, in the original
+20.4cm result. Filtering to only full-12-marker-visible samples (partial-marker frames
+add real solvePnP noise) and growing the set to 11 such samples brought even TSAI into
+much closer agreement with the others (8.5cm vs 6.6-8.4cm). Saved with **PARK**
+(agrees tightly with HORAUD/DANIILIDIS) as
+`~/deployment_ws/pachirisu_wrist_camera_calib/wrist_camera_calib_v2.json`.
+
+Self-consistency spread is still 20-45cm across samples even after these fixes -- not
+fully resolved, method-agreement was the trust signal used to proceed, not a clean
+consistency number.
+
+### Validation: manual-touch error closed from ~20-27cm to 5.3cm
+
+Re-ran `detect_handle_and_placement` (via `scripts/scratch/test_detect_handle_and_placement.py`,
+now with `CALIB_PATH` overridable by env var) against the new calibration --
+`microwave handle` fired at 0.57-0.61 confidence, handle pose repeatable to ~3.3cm across
+two detections minutes apart, consistent with prior sessions. User touched the arm to the
+physical handle; comparing `get_state()['ee_pos']` to the computed handle pose:
+
+| | pos | 
+|---|---|
+| touch (wrist `ee_pos`) | (0.634, -0.125, 0.478) |
+| computed handle | (0.683 / 0.716 across 2 detections, -0.116/-0.123, 0.459) |
+| delta | ~5.3cm |
+
+5.3cm is in the same range as the known, separate gripper-fingertip-to-wrist offset
+(~5-6cm, previously identified and ruled out as *the sole* cause of the old ~20cm error) --
+so this residual is plausibly just that offset, not leftover calibration error. GPU was
+unavailable for detection this session (see below), so this ran on CPU
+(`CUDA_VISIBLE_DEVICES=""`, same fallback the Jetson rig uses) -- still fast enough for a
+one-off detection, no real slowdown concern for this kind of test.
+
+### GPU was full from another user's process -- not touched
+
+`GroundedSAM()` init hit `CUDA_AcceleratorError: out of memory` -- `nvidia-smi` showed
+PID (unrelated to this session) holding ~10.8GB/12GB: a `serve_policy.py` (pi05 LoRA
+checkpoint) process belonging to another lab member, running since the day before. Did
+**not** kill another user's process on a shared machine without checking first; worked
+around by running detection on CPU instead (see above).
+
+### Approach-only hover attempt: real motion incident, then unresolved IK convergence
+
+Brought up `stub_base_server.py` + `bulldog_bypass.py` (motion unlocked), `set_speed("low")`.
+
+First hover-target math needed two rounds of correction from the user before commanding
+anything (good catches, no motion sent during either): the repo's own pre-grasp offset
+convention (`handle_transform @ [0,0,-0.12]`, from `perception_interface.py`) produced a
+target *further* from the arm base than the handle itself, along an axis that -- once
+sanity-checked against "arm base ~ origin, handle mostly out along +x" -- didn't hold up
+as an obviously-safe direction to trust blindly for a first real move on this rig. Revised
+to the simplest defensible version: back off 12cm along **world -x only**, holding y/z
+(height) fixed at the handle's values. Final target: `(0.596, -0.123, 0.459)`, same
+orientation as the detected handle `(0.5, -0.5, -0.5, 0.5)` xyzw.
+
+Commanded via `arm.set_ee_pose()` (Kortex cartesian). **This did not behave like the
+documented "aborts, no motion" failure mode** -- `set_ee_pose()` returned `False` and a
+same-second `get_state()` read looked unchanged, but the user observed real, jerky
+motion, and the `arm_server.py` log confirmed it: a `JOINT_ACCELERATION_LIMIT_REACHED`
+trajectory-info notification mid-move, i.e. a real, partially-executed, aborted
+trajectory -- not a clean instant no-op. User moved the arm back by hand.
+**`LOCAL_DEPLOYMENT.md`'s "aborts... no motion" note is not reliable enough on its own
+to trust for a real move of this size on this rig** -- needs updating / more caution
+next time, not just cited as fact.
+
+`get_arm_state()` afterward read `ARMSTATE_SERVOING_READY` (no fault latched) with
+`velocity` all zero -- arm was fine, just displaced from where the software last thought
+it was.
+
+Switched to the Jetson-proven seeded-IK + joint-space pattern (`solve_ik_seeded`/
+`move_and_check` from `scripts/real_gen3_detect_grasp_microwave.py`, reimplemented
+standalone as `scripts/scratch/approach_hover_seeded_ik.py`, compute-only / no auto-command).
+Two things checked, in order:
+1. **Frame composition sanity check** (new, not in the Jetson original): FK the sim from
+   the arm's *actual current* joints and compare to the real `ee_pos`, with and without
+   composing `sd.robot_base_pose`. Confirmed consistent: `sim_ee_world == real_ee_pos +
+   robot_base_pose.position` (that offset, `(1.0, 3.0, 0.54)`, is just this `vention.yaml`
+   scene's fixed placement for a full mobile-base/kitchen sim, not a bug) -- so the
+   frame math itself is trustworthy.
+2. **IK solve itself did not converge**: 18.5cm `ik_err` for the hover target from the
+   current seed, with one joint solution component (~-5.95 rad) clearly outside that
+   joint's real hardware range -- a genuine solver/reachability failure from this specific
+   starting posture, not a frame bug. Correctly aborted (no motion commanded) per the
+   `ik_err > 2cm` guard.
+
+Session stopped here at the user's call (one real incident already; software-only IK
+debugging can safely continue without the arm powered/unlocked). Bulldog bypass killed
+cleanly (`SIGINT`, confirmed heartbeat-loss message + arm still `ARMSTATE_SERVOING_READY`,
+no fault) to relock motion before ending the session.
+
+### Not done / next session
+
+- **IK convergence for the hover target is still unresolved.** Try a different current
+  arm seed posture (small manual reposition before attempting the big jump), explicit
+  joint-limit arrays passed to `calculateInverseKinematics`, or a rest-pose bias --
+  all software-only, no hardware risk to iterate on.
+- The approach-only hover test itself (no grasp) is still not done -- blocked on the above.
+- Treat `arm.set_ee_pose()` as **not** a safe default for large moves on this rig until
+  proven otherwise -- prefer seeded-IK + `set_joint_position` (once IK converges), same
+  as the Jetson rig's proven pattern.
+- GPU contention with other users' long-running jobs on this shared machine is now a
+  known recurring risk for anything needing `torch`/CUDA here -- check `nvidia-smi` before
+  assuming GPU detection will just work, and don't kill others' processes without asking.
+
+---
+
 ## 2026-07-22 (evening) — Pachirisu: depth stable this session, full handle localization succeeded, but ~20cm base-frame error found in the eye-in-hand calibration
 
 Follow-on session. Goal was to retry `align_depth` (blocked twice before by USB controller
