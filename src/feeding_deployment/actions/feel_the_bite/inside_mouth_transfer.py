@@ -6,7 +6,6 @@ import time
 import pickle
 
 try:
-    import rospy
     from std_msgs.msg import Bool
 except ModuleNotFoundError:
     ROSPY_IMPORTED = False

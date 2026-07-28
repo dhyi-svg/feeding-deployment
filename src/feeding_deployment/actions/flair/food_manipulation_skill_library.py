@@ -2,16 +2,12 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 import threading
 
-# ros imports
-try:
-    import rospy
-    import tf2_ros
-    from geometry_msgs.msg import Point
-    from sensor_msgs.msg import JointState
-    from std_msgs.msg import String, Float64, Bool
-    ROSPY_IMPORTED = True
-except ModuleNotFoundError:
-    ROSPY_IMPORTED = False
+# NOTE(ros2): the ROS1 (rospy/tf2_ros/actionlib-adjacent) import block that
+# used to live here (rospy, tf2_ros, geometry_msgs.Point, sensor_msgs.
+# JointState, std_msgs.String/Float64/Bool, guarded by
+# `except ModuleNotFoundError: ROSPY_IMPORTED = False`) was dead code: none
+# of those names were referenced anywhere else in this file, and
+# ROSPY_IMPORTED itself was never read. Removed rather than migrated.
 
 from feeding_deployment.utils.pixel_selector import PixelSelector
 from feeding_deployment.utils.camera_utils import angle_between_pixels, pixel2World, world2Pixel

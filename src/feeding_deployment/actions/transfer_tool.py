@@ -9,8 +9,9 @@ import json
 from pybullet_helpers.geometry import Pose
 
 try:
-    import rospy
     from std_msgs.msg import Bool
+
+    from feeding_deployment.ros2_utils import node_handle
 except ModuleNotFoundError:
     ROSPY_IMPORTED = False
 
@@ -58,7 +59,9 @@ class TransferToolHLA(HighLevelAction):
             raise ValueError("Bite transfer type not recognized")
 
         if self.robot_interface is not None:
-            self.disable_collision_sensor_pub = rospy.Publisher("/disable_collision_sensor", Bool, queue_size=1)
+            self.disable_collision_sensor_pub = node_handle.get_node().create_publisher(
+                Bool, "/disable_collision_sensor", 1
+            )
 
         self.synthesized_gestures_dict_path = self.gesture_detectors_dir / "synthesized_gestures_dict.json"
         if not self.synthesized_gestures_dict_path.exists():

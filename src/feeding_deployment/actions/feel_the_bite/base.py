@@ -9,8 +9,9 @@ from feeding_deployment.interfaces.rviz_interface import RVizInterface
 from feeding_deployment.control.robot_controller.command_interface import CartesianCommand
 
 try:
-    import rospy
     from std_msgs.msg import Bool
+
+    from feeding_deployment.ros2_utils import node_handle
 except ModuleNotFoundError:
     ROSPY_IMPORTED = False
 
@@ -26,7 +27,9 @@ class Transfer(abc.ABC):
         self.no_waits = no_waits
 
         if self.robot_interface is not None:
-            self.set_filter_noisy_readings_pub = rospy.Publisher('/head_perception/set_filter_noisy_readings', Bool, queue_size=1)
+            self.set_filter_noisy_readings_pub = node_handle.get_node().create_publisher(
+                Bool, '/head_perception/set_filter_noisy_readings', 1
+            )
 
     def set_tool(self, tool):
         self.tool = tool

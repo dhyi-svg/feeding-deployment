@@ -9,14 +9,157 @@ from typing import Any, Tuple
 import yaml
 
 try:
-    import actionlib
-    import rospy
+    import rclpy
     import tf2_ros
-    from actionlib_msgs.msg import GoalStatus
+    from action_msgs.msg import GoalStatus  # TODO(ros2): replaces
+    # actionlib_msgs/GoalStatus -- constant NAMES changed (e.g. ACTIVE ->
+    # STATUS_EXECUTING, SUCCEEDED -> STATUS_SUCCEEDED); see _BlockingActionClient.
     from geometry_msgs.msg import Twist
+    # TODO(ros2): ROS2 action-message codegen normally produces ONE action
+    # type with nested Goal/Result/Feedback classes (e.g. `MoveBase.Goal`),
+    # not the separate `MoveBaseAction`/`MoveBaseGoal`/... classes actionlib
+    # used. Left as-is here, matching the still-unmigrated ROS1 shape
+    # `shared_autonomy_manager.py` (control/base_controller/, a different
+    # migration batch) currently imports -- if that package gets rebuilt
+    # with standard ROS2 .action codegen, this import and every
+    # MoveBaseGoal()/MoveBaseAction reference below will need updating too.
     from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
     from nav_msgs.msg import Odometry
+    from rclpy.action import ActionClient as _RclpyActionClient
     from std_msgs.msg import Bool, Empty
+
+    from feeding_deployment.ros2_utils import node_handle
+    from feeding_deployment.ros2_utils import rospy_compat as rospy
+
+    def _duration_sec(duration) -> float:
+        """float seconds from an ``rclpy.duration.Duration``
+        (``rospy_compat.Duration`` has no ``.to_sec()`` the way
+        ``rospy.Duration`` did)."""
+        return duration.nanoseconds / 1e9
+
+    def _time_from_stamp(stamp) -> "rclpy.time.Time":
+        """``rclpy.time.Time`` from a ``builtin_interfaces/Time``-typed
+        message field (e.g. ``TransformStamped.header.stamp``). Unlike
+        ROS1 rospy, where ``header.stamp`` already behaved like a
+        ``rospy.Time``, ROS2 message fields are plain data and need
+        explicit conversion before arithmetic with an ``rclpy.time.Time``
+        (e.g. ``rospy_compat.now()``)."""
+        return rclpy.time.Time.from_msg(stamp)
+
+    def _ros_now_sec() -> float:
+        """Analogue of ``rospy.get_time()`` (current ROS time as a float
+        seconds count). ``rospy_compat`` has no direct equivalent -- only
+        ``now()``, which returns an ``rclpy.time.Time`` -- and this file
+        uses raw float timestamps pervasively (deadlines, freshness
+        checks), so this converts once here rather than at every call
+        site."""
+        return rospy.now().nanoseconds / 1e9
+
+    class _BlockingActionClient:
+        """Thin synchronous-shaped wrapper around ``rclpy.action.ActionClient``,
+        standing in for ``actionlib.SimpleActionClient`` -- whose blocking
+        ``send_goal()``/``wait_for_result()``/``get_state()``/``cancel_goal()``
+        API this whole file's navigation watchdog/recovery loop is written
+        around (see ``_await_nav_result``, ``_drive_to_pose``,
+        ``_await_goal_active``).
+
+        # TODO(ros2): actionlib->rclpy.action port needs runtime
+        verification, blocking-call semantics changed. rclpy actions are
+        natively async (send_goal_async -> goal-handle future ->
+        get_result_async -> result future); this wrapper spins the shared
+        node to fake the old blocking calls rather than rewriting the
+        several hundred lines of watchdog/recovery logic built around
+        polling ``wait_for_result()`` in a loop. Known, NOT verified
+        against a real action server, semantic gaps vs
+        ``actionlib.SimpleActionClient``:
+          - ``send_goal()`` here BLOCKS (spins) until the goal is ACCEPTED
+            or REJECTED by the server; actionlib's returned immediately and
+            only surfaced rejection via ``get_state()``. A rejection here
+            raises ``RuntimeError`` instead.
+          - Sending a new goal while a previous one is still outstanding
+            simply drops the old goal handle client-side (no explicit
+            cancel); actionlib's ``SimpleActionClient`` replaced/preempted
+            the active goal. Not believed to matter for this file (goals
+            are always awaited to a terminal state, or explicitly
+            cancelled, before the next ``send_goal()``), but flagging since
+            it's a real behavior difference.
+          - ``cancel_goal()`` blocks (spins) on the cancel-response future;
+            actionlib's did not block.
+          - ``get_goal_status_text()``: ROS2 action results have no
+            free-text status field the way actionlib's server-set "status
+            text" did; this always returns ``""`` here.
+            ``_drive_to_pose``'s success-branch fallback check
+            (``"human teleoperation" in (client.get_goal_status_text() or
+            "")``) is therefore dead in practice -- the file already
+            prefers the native ``_done_pressed_this_leg`` subscription
+            signal, so behavior is preserved as long as that signal stays
+            reliable, but this is a real capability loss worth someone's
+            attention.
+          - No feedback-callback wiring (this file never consumed goal
+            feedback).
+        """
+
+        def __init__(self, node, action_type, action_name: str):
+            self._node = node
+            self._client = _RclpyActionClient(node, action_type, action_name)
+            self._goal_handle = None
+
+        @staticmethod
+        def _timeout_sec(timeout):
+            if timeout is None:
+                return None
+            if hasattr(timeout, "nanoseconds"):
+                return timeout.nanoseconds / 1e9
+            return float(timeout)
+
+        def wait_for_server(self, timeout=None) -> bool:
+            return self._client.wait_for_server(
+                timeout_sec=self._timeout_sec(timeout)
+            )
+
+        def send_goal(self, goal_msg) -> None:
+            send_future = self._client.send_goal_async(goal_msg)
+            rclpy.spin_until_future_complete(self._node, send_future)
+            goal_handle = send_future.result()
+            if goal_handle is None or not goal_handle.accepted:
+                raise RuntimeError(
+                    "navigation action goal was rejected or the send "
+                    "failed (actionlib.SimpleActionClient.send_goal() "
+                    "never raised here -- TODO(ros2): confirm callers want "
+                    "a raise vs. surfacing rejection through get_state())"
+                )
+            self._goal_handle = goal_handle
+            self._result_future = goal_handle.get_result_async()
+
+        def get_state(self):
+            if self._goal_handle is None:
+                return GoalStatus.STATUS_UNKNOWN
+            return self._goal_handle.status
+
+        def wait_for_result(self, timeout=None) -> bool:
+            timeout_sec = self._timeout_sec(timeout)
+            deadline = None if timeout_sec is None else time.monotonic() + timeout_sec
+            terminal = (
+                GoalStatus.STATUS_SUCCEEDED,
+                GoalStatus.STATUS_CANCELED,
+                GoalStatus.STATUS_ABORTED,
+            )
+            while True:
+                if self._goal_handle is not None and self._goal_handle.status in terminal:
+                    return True
+                if deadline is not None and time.monotonic() >= deadline:
+                    return False
+                rclpy.spin_once(self._node, timeout_sec=0.05)
+
+        def cancel_goal(self) -> None:
+            if self._goal_handle is None:
+                return
+            cancel_future = self._goal_handle.cancel_goal_async()
+            rclpy.spin_until_future_complete(self._node, cancel_future)
+
+        def get_goal_status_text(self) -> str:
+            # TODO(ros2): see class docstring -- no rclpy equivalent field.
+            return ""
 
     ROS_NAV_IMPORTED = True
 except ModuleNotFoundError:
@@ -218,8 +361,11 @@ class NavigateHLA(HighLevelAction):
     def _get_tf_buffer(self) -> "tf2_ros.Buffer":
         """Persistent TF buffer/listener, kept warm across navigation legs."""
         if not getattr(self, "_tf_buffer", None):
-            self._tf_buffer = tf2_ros.Buffer(cache_time=rospy.Duration(10.0))
-            self._tf_listener = tf2_ros.TransformListener(self._tf_buffer)
+            self._tf_buffer = tf2_ros.Buffer(cache_time=rospy.Duration(seconds=10.0))
+            # TransformListener now requires the node explicitly (ROS1 didn't).
+            self._tf_listener = tf2_ros.TransformListener(
+                self._tf_buffer, node_handle.get_node()
+            )
         return self._tf_buffer
 
     def _localization_fresh(self) -> bool:
@@ -233,11 +379,11 @@ class NavigateHLA(HighLevelAction):
         """
         try:
             tf = self._get_tf_buffer().lookup_transform(
-                self._MAP_FRAME, self._BASE_FRAME, rospy.Time(0)
+                self._MAP_FRAME, self._BASE_FRAME, rospy.Time()
             )
         except tf2_ros.TransformException:
             return False
-        age_s = (rospy.Time.now() - tf.header.stamp).to_sec()
+        age_s = _duration_sec(rospy.now() - _time_from_stamp(tf.header.stamp))
         return age_s <= self._LOCALIZATION_STALE_AFTER_S
 
     def _resolve_via(self, via: list) -> list:
@@ -267,12 +413,14 @@ class NavigateHLA(HighLevelAction):
         if not ROS_NAV_IMPORTED:
             raise RuntimeError("ROS navigation dependencies are not available")
 
-        if not rospy.core.is_initialized():
-            rospy.init_node(
-                "feeding_deployment_navigate_hla",
-                anonymous=True,
-                disable_signals=True,
-            )
+        if not node_handle.has_node():
+            # TODO(ros2): rospy's anonymous=True (unique auto-suffixed node
+            # name) and disable_signals=True (let the app manage SIGINT
+            # itself) have no direct node_handle.init_node()/rclpy.create_node()
+            # equivalent here -- node_handle's singleton is named exactly as
+            # given, and signal handling is whatever the process's
+            # rclpy.init() call site already set up.
+            node_handle.init_node("feeding_deployment_navigate_hla")
 
         if not hasattr(self, "_move_base_client"):
             # Connect to the shared_autonomy_manager's "navigate" action server
@@ -280,10 +428,10 @@ class NavigateHLA(HighLevelAction):
             # directly, so a human takeover can still report SUCCEEDED. Set the
             # FEEDING_NAV_ACTION env var to "move_base" to bypass the manager.
             nav_action = os.environ.get("FEEDING_NAV_ACTION", "navigate").strip()
-            self._move_base_client = actionlib.SimpleActionClient(
-                nav_action, MoveBaseAction
+            self._move_base_client = _BlockingActionClient(
+                node_handle.get_node(), MoveBaseAction, nav_action
             )
-            if not self._move_base_client.wait_for_server(rospy.Duration(15.0)):
+            if not self._move_base_client.wait_for_server(rospy.Duration(seconds=15.0)):
                 raise RuntimeError(
                     f"Timed out waiting for navigation action server '{nav_action}'"
                 )
@@ -315,20 +463,21 @@ class NavigateHLA(HighLevelAction):
         # consulted when the leg succeeds to decide "human parked it" -> skip the
         # confirm re-drive.
         self._done_pressed_this_leg = False
-        rospy.Subscriber(
-            "/shared_autonomy/takeover", Empty, self._on_teleop_takeover, queue_size=1
+        node = node_handle.get_node()
+        node.create_subscription(
+            Empty, "/shared_autonomy/takeover", self._on_teleop_takeover, 1
         )
-        rospy.Subscriber(
-            "/shared_autonomy/resume", Empty, self._on_teleop_resume, queue_size=1
+        node.create_subscription(
+            Empty, "/shared_autonomy/resume", self._on_teleop_resume, 1
         )
-        rospy.Subscriber(
-            "/shared_autonomy/done", Empty, self._on_teleop_done, queue_size=1
+        node.create_subscription(
+            Empty, "/shared_autonomy/done", self._on_teleop_done, 1
         )
         # We also PUBLISH takeover to start a recovery leg ourselves: re-send the
         # failed goal, then assert a takeover so the manager cancels move_base and
         # waits for the human. (The webapp asserts it too on the teleop screen.)
-        self._takeover_pub = rospy.Publisher(
-            "/shared_autonomy/takeover", Empty, queue_size=1
+        self._takeover_pub = node.create_publisher(
+            Empty, "/shared_autonomy/takeover", 1
         )
         # Safety hold (/nav_safety_hold). DORMANT since 2026-07-15: the original
         # publisher (zed_health_monitor) was deleted with the IMU-only ZED sweep;
@@ -339,15 +488,15 @@ class NavigateHLA(HighLevelAction):
         # the goal on release -- "stop, wait, resume" instead of a failed leg.
         self._safety_hold = False
         self._last_hold_time = None
-        rospy.Subscriber(
-            "/nav_safety_hold", Bool, self._on_safety_hold, queue_size=5
+        node.create_subscription(
+            Bool, "/nav_safety_hold", self._on_safety_hold, 5
         )
         self._teleop_subs_ready = True
 
     def _on_safety_hold(self, msg: "Bool") -> None:
         self._safety_hold = bool(msg.data)
         if self._safety_hold:
-            self._last_hold_time = rospy.Time.now()
+            self._last_hold_time = rospy.now()
 
     def _wait_while_safety_hold(self) -> None:
         """Block while the ZED-divergence hold is asserted (robot already stopped
@@ -391,10 +540,13 @@ class NavigateHLA(HighLevelAction):
         """Block until the freshly-sent goal goes ACTIVE, so a subsequent takeover
         is honored rather than cleared as a stale intent at the goal's start
         (the manager consumes pending intents when a new goal begins)."""
-        deadline = rospy.Time.now() + rospy.Duration(timeout_s)
+        deadline = rospy.now() + rospy.Duration(seconds=timeout_s)
         rate = rospy.Rate(20.0)
-        while not rospy.is_shutdown() and rospy.Time.now() < deadline:
-            if client.get_state() == GoalStatus.ACTIVE:
+        while not rospy.is_shutdown() and rospy.now() < deadline:
+            # TODO(ros2): ACTIVE (actionlib_msgs/GoalStatus) mapped to
+            # STATUS_EXECUTING (action_msgs/GoalStatus) -- confirm this is
+            # the right target state vs. also accepting STATUS_ACCEPTED.
+            if client.get_state() == GoalStatus.STATUS_EXECUTING:
                 return
             rate.sleep()
 
@@ -513,7 +665,7 @@ class NavigateHLA(HighLevelAction):
         stall_s = 0.0
         held_during_goal = False
         while True:
-            if client.wait_for_result(rospy.Duration(poll_s)):
+            if client.wait_for_result(rospy.Duration(seconds=poll_s)):
                 break  # move_base/manager reached a terminal state
             if rospy.is_shutdown():
                 client.cancel_goal()
@@ -539,7 +691,9 @@ class NavigateHLA(HighLevelAction):
                 return "failed"
 
         state = client.get_state()
-        if state == GoalStatus.SUCCEEDED:
+        # TODO(ros2): SUCCEEDED (actionlib_msgs/GoalStatus) mapped to
+        # STATUS_SUCCEEDED (action_msgs/GoalStatus).
+        if state == GoalStatus.STATUS_SUCCEEDED:
             return "succeeded"
         # If move_base aborted because of / during a ZED-divergence hold (its
         # recovery behaviors fail while the wheels are held, so it eventually
@@ -611,7 +765,9 @@ class NavigateHLA(HighLevelAction):
         # if the user presses Done at any point during this drive.
         self._done_pressed_this_leg = False
         while True:
-            goal.target_pose.header.stamp = rospy.Time.now()
+            # .to_msg(): a message field wants builtin_interfaces/Time, not
+            # the rclpy.time.Time rospy.now() returns.
+            goal.target_pose.header.stamp = rospy.now().to_msg()
             client.send_goal(goal)
             # This leg starts under autonomy; enable the webapp's Robot Base
             # Control button so the user can take over mid-drive. The manager
@@ -764,9 +920,9 @@ class NavigateHLA(HighLevelAction):
         if duration_s <= 0.0:
             return
         print(f"  Waiting {duration_s:.0f}s for localization to settle before {reason}...")
-        deadline = rospy.Time.now() + rospy.Duration(duration_s)
-        while not rospy.is_shutdown() and rospy.Time.now() < deadline:
-            remaining_s = (deadline - rospy.Time.now()).to_sec()
+        deadline = rospy.now() + rospy.Duration(seconds=duration_s)
+        while not rospy.is_shutdown() and rospy.now() < deadline:
+            remaining_s = _duration_sec(deadline - rospy.now())
             rospy.sleep(min(1.0, max(0.0, remaining_s)))
 
     def _refine_cmd(self, yaw: float, goal_yaw: float, cfg: dict) -> "Twist":
@@ -816,19 +972,42 @@ class NavigateHLA(HighLevelAction):
         # means move_base isn't configured as expected and we want to fail loudly
         # rather than refine to a wrong threshold. (Switching planners changes
         # this namespace, e.g. DWAPlannerROS.)
-        yaw_tol = rospy.get_param("move_base/TebLocalPlannerROS/yaw_goal_tolerance")
+        # TODO(ros2): rospy.get_param() read a param from move_base's own ROS1
+        # global parameter server -- ROS2 has NO global parameter server;
+        # parameters are strictly per-node, and reading ANOTHER node's
+        # parameter requires a parameter-service client against that
+        # specific node (e.g. a client on '/move_base/get_parameters'), not
+        # a local declare_parameter()/get_parameter() call. What follows
+        # declares/reads a parameter of the same NAME on THIS node instead,
+        # which only picks up the real TEB tolerance if something explicitly
+        # sets it as an override on this node (e.g. via launch) -- it does
+        # NOT reach into a running move_base/Nav2 node's parameters the way
+        # the ROS1 code did. Needs a real fix once the ROS2 navigation
+        # stack (move_base vs. Nav2 controller_server, node name/namespace)
+        # is finalized.
+        yaw_tol_param_name = "move_base.TebLocalPlannerROS.yaw_goal_tolerance"
+        node = node_handle.get_node()
+        if not node.has_parameter(yaw_tol_param_name):
+            node.declare_parameter(yaw_tol_param_name)
+        yaw_tol = node.get_parameter(yaw_tol_param_name).value
+        if yaw_tol is None:
+            raise RuntimeError(
+                f"required parameter '{yaw_tol_param_name}' is not set "
+                "(see the TODO(ros2) above -- this no longer reaches "
+                "move_base's own parameters the way rospy.get_param did)"
+            )
         success_yaw_rad = (
             float(cfg["success_yaw_rad"]) if cfg["success_yaw_rad"] is not None else yaw_tol * 0.5
         )
 
         actuate = bool(cfg["actuate"])
         cmd_pub = (
-            rospy.Publisher(str(cfg["cmd_vel_topic"]), Twist, queue_size=1)
+            node.create_publisher(Twist, str(cfg["cmd_vel_topic"]), 1)
             if actuate else None
         )
 
-        tf_buffer = tf2_ros.Buffer(cache_time=rospy.Duration(5.0))
-        _listener = tf2_ros.TransformListener(tf_buffer)
+        tf_buffer = tf2_ros.Buffer(cache_time=rospy.Duration(seconds=5.0))
+        _listener = tf2_ros.TransformListener(tf_buffer, node)
 
         gx = pose["x"]
         gy = pose["y"]
@@ -843,7 +1022,7 @@ class NavigateHLA(HighLevelAction):
             try:
                 tfm = tf_buffer.lookup_transform(
                     self._MAP_FRAME, self._BASE_FRAME,
-                    rospy.Time(0), rospy.Duration(1.0),
+                    rospy.Time(), rospy.Duration(seconds=1.0),
                 )
             except (
                 tf2_ros.LookupException,
@@ -889,11 +1068,11 @@ class NavigateHLA(HighLevelAction):
         # Start the refinement clock AFTER the settle wait, so `timeout_s` budgets
         # only actual refinement driving -- otherwise the settle wait alone exceeds
         # the timeout and the loop bails before commanding the base.
-        start = rospy.Time.now()
+        start = rospy.now()
 
         try:
             while not rospy.is_shutdown():
-                elapsed_s = (rospy.Time.now() - start).to_sec()
+                elapsed_s = _duration_sec(rospy.now() - start)
                 if elapsed_s >= float(cfg["timeout_s"]):
                     print(f"\n  Refinement: timed out after {float(cfg['timeout_s']):.0f}s.")
                     break
@@ -901,7 +1080,7 @@ class NavigateHLA(HighLevelAction):
                 try:
                     tf = tf_buffer.lookup_transform(
                         self._MAP_FRAME, self._BASE_FRAME,
-                        rospy.Time(0), rospy.Duration(0.1),
+                        rospy.Time(), rospy.Duration(seconds=0.1),
                     )
                 except (
                     tf2_ros.LookupException,
@@ -1084,11 +1263,12 @@ class NavigateHLA(HighLevelAction):
             return
         self._scripted_odom = None      # (x, y, yaw, receipt time)
         self._last_teleop_cmd_t = None  # receipt time of the last NONZERO teleop cmd
-        rospy.Subscriber(
-            self._SCRIPTED_ODOM_TOPIC, Odometry, self._on_scripted_odom, queue_size=5
+        node = node_handle.get_node()
+        node.create_subscription(
+            Odometry, self._SCRIPTED_ODOM_TOPIC, self._on_scripted_odom, 5
         )
-        rospy.Subscriber(
-            "/cmd_vel_teleop", Twist, self._on_teleop_cmd, queue_size=5
+        node.create_subscription(
+            Twist, "/cmd_vel_teleop", self._on_teleop_cmd, 5
         )
         self._scripted_subs_ready = True
 
@@ -1096,12 +1276,12 @@ class NavigateHLA(HighLevelAction):
         p = msg.pose.pose.position
         q = msg.pose.pose.orientation
         self._scripted_odom = (
-            p.x, p.y, self._yaw_from_quat(q.x, q.y, q.z, q.w), rospy.get_time(),
+            p.x, p.y, self._yaw_from_quat(q.x, q.y, q.z, q.w), _ros_now_sec(),
         )
 
     def _on_teleop_cmd(self, msg: "Twist") -> None:
         if msg.linear.x != 0.0 or msg.angular.z != 0.0:
-            self._last_teleop_cmd_t = rospy.get_time()
+            self._last_teleop_cmd_t = _ros_now_sec()
 
     def _fresh_odom_sample(self):
         """(x, y, yaw) of the latest fused-odom sample if younger than
@@ -1110,14 +1290,14 @@ class NavigateHLA(HighLevelAction):
         if sample is None:
             return None
         x, y, yaw, recv_t = sample
-        if rospy.get_time() - recv_t > self._SCRIPTED_ODOM_FRESH_S:
+        if _ros_now_sec() - recv_t > self._SCRIPTED_ODOM_FRESH_S:
             return None
         return x, y, yaw
 
     def _get_scripted_cmd_pub(self):
         if getattr(self, "_scripted_cmd_pub", None) is None:
-            self._scripted_cmd_pub = rospy.Publisher(
-                self._SCRIPTED_CMD_VEL_TOPIC, Twist, queue_size=1
+            self._scripted_cmd_pub = node_handle.get_node().create_publisher(
+                Twist, self._SCRIPTED_CMD_VEL_TOPIC, 1
             )
             rospy.sleep(0.3)  # let connections settle before the first command
         return self._scripted_cmd_pub
@@ -1198,9 +1378,9 @@ class NavigateHLA(HighLevelAction):
 
         # Origin latch, fail-fast: without fresh fused odom there is no way to
         # measure progress and we refuse to drive blind.
-        wait_deadline = rospy.get_time() + self._SCRIPTED_ODOM_WAIT_S
+        wait_deadline = _ros_now_sec() + self._SCRIPTED_ODOM_WAIT_S
         origin = self._fresh_odom_sample()
-        while origin is None and rospy.get_time() < wait_deadline and not rospy.is_shutdown():
+        while origin is None and _ros_now_sec() < wait_deadline and not rospy.is_shutdown():
             rospy.sleep(0.1)
             origin = self._fresh_odom_sample()
         if origin is None:
@@ -1217,7 +1397,7 @@ class NavigateHLA(HighLevelAction):
         rate = rospy.Rate(self._SCRIPTED_RATE_HZ)
         progress = 0.0
         yaw_drift_ticks = 0
-        start_t = rospy.get_time()
+        start_t = _ros_now_sec()
         seg_start_t = start_t
         stop_reason = None
         print(
@@ -1228,7 +1408,7 @@ class NavigateHLA(HighLevelAction):
         )
         try:
             while not rospy.is_shutdown():
-                now = rospy.get_time()
+                now = _ros_now_sec()
                 # Human intervention: takeover intent (webapp/Xbox both publish
                 # it) or any nonzero teleop command since this segment started.
                 teleop_cmd_t = getattr(self, "_last_teleop_cmd_t", None)
@@ -1308,7 +1488,7 @@ class NavigateHLA(HighLevelAction):
                 except Exception:
                     break
 
-        record["driven_s"] = round(rospy.get_time() - start_t, 2)
+        record["driven_s"] = round(_ros_now_sec() - start_t, 2)
         record["stop_reason"] = stop_reason
         record["map_pose_after"] = self._se2_record(self._read_base_pose_se2())
         self._log_scripted_event(record)
@@ -1363,7 +1543,7 @@ class NavigateHLA(HighLevelAction):
             teleop_cmd_t = getattr(self, "_last_teleop_cmd_t", None)
             quiet = (
                 teleop_cmd_t is None
-                or rospy.get_time() - teleop_cmd_t >= self._SCRIPTED_TELEOP_QUIET_S
+                or _ros_now_sec() - teleop_cmd_t >= self._SCRIPTED_TELEOP_QUIET_S
             )
             if not self._teleop_active and quiet:
                 print(f"[logged-nav] {purpose}: teleop released -- "
@@ -1448,7 +1628,7 @@ class NavigateHLA(HighLevelAction):
             return None
         try:
             tf = self._get_tf_buffer().lookup_transform(
-                self._MAP_FRAME, self._BASE_FRAME, rospy.Time(0), rospy.Duration(1.0)
+                self._MAP_FRAME, self._BASE_FRAME, rospy.Time(), rospy.Duration(seconds=1.0)
             )
         except tf2_ros.TransformException:
             return None
