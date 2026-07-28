@@ -246,6 +246,8 @@ input, textarea {
 /* ── Autocontinue countdown ── */
 .cdown { font-size: 2.4vh; color: var(--tm); text-align: center; min-height: 1.3em; }
 .cdown span { color: var(--a); font-weight: 700; font-size: 2.7vh; }
+/* keeps the countdown's box in the layout so its appearance doesn't shift the page */
+.cdown.cdown-hidden { visibility: hidden; }
 
 /* ── Talk box (text input + send/clear/voice) ── */
 .talk-lbl { font-size: 2.4vh; text-transform: uppercase; letter-spacing: .06em; color: var(--tm); margin: 1.4vh 0 1vh; }

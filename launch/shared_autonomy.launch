@@ -3,8 +3,8 @@
 
        Prerequisites (start these first, as usual):
          - Localization: cartographer_localization.launch (map->odom) and the
-           ZED/VIO (odom->vention_base_link). These MUST stay running during a
-           human takeover so TF stays valid.
+           fused IMU+wheel EKF from sensors.launch (odom->vention_base_link).
+           These MUST stay running during a human takeover so TF stays valid.
          - Sensors: lidar topics.
 
        This launch starts:
@@ -18,15 +18,10 @@
        manager automatically. (Set FEEDING_NAV_ACTION=move_base to bypass.)
   -->
 
-  <!-- Ablation flag: zed_interlock:=false runs WITHOUT the ZED-divergence
-       interlock (no zed_health_monitor -> no bridge gating, no manager goal
-       pausing). Default on; NO_ZED_INTERLOCK=1 env also disables. -->
-  <arg name="zed_interlock" default="$(eval optenv('NO_ZED_INTERLOCK', '0') != '1')"/>
-
-  <!-- move_base + cmd_vel bridge -->
-  <include file="$(find feeding_deployment)/launch/navigation.launch">
-    <arg name="zed_interlock" value="$(arg zed_interlock)"/>
-  </include>
+  <!-- move_base + cmd_vel bridge. (The ZED-divergence interlock and its
+       zed_interlock/NO_ZED_INTERLOCK flag were unplumbed 2026-07-13, see
+       navigation.launch; nav rides the fused IMU+wheel EKF now.) -->
+  <include file="$(find feeding_deployment)/launch/navigation.launch"/>
 
   <!-- Manager: navigate action server -> move_base passthrough -->
   <node pkg="feeding_deployment"
@@ -50,14 +45,13 @@
     <param name="axis_linear" value="1"/>
     <param name="axis_angular" value="0"/>
     <!-- Teleop publishes on its own topic; the cmd_vel bridge executes it with
-         priority over /cmd_vel and WITHOUT the ZED-divergence hold gate (the
+         priority over /cmd_vel and exempt from any /nav_safety_hold gate (the
          human is supervising). Autonomous nav stays on /cmd_vel. -->
     <param name="cmd_vel_topic" value="/cmd_vel_teleop"/>
-    <!-- Intentionally faster than the autonomy's TEB limits (see
-         teb_local_planner.yaml: 0.2 m/s / 0.5 rad/s); takeover driving is
-         deadman-gated and human-supervised. -->
-    <param name="max_vel_x" value="0.6"/>
-    <param name="max_vel_theta" value="1.0"/>
+    <!-- Teleop cap 0.10 m/s / 0.1667 rad/s (2026-07-10, 5/3 ratio). Kept above the
+         autonomy's TEB limits (see teb_local_planner.yaml); deadman-gated, supervised. -->
+    <param name="max_vel_x" value="0.10"/>
+    <param name="max_vel_theta" value="0.1667"/>
     <param name="deadband" value="0.12"/>
   </node>
 </launch>

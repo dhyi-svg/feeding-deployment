@@ -53,7 +53,8 @@ SESSION_KEEP="${SESSION_KEEP:-10}"
 new_bundle() {
   local stamp bundle
   stamp="$(printf '%(%Y%m%d_%H%M%S)T' -1)"
-  bundle="$SESS_ROOT/session_$stamp"
+  # SESSION_LABEL (forwarded by feeding_start over ssh) suffixes the bundle name.
+  bundle="$SESS_ROOT/session_${stamp}${SESSION_LABEL:+_$SESSION_LABEL}"
   mkdir -p "$bundle/robot/tmux"
   printf '%(%Y-%m-%dT%H:%M:%S)T' -1 > "$bundle/.started_iso"
   # Point current_session at the new bundle. If a stray REAL dir sits there,
@@ -150,7 +151,8 @@ do_build() {
 
   if (( ! fresh )); then
     install_pane_logging       # ensure hooks + pipe existing panes, then attach
-    echo "session '$SESSION' already exists -- attaching."
+    echo "session '$SESSION' already exists."
+    [[ -n "${NO_ATTACH:-}" ]] && { echo "(NO_ATTACH set -- left detached)"; return 0; }
     exec tmux attach -t "$SESSION"
   fi
 
@@ -184,6 +186,7 @@ do_build() {
   echo "Built tmux session '$SESSION' (arm / base / bulldog)."
   echo "First bringup: run arm, run base, then -- once both are up -- run bulldog."
   echo "After an e-stop: press 'prefix + r' to restart all three (bulldog +${BULLDOG_DELAY}s)."
+  [[ -n "${NO_ATTACH:-}" ]] && { echo "(NO_ATTACH set -- session built, left detached)"; return 0; }
   exec tmux attach -t "$SESSION"
 }
 

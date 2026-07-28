@@ -1,3 +1,8 @@
+# RETIRED [2026-07-15]: zed_pose_to_odom_feedback (the only consumer) was
+# removed from sensors.launch when the ZED went IMU-only -- VIO odom, the
+# sanitizer, and the odom_feedback chain no longer exist. Kept for git
+# history / offline replay context of pre-Jul-15 bags.
+#
 # Odom pipeline ablation switches — read by zed_pose_to_odom_feedback.py.
 #
 # Each flag toggles ONE stage of the ZED-odom processing node. Setting a flag

@@ -204,7 +204,7 @@ def _load_encoding_payload(path: str) -> Dict[str, Any]:
 
 
 def run_deployment(
-    client: OpenAI,
+    client: anthropic.Anthropic,
     user_name: str,
     deployment_id: str,
     physical_profile_label: str,

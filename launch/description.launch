@@ -1,4 +1,6 @@
 <launch>
+  <!-- LEGACY standalone bringup: vention.urdf still assumes ZED-owned odom
+       (inverted joint). NEVER run alongside sensors.launch (two-parent TF). -->
   <param name="robot_description"
          textfile="$(find feeding_deployment)/urdf/vention.urdf" />
 

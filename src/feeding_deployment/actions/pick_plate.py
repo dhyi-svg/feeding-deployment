@@ -1,6 +1,5 @@
 from typing import Any
 
-import time
 from contextlib import nullcontext
 
 from relational_structs import (
@@ -72,10 +71,7 @@ class PickPlateFromApplianceHLA(HighLevelAction):
 
         return f"pick_plate_from_{appliance.name}.yaml"
     
-    # manip_confirm_mode defaults to None so per-user behavior trees that
-    # predate the AskForManipulationConfirmation parameter still execute
-    # (today's wait-for-the-user detection page).
-    def pick_plate_from_fridge(self, speed: str, handle_color, color_range, manip_confirm_mode=None) -> None:
+    def pick_plate_from_fridge(self, speed: str, handle_color, color_range, manip_confirm) -> None:
         assert self.sim.held_object_name is None
 
         if self.robot_interface is not None:
@@ -86,7 +82,8 @@ class PickPlateFromApplianceHLA(HighLevelAction):
         self.report_activity("Looking inside the fridge for the plate")
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.fridge_contents_gaze_pos)
-        confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm_mode)
+        self.settle_camera()
+        confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm)
         result = self.perception_interface.perceive_attachment_poses(handle_type="bottom textured fridge door", handle_color=handle_color, color_range=color_range, web_interface=self.web_interface, confirm_mode=confirm_mode, confirm_autocontinue_s=confirm_autocontinue_s)
 
         pickup_pose = result["pickup_pose"]
@@ -99,8 +96,8 @@ class PickPlateFromApplianceHLA(HighLevelAction):
         orig_color = list(handle_color) if hasattr(handle_color, '__iter__') else handle_color
         if new_color != orig_color or abs(new_range - float(color_range)) > 1e-9:
             objects = (Object("plate", plate_type), Object("fridge", appliance_type))
-            self.process_behavior_tree_parameter_update(objects, {}, "PickPlateFromAppliance", "HandleColor", new_color)
-            self.process_behavior_tree_parameter_update(objects, {}, "PickPlateFromAppliance", "ColorRange", new_range)
+            self.process_behavior_tree_parameter_update(objects, {}, "PickPlateFromAppliance", "PlateHandleColor", new_color)
+            self.process_behavior_tree_parameter_update(objects, {}, "PickPlateFromAppliance", "PlateHandleColorTolerance", new_range)
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.fridge_inside_intermediate_pos)
@@ -118,7 +115,7 @@ class PickPlateFromApplianceHLA(HighLevelAction):
         self.move_to_ee_pose(self.sim.scene_description.fridge_above_intermediate_pose)
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
 
-    def pick_plate_from_microwave(self, speed: str, handle_color, color_range, manip_confirm_mode=None) -> None:
+    def pick_plate_from_microwave(self, speed: str, handle_color, color_range, manip_confirm) -> None:
         assert self.sim.held_object_name is None
 
         if self.robot_interface is not None:
@@ -131,10 +128,10 @@ class PickPlateFromApplianceHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.right_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.microwave_inside_gaze_pos)
 
-        time.sleep(2.0)
+        self.settle_camera()
         # The camera is physically flipped for the microwave-inside gaze, so the frame is
         # already upright -- tell perception not to re-flip the user-facing images.
-        confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm_mode)
+        confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm)
         result = self.perception_interface.perceive_attachment_poses(handle_type="microwave", handle_color=handle_color, color_range=color_range, web_interface=self.web_interface, camera_flipped=True, confirm_mode=confirm_mode, confirm_autocontinue_s=confirm_autocontinue_s)
         pickup_pose = result["pickup_pose"]
         pre_pickup_pose = result["pre_pickup_pose"]
@@ -144,8 +141,8 @@ class PickPlateFromApplianceHLA(HighLevelAction):
         orig_color = list(handle_color) if hasattr(handle_color, '__iter__') else handle_color
         if new_color != orig_color or abs(new_range - float(color_range)) > 1e-9:
             objects = (Object("plate", plate_type), Object("microwave", appliance_type))
-            self.process_behavior_tree_parameter_update(objects, {}, "PickPlateFromAppliance", "HandleColor", new_color)
-            self.process_behavior_tree_parameter_update(objects, {}, "PickPlateFromAppliance", "ColorRange", new_range)
+            self.process_behavior_tree_parameter_update(objects, {}, "PickPlateFromAppliance", "PlateHandleColor", new_color)
+            self.process_behavior_tree_parameter_update(objects, {}, "PickPlateFromAppliance", "PlateHandleColorTolerance", new_range)
 
         self.move_to_joint_positions(self.sim.scene_description.right_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.behind_back_retract_pos)
@@ -239,7 +236,7 @@ class PickPlateFromHolderHLA(HighLevelAction):
         self.report_activity("Picking up the plate")
         self.move_to_ee_pose(self.sim.scene_description.inside_plate_holder_pose)
 
-        with holder_threshold:
+        with self.low_speed(restore=speed), holder_threshold:
             self.open_gripper()
             self.report_activity("Lifting the plate off the stand")
             self.move_to_ee_pose(self.sim.scene_description.above_plate_holder_pose)
@@ -288,7 +285,7 @@ class PickPlateFromTableHLA(HighLevelAction):
         assert table.name == "table"
         return "pick_plate_from_table.yaml"
 
-    def pick_plate_from_table(self, speed: str, handle_color, color_range, manip_confirm_mode=None) -> None:
+    def pick_plate_from_table(self, speed: str, handle_color, color_range, manip_confirm) -> None:
         assert self.sim.held_object_name is None
 
         if self.robot_interface is not None:
@@ -296,11 +293,18 @@ class PickPlateFromTableHLA(HighLevelAction):
 
         print("Picking plate from table ...")
 
+        self.report_activity("Recording a picture of the plate after feeding")
+        self.move_to_joint_positions(self.sim.scene_description.retract_pos)
+        self.move_to_joint_positions(self.sim.scene_description.above_plate_pos)
+        self.log_camera_image("plate_after_feeding", settle_s=5.0)
+        self.move_to_joint_positions(self.sim.scene_description.retract_pos)
+
         self.report_activity("Looking at the table for the plate")
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.table_plate_gaze_pos)
+        self.settle_camera()
 
-        confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm_mode)
+        confirm_mode, confirm_autocontinue_s = self._confirm_page_args(manip_confirm)
         result = self.perception_interface.perceive_attachment_poses(handle_type="table", handle_color=handle_color, color_range=color_range, web_interface=self.web_interface, handle_orientation="left", confirm_mode=confirm_mode, confirm_autocontinue_s=confirm_autocontinue_s)
         pickup_pose = result["pickup_pose"]
         pre_pickup_pose = result["pre_pickup_pose"]
@@ -311,16 +315,19 @@ class PickPlateFromTableHLA(HighLevelAction):
         orig_color = list(handle_color) if hasattr(handle_color, '__iter__') else handle_color
         if new_color != orig_color or abs(new_range - float(color_range)) > 1e-9:
             objects = (Object("plate", plate_type), Object("table", table_type))
-            self.process_behavior_tree_parameter_update(objects, {}, "PickPlateFromTable", "HandleColor", new_color)
-            self.process_behavior_tree_parameter_update(objects, {}, "PickPlateFromTable", "ColorRange", new_range)
+            self.process_behavior_tree_parameter_update(objects, {}, "PickPlateFromTable", "PlateHandleColor", new_color)
+            self.process_behavior_tree_parameter_update(objects, {}, "PickPlateFromTable", "PlateHandleColorTolerance", new_range)
 
         self.move_to_joint_positions(self.sim.scene_description.table_intermediate_pos)
         self.report_activity("Reaching for the plate on the table")
         self.move_to_ee_pose(pre_pickup_pose)
         self.close_gripper()
-        self.move_to_ee_pose(pickup_pose)
-        self.open_gripper()
-        self.report_activity("Lifting the plate off the table")
-        self.move_to_ee_pose(above_pickup_pose)
+
+        with self.low_speed(restore=speed):
+            self.move_to_ee_pose(pickup_pose)
+            self.open_gripper()
+            self.report_activity("Lifting the plate off the table")
+            self.move_to_ee_pose(above_pickup_pose)
+
         self.move_to_ee_pose(self.sim.scene_description.table_intermediate_pose)
         self.move_to_joint_positions(self.sim.scene_description.left_back_retract_pos)

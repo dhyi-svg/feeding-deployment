@@ -43,11 +43,12 @@ import math
 import os
 import sys
 import threading
+import time
 import traceback
 
 import rospy
 from geometry_msgs.msg import Twist
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float64
 
 def add_ros_vention_src_to_path():
     try:
@@ -78,11 +79,13 @@ class CmdVelBridgeBasicmicro:
         self.cmd_vel_topic = rospy.get_param("~cmd_vel_topic", "/cmd_vel")
 
         # Convert m/s and rad/s into "speed units" used by your motor controller.
-        # Start with these, then tune:
-        # - If robot is too slow: increase linear_scale
-        # - If steering is too weak/strong: adjust angular_scale
-        self.linear_scale = float(rospy.get_param("~linear_scale", 1000.0))
-        self.angular_scale = float(rospy.get_param("~angular_scale", 800.0))
+        # Defaults physically calibrated 2026-07-09 (direct-serial sweeps):
+        # linear_scale == counts_per_meter (4874) so commanded m/s == actual;
+        # angular_scale (2600) from measured rotation (250 counts/s -> 0.096 rad/s).
+        # Govern speed via TEB max_vel_*, NOT by detuning these. (launch files
+        # override; angular measured on a slip-prone patch -- verify on real floor.)
+        self.linear_scale = float(rospy.get_param("~linear_scale", 4874.0))
+        self.angular_scale = float(rospy.get_param("~angular_scale", 2600.0))
 
         # Deadband on angular velocity (rad/s) to avoid sign-flip jitter.
         self.w_deadband = float(rospy.get_param("~w_deadband", 0.03))
@@ -98,7 +101,7 @@ class CmdVelBridgeBasicmicro:
         # IMPORTANT: do NOT reintroduce a per-wheel minimum here -- forcing each
         # wheel up independently snaps gentle arcs to pure-straight/pure-spin,
         # which is the "translate OR rotate, never both" bug this replaced.
-        self.min_move_units = int(rospy.get_param("~min_move_units", 250))
+        self.min_move_units = int(rospy.get_param("~min_move_units", 100))
 
         # If your wiring is flipped, you can invert left/right or swap outputs:
         self.invert_left = bool(rospy.get_param("~invert_left", False))
@@ -111,10 +114,11 @@ class CmdVelBridgeBasicmicro:
         # NOTE: the lost-command stop lives on the NUC (BaseInterface), not here.
         # This node only translates /cmd_vel into set_speeds RPC calls.
 
-        # ---- Safety hold (ZED-divergence interlock) ----
-        # zed_health_monitor asserts /nav_safety_hold when ZED tracking diverges
-        # (odom becomes garbage). While held, we command zero regardless of
-        # /cmd_vel, so the base stops until the ZED recovers. The hold gates
+        # ---- Safety hold (/nav_safety_hold) ----
+        # DORMANT since 2026-07-15: the original publisher (zed_health_monitor)
+        # was deleted with the IMU-only ZED sweep; a Phase-3 interlock can
+        # republish the topic and this gate re-engages unchanged. While held,
+        # we command zero regardless of /cmd_vel. The hold gates
         # AUTONOMOUS commands only: teleop is human-supervised and exempt --
         # driving out of a divergence is exactly what a takeover is for.
         # Fail-safe: once we've ever heard the monitor, a stale flag (monitor
@@ -145,6 +149,12 @@ class CmdVelBridgeBasicmicro:
         # stiction floor and clamp), converted back to m/s / rad/s so it can
         # be overlaid against the incoming /cmd_vel.
         self.applied_pub = rospy.Publisher("~applied", Twist, queue_size=10)
+
+        # Diagnostics: measured wall time of the set_speeds RPC round-trip
+        # (compute -> NUC -> serial write/flush -> return). This is the command
+        # latency the ~applied echo does NOT capture. Published, not written to
+        # disk, so the hot path stays free of I/O; nav_diag_logger records it.
+        self.rpc_latency_pub = rospy.Publisher("~rpc_latency_s", Float64, queue_size=10)
 
         rospy.loginfo("cmd_vel bridge running. Waiting for %s (autonomous, hold-gated) "
                       "and %s (teleop, priority, mute %.2fs)...",
@@ -260,7 +270,11 @@ class CmdVelBridgeBasicmicro:
                 # NOTE: BaseInterface.set_speeds(speed_a, speed_b) over RPC.
                 # If speed_a maps to right and speed_b maps to left in your hardware, this is correct.
                 # If reversed, set ~swap_left_right:=true.
+                # Time the RPC (two perf_counter reads + one async publish; no
+                # added blocking, no disk I/O -- does not affect command timing).
+                _t0 = time.perf_counter()
                 self.base.set_speeds(right, left)
+                self.rpc_latency_pub.publish(Float64(time.perf_counter() - _t0))
             except Exception:
                 rospy.logerr("Motor command failed:\n%s", traceback.format_exc())
 

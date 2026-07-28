@@ -8,7 +8,9 @@ can be attributed to a source:
   * map  -> odom               : Cartographer's correction (scan-matching vs the
                                  frozen .pbstream). Jitter here = lidar / map /
                                  environment-feature quality.
-  * odom -> vention_base_link  : ZED VIO odometry. Jitter here = VIO drift.
+  * odom -> vention_base_link  : fused wheel+IMU EKF odometry (ekf_fused_imu_wheel,
+                                 20 Hz; was ZED VIO pre-2026-07-13). Jitter here =
+                                 odometry drift.
   * map  -> vention_base_link  : the product -- exactly what NavigateHLA /
                                  move_base compare against when checking the goal.
 
@@ -328,7 +330,7 @@ class LocalizationMeasurer:
         labels = {
             "map2base": "map -> base   (what the goal-check uses)",
             "map2odom": "map -> odom   (Cartographer correction)",
-            "odom2base": "odom -> base  (ZED VIO odometry)",
+            "odom2base": "odom -> base  (fused wheel+IMU EKF)",
         }
         for link in LINKS:
             s = self._link_stats(self.rows[link])
@@ -404,7 +406,7 @@ class LocalizationMeasurer:
         labels = {
             "map2base": "map -> base   (what the goal-check uses)",
             "map2odom": "map -> odom   (Cartographer correction)",
-            "odom2base": "odom -> base  (ZED VIO odometry)",
+            "odom2base": "odom -> base  (fused wheel+IMU EKF)",
         }
         for link in LINKS:
             s = self._link_stats(self.rows[link])

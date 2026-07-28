@@ -1,6 +1,6 @@
 """Run a focused NavigateHLA test to a named location.
 
-Standalone nav-offset loop (no preference pipeline): the PositionOffset stored
+Standalone nav-offset loop (no preference pipeline): the ParkingOffset stored
 in the navigate_to_<location>.yaml behavior tree is read and applied to the
 goal, and after arrival you can teleop the robot to the exact desired pose and
 have the new TOTAL offset written straight back to that YAML -- the next run
@@ -37,7 +37,7 @@ _FACTORY_BT_DIR = Path(__file__).parent.parent / "actions" / "behavior_trees"
 
 
 def _read_position_offset(bt_dir: Path, location: str) -> list[float] | None:
-    """PositionOffset [dx, dy, dyaw] from navigate_to_<location>.yaml, or None
+    """ParkingOffset [dx, dy, dyaw] from navigate_to_<location>.yaml, or None
     if the file/param is missing (treated as zero offset by the HLA)."""
     fpath = bt_dir / f"navigate_to_{location}.yaml"
     if not fpath.exists():
@@ -48,9 +48,9 @@ def _read_position_offset(bt_dir: Path, location: str) -> list[float] | None:
         # need the parameters block, so blank the tag before parsing.
         data = yaml.safe_load(f.read().replace("!hla", "")) or {}
     for param in data.get("parameters", []):
-        if param.get("name") == "PositionOffset":
+        if param.get("name") == "ParkingOffset":
             return [float(v) for v in param.get("value", [0.0, 0.0, 0.0])]
-    print(f"[nav-offset] no PositionOffset in {fpath.name}; navigating with zero offset.")
+    print(f"[nav-offset] no ParkingOffset in {fpath.name}; navigating with zero offset.")
     return None
 
 
@@ -122,7 +122,7 @@ def _terminal_adjustment(
     objects = (Object(location, nav_target_type), Object(location, nav_target_type))
     node_name = f"NavigateTo{location.capitalize()}"
     result = hla.process_behavior_tree_parameter_update(
-        objects, {}, node_name, "PositionOffset",
+        objects, {}, node_name, "ParkingOffset",
         [float(clamped[0]), float(clamped[1]), float(clamped[2])],
     )
     print(
@@ -151,6 +151,7 @@ def test_navigate_action(
     adjust: bool,
     use_interface: bool,
     no_waits: bool,
+    assume_from: str | None = None,
 ) -> None:
     """Instantiate NavigateHLA and navigate to a named location."""
     rospy_mod = None
@@ -261,14 +262,34 @@ def test_navigate_action(
             f"dyaw={math.degrees(position_offset[2]):+.1f}deg"
         )
 
+    scripted_terminal_leg = False
     try:
-        navigate_hla._navigate_to_target(location, speed, position_offset=position_offset)
+        # Go through the PUBLIC entry point so the harness matches deployment
+        # behavior in navigate.py: route-specific via points (e.g. sink via
+        # kitchen_enter) and any origin-gated logged-nav branches live there,
+        # not in _navigate_to_target(). The harness has no PDDL executive, so
+        # --assume_from substitutes the origin execute_action() would stash.
+        navigate_method = getattr(navigate_hla, f"navigate_to_{location}")
+        if assume_from is not None:
+            navigate_hla._nav_origin = assume_from
+            print(f"[nav] harness: assumed origin = {assume_from!r}")
+        navigate_method(speed, position_offset=position_offset)
+        scripted_terminal_leg = (
+            navigate_hla._logged_nav_enabled()
+            and location == "microwave"
+            and assume_from == "fridge"
+        )
 
         # With the interface, the HLA's own iPad adjust prompt already ran
         # inside _navigate_to_target; without it, offer the terminal-driven
         # equivalent so the offset loop works standalone.
         if adjust and run_on_robot and web_interface is None and not no_waits:
-            commanded_pose = navigate_hla._apply_offset_to_pose(nominal_pose, position_offset)
+            # A scripted terminal leg never applied the offset to the motion,
+            # so the adjustment measures against commanded == nominal.
+            commanded_pose = (
+                dict(nominal_pose) if scripted_terminal_leg
+                else navigate_hla._apply_offset_to_pose(nominal_pose, position_offset)
+            )
             _terminal_adjustment(
                 navigate_hla, location, nominal_pose, commanded_pose, position_offset
             )
@@ -315,7 +336,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ignore_offset",
         action="store_true",
-        help="Navigate to the raw mapped pose, ignoring any stored PositionOffset.",
+        help="Navigate to the raw mapped pose, ignoring any stored ParkingOffset.",
     )
     parser.add_argument(
         "--no_adjust",
@@ -340,6 +361,27 @@ if __name__ == "__main__":
             "prompts are skipped)."
         ),
     )
+    parser.add_argument(
+        "--logged_nav",
+        action="store_true",
+        help=(
+            "Mirror run.py's --logged-navigation (sets FEEDING_LOGGED_NAV=1): "
+            "scripted kitchen legs instead of move_base. Combine with "
+            "--assume_from to pick which scripted leg fires."
+        ),
+    )
+    parser.add_argument(
+        "--assume_from",
+        type=str,
+        default="",
+        help=(
+            "Origin location to assume (the harness has no PDDL executive to "
+            "provide ?from). Used by any origin-specific route logic; with "
+            "--logged_nav, e.g. --assume_from fridge --location microwave "
+            "drives the scripted 1.4 m approach, and --assume_from microwave "
+            "--location table drives the scripted kitchen egress."
+        ),
+    )
     args = parser.parse_args()
 
     if args.speed not in {"low", "medium", "high"}:
@@ -349,6 +391,10 @@ if __name__ == "__main__":
 
     if args.locations_file:
         os.environ["FEEDING_NAV_LOCATIONS_FILE"] = args.locations_file
+
+    if args.logged_nav:
+        os.environ["FEEDING_LOGGED_NAV"] = "1"
+        print("[logged-nav] Hardcoded navigation mode ENABLED (FEEDING_LOGGED_NAV=1).")
 
     try:
         test_navigate_action(
@@ -367,6 +413,7 @@ if __name__ == "__main__":
             adjust=not args.no_adjust,
             use_interface=args.use_interface,
             no_waits=args.no_waits,
+            assume_from=args.assume_from or None,
         )
     except KeyboardInterrupt:
         # disable_signals=True keeps Ctrl+C as a plain KeyboardInterrupt; the

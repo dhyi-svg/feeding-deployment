@@ -13,7 +13,7 @@
         <div class="cf-left">
           <strong>Did the robot grab the bite successfully?</strong>
           <p>If the pickup looks correct, continue and the robot will bring it to your mouth.<br><br>If not, retry and it will try again.</p>
-          <p v-if="!userInteracted && countdown !== null" class="cdown">Auto-continuing in <span>{{ countdown }}s</span></p>
+          <p class="cdown" :class="{ 'cdown-hidden': userInteracted || countdown === null }">Auto-continuing in <span>{{ countdown }}s</span></p>
         </div>
         <div class="cf-right">
           <button class="btn lg amber w100" @click="handleButtonClick">Continue — Transfer Bite</button>
@@ -38,17 +38,24 @@ export default {
       countdown: null,
       countdownInterval: null,
       userInteracted: false,
+      // Set ONLY on countdown expiry: responses carry user_action tap|autocontinue.
+      autoSubmit: false,
     }
   },
   mounted () {
     this.ros = new ROSLIB.Ros({ url: ROS_URL })
     this.initSubscriber()
     this.initPublisher()
+    // any tap anywhere (incl. App.vue chrome/overlays outside .page) cancels autocontinue
+    window.addEventListener('pointerdown', this.cancelAutocontinue, true)
     // NOTE: the physical button is intentionally NOT wired here. It is handled only
     // on the robot_executing page (to avoid confusing the user about whether to use
     // the on-screen button or the physical one). handleButtonClick() below is still
     // used by the on-screen "Continue — Transfer Bite" tap and the auto-continue
     // countdown.
+  },
+  beforeUnmount () {
+    window.removeEventListener('pointerdown', this.cancelAutocontinue, true)
   },
   beforeRouteLeave (to, from, next) {
     this.stopCountdown()
@@ -101,6 +108,7 @@ export default {
         } else {
           this.stopCountdown()
           // Unattended: confirm and let the transfer proceed.
+          this.autoSubmit = true
           this.handleButtonClick()
         }
       }, 1000);
@@ -130,17 +138,20 @@ export default {
       const message = new ROSLIB.Message({
         data: JSON.stringify({
           state: 'bite_confirm_transfer',
-          status: 'confirm'
-        }) 
+          status: 'confirm',
+          user_action: this.autoSubmit ? 'autocontinue' : 'tap'
+        })
       })
       this.publisher.publish(message);
+      this.autoSubmit = false;
     },
     publishMessage2() {
       const message = new ROSLIB.Message({
         data: JSON.stringify({
           state: 'bite_confirm_transfer',
-          status: 'cancel'
-        }) 
+          status: 'cancel',
+          user_action: 'tap'
+        })
       })
 
       this.publisher.publish(message);

@@ -75,7 +75,7 @@ class AttachmentPerception(TFInterface):
         # Color mask
         # -----------------------------
         mask = self.detect_attachment_color(rgb_image, handle_color=handle_color, color_range=color_range)
-        # mask = self.clean_mask(mask)
+        mask = self.clean_mask(mask)
 
         # -----------------------------
         # Extract ALL 3D points from mask
@@ -105,7 +105,7 @@ class AttachmentPerception(TFInterface):
         # -----------------------------
         clustering = DBSCAN(
             eps=0.07,
-            min_samples=5
+            min_samples=25
         ).fit(points_3d)
 
         # print("Ran DBSCAN")

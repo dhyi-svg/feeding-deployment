@@ -46,13 +46,20 @@ class FakeModel:
     def __init__(self):
         self.predict_calls = []
         self.update_calls = []
+        # Mirrored by PreferenceSession after each predict (via getattr); present
+        # so the session picks up a real (empty) value rather than the default.
+        self.last_latent_scores = {}
+        self.last_latent_inference = ""
+        self.last_explanations = {}
 
-    def predict_bundle(self, context, corrected, confirmed=None, color_seeds=None, nav_offset_seeds=None):
+    def predict_bundle(self, context, corrected, confirmed=None, color_seeds=None,
+                       nav_offset_seeds=None, prior_predictions=None):
         self.predict_calls.append({
             "corrected": dict(corrected),
             "confirmed": dict(confirmed or {}),
             "color_seeds": dict(color_seeds or {}),
             "nav_offset_seeds": dict(nav_offset_seeds or {}),
+            "prior_predictions": list(prior_predictions or []),
         })
         out = {}
         for f in PREF_FIELDS:
@@ -142,8 +149,8 @@ def _set_yaml_color(bt_dir: Path, location: str, hsv_range) -> None:
     fp = bt_dir / f"pick_plate_from_{location}.yaml"
     data = _load_yaml(fp)
     hc, cr = color_to_bt(hsv_range)
-    _set_param_value(data, "HandleColor", hc)
-    _set_param_value(data, "ColorRange", cr)
+    _set_param_value(data, "PlateHandleColor", hc)
+    _set_param_value(data, "PlateHandleColorTolerance", cr)
     _save_yaml(fp, data)
 
 
@@ -169,7 +176,7 @@ def test_color_seed_comes_from_bt_and_falls_back(bt_dir):
 def test_ask_confirm_finalizes_without_correction(bt_dir):
     s = PreferenceSession(FakeModel(), bt_dir, CTX, web_interface=FakeWeb())
     s.start()
-    s.ask(["robot_speed", "wait_before_autocontinue_seconds"])
+    s.ask(["robot_speed", "confirm_manipulation"])
     assert "robot_speed" in s.finalized
     assert "robot_speed" not in s.corrected  # confirmed, not corrected
 
@@ -212,13 +219,23 @@ def test_repredict_receives_confirmed_and_corrected_split(bt_dir):
     assert "skewering_axis" not in last["confirmed"]
 
 
-def test_wait_pref_drives_autocontinue(bt_dir):
+def test_preference_pages_use_fixed_autocontinue(bt_dir):
+    # The preference ask/correction pages themselves auto-continue on a fixed
+    # 30 s timeout (no longer a user-facing wait dim); each page's own countdown
+    # is carried by its confirm/countdown dim and reaches the page via the BT.
+    from feeding_deployment.integration.preference_session import (
+        PREFERENCE_PAGE_AUTOCONTINUE_SECONDS,
+    )
+    assert PREFERENCE_PAGE_AUTOCONTINUE_SECONDS == 30.0
+
     web = FakeWeb()
     s = PreferenceSession(FakeModel(), bt_dir, CTX, web_interface=web)
     s.start()
-    assert s.wait_seconds == 10.0  # default before finalized
-    s._finalize("wait_before_autocontinue_seconds", "100 sec", changed=True)
-    assert s.wait_seconds == 100.0
+    s.ask(["robot_speed", "confirm_manipulation"])
+    # FakeWeb.send_preference_step records (field, autocontinue_seconds).
+    assert web.steps, "ask() must show at least one page"
+    for _field, autocontinue_seconds in web.steps:
+        assert autocontinue_seconds == 30.0
 
 
 def test_record_color_correction_finalizes_and_propagates(bt_dir):
@@ -260,6 +277,65 @@ def test_finalize_meal_one_update_with_full_bundle(bt_dir):
     assert set(call["gt"].keys()) >= set(PREF_FIELDS)
     # Every dim is finalized (unasked dims confirmed at the prediction).
     assert all(f in s.finalized for f in PREF_FIELDS)
+
+
+def test_pinned_split_orders_by_ask_order(bt_dir):
+    # _pinned_split must render corrected/confirmed in the fixed ASK order
+    # (_SETTINGS_DISPLAY_ORDER), not the hash order of the ``finalized`` set, so
+    # the prompt blocks are deterministic and read in the order the user was asked.
+    from feeding_deployment.integration.preference_session import _SETTINGS_DISPLAY_ORDER
+    web = FakeWeb({"robot_speed": "fast"})
+    s = PreferenceSession(FakeModel(), bt_dir, CTX, web_interface=web)
+    s.start()
+    # Ask out of ask-order (skewering_axis is late, robot_speed/confirm are early).
+    s.ask(["skewering_axis", "robot_speed", "confirm_manipulation"])
+    s.wait_for_reprediction(5.0)
+    corrected, confirmed = s._pinned_split()
+    for block in (list(corrected.keys()), list(confirmed.keys())):
+        idx = [_SETTINGS_DISPLAY_ORDER.index(f) for f in block]
+        assert idx == sorted(idx), f"{block} not in ask-order"
+    assert set(corrected) | set(confirmed) == set(s.finalized)
+
+
+def test_prediction_history_is_never_persisted(bt_dir):
+    # Within-meal prior-prediction history is in-memory only: it must not appear
+    # in capture_state() (crash-resume) nor reach the cross-day update() payload.
+    model = FakeModel()
+    web = FakeWeb({"robot_speed": "fast"})
+    s = PreferenceSession(model, bt_dir, CTX, web_interface=web)
+    s.start()
+    s.ask(["robot_speed"])
+    s.wait_for_reprediction(5.0)
+    assert s._prediction_history  # accumulates within the meal
+    snap = s.capture_state()
+    assert "prediction_history" not in str(snap)  # not in crash-resume state
+    s.finalize_meal(day=3)
+    call = model.update_calls[-1]
+    assert set(call.keys()) == {"day", "corrected", "gt"}  # no history crosses days
+
+
+def test_prior_predictions_flag_on_feeds_history(bt_dir):
+    # Default ON: the reprediction after a correction receives the earlier
+    # this-meal prediction(s) as prior_predictions.
+    model = FakeModel()
+    web = FakeWeb({"robot_speed": "fast"})
+    s = PreferenceSession(model, bt_dir, CTX, web_interface=web)
+    s.start()
+    s.ask(["robot_speed"])
+    s.wait_for_reprediction(5.0)
+    assert any(c["prior_predictions"] for c in model.predict_calls[1:])
+
+
+def test_prior_predictions_flag_off_sends_none(bt_dir):
+    # Flag OFF: no prediction ever receives prior-prediction feedback.
+    model = FakeModel()
+    web = FakeWeb({"robot_speed": "fast"})
+    s = PreferenceSession(model, bt_dir, CTX, web_interface=web,
+                          provide_prior_predictions=False)
+    s.start()
+    s.ask(["robot_speed"])
+    s.wait_for_reprediction(5.0)
+    assert all(c["prior_predictions"] == [] for c in model.predict_calls)
 
 
 # ---------------------------------------------------------------------------
@@ -323,19 +399,16 @@ def test_microwave_time_locks_after_apply_microwave(bt_dir):
     assert s.bundle["microwave_time"] == before
 
 
-def test_transfer_mode_edit_defers_reinit_until_flush(bt_dir):
+def test_transfer_mode_inside_raises_on_apply(bt_dir):
     s = PreferenceSession(FakeModel(), bt_dir, CTX, web_interface=FakeWeb())
     s.start()
     s.ask(["transfer_mode"])
-    before = s.bundle["transfer_mode"]
-    other = next(o for o in PREF_OPTIONS["transfer_mode"] if o != before)
-    assert s.edit("transfer_mode", other) is True
-    assert s._pending_transfer_reinit is True  # deferred, not applied on the worker
-    # Settle the background reprediction first: its apply re-arms the pending
-    # flag, exactly as run.py's join-then-flush ordering settles it.
-    assert s.wait_for_reprediction(5.0)
-    s.flush_pending_inmemory()  # main-thread safe boundary
-    assert s._pending_transfer_reinit is False
+    assert s.bundle["transfer_mode"] == "outside mouth transfer"
+    # The deployment only performs outside-mouth transfer (transfer_type is
+    # fixed by the command line): selecting inside must fail loudly instead of
+    # silently diverging from what the robot actually does.
+    with pytest.raises(RuntimeError, match="inside mouth transfer"):
+        s.edit("transfer_mode", "inside mouth transfer")
 
 
 def test_settings_view_and_edit_are_thread_safe(bt_dir):
@@ -492,7 +565,7 @@ def test_on_change_persists_every_correction(bt_dir):
     s.start()  # prediction only -> no _finalize, no persist
     assert saved == []
 
-    s.ask(["robot_speed", "wait_before_autocontinue_seconds"])
+    s.ask(["robot_speed", "confirm_manipulation"])
     assert saved, "ask() must persist on each finalize"
     assert saved[-1]["corrected"].get("robot_speed") == "fast"
 
@@ -638,10 +711,9 @@ def test_repredictions_do_not_write_memory(bt_dir):
 
 
 def test_confirmation_dims_shape_and_staging():
-    # The three per-family confirmation-mode dims share one option vocabulary;
-    # the mode dims are asked in the initial batch BEFORE the wait pref (the
-    # user learns what "autocontinue" refers to before choosing its duration),
-    # and the feeding dim replaced web_interface_confirmation at the table.
+    # The three per-family confirm dims share one option vocabulary that folds
+    # mode + countdown into one spectrum; they are asked in the initial batch,
+    # and the feeding confirm + the two feeding-page countdown dims at the table.
     from feeding_deployment.integration.preference_session import (
         INITIAL_PREF_DIMS, TABLE_PREF_DIMS,
     )
@@ -650,10 +722,19 @@ def test_confirmation_dims_shape_and_staging():
         "robot_speed",
         "confirm_navigation_arrival",
         "confirm_manipulation",
-        "wait_before_autocontinue_seconds",
     ]
     assert "confirm_feeding_pickup" in TABLE_PREF_DIMS
+    # The two feeding-page countdown dims are asked at the table, just before the
+    # pages they govern first appear.
+    assert "wait_before_autocontinue_bite_selection" in TABLE_PREF_DIMS
+    assert "wait_before_autocontinue_task_selection" in TABLE_PREF_DIMS
+    # Deleted dims are gone.
+    assert "wait_before_autocontinue_mealprep" not in PREF_FIELDS
+    assert "wait_before_autocontinue_feeding_pickup" not in PREF_FIELDS
     assert "web_interface_confirmation" not in PREF_FIELDS
-    assert len(PREF_FIELDS) == 27
+    assert len(PREF_FIELDS) == 28
     for f in ("confirm_feeding_pickup", "confirm_navigation_arrival", "confirm_manipulation"):
-        assert PREF_OPTIONS[f] == ["no", "yes (with auto-continue countdown)", "yes (without any auto-continue)"]
+        assert PREF_OPTIONS[f] == [
+            "skip", "countdown (15 sec)", "countdown (30 sec)",
+            "countdown (60 sec)", "wait for me",
+        ]

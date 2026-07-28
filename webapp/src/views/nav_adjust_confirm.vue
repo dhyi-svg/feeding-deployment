@@ -13,7 +13,7 @@
         <div class="cf-left">
           <strong>Is the robot parked where you want it?</strong>
           <p>If the position looks right, continue.<br><br>If not, choose adjust and drive the robot to exactly where you want it — it will remember the correction for next time.</p>
-          <p v-if="!userInteracted && countdown !== null" class="cdown">Auto-confirming position in <span>{{ countdown }}s</span></p>
+          <p class="cdown" :class="{ 'cdown-hidden': userInteracted || countdown === null }">Auto-confirming position in <span>{{ countdown }}s</span></p>
         </div>
         <div class="cf-right">
           <button class="btn lg amber w100" @click="handleOk">Position OK</button>
@@ -39,6 +39,8 @@ export default {
       countdown: null,
       countdownInterval: null,
       userInteracted: false,
+      // Set ONLY on countdown expiry: ok/adjust responses carry user_action tap|autocontinue.
+      autoSubmit: false,
     }
   },
   mounted () {
@@ -48,8 +50,11 @@ export default {
     // Tell the backend we've mounted/subscribed so it can stop re-sending the
     // (non-latched) jump. Location + autocontinue arrive via the jump message.
     this.publishStatus('ready')
+    // any tap anywhere (incl. App.vue chrome/overlays outside .page) cancels autocontinue
+    window.addEventListener('pointerdown', this.cancelAutocontinue, true)
   },
   beforeUnmount () {
+    window.removeEventListener('pointerdown', this.cancelAutocontinue, true)
     this.stopCountdown()
   },
   beforeRouteLeave (to, from, next) {
@@ -114,11 +119,17 @@ export default {
       if (!this.publisher) {
         return
       }
+      const payload = {
+        state: 'nav_adjust',
+        status: status
+      }
+      // 'ready' is a mount handshake, not a user decision -- no user_action.
+      if (status !== 'ready') {
+        payload.user_action = this.autoSubmit ? 'autocontinue' : 'tap'
+        this.autoSubmit = false
+      }
       const message = new ROSLIB.Message({
-        data: JSON.stringify({
-          state: 'nav_adjust',
-          status: status
-        })
+        data: JSON.stringify(payload)
       })
       this.publisher.publish(message);
     },
@@ -141,6 +152,7 @@ export default {
         } else {
           this.stopCountdown()
           // Unattended: default to the safe no-op.
+          this.autoSubmit = true
           this.handleOk()
         }
       }, 1000);

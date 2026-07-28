@@ -84,7 +84,7 @@ class AppliancePerception(TFInterface):
         self.TEXT_THRESHOLD = 0.3
         self.NMS_THRESHOLD = 0.4
 
-        self.molmo_url = "https://c0fd-128-84-97-177.ngrok-free.app/predict"
+        self.molmo_url = "https://exponent-sediment-professed.ngrok-free.dev/predict"
 
         self.handle_type = None
         self.num_perception_samples = num_perception_samples
@@ -352,19 +352,33 @@ class AppliancePerception(TFInterface):
         if not ok_enc:
             print("Failed to encode flipped image for molmo request")
             return None
-        http_response = requests.post(
-            self.molmo_url,
-            files={"image": ("rgb_flipped.png", flipped_buf.tobytes(), "image/png")},
-            data={
-                "prompt": "Point to the center of the start / 30 secs white button. Right one out of two rectangular buttons at the bottom row of the microwave control panel."
-            },
-        )
-        http_response.raise_for_status()
-        response = http_response.json()
+        # A raised exception here would escape the executive's skill loop and
+        # kill the whole app (rajat_pilot 2026-07-16 21:47: transient SSLEOFError
+        # from the ngrok tunnel). Return None instead -- the caller's frame loop
+        # retries, so short tunnel blips self-heal.
+        try:
+            http_response = requests.post(
+                self.molmo_url,
+                files={"image": ("rgb_flipped.png", flipped_buf.tobytes(), "image/png")},
+                data={"prompt": "Point to the center of the start / 30 secs white button. Right one out of two rectangular buttons at the bottom row of the microwave control panel."},
+                headers={"ngrok-skip-browser-warning": "true"},
+                timeout=(5, 60),
+            )
+            http_response.raise_for_status()
+            response = http_response.json()
+        except requests.exceptions.RequestException as e:
+            print(f"Molmo request failed ({type(e).__name__}): {e}")
+            return None
+        except ValueError as e:
+            print(f"Molmo returned a non-JSON response: {e}")
+            return None
         print("Molmo HTTP response:", response)
         pixel_coords = response.get("pixel_coords", [])
 
         print("Pixel coords from molmo:", pixel_coords)
+        if not pixel_coords or len(pixel_coords[0]) != 2:
+            print("Molmo response has no usable pixel_coords")
+            return None
         # Flip pixel coords back since we flipped the image before sending to molmo
         button_pixel = (
             rgb_image.shape[1] - pixel_coords[0][0],

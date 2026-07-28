@@ -604,9 +604,9 @@ class WebInterface:
             # Detection found no actionable bite: run the page in manual-only
             # mode. Send only the plate image and the no_detections status --
             # skip the bite/dip payloads (an empty current_bite dict hangs the
-            # page's data parsing) and auto_time (the page parses "0.0" as
-            # truthy, so a zero countdown would instantly auto-publish
-            # acquire_food with placeholder data).
+            # page's data parsing) and auto_time (manual-only mode must never
+            # arm a countdown; the page only counts down when an auto_time
+            # with a positive value arrives).
             no_detections_msg = {"state": "bite_selection", "status": "no_detections"}
 
             def _send_no_detections_data():
@@ -685,7 +685,7 @@ class WebInterface:
 
         # Jump to bite confirm transfer page. autocontinue_seconds > 0 makes the
         # page count down and auto-send "confirm" on expiry (confirm_feeding_pickup
-        # = "yes (with auto-continue countdown)"); <= 0 means wait for the user. The jump is
+        # = "countdown (N sec)"); <= 0 means wait for the user. The jump is
         # re-sent until answered: the routing jump is consumed by the PREVIOUS
         # page, so the freshly-mounted page learns its countdown from the first
         # resend it sees (also heals a dropped jump on the non-latched topic).
@@ -756,7 +756,7 @@ class WebInterface:
         A takeover while blocked raises WebInterfaceTakeoverInterrupt from
         get_required_web_interface_message (handled by the HLA layer).
         ``autocontinue_seconds`` > 0 makes the page count down and auto-send
-        "confirm" on expiry (confirm_manipulation = "yes (with auto-continue countdown)");
+        "confirm" on expiry (confirm_manipulation = "countdown (N sec)");
         <= 0 keeps today's wait-for-the-user behavior.
         """
         self.current_page = "plate_release_confirm"
@@ -794,6 +794,40 @@ class WebInterface:
         # finishes its retreat motions (also keeps current_page truthful).
         self.switch_to_explanation_page()
 
+    #### Feeding Ready Confirmation Page ####
+
+    def get_feeding_ready_confirmation(self) -> None:
+        """Block until the user, seated at the table, taps that they are ready
+        for feeding to start. Deliberately has NO autocontinue: the plate is
+        already resting on the table, so waiting indefinitely is safe and the
+        user must be present before the table-time preferences are asked.
+        """
+        self.current_page = "feeding_ready"
+
+        # Drop stale messages so an old confirm can't satisfy this wait.
+        self.clear_received_messages()
+
+        # Resend until confirmed -- /robot_to_webapp is not latched and a drop
+        # here would strand the webapp on robot_executing forever.
+        jump_msg = {"state": "feeding_ready", "status": "jump"}
+        self._send_message(jump_msg)
+
+        msg_dict = self.get_required_web_interface_message(
+            lambda m: (
+                m.get("state") == "feeding_ready"
+                and m.get("status") == "confirm"
+            ),
+            resend=lambda: self._send_message(jump_msg),
+            resend_interval=2.0,
+        )
+        if msg_dict is None:
+            print("WARNING: feeding-ready confirmation interrupted by task "
+                  "selection jump; continuing without it.")
+
+        # Park the iPad on the generic 'robot executing' page until the next
+        # jump (the table-time preferences) arrives; keeps current_page truthful.
+        self.switch_to_explanation_page()
+
     #### Detection Confirmation Page ####
 
     def get_detection_confirmation(self, detection_type: str, vis_image=None,
@@ -806,7 +840,7 @@ class WebInterface:
         Returns True if the user confirms the detection looks correct, and False
         if the perception should be re-run. ``autocontinue_seconds`` > 0 makes
         the page count down and auto-confirm on expiry (confirm_manipulation =
-        "yes (with auto-continue countdown)"); <= 0 waits for the user.
+        "countdown (N sec)"); <= 0 waits for the user.
         """
         self.current_page = "detection_confirm"
 
@@ -1161,6 +1195,14 @@ class WebInterface:
                 and m.get("field") == field
             )
         )
+        # Side-channel (return type unchanged for callers/fakes): how the user
+        # answered -- 'tap' (engaged) vs 'autocontinue' (countdown expired).
+        # None for responses from webapp versions predating the flag.
+        if not hasattr(self, "preference_user_actions"):
+            self.preference_user_actions = {}
+        self.preference_user_actions[field] = (
+            msg_dict.get("user_action") if msg_dict is not None else None
+        )
         if msg_dict is None:
             return predicted
         return msg_dict.get("value", predicted)
@@ -1168,6 +1210,112 @@ class WebInterface:
     def finish_preference_correction(self) -> None:
         """Tell the page the correction stage is done (it returns to its caller)."""
         self._send_message({"state": "preference_correction", "status": "done"})
+
+    #### End-of-Meal Survey Page ####
+    # The survey page is driven ONE question at a time within a single page
+    # mount (like preference correction), then the iPad is parked on the
+    # terminal thank_you page. Protocol:
+    #
+    #   start_survey(total):
+    #       BE -> app: {"state":"survey","status":"jump","total":N}
+    #       app -> BE: {"state":"survey","status":"ready"}
+    #   send_survey_question(...) (called once per question):
+    #       BE -> app: {"state":"survey_data","field":..,"title":..,
+    #                   "question":..,"kind":"likert"|"text","step":i,
+    #                   "total":N,"scale_min":1,"scale_max":7,
+    #                   "min_label":..,"max_label":..}
+    #       app -> BE: {"state":"survey_response","field":..,"value":..,
+    #                   "user_action":"tap"}
+    #   finish_survey():
+    #       BE -> app: {"state":"thank_you","status":"jump"}
+    #       app -> BE: {"state":"thank_you","status":"ready"}
+
+    def start_survey(self, total: int, subtitle: str | None = None,
+                     eyebrow: str | None = None, note: str | None = None) -> None:
+        """Navigate to the survey page and wait until it has mounted/subscribed.
+
+        ``subtitle``/``eyebrow``/``note`` override the page's default header text
+        and are used by the pre-meal latent questionnaire, which reuses this page;
+        the end-of-meal survey omits them and keeps its defaults."""
+        # If the user has the settings overlay open, stall until they close it.
+        self.wait_until_settings_closed("robot_waiting", raise_on_takeover=True)
+        self.current_page = "survey"
+        # Drop stale messages so we wait for the ready for THIS navigation.
+        self.clear_received_messages()
+        jump_msg = {"state": "survey", "status": "jump", "total": int(total)}
+        if subtitle is not None:
+            jump_msg["subtitle"] = subtitle
+        if eyebrow is not None:
+            jump_msg["eyebrow"] = eyebrow
+        if note is not None:
+            jump_msg["note"] = note
+        self._send_message(jump_msg)
+        # Resend until the page mounts and reports ready: /robot_to_webapp is
+        # not latched and the page re-subscribes asynchronously on mount.
+        self.get_required_web_interface_message(
+            lambda m: m.get("state") == "survey" and m.get("status") == "ready",
+            resend=lambda: self._send_message(jump_msg),
+        )
+
+    def send_survey_question(
+        self,
+        field: str,
+        title: str,
+        question: str,
+        kind: str,
+        step: int,
+        total: int,
+        scale_min: int = 1,
+        scale_max: int = 7,
+        min_label: str = "Very Low",
+        max_label: str = "Very High",
+        subtitle: str | None = None,
+        eyebrow: str | None = None,
+        note: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Show one survey question and block for the user's answer.
+
+        Returns the full response message (``value`` + ``user_action``), or
+        None if the webapp jumped to task selection. Unlike
+        send_preference_step, the question data is RESENT while waiting: a
+        webapp reload mid-question remounts the page, which would otherwise
+        wait forever since /robot_to_webapp is not latched. The page ignores
+        duplicate sends of the current/just-answered question."""
+        step_msg = {
+            "state": "survey_data",
+            "field": field,
+            "title": title,
+            "question": question,
+            "kind": kind,
+            "step": int(step),
+            "total": int(total),
+            "scale_min": int(scale_min),
+            "scale_max": int(scale_max),
+            "min_label": min_label,
+            "max_label": max_label,
+        }
+        if subtitle is not None:
+            step_msg["subtitle"] = subtitle
+        if eyebrow is not None:
+            step_msg["eyebrow"] = eyebrow
+        if note is not None:
+            step_msg["note"] = note
+        self._send_message(step_msg)
+        return self.get_required_web_interface_message(
+            lambda m: m.get("state") == "survey_response" and m.get("field") == field,
+            resend=lambda: self._send_message(step_msg),
+        )
+
+    def finish_survey(self) -> None:
+        """Park the iPad on the terminal Thank You page (the meal is over --
+        deliberately no return to task selection)."""
+        self.current_page = "thank_you"
+        jump_msg = {"state": "thank_you", "status": "jump"}
+        self._send_message(jump_msg)
+        self.get_required_web_interface_message(
+            lambda m: m.get("state") == "thank_you" and m.get("status") == "ready",
+            resend=lambda: self._send_message(jump_msg),
+        )
 
     #### Gesture Pages ####
 

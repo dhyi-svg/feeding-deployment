@@ -1,0 +1,35 @@
+# pip constraints for installing `.[robot]` on a 2026-era package index without
+# touching pyproject.toml (which declares deps unversioned). Apply with:
+#   python3 -m pip install -e ".[robot]" -c constraints.txt
+#
+# Verified in the `feed-noetic` Docker container (ROS Noetic / Ubuntu 20.04).
+# With these pins, dependency resolution succeeds and everything installs EXCEPT
+# under the container's native Python 3.8.10: `prpl-utils`/`pybullet_helpers`/
+# `relational_structs` (prpl-mono, pulled via git URL) and `tomsutils` all require
+# Python >=3.9/3.10 in every published version and every git commit in their
+# history, so `.[robot]` cannot fully install on stock py3.8 — see the
+# "native install blocker" entry in TESTING_LOG.md (2026-07-21) for the full
+# writeup, including the RoboStack (conda-forge ROS on py3.11) fix that gets both
+# rospy and these deps into one interpreter.
+
+# pin: newest releases dropped py3.8 wheel support on this platform -> source build.
+pin==2.7.0
+
+# ruckig: newest releases dropped py3.8 wheel support on this platform -> source build.
+ruckig==0.9.2
+
+# openai: unpinned upstream dep (in pyproject.toml) resolves to very new releases
+# with a huge transitive dependency graph, driving slow/failing backtracking.
+openai==1.55.0
+
+# tokenizers: pulled in transitively by anthropic (unpinned in pyproject.toml).
+# Newest tokenizers (0.21.0) has no cp38 wheel for this platform, so pip tries to
+# build from source; its build backend then requires `puccinialin` (a Rust-toolchain
+# bootstrapper) which has no PyPI distribution at all -> hard install failure.
+# tokenizers==0.20.3 has a prebuilt cp38 manylinux wheel, avoiding the source build.
+tokenizers==0.20.3
+
+# anthropic: unpinned, causes pip to backtrack through ~70 historical releases
+# (down to 0.2.x) while resolving transitive deps, wasting minutes per attempt.
+# Pin to a known-good, wheel-available version to keep resolution fast.
+anthropic==0.34.2

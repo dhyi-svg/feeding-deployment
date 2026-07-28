@@ -72,6 +72,10 @@ intermediate_plate_holder_pose:
   type: "ee_pose"
   values: [0.18077898025512695, -0.2641909718513489, 0.1410924196243286, -0.5071388682913235, 0.49506331260138825, 0.5030548764813569, -0.4946294330432256]
 
+microwave_push_starting_pos: 
+  description: "Starting configuration for pushing the microwave door"
+  type: "joint_positions"
+  values: [-1.1754734987902262, -1.7584197540165052, -2.688253660186074, -2.5611058276302026, -0.332138265878104, -0.9636850804694568, 2.2315126116478328]
 microwave_closeup_gaze_pos: 
   description: "Gaze configuration, the button and inside of microwave should be visible from this configuration"
   type: "joint_positions"

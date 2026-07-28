@@ -122,14 +122,17 @@ from feeding_deployment.transparency.query_llm import TransparencyQuery
 from feeding_deployment.integration.preference_context import build_preference_context
 from feeding_deployment.integration.checkpoint import CheckpointStore
 from feeding_deployment.integration.data_logger import DataLogger
+from feeding_deployment.integration.survey import run_end_of_meal_survey
+from feeding_deployment.integration.pre_meal_survey import run_pre_meal_survey
 from feeding_deployment.integration.preference_session import (
     DEFAULT_PHYSICAL_PROFILE,
+    DEFAULT_PROVIDE_PRIOR_PREDICTIONS,
     INITIAL_PREF_DIMS as _INITIAL_PREF_DIMS,
     PreferenceSession,
     TABLE_PREF_DIMS as _TABLE_PREF_DIMS,
     bt_consumes_predictions,
 )
-from feeding_deployment.preference_learning.methods.prediction_model import PredictionModel, PREF_OPTIONS
+from feeding_deployment.preference_learning.methods.prediction_model import PredictionModel, PREF_OPTIONS, MEMORY_MODES, DEFAULT_MEMORY_MODE
 from feeding_deployment.preference_learning.config.physical_capabilities import (
     PHYSICAL_CAPABILITY_PROFILES,
 )
@@ -183,6 +186,8 @@ class _Runner:
                  resume_from_state: str = "", no_waits: bool = False,
                  physical_profile_label: str | None = None,
                  pref_mode: str = "none",
+                 pref_memory_mode: str = DEFAULT_MEMORY_MODE,
+                 pref_prior_predictions: bool = DEFAULT_PROVIDE_PRIOR_PREDICTIONS,
                  day: int | None = None) -> None:
         self.run_on_robot = run_on_robot
         self.use_interface = use_interface
@@ -195,6 +200,8 @@ class _Runner:
         # truth for both per-day release logging and the preference-learning day.
         self._day = day
         self._pref_mode = pref_mode
+        self._pref_memory_mode = pref_memory_mode
+        self._pref_prior_predictions = pref_prior_predictions
         self._prediction_model: PredictionModel | None = None
         self._pref_session: PreferenceSession | None = None
         self.predicted_bundle: dict[str, str] | None = None
@@ -292,7 +299,11 @@ class _Runner:
 
         print("Initializing FLAIR...")
         grounded_sam = self.perception_interface._grounded_sam if hasattr(self.perception_interface, '_grounded_sam') else None
-        self.flair = FLAIR(self.log_dir, grounded_sam=grounded_sam)
+        # Scope bite history to the per-day dir so it resets each deployment day
+        # (resuming the same --day reuses that dir and restores the history).
+        # Falls back to the user-level dir when day logging is disabled (no --day).
+        history_dir = self.data_logger.day_dir or self.log_dir
+        self.flair = FLAIR(self.log_dir, grounded_sam=grounded_sam, history_dir=history_dir)
 
         if self.run_on_robot:
             self.rviz_interface = RVizInterface(self.scene_description)
@@ -321,15 +332,7 @@ class _Runner:
         self.hlas = {
             cls(self.sim, self.robot_interface, self.perception_interface, self.rviz_interface, self.web_interface, hla_hyperparams,
                 self.wrist_interface, self.flair, self.no_waits, self.log_dir, self.run_behavior_tree_dir, self.execution_log, self.gesture_detectors_dir,
-                self.register_gesture_detector, self.load_synthesized_gestures,
-                # Post-arrival adjust prompt reuses the user's
-                # wait_before_autocontinue_seconds preference when a session is
-                # live (the session is created per meal, after the HLAs).
-                get_autocontinue_seconds=lambda: (
-                    self._pref_session.wait_seconds
-                    if getattr(self, "_pref_session", None) is not None
-                    else 20.0
-                )) for cls in HLAS  # type: ignore
+                self.register_gesture_detector, self.load_synthesized_gestures) for cls in HLAS  # type: ignore
         }
         print("HLAs created.")
         self.hla_name_to_hla = {hla.get_name(): hla for hla in self.hlas}
@@ -477,7 +480,7 @@ class _Runner:
             GroundAtom(IsUtensil, [self.utensil]),
             GroundAtom(DoorClosed, [self.fridge]),
             GroundAtom(DoorClosed, [self.microwave]),
-            GroundAtom(InFrontOf, [self.microwave]),
+            GroundAtom(InFrontOf, [self.fridge]),
             GroundAtom(PlateAt, [plate_start]),
             # GroundAtom(Holding, [self.plate]),
             GroundAtom(SafeToNavigate, []),
@@ -594,6 +597,7 @@ class _Runner:
             physical_profile_label="deployment_physical_profile",
             logs_dir=self.log_dir / "preference_learning",
             physical_profile_description=self.physical_profile_label,
+            memory_mode=self._pref_memory_mode,
         )
         # Reject day gaps, then re-hydrate cross-day memory (LTM summary +
         # episodic history) from days strictly before today, so this fresh
@@ -617,12 +621,11 @@ class _Runner:
             dict(ctx),
             web_interface=correction_interface,
             data_logger=self.data_logger,
-            scene_description=self.sim.scene_description,
-            hla_map=self.hla_name_to_hla,
             flair=self.flair,
             # Persist the session on every locked correction so a crash before the
             # next sub-skill checkpoint loses nothing (see _save_state / resume).
             on_change=self._ckpt.save_pref,
+            provide_prior_predictions=self._pref_prior_predictions,
         )
         # Wire the settings overlay to this session (single site covering both the
         # fresh and resume paths). Guarded: terminal/no-interface runs have no
@@ -663,12 +666,23 @@ class _Runner:
             ctx = self.ensure_preference_context()
             print("Resuming preference session; context:", ctx)
         else:
+            # Pre-meal latent questionnaire (web-interface deployments only): the
+            # meal OPENS with this -- before the user sets up the meal context and
+            # before the robot predicts anything. Held out: logged to
+            # pre_meal.jsonl only, never fed into prediction or the
+            # preference-learning memory. Best-effort: a questionnaire failure
+            # must never block the meal.
+            if self._pref_mode == "interface":
+                try:
+                    run_pre_meal_survey(self.web_interface, self.data_logger)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[pre-meal survey] error (skipping): {e}")
             ctx = self._collect_preference_context()
             print("Preference context (meal / setting / time_of_day):", ctx)
             self._prediction_model = self._build_prediction_model()
             self._pref_session = self._build_preference_session(self._prediction_model, dict(ctx))
-            # Predict everything before asking the initial dims (speed +
-            # autocontinue wait). The finalized wait drives later autocontinue.
+            # Predict everything before asking the initial dims (speed + the two
+            # meal-prep confirm dims, each carrying its own countdown length).
             self._pref_session.start()
             print("Predicted preference bundle (initial):",
                   json.dumps(self._pref_session._loggable_bundle(), indent=2))
@@ -754,6 +768,10 @@ class _Runner:
             )
 
         if resume_from_step <= self._PREP_TABLE_DIMS:
+            # Plate is on the table: wait for the user to take their seat
+            # before asking the table-time prefs. Explicit tap only -- the
+            # page has no autocontinue.
+            self.web_interface.get_feeding_ready_confirmation()
             # Table dims, just before feeding.
             session.ask(_TABLE_PREF_DIMS)
 
@@ -850,7 +868,16 @@ class _Runner:
                     # away, write the single per-day memory update.
                     self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["PlacePlateInSink"], (self.plate, self.sink)), phase="finish")
                     self._finalize_preference_session()
-                    last_task_type = None
+                    # End-of-meal survey; afterwards the meal ends on the
+                    # webapp's Thank You page, NOT back at task selection, so
+                    # skip the loop tail's ready_for_task_selection. A survey
+                    # hiccup must never crash the executive at meal end.
+                    try:
+                        run_end_of_meal_survey(self.web_interface, self.data_logger)
+                    except Exception as e:
+                        print(f"End-of-meal survey error (skipping): {e}")
+                    print("Meal finished; web interface parked on the Thank You page.")
+                    continue
                 elif task == "meal_assistance":
                     if task_type == "bite":
                         self.process_user_command(GroundHighLevelAction(self.hla_name_to_hla["TransferTool"], (self.utensil,self.table)))
@@ -1047,9 +1074,7 @@ class _Runner:
             # Don't start the next HLA while the user has the settings overlay open:
             # a preference edit could change this skill. Stall until they close it
             # (raise_on_takeover=False so a takeover during the stall returns control
-            # to the existing takeover machinery below, not a new exception). Then
-            # flush any deferred in-memory pref apply (transfer re-init) on this main
-            # thread, just before the BT is read, so it never overlaps a live motion.
+            # to the existing takeover machinery below, not a new exception).
             if self.web_interface is not None:
                 self.web_interface.wait_until_settings_closed(
                     "robot_paused", raise_on_takeover=False
@@ -1060,20 +1085,24 @@ class _Runner:
                 # prediction-produced parameters (pickup colors, nav offsets,
                 # feeding dims) so they never execute on half-updated YAMLs.
                 # The join runs after the settings stall (edits made while the
-                # panel was open have scheduled their reprediction by now) and
-                # before the flush (so the deferred transfer re-init uses the
-                # final repredicted bundle).
+                # panel was open have scheduled their reprediction by now).
                 if bt_consumes_predictions(skill_plan_names[i]):
                     self._pref_session.wait_for_reprediction()
-                self._pref_session.flush_pending_inmemory()
 
             # Execute the high-level plan in simulation. On a mid-skill takeover
             # the user chooses, via the teleop Done button, whether to redo this
             # skill (re-run it) or continue to the next (treat it as done, so we
             # fall through and apply its effects below).
+            attempt = 0
             while True:
+                attempt += 1
                 try:
-                    ground_hla.execute_action()
+                    # skill_execution only records the outcome (skill_execute
+                    # event); every exception passes through it unchanged, so
+                    # the takeover/fatal handling below is exactly as before.
+                    with self.data_logger.skill_execution(
+                            skill_plan_names[i], attempt=attempt, phase=phase):
+                        ground_hla.execute_action()
                     break
                 except TeleopTakeoverException as e:
                     if e.redo_current:
@@ -1285,8 +1314,8 @@ Write a VERY BRIEF summary of all the changes for a non-technical end user. Make
             f.write(gesture_file_text)
         # Immediately add the new gesture to specific BT nodes.
         gesture_interaction_parameters = [
-            "InitiateTransferInteraction",
-            "TransferCompleteInteraction",
+            "UserTransferReadySignal",
+            "UserTransferDoneSignal",
         ]
         for hla, objs in self._all_ground_hlas:
             try:
@@ -1394,6 +1423,15 @@ if __name__ == "__main__":
     parser.add_argument("--resume_from_state", type=str, default="")
     parser.add_argument("--no_waits", action="store_true")
     parser.add_argument(
+        "--logged-navigation", action="store_true",
+        help="Hardcoded navigation mode: fridge->microwave is a scripted 1.4 m "
+             "forward drive (no move_base; the arrival confirm/adjust page "
+             "still runs and the position learning still logs), and the "
+             "*->table legs first back out of the kitchen with a scripted "
+             "reverse + 90 deg CW rotate before navigating autonomously "
+             "direct to the table. All other legs stay fully autonomous.",
+    )
+    parser.add_argument(
         "--pref_mode",
         type=str,
         choices=["none", "terminal", "interface"],
@@ -1403,6 +1441,28 @@ if __name__ == "__main__":
              "'none': no personalization. "
              "'terminal': predict + correct via terminal prompts (must be passed explicitly). "
              "'interface': predict + correct via web interface (requires frontend).",
+    )
+    parser.add_argument(
+        "--pref_memory_mode",
+        type=str,
+        choices=list(MEMORY_MODES),
+        default=DEFAULT_MEMORY_MODE,
+        help="Cross-day preference memory backend (PredictionModel.memory_mode). "
+             "'three_layer': semantic LTM summary + episodic retrieval. "
+             "'single_full_history': every prior finalized meal verbatim, no "
+             "summarization/retrieval. 'no_memory': working memory only. "
+             "Default: %(default)s. "
+             "Each mode persists its own log folder, so switch modes only with a "
+             "fresh user or after backfilling the mode's day_*.json history.",
+    )
+    parser.add_argument(
+        "--pref_prior_predictions",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_PROVIDE_PRIOR_PREDICTIONS,
+        help="Feed the model its OWN earlier predictions from THIS meal back into "
+             "each reprediction so it can self-correct same-context bias "
+             "(within-meal only; never persisted across days). On by default; use "
+             "--no-pref_prior_predictions to disable (for A/B testing).",
     )
     parser.add_argument(
         "--pref_meal",
@@ -1432,6 +1492,13 @@ if __name__ == "__main__":
              "while --resume_from_state continues a crashed meal of the same day.",
     )
     args = parser.parse_args()
+
+    # Logged-navigation mode travels as an env var (like FEEDING_NAV_ACTION /
+    # FEEDING_NAV_LOCATIONS_FILE) so only NavigateHLA needs to know about it --
+    # the shared HLA constructor signature stays untouched.
+    if args.logged_navigation:
+        os.environ["FEEDING_LOGGED_NAV"] = "1"
+        print("[logged-nav] Hardcoded navigation mode ENABLED (FEEDING_LOGGED_NAV=1).")
 
     # Resolve pref_mode when not passed explicitly: interface runs personalize via
     # the web interface; everything else defaults to no personalization. Terminal
@@ -1473,6 +1540,8 @@ if __name__ == "__main__":
                      args.no_waits,
                      physical_profile_label=physical_profile_label,
                      pref_mode=args.pref_mode,
+                     pref_memory_mode=args.pref_memory_mode,
+                     pref_prior_predictions=args.pref_prior_predictions,
                      day=args.day)
 
     if args.pref_mode == "interface" and args.pref_meal.strip():

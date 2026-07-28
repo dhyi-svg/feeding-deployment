@@ -15,8 +15,8 @@ import numpy as np
 from multiprocess.managers import BaseManager as MPBaseManager
 
 RPC_AUTHKEY = b"secret-key"
-# Host the arm RPC server binds to / the client connects to. Defaults to the lab
-# NUC; override with ARM_RPC_HOST (e.g. 127.0.0.1 on a single-machine setup).
+# Lab default is the NUC running arm_server.py; override for single-machine
+# rigs where the client and server share a box (e.g. ARM_RPC_HOST=127.0.0.1).
 NUC_HOSTNAME = os.environ.get("ARM_RPC_HOST", "192.168.1.3")
 ARM_RPC_PORT = 5000
 BULLDOG_HEARTBEAT_TIMEOUT = 1.0  # seconds
@@ -79,6 +79,13 @@ class ArmInterface:
                     if not self.emergency_stop_active:
                         self.emergency_stop()
                     break
+
+    def get_arm_state(self):
+        """Diagnostic, read-only: raw Kortex ARMSTATE_* (int + name)."""
+        from kortex_api.autogen.messages import Base_pb2
+        val = self.arm.base.GetArmState().active_state
+        name = next((n for n in dir(Base_pb2) if n.startswith("ARMSTATE") and getattr(Base_pb2, n) == val), str(val))
+        return {"active_state": val, "name": name}
 
     def get_state(self):
         try:
@@ -297,7 +304,7 @@ class ArmInterface:
             raise Exception(f"Error in set_joint_trajectory: {str(e)}") from None # suppress original exception
         return success
 
-    def set_ee_pose(self, xyz, xyz_quat):
+    def set_ee_pose(self, xyz, xyz_quat, soft_stop=False):
         self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
         assert not self.in_compliant_mode, "In compliant mode"
@@ -307,7 +314,7 @@ class ArmInterface:
         print(f"Received cartesian pose command: {xyz}, {xyz_quat}")
 
         try:
-            success = self.arm.move_cartesian(xyz, xyz_quat)
+            success = self.arm.move_cartesian(xyz, xyz_quat, soft_stop=soft_stop)
         except Exception as e:
             print(f"Error in set_ee_pose: {e}")
             # Re-raise a simplified exception to avoid pickling issues

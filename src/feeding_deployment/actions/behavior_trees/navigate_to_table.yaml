@@ -3,13 +3,13 @@ description: "Navigate to the table."
 type: "Behavior"
 parameters:
   - name: "Speed"
-    description: "Speed of the robot during navigation to the table."
+    description: "Arm speed while tucking in before driving to the table; the base driving speed is fixed by the navigation config."
     space:
       type: Enum
       elements: ["low", "medium", "high"]
     is_user_editable: True
     value: "medium"
-  - name: "PositionOffset"
+  - name: "ParkingOffset"
     description: "Learned SE(2) offset (dx m, dy m, dyaw rad) applied to the nominal goal pose in the goal's local frame, accumulated from the user's post-arrival position corrections."
     space:
       type: Box
@@ -17,11 +17,12 @@ parameters:
       upper: [0.5, 0.5, 0.7853981633974483]
     is_user_editable: True
     value: [0.0, 0.0, 0.0]
-  - name: "AskForArrivalConfirmation"
-    description: "Post-arrival position check/adjust page mode: 0 = skip, 1 = show with autocontinue, 2 = wait for the user."
+  - name: "ArrivalConfirm"
+    description: "Post-arrival position check/adjust page: -1 = skip, 0 = show and wait for the user, >0 = show and count down that many seconds before continuing."
     space:
-      type: Enum
-      elements: [0, 1, 2]
+      type: Box
+      lower: -1.0
+      upper: 1000.0
     is_user_editable: True
-    value: 1
+    value: 0.0
 fn: !hla navigate_to_table

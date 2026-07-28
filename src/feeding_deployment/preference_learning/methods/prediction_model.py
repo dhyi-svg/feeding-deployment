@@ -23,6 +23,9 @@ from feeding_deployment.preference_learning.config.preference_bundle import (
     format_nav_offset,
 )
 from feeding_deployment.preference_learning.methods.episodic_memory import EpisodicMemoryModel
+from feeding_deployment.preference_learning.methods.full_history_memory import (
+    FullHistoryMemoryModel,
+)
 from feeding_deployment.preference_learning.methods.long_term_memory import (
     LongTermMemoryModel,
     _extract_json_object,
@@ -36,6 +39,15 @@ from feeding_deployment.utils.llm_config import (
     PREDICTION_EFFORT,
     PREDICTION_FAST_MODE,
 )
+
+# Cross-day memory backends. "three_layer" is semantic LTM summary + episodic
+# retrieval + working memory; "single_full_history" replaces the first two with
+# every prior finalized meal verbatim; "no_memory" predicts from working memory
+# alone. Working memory (current-meal context + corrections) is live state, not
+# long-term memory, so it exists in every mode.
+MEMORY_MODES = ("three_layer", "single_full_history", "no_memory")
+# Default backend for deployment, the emulator, and offline eval.
+DEFAULT_MEMORY_MODE = "single_full_history"
 
 PREF_OPTIONS: Dict[str, List[str]] = {name: opts for (name, _, opts) in root_config.PREFERENCE_BUNDLE}
 PREF_DESCRIPTIONS: Dict[str, str] = {dim.field: dim.description for dim in _PREF_BUNDLE_DIMS}
@@ -64,6 +76,23 @@ def _safe_json_load(s: str) -> Optional[Dict[str, Any]]:
         return data if isinstance(data, dict) else None
     except Exception:
         return None
+
+
+def _bundle_present(data: Optional[Dict[str, Any]]) -> bool:
+    """True when a parsed response actually carries a preference bundle. Guards
+    against valid-JSON-but-no-bundle responses (e.g. the model derails on the
+    nested latent_scores object and closes the JSON before emitting any
+    preference keys) -- treated the same as unparseable JSON so the caller
+    retries instead of silently defaulting every dimension. Requires at least
+    half of the categorical dims to be present, tolerating a stray omission
+    (which the per-field validator backfills) while catching a missing bundle."""
+    if not data:
+        return False
+    required = [f for f in PREF_FIELDS if PREF_KIND.get(f) == "categorical"]
+    if not required:
+        return True
+    present = sum(1 for f in required if f in data)
+    return present >= max(1, len(required) // 2)
 
 
 def _get_meal_info(meal: str) -> Dict[str, Any]:
@@ -163,6 +192,41 @@ def _format_corrected_block(corrected: Dict[str, Any]) -> str:
             out.append(f"{k}={v}")
     return "\n".join(out)
 
+
+def _format_prior_predictions_block(prior_predictions: Optional[List[Dict[str, Any]]]) -> str:
+    """Render THIS meal's earlier model predictions (the session's in-memory
+    within-meal history) so a reprediction can self-diagnose same-context bias.
+    One entry per (re)prediction, oldest first: the latent-trait scores it
+    asserted, its latent-factor inference, and the open-dim values it predicted.
+    Returns an empty sentinel when feedback is disabled or this is the first
+    prediction of the meal."""
+    if not prior_predictions:
+        return "(none — this is your first prediction this meal)"
+    rounds = []
+    for i, entry in enumerate(prior_predictions, start=1):
+        trig = entry.get("trigger") or "initial"
+        scores = entry.get("latent_scores") or {}
+        score_bits = []
+        for k in ("pace", "trust", "proximity", "communication"):
+            v = scores.get(k)
+            if isinstance(v, dict):
+                score_bits.append(f"{k}={v.get('score')}")
+            elif v is not None:
+                score_bits.append(f"{k}={v}")
+        score_line = ", ".join(score_bits) if score_bits else "(none)"
+        inference_txt = entry.get("latent_inference") or ""
+        predicted = entry.get("predicted") or {}
+        pred_line = (
+            "; ".join(f"{k}={val}" for k, val in predicted.items()) if predicted else "(none)"
+        )
+        rounds.append(
+            f"Prediction {i} (after: {trig}):\n"
+            f"  latent_scores: {score_line}\n"
+            f"  latent_inference: {inference_txt}\n"
+            f"  predicted open dims: {pred_line}"
+        )
+    return "\n".join(rounds)
+
 def _day_path(dir_path: Path, day: int) -> Path:
     return dir_path / f"day_{day:04d}.json"
 
@@ -174,11 +238,19 @@ def _write_json(path: Path, obj: Any) -> None:
 
 class PredictionModel:
     """
-    Combines:
-    - LongTermMemoryModel (semantic memory summary, as JSON string)
-    - EpisodicMemoryModel (episodic retrieval over history)
-    - Working memory (current context + corrected so far)
-    And calls the LLM to predict the preference bundle.
+    Combines a cross-day memory backend (see ``memory_mode`` / MEMORY_MODES):
+    - "three_layer": LongTermMemoryModel (semantic memory summary, as JSON
+      string) + EpisodicMemoryModel (episodic retrieval over history)
+    - "single_full_history": FullHistoryMemoryModel (every prior finalized
+      meal verbatim; no summarization, no retrieval)
+    - "no_memory": nothing cross-day
+    with working memory (current context + corrected so far), and calls the
+    LLM to predict the preference bundle.
+
+    ``memory_mode=None`` resolves to DEFAULT_MEMORY_MODE, except that passing
+    either ``use_long_term_memory`` / ``use_episodic_memory`` implies
+    "three_layer" -- they are its sub-ablations (which of LTM/EM to enable)
+    and may not be combined with the other modes, which derive both as False.
     """
 
     def __init__(
@@ -187,14 +259,38 @@ class PredictionModel:
         physical_profile_label: str,
         logs_dir: Path,
         retry_fn = _retry_on_rate_limit,
-        use_long_term_memory: bool = True,
-        use_episodic_memory: bool = True,
+        memory_mode: Optional[str] = None,
+        use_long_term_memory: Optional[bool] = None,
+        use_episodic_memory: Optional[bool] = None,
         k_retrieve: int = 5,
+        max_full_history_days: Optional[int] = None,
         chat_model: str = PREDICTION_CLAUDE_MODEL,
         embed_model: str = "text-embedding-3-small",
         physical_profile_description: str | None = None,
     ) -> None:
-        
+
+        if memory_mode is None:
+            memory_mode = (
+                "three_layer"
+                if (use_long_term_memory is not None or use_episodic_memory is not None)
+                else DEFAULT_MEMORY_MODE
+            )
+        if memory_mode not in MEMORY_MODES:
+            raise ValueError(
+                f"Unknown memory_mode={memory_mode!r}. Valid: {', '.join(MEMORY_MODES)}"
+            )
+        if memory_mode == "three_layer":
+            use_long_term_memory = True if use_long_term_memory is None else use_long_term_memory
+            use_episodic_memory = True if use_episodic_memory is None else use_episodic_memory
+        else:
+            if use_long_term_memory is not None or use_episodic_memory is not None:
+                raise ValueError(
+                    "use_long_term_memory / use_episodic_memory are three-layer "
+                    f"sub-ablations; do not pass them with memory_mode={memory_mode!r}."
+                )
+            use_long_term_memory = use_episodic_memory = False
+        self.memory_mode = memory_mode
+
         self.user = user
         self.physical_profile_label = physical_profile_label
         self.physical_profile_description = physical_profile_description
@@ -203,14 +299,20 @@ class PredictionModel:
         # access / bad request) so later calls skip the doomed fast attempt.
         # Rate limits do NOT latch -- fast capacity replenishes continuously.
         self._fast_mode_unavailable = False
-        self.embed_client = OpenAI(api_key=_resolve_api_key(None))  # embeddings stay on OpenAI (falls back to OPENAI_API_KEY)
+        # Embeddings stay on OpenAI (falls back to OPENAI_API_KEY). Only the
+        # episodic retrieval layer needs them, so the other memory modes never
+        # require an OpenAI key.
+        self.embed_client: Optional[OpenAI] = (
+            OpenAI(api_key=_resolve_api_key(None)) if use_episodic_memory else None
+        )
         self.chat_model = chat_model
         self.embed_model = embed_model
         self._retry = retry_fn
         self.logs_dir = logs_dir
         self.long_term_memory_model: Optional[LongTermMemoryModel] = None
         self.episodic_memory_model: Optional[EpisodicMemoryModel] = None
-        
+        self.full_history_memory_model: Optional[FullHistoryMemoryModel] = None
+
         if use_long_term_memory:
             self.long_term_memory_dir = self.logs_dir / user / "long_term_memory"
             self.long_term_memory_dir.mkdir(parents=True, exist_ok=True)
@@ -233,7 +335,14 @@ class PredictionModel:
                 retry_fn=self._retry,
                 k_retrieve=k_retrieve,
             )
-            
+
+        if memory_mode == "single_full_history":
+            self.full_history_memory_dir = self.logs_dir / user / "full_history_memory"
+            self.full_history_memory_dir.mkdir(parents=True, exist_ok=True)
+            self.full_history_memory_model = FullHistoryMemoryModel(
+                max_days=max_full_history_days,
+            )
+
         self.working_memory_dir = self.logs_dir / user / "working_memory"
         self.working_memory_dir.mkdir(parents=True, exist_ok=True)
         
@@ -245,6 +354,13 @@ class PredictionModel:
         # "latent_inference" sentence(s) ride along in last_latent_inference.
         self.last_explanations: Dict[str, str] = {}
         self.last_latent_inference: str = ""
+        # The LLM's scored predictions over the four stable latent user-traits
+        # (pace / trust / proximity / communication), each
+        # {"score": 1-5, "confidence": ..., "why": ...}; {} when absent/malformed.
+        # This is the model's inferred latent state, graded offline against the
+        # user's held-out pre-meal self-report. Extra response key, not a
+        # preference field (the validation loop only reads PREF_FIELDS).
+        self.last_latent_scores: Dict[str, Any] = {}
 
     @staticmethod
     def _scan_day_files(dir_path: Path, current_day: int):
@@ -291,9 +407,9 @@ class PredictionModel:
         summary and episodic history start empty and prior days' learning is lost.
 
         LTM is cumulative, so only the latest prior day's summary is needed;
-        episodic history needs every prior episode_text. The strictly-less-than
-        cutoff keeps a re-run/resume of ``current_day`` from folding its own prior
-        record back into itself."""
+        episodic and full-history each need every prior episode_text. The
+        strictly-less-than cutoff keeps a re-run/resume of ``current_day`` from
+        folding its own prior record back into itself."""
         if self.long_term_memory_model:
             ltm_files = self._scan_day_files(self.long_term_memory_dir, current_day)
             if ltm_files:
@@ -320,6 +436,20 @@ class PredictionModel:
                     texts.append(txt)
             if texts:
                 self.episodic_memory_model.load_history(texts)
+
+        if self.full_history_memory_model:
+            texts = []
+            for _, path in self._scan_day_files(self.full_history_memory_dir, current_day):
+                try:
+                    record = json.loads(path.read_text(encoding="utf-8"))
+                except Exception as e:
+                    print(f"Warning: skipping unreadable full-history record {path}: {e}", flush=True)
+                    continue
+                txt = record.get("episode_text", "")
+                if txt:
+                    texts.append(txt)
+            if texts:
+                self.full_history_memory_model.load_history(texts)
 
     def update(self, day: int, context: Dict[str, Any], corrected: Dict[str, str], ground_truth_bundle: Dict[str, str]) -> None:
         
@@ -362,7 +492,21 @@ class PredictionModel:
                 "retrieved_episodes": self.episodic_memory_model.get_last_retrieved(),
             }
             _write_json(_day_path(self.episodic_memory_dir, day), episodic_memory_record)
-            
+
+        if self.full_history_memory_model:
+            self.full_history_memory_model.add_episode(ep_txt)
+
+            full_history_memory_record = {
+                "day": day,
+                "context": context,
+                "corrected": dict(corrected),
+                "episode_text": ep_txt,
+                "ground_truth_bundle": dict(ground_truth_bundle),
+            }
+            _write_json(_day_path(self.full_history_memory_dir, day), full_history_memory_record)
+
+        # Always written, in every memory mode: the canonical "day finalized"
+        # marker that existing_days()/validate_sequential_day key off.
         working_memory_record = {
             "day": day,
             "context": context,
@@ -428,6 +572,7 @@ class PredictionModel:
         confirmed: Optional[Dict[str, Any]] = None,
         color_seeds: Optional[Dict[str, Any]] = None,
         nav_offset_seeds: Optional[Dict[str, Any]] = None,
+        prior_predictions: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Returns predicted_bundle.
@@ -461,21 +606,29 @@ class PredictionModel:
         if self.long_term_memory_model:
             long_term_memory = self.long_term_memory_model.get_ltm()  # JSON string (or empty)
 
+        full_history_block = ""
+        if self.full_history_memory_model:
+            full_history_block = self.full_history_memory_model.get_memory_block()
+
         # Prompt blocks
         options_block = _build_options_block(color_seeds, nav_offset_seeds)
         corrected_block = _format_corrected_block(corrected)
         confirmed_block = _format_corrected_block(confirmed)
         meal_contents_block = _build_meal_contents_block(str(context.get("meal", "")))
+        prior_predictions_block = _format_prior_predictions_block(prior_predictions)
 
         prompt = get_bundle_prediction_prompt(
             physical_profile_label=self.physical_profile_label,
             ltm_summary=long_term_memory,
             retrieved_block=episodic_memory,
+            memory_mode=self.memory_mode,
+            full_history_block=full_history_block,
             context=context,
             corrected_block=corrected_block,
             confirmed_block=confirmed_block,
             options_block=options_block,
             meal_contents=meal_contents_block,
+            prior_predictions_block=prior_predictions_block,
             physical_profile_description=self.physical_profile_description,
         )
 
@@ -504,13 +657,19 @@ class PredictionModel:
 
         resp = self._retry(_call)
         data = _parse_response(resp)
-        if data is None:
-            # Malformed JSON is usually transient -- one fresh attempt before
-            # falling back to seeds/pinned/defaults (which silently discards
-            # the model's actual prediction).
-            print("Warning: bundle prediction was not valid JSON; retrying once ...", flush=True)
+        if not _bundle_present(data):
+            # Either unparseable JSON (data is None) or valid JSON that omitted
+            # the preference bundle (e.g. the model derails on the nested
+            # latent_scores object and closes early). Both would otherwise fall
+            # back to seeds/pinned/defaults, silently discarding the prediction
+            # for the whole meal -- one fresh attempt first.
+            print("Warning: bundle prediction missing or malformed (bad JSON or absent preference keys); retrying once ...", flush=True)
             resp = self._retry(_call)
-            data = _parse_response(resp)
+            data2 = _parse_response(resp)
+            if _bundle_present(data2):
+                data = data2
+            else:
+                data = data or data2
         data = data or {}
 
         if self.working_memory_calls_dir:
@@ -530,6 +689,8 @@ class PredictionModel:
         expl = data.get("explanations")
         self.last_explanations = dict(expl) if isinstance(expl, dict) else {}
         self.last_latent_inference = str(data.get("latent_inference") or "")
+        ls = data.get("latent_scores")
+        self.last_latent_scores = dict(ls) if isinstance(ls, dict) else {}
 
         # Validate each field; categorical -> allowed option (fallback to
         # pinned/default), color -> parsed HSV (fallback to seed), nav

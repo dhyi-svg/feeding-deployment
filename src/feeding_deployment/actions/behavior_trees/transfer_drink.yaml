@@ -1,5 +1,5 @@
 name: "TransferDrink"
-description: "Bring the mug (drink) to the user's mouth for a sip. Before initiating the transfer sequence for drink, the robot can confirm with the user on the web app (web interface) once using AskForConfirmationInitiatingTransferSequence. A drink transfer starts with an ReadyToInitiateTransferInteraction (robot to human) where the robot conveys to the user that it is ready to initiate the drink transfer, then an InitiateTransferInteraction (human to robot) where the human conveys to the robot that it is ready for a drink transfer. After this, the robot moves the mug either near the user's mouth (OutsideMouthDistance defines how near) or inside the user's mouth. Then commences the ReadyForTransferInteraction (robot to human) where the robot conveys to the user that they can take a sip now. After the users is done taking a sip, they use the TransferCompleteInteraction (human to robot) to convey to the robot that they are done. The robot then moves the mug away from the user's mouth. Once a drink transfer is complete, the robot waits for TimeToWaitBeforeAutocontinue on the web app (web interface) before re-selecting drink transfer again."
+description: "Bring the mug (drink) to the user's mouth for a sip. Before initiating the transfer sequence for drink, the robot can confirm with the user on the web app (web interface) once using PickupConfirm. A drink transfer starts with an RobotTransferStartCue (robot to human) where the robot conveys to the user that it is ready to initiate the drink transfer, then an UserTransferReadySignal (human to robot) where the human conveys to the robot that it is ready for a drink transfer. After this, the robot moves the mug either near the user's mouth (OutsideMouthDistance defines how near) or inside the user's mouth. Then commences the RobotTransferArrivedCue (robot to human) where the robot conveys to the user that they can take a sip now. After the users is done taking a sip, they use the UserTransferDoneSignal (human to robot) to convey to the robot that they are done. The robot then moves the mug away from the user's mouth. Once a drink transfer is complete, the robot waits for TaskReselectionAutocontinueSeconds on the web app (web interface) before re-selecting drink transfer again."
 type: "Behavior"
 parameters:
   - name: "Speed"
@@ -9,29 +9,29 @@ parameters:
       elements: ["low", "medium", "high"]
     is_user_editable: True
     value: "medium"
-  - name: "ReadyToInitiateTransferInteraction"
-    description: "Interaction mode for how the robot conveys to the user that it is ready to initiate the drink transfer."
+  - name: "RobotTransferStartCue"
+    description: "Cue (robot to user) announcing the robot is about to start the drink transfer."
     space:
       type: "Enum"
       elements: ["silent", "voice", "led", "beep", "voice_led"]
     is_user_editable: True
     value: "voice"
-  - name: "InitiateTransferInteraction"
-    description: "Interaction mode for how the user conveys to the robot that they are ready for a drink transfer."
+  - name: "UserTransferReadySignal"
+    description: "Signal (user to robot) that the user is ready for the drink transfer."
     space:
       type: "Enum"
       elements: ["button", "open_mouth", "auto_timeout"]
     is_user_editable: True
     value: "open_mouth"
-  - name: "ReadyForTransferInteraction"
-    description: "Interaction mode for how the robot conveys to the user that they can take a sip now."
+  - name: "RobotTransferArrivedCue"
+    description: "Cue (robot to user) that the drink has arrived and the user can take a sip."
     space:
       type: "Enum"
       elements: ["silent", "voice", "led", "beep", "voice_led"]
     is_user_editable: True
     value: "voice"
-  - name: "TransferCompleteInteraction"
-    description: "Interaction mode for how the user conveys to the robot that they are done taking a sip. Sense corresponds to the robot waiting for a head nod from the user."
+  - name: "UserTransferDoneSignal"
+    description: "Signal (user to robot) that the user is done taking a sip. Sense corresponds to the robot waiting for a head nod from the user."
     space:
       type: "Enum"
       elements: ["button", "sense", "auto_timeout"]
@@ -45,18 +45,19 @@ parameters:
       upper: 0.15
     is_user_editable: True
     value: 0.1
-  - name: "AskForConfirmationInitiatingTransferSequence"
-    description: "Drink pickup confirmation page mode: 0 = skip, 1 = show with autocontinue, 2 = wait for the user."
+  - name: "PickupConfirm"
+    description: "Bite/drink/wipe pickup confirmation page: -1 = skip the page, 0 = show and wait for the user, >0 = show and count down that many seconds before continuing."
     space:
-      type: "Enum"
-      elements: [0, 1, 2]
+      type: Box
+      lower: -1.0
+      upper: 1000.0
     is_user_editable: True
-    value: 2
-  - name: "TimeToWaitBeforeAutocontinue"
-    description: "Autocontinue duration for re-selecting drink transfer after a sip on the web app (web interface)."
+    value: 0.0
+  - name: "TaskReselectionAutocontinueSeconds"
+    description: "Autocontinue duration for re-selecting drink transfer after a sip on the web app (web interface). 0 disables the autocontinue (the page waits for the user)."
     space:
       type: "Box"
-      lower: 5.0
+      lower: 0.0
       upper: 1000.0
     is_user_editable: True
     value: 10.0

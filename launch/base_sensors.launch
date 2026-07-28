@@ -1,4 +1,7 @@
 <launch>
+  <!-- LEGACY standalone bringup (superseded by sensors.launch): still assumes
+       ZED-owned odom (vention.urdf inverted joint + publish_tf=true). NEVER
+       run alongside sensors.launch (two-parent TF tree). -->
   <!-- Stable: tied to physical USB port -->
   <arg name="port2" default="/dev/serial/by-path/pci-0000:00:14.0-usb-0:4.4.3:1.0-port0"/>
   <arg name="port1" default="/dev/serial/by-path/pci-0000:00:14.0-usb-0:4.4.4:1.0-port0"/>

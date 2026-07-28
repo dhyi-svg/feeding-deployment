@@ -22,6 +22,48 @@ _PREF_FIELDS: List[str] = [name for (name, _, _) in root_config.PREFERENCE_BUNDL
 _PHYSICAL_CAPABILITY_BY_LABEL = {p.label: p for p in PHYSICAL_CAPABILITY_PROFILES}
 
 
+def _render_memory_block(
+    memory_mode: str,
+    ltm_summary: str,
+    retrieved_block: str,
+    full_history_block: str,
+) -> str:
+    """The cross-day memory section of the prompt, rendered per memory mode.
+    Working memory is not part of this block -- current-meal corrections are
+    live state and keep their own template section in every mode."""
+    if memory_mode == "three_layer":
+        return (
+            "=== SEMANTIC MEMORY: Prior on the user's preference encoding inferred from all prior meals ===\n"
+            f"{ltm_summary}\n"
+            "======\n"
+            "\n"
+            "=== EPISODIC MEMORY: Similar prior meals retrieved from memory with ground truth user preference bundles ===\n"
+            f"{retrieved_block}\n"
+            "======"
+        )
+    if memory_mode == "single_full_history":
+        return (
+            "=== FULL HISTORY MEMORY: Every prior finalized meal in chronological order, with ground truth user preference bundles ===\n"
+            f"{full_history_block}\n"
+            "======"
+        )
+    if memory_mode == "no_memory":
+        return "(no prior memory)"
+    raise ValueError(f"Unknown memory_mode={memory_mode!r}")
+
+
+def _render_memory_priority_lines(memory_mode: str) -> str:
+    """Items 2+ of the prompt's priority list (item 1, the physical profile,
+    is fixed in the template)."""
+    if memory_mode == "three_layer":
+        return "2. WORKING MEMORY\n3. EPISODIC MEMORY\n4. SEMANTIC MEMORY"
+    if memory_mode == "single_full_history":
+        return "2. WORKING MEMORY\n3. FULL HISTORY MEMORY"
+    if memory_mode == "no_memory":
+        return "2. WORKING MEMORY"
+    raise ValueError(f"Unknown memory_mode={memory_mode!r}")
+
+
 def get_bundle_prediction_prompt(
     physical_profile_label: str,
     ltm_summary: str,
@@ -32,6 +74,9 @@ def get_bundle_prediction_prompt(
     meal_contents: str = "(not provided)",
     confirmed_block: str = "(none)",
     *,
+    memory_mode: str = "three_layer",
+    full_history_block: str = "",
+    prior_predictions_block: str = "(none — this is your first prediction this meal)",
     physical_profile_description: str | None = None,
 ) -> str:
     template = BUNDLE_PREDICTION_PROMPT_PATH.read_text(encoding="utf-8")
@@ -51,14 +96,17 @@ def get_bundle_prediction_prompt(
     return template.format(
         system_description=system_description,
         physical_profile=desc,
-        ltm_summary=ltm_summary,
-        retrieved_block=retrieved_block,
+        memory_block=_render_memory_block(
+            memory_mode, ltm_summary, retrieved_block, full_history_block
+        ),
+        memory_priority_lines=_render_memory_priority_lines(memory_mode),
         meal=context.get("meal"),
         setting=context.get("setting"),
         time_of_day=context.get("time_of_day"),
         meal_contents=meal_contents,
         confirmed_block=confirmed_block,
         corrected_block=corrected_block,
+        prior_predictions_block=prior_predictions_block,
         options_block=options_block,
         pref_fields_csv=", ".join(_PREF_FIELDS),
     )

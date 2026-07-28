@@ -40,4 +40,7 @@ refinement:
   # --- heading controller (only used when actuate: true) ---------------------
   cmd_vel_topic: /cmd_vel
   k_ang: 1.2             # proportional gain on heading error -> angular vel
-  max_ang_rps: 0.4       # clamp on angular velocity (rad/s)
+  max_ang_rps: 0.1667    # clamp on angular velocity (rad/s) == teleop
+                         # max_vel_theta (shared_autonomy.launch): no
+                         # non-planner motion may exceed the supervised
+                         # teleop caps (was 0.4 before the Jul 13 spin)

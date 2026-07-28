@@ -29,7 +29,7 @@
         <div v-else class="cam-placeholder">Waiting for detection image...</div>
       </div>
 
-      <p v-if="!userInteracted && countdown !== null" class="cdown">Auto-confirming in <span>{{ countdown }}s</span></p>
+      <p class="cdown" :class="{ 'cdown-hidden': userInteracted || countdown === null }">Auto-confirming in <span>{{ countdown }}s</span></p>
       <div class="det-actions">
         <button class="btn md amber" @click="confirmDetection">Looks Correct</button>
         <button class="btn md ghost" @click="redoDetection">Redo</button>
@@ -111,6 +111,8 @@ export default {
       countdown: null,
       countdownInterval: null,
       userInteracted: false,
+      // Set ONLY on countdown expiry: responses carry user_action tap|autocontinue.
+      autoSubmit: false,
     }
   },
   computed: {
@@ -131,6 +133,11 @@ export default {
     this.ros = new ROSLIB.Ros({ url: ROS_URL })
     this.initSubscriber()
     this.initPublisher()
+    // any tap anywhere (incl. App.vue chrome/overlays outside .page) cancels autocontinue
+    window.addEventListener('pointerdown', this.cancelAutocontinue, true)
+  },
+  beforeUnmount () {
+    window.removeEventListener('pointerdown', this.cancelAutocontinue, true)
   },
   beforeRouteLeave (to, from, next) {
     this.stopCountdown()
@@ -204,10 +211,12 @@ export default {
         data: JSON.stringify({
           state: 'detection_confirm',
           status: status,
-          detection_type: this.detectionType
+          detection_type: this.detectionType,
+          user_action: this.autoSubmit ? 'autocontinue' : 'tap'
         })
       })
       this.publisher.publish(message);
+      this.autoSubmit = false;
     },
     startCountdown (seconds) {
       this.countdown = seconds
@@ -217,6 +226,7 @@ export default {
         } else {
           this.stopCountdown()
           // Unattended: accept the detection.
+          this.autoSubmit = true
           this.confirmDetection()
         }
       }, 1000);

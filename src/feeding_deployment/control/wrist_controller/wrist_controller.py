@@ -239,6 +239,33 @@ class WristInterface:
         desired_roll = current_roll - 4 * math.pi
         self.set_wrist_state(current_pitch, desired_roll, vel=vel, use_offset=False)
 
+    def twirl_to_neutral(self, max_speed=0.5, timeout=15.0):
+        # Slowly unwind the twirl/roll DoF (q1) to neutral in velocity mode so the
+        # horizontal-spoon position controller doesn't snap the wound-up utensil
+        # (and fling food) when it takes over. Neutral is absolute 0 — the same
+        # target horizontal spoon will command.
+        self.set_velocity_mode()
+        try:
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                wrist_joint_states = rospy.wait_for_message('/wrist_joint_states', JointState)
+                current_roll = wrist_joint_states.position[1]
+                if np.abs(current_roll) < 0.02:
+                    break
+                wrist_state = SimpleJointAngleCommand()
+                # Velocity mode: q0/q1 are velocities. q0=0 -> pitch does NOT
+                # move (holds its current angle); only the roll is driven.
+                wrist_state.q0 = 0
+                wrist_state.q1 = float(np.clip(-current_roll * 2.0, -max_speed, max_speed))
+                self.wrist_state_pub.publish(wrist_state)
+            wrist_state = SimpleJointAngleCommand()
+            wrist_state.q0 = 0
+            wrist_state.q1 = 0
+            self.wrist_state_pub.publish(wrist_state)
+        except Exception as e:
+            # Wrist hiccups must not kill the meal flow; horizontal spoon takes over anyway.
+            print(f"Wrist error during twirl_to_neutral ({e}); continuing")
+
     def set_to_scoop_pos(self):
         wrist_joint_states = rospy.wait_for_message('/wrist_joint_states', JointState)
         current_pitch = -wrist_joint_states.position[0]

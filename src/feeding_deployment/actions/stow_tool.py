@@ -68,9 +68,12 @@ class StowToolHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.utensil_outside_above_mount_pos)
         self.move_to_ee_pose(self.sim.scene_description.utensil_outside_mount_pose)
-        self.move_to_ee_pose(self.sim.scene_description.utensil_inside_mount_pose)
-        self.ungrasp_tool("utensil")
-        self.move_to_ee_pose(self.sim.scene_description.utensil_above_mount_pose)
+
+        with self.low_speed(restore=speed):
+            self.move_to_ee_pose(self.sim.scene_description.utensil_inside_mount_pose)
+            self.ungrasp_tool("utensil")
+            self.move_to_ee_pose(self.sim.scene_description.utensil_above_mount_pose)
+        
         self.move_to_joint_positions(self.sim.scene_description.retract_pos)
 
     def stow_drink(self, speed: str) -> None:
@@ -90,10 +93,13 @@ class StowToolHLA(HighLevelAction):
 
         if abs(x_movement) < 0.01 and abs(y_movement) < 0.01:
             self.move_to_joint_positions(last_drink_pickup_joint_pos)
-        self.move_to_ee_pose(last_drink_poses['inside_top_pose'])
-        self.ungrasp_tool("drink")
-        self.move_to_ee_pose(last_drink_poses['place_inside_bottom_pose'])
-        self.move_to_ee_pose(last_drink_poses['place_pre_grasp_pose'])
+
+        with self.low_speed(restore=speed):
+            self.move_to_ee_pose(last_drink_poses['inside_top_pose'])
+            self.ungrasp_tool("drink")
+            self.move_to_ee_pose(last_drink_poses['place_inside_bottom_pose'])
+            self.move_to_ee_pose(last_drink_poses['place_pre_grasp_pose'])
+
         self.move_to_joint_positions(self.sim.scene_description.drink_staging_pos)
         self.move_to_joint_positions(self.sim.scene_description.retract_pos)
 
@@ -108,9 +114,11 @@ class StowToolHLA(HighLevelAction):
         self.move_to_joint_positions(self.sim.scene_description.retract_pos)
         self.move_to_joint_positions(self.sim.scene_description.wipe_outside_above_mount_pos)
         self.move_to_ee_pose(self.sim.scene_description.wipe_outside_mount_pose)
-        self.move_to_ee_pose(self.sim.scene_description.wipe_inside_mount_pose)
-        self.ungrasp_tool("wipe")
-        self.move_to_ee_pose(self.sim.scene_description.wipe_above_mount_pose)
+        with self.low_speed(restore=speed):
+            self.move_to_ee_pose(self.sim.scene_description.wipe_inside_mount_pose)
+            self.ungrasp_tool("wipe")
+            self.move_to_ee_pose(self.sim.scene_description.wipe_above_mount_pose)
+
         self.move_to_joint_positions(self.sim.scene_description.retract_pos)
 
     def stow_plate(self, speed: str) -> None:

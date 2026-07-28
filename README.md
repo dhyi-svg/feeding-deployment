@@ -293,11 +293,9 @@ python src/feeding_deployment/scripts/build_map_interactive.py --pbstream-file /
 
 ## Start move_base For Navigation
 
-First make sure we are publishing the odom link required:
-
-```
-python src/feeding_deployment/scripts/zed_pose_to_odom_feedback.py
-```
+First make sure sensors.launch is up: it owns the odom->base TF via
+`ekf_fused_imu_wheel` (wheel + debiased ZED gyro) and publishes
+`/odometry/fused_imu_wheel` for cartographer + TEB.
 
 You may need to change the Arduino usb id cmd_vel_bridge_basicmicro.py.
 ```

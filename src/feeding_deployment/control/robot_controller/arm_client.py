@@ -122,7 +122,7 @@ class ArmInterfaceClient:
             if self.in_compliant_mode:
                 return self._arm_interface.compliant_set_ee_pose(cmd.pos, cmd.quat)
             else:
-                return self._arm_interface.set_ee_pose(cmd.pos, cmd.quat)
+                return self._arm_interface.set_ee_pose(cmd.pos, cmd.quat, cmd.soft_stop)
 
         if cmd.__class__.__name__ == "OpenGripperCommand":
             return self._arm_interface.open_gripper()

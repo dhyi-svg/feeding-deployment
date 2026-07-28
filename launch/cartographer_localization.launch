@@ -4,6 +4,23 @@
   <arg name="config_basename" default="vention_2lidar_localization.lua"/>
   <arg name="load_state_filename" default="/tmp/vention_map.pbstream"/>
   <arg name="load_frozen_state" default="true"/>
+  <!-- Coverage floor for the scan gate (occupied 0.2 m cells). Healthy scans
+       measure 36-114 across the jul14_2 trigger bags; feeding-occlusion sits
+       around 10-20 per Cartographer's node point counts. Retune from the
+       scan_gate stats lines after the first gated table session. -->
+  <arg name="gate_min_cells" default="25"/>
+
+  <!-- Scan gate: drops BOTH lidars' scans whenever either is too occluded to
+       localize on (person/arm at the table gutted scans -> Cartographer
+       matched them 4-7 m off at 90% score and yanked map->odom 2-7 m every
+       optimization; both table stays, session jul14_2). Starved, Cartographer
+       freezes map->odom on the last good pose and the robot rides wheel+IMU
+       odom until the view clears. Costmaps/diagnostics keep the raw topics;
+       only Cartographer subscribes to the gated ones. -->
+  <node pkg="feeding_deployment" type="scan_gate.py" name="scan_gate"
+        output="screen" respawn="true" respawn_delay="2">
+    <param name="min_cells" value="$(arg gate_min_cells)"/>
+  </node>
 
   <!-- Cartographer node in localization mode. -->
   <node pkg="cartographer_ros" type="cartographer_node" name="cartographer_node" output="screen"
@@ -11,12 +28,14 @@
               -configuration_basename $(arg config_basename)
               -load_state_filename $(arg load_state_filename)
               -load_frozen_state $(arg load_frozen_state)">
-    <remap from="scan_2" to="/lidar_l/scan"/>
-    <remap from="scan_1" to="/lidar_r/scan"/>
-    <!-- Sanitized odom (zed_pose_to_odom_feedback.py drops single-frame VIO
-         teleports). Was /zed_mini/zed_node/odom; a raw teleport frame corrupted
-         the extrapolator for 86 s (navlog_20260702_141316). -->
-    <remap from="odom" to="/zed_mini/zed_node/odom_sanitized"/>
+    <remap from="scan_2" to="/lidar_l/scan_gated"/>
+    <remap from="scan_1" to="/lidar_r/scan_gated"/>
+    <!-- Fused wheel+IMU odometry (ekf_fused_imu_wheel in sensors.launch, which
+         also owns the odom->vention_base_link TF). child_frame_id equals the
+         tracking_frame, so no TF hop. Was the sanitized ZED VIO
+         (/zed_mini/zed_node/odom_sanitized) until Jul 2026; VIO jumps kept
+         dragging localization (e.g. 31.5 m excursion, session jul10-6). -->
+    <remap from="odom" to="/odometry/fused_imu_wheel"/>
   </node>
 
   <!-- Publish occupancy grid as /map. -->

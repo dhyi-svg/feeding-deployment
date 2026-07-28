@@ -1,5 +1,8 @@
 DWAPlannerROS:
-  odom_topic: /move_base/odom_feedback
+  # NOT LOADED (TEB is the active local planner). Repointed from the retired
+  # /move_base/odom_feedback [2026-07-15] so a future re-enable doesn't ride a
+  # dead topic.
+  odom_topic: /odometry/fused_imu_wheel
 
   max_vel_x: 0.3
   min_vel_x: -0.3

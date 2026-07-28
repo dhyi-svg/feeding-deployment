@@ -49,10 +49,12 @@ class CartesianCommand(KinovaCommand):
 
     pos: NDArray
     quat: NDArray
+    soft_stop: bool = False
 
-    def __init__(self, pos, quat):
+    def __init__(self, pos, quat, soft_stop=False):
         object.__setattr__(self, "pos", np.array(pos))
         object.__setattr__(self, "quat", np.array(quat))
+        object.__setattr__(self, "soft_stop", bool(soft_stop))
         assert self.pos.shape == (3,)
         assert self.quat.shape == (4,)
 

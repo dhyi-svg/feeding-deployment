@@ -67,13 +67,15 @@ from feeding_deployment.preference_learning.config.mealtime_context import (
     food_items_for_flair,
 )
 from feeding_deployment.preference_learning.methods.prediction_model import (
-    PREF_DESCRIPTIONS,
     PREF_KIND,
     PREF_OPTIONS,
 )
 from feeding_deployment.preference_learning.methods.utils import PREF_FIELDS
 
 _PREF_LABELS: Dict[str, str] = {dim.field: dim.label for dim in PREFERENCE_BUNDLE}
+_PREF_SHORT_DESCRIPTIONS: Dict[str, str] = {
+    dim.field: dim.short_description for dim in PREFERENCE_BUNDLE
+}
 
 from feeding_deployment.integration.apply_preferences import (
     _load_yaml,
@@ -90,9 +92,10 @@ _COLOR_FIELD_SET = set(COLOR_FIELDS)
 _TEXT_FIELD_SET = set(TEXT_FIELDS)
 _NAV_OFFSET_FIELD_SET = set(NAV_OFFSET_FIELDS)
 
-# Default autocontinue (seconds) for the correction page before the user's
-# wait_before_autocontinue_seconds preference has been finalized.
-_DEFAULT_AUTOCONTINUE_SECONDS = 10.0
+# Autocontinue (seconds) for the preference ask/correction pages themselves.
+# Fixed -- these pages are not a user-facing preference (the confirm/countdown
+# dims each carry their own page's countdown).
+PREFERENCE_PAGE_AUTOCONTINUE_SECONDS = 30.0
 
 # ---------------------------------------------------------------------------
 # Staged ask schedule + deployment defaults, shared by run.py and the terminal
@@ -109,23 +112,28 @@ DEFAULT_PHYSICAL_PROFILE = (
     "personal device using their arms."
 )
 
+# Default for within-meal prior-prediction feedback: feed the model its own
+# earlier predictions from THIS meal back into each reprediction so it can
+# self-diagnose same-context bias. On by default; toggled per run (A/B) via the
+# --pref_prior_predictions / --no-pref_prior_predictions CLI flag. Within-meal
+# only -- never persisted across days.
+DEFAULT_PROVIDE_PRIOR_PREDICTIONS = True
+
 # Preference dimensions asked at the start of the meal (before fetching the
-# plate). The two confirmation-mode dims fire first during the fridge leg
-# (navigation arrival page, handle-detection page), so they are asked up
-# front; they come BEFORE the wait pref so the user learns what pages exist
-# (and what "autocontinue" refers to) before choosing its duration. The
-# finalized wait then drives the autocontinue of every later correction and
-# confirmation page (the three earlier ask pages use the 10 s bootstrap
-# default).
+# plate). The two confirmation dims fire first during the fridge leg (navigation
+# arrival page, handle-detection page), so they are asked up front. Each confirm
+# dim now carries its own countdown length (skip / countdown (N sec) / wait for
+# me), so there is no separate mealprep wait dim to ask. The two feeding-page
+# countdown dims are asked at the table (TABLE_PREF_DIMS), just before the pages
+# they govern first appear.
 INITIAL_PREF_DIMS = [
     "robot_speed",
     "confirm_navigation_arrival",
     "confirm_manipulation",
-    "wait_before_autocontinue_seconds",
 ]
 
 # Behavior trees whose parameters come from (re)prediction: plate pickups read
-# HandleColor/ColorRange, navigations read PositionOffset, and the feeding
+# PlateHandleColor/PlateHandleColorTolerance, navigations read ParkingOffset, and the feeding
 # skills read the table dims. run.py joins the background reprediction before
 # executing these; every other skill only reads dims that are finalized before
 # it can run (Speed, confirm_navigation_arrival and confirm_manipulation from
@@ -149,7 +157,6 @@ def bt_consumes_predictions(bt_name: str) -> bool:
 # Preference dimensions asked at the table, just before feeding begins.
 TABLE_PREF_DIMS = [
     "skewering_axis",
-    "confirm_feeding_pickup",
     "bite_dipping_preference",
     "bite_ordering",
     "transfer_mode",
@@ -163,6 +170,20 @@ TABLE_PREF_DIMS = [
     "detect_user_completed_transfer_drinking",
     "detect_user_completed_transfer_wiping",
     "retract_between_bites",
+    "wait_before_autocontinue_bite_selection",
+    "confirm_feeding_pickup",
+    "wait_before_autocontinue_task_selection",
+]
+
+
+# Settings-overlay display order: mirror the order the dims are ASKED in during
+# the meal (INITIAL_PREF_DIMS, then the prep-time microwave ask, then
+# TABLE_PREF_DIMS) so the pane lists prefs in the same sequence the user saw
+# them predicted. Any bundle field not covered by a staged ask list is appended
+# in bundle order so it can never silently drop out of the pane.
+_SETTINGS_ASK_ORDER = INITIAL_PREF_DIMS + ["microwave_time"] + TABLE_PREF_DIMS
+_SETTINGS_DISPLAY_ORDER = _SETTINGS_ASK_ORDER + [
+    f for f in PREF_FIELDS if f not in _SETTINGS_ASK_ORDER
 ]
 
 
@@ -174,12 +195,12 @@ def _nav_yaml_name(location: str) -> str:
     return f"navigate_to_{location}.yaml"
 
 
-# Full parameter block for upserting PositionOffset into a per-user navigate
+# Full parameter block for upserting ParkingOffset into a per-user navigate
 # BT YAML that predates the parameter (per-user trees are copied from factory
 # only for NEW users, so existing deployments never pick it up otherwise).
 # Must match the factory navigate_to_*.yaml definition.
 _NAV_OFFSET_PARAM = {
-    "name": "PositionOffset",
+    "name": "ParkingOffset",
     "description": (
         "Learned SE(2) offset (dx m, dy m, dyaw rad) applied to the nominal "
         "goal pose in the goal's local frame, accumulated from the user's "
@@ -194,16 +215,6 @@ _NAV_OFFSET_PARAM = {
 }
 
 
-def _wait_pref_to_seconds(value: Optional[str]) -> float:
-    """'10 sec' -> 10.0. Falls back to the default on anything unexpected."""
-    if not value:
-        return _DEFAULT_AUTOCONTINUE_SECONDS
-    try:
-        return float(str(value).split()[0])
-    except (ValueError, IndexError):
-        return _DEFAULT_AUTOCONTINUE_SECONDS
-
-
 class PreferenceSession:
     def __init__(
         self,
@@ -213,18 +224,15 @@ class PreferenceSession:
         *,
         web_interface: Any = None,
         data_logger: Any = None,
-        scene_description: Any = None,
-        hla_map: Optional[Dict[str, Any]] = None,
         flair: Any = None,
         on_change: Optional[Callable[[Dict[str, Any]], None]] = None,
+        provide_prior_predictions: bool = DEFAULT_PROVIDE_PRIOR_PREDICTIONS,
     ) -> None:
         self._model = prediction_model
         self._bt_dir = Path(run_behavior_tree_dir)
         self.context = dict(context)
         self._web = web_interface
         self._logger = data_logger
-        self._scene = scene_description
-        self._hla_map = hla_map or {}
         self._flair = flair
         # Called with capture_state() whenever a correction is locked, so the
         # latest preference state is persisted immediately (see _finalize).
@@ -240,6 +248,19 @@ class PreferenceSession:
         # (re)prediction.
         self.last_explanations: Dict[str, str] = {}
         self.last_latent_inference: str = ""
+        # Model's scored latent-trait estimate (pace/trust/proximity/communication)
+        # from the most recent (re)prediction; mirrored from the model and logged
+        # for offline validation against the user's held-out pre-meal self-report.
+        self.last_latent_scores: Dict[str, Any] = {}
+
+        # Within-meal prior-prediction feedback (see DEFAULT_PROVIDE_PRIOR_PREDICTIONS):
+        # _prediction_history accumulates this meal's (re)predictions in memory so a
+        # later reprediction can see what the model already guessed and how it
+        # reasoned, to self-diagnose same-context bias. Reset per meal (the session
+        # is per-meal) and NEVER persisted -- not in capture_state(), not passed to
+        # finalize_meal/update, so it cannot cross days.
+        self._provide_prior_predictions = bool(provide_prior_predictions)
+        self._prediction_history: List[Dict[str, Any]] = []
 
         # Guards the in-memory bundle/finalized/corrected against the settings-edit
         # path (a separate WebInterface worker thread calling settings_view()/edit())
@@ -252,11 +273,6 @@ class PreferenceSession:
         # microwave_time once apply_microwave routes the planner). settings_view()
         # marks these editable=False and edit() ignores them.
         self._locked: set[str] = set()
-        # Set by a settings edit that changed transfer_mode (and by every
-        # background reprediction apply); the transfer-object re-init
-        # (apply_transfer_mode) is deferred to flush_pending_inmemory() on
-        # the main thread so it never swaps the transfer under an in-flight motion.
-        self._pending_transfer_reinit = False
 
         # Serializes every BT-YAML writing section (_apply_non_planning and the
         # open-color/nav writers) across the main thread, the settings
@@ -274,6 +290,9 @@ class PreferenceSession:
         self._repredict_cv = threading.Condition()
         self._repredict_running = False
         self._repredict_dirty = False
+        # Pending trigger labels, drained by the worker onto the pass's
+        # preference_repredicted event (a coalesced pass lists all of them).
+        self._repredict_triggers: List[str] = []
 
     # ------------------------------------------------------------------ #
     # Color seeds / BT YAML I/O
@@ -293,9 +312,9 @@ class PreferenceSession:
         handle_color = None
         color_range = None
         for param in data.get("parameters", []):
-            if param.get("name") == "HandleColor":
+            if param.get("name") == "PlateHandleColor":
                 handle_color = param.get("value")
-            elif param.get("name") == "ColorRange":
+            elif param.get("name") == "PlateHandleColorTolerance":
                 color_range = param.get("value")
         return color_from_bt(handle_color, color_range)
 
@@ -303,7 +322,7 @@ class PreferenceSession:
         return {f: self._read_color_seed(f) for f in COLOR_FIELDS}
 
     def _write_color_to_bt(self, field: str, color: Dict[str, Any]) -> None:
-        """Write a canonical color into its pickup BT YAML (HandleColor/ColorRange)."""
+        """Write a canonical color into its pickup BT YAML (PlateHandleColor/PlateHandleColorTolerance)."""
         location = field.rsplit("_", 1)[-1]
         fpath = self._bt_dir / _pickup_yaml_name(location)
         if not fpath.exists():
@@ -311,8 +330,8 @@ class PreferenceSession:
         data = _load_yaml(fpath)
         handle_color, color_range = color_to_bt(color)
         changed = False
-        changed |= _set_param_value(data, "HandleColor", handle_color)
-        changed |= _set_param_value(data, "ColorRange", color_range)
+        changed |= _set_param_value(data, "PlateHandleColor", handle_color)
+        changed |= _set_param_value(data, "PlateHandleColorTolerance", color_range)
         if changed:
             _save_yaml(fpath, data)
 
@@ -346,7 +365,7 @@ class PreferenceSession:
         data = _load_yaml(fpath)
         value = None
         for param in data.get("parameters", []):
-            if param.get("name") == "PositionOffset":
+            if param.get("name") == "ParkingOffset":
                 value = param.get("value")
         return nav_offset_from_bt(value)
 
@@ -354,7 +373,7 @@ class PreferenceSession:
         return {f: self._read_nav_offset_seed(f) for f in NAV_OFFSET_FIELDS}
 
     def _write_nav_offset_to_bt(self, field: str, offset: Dict[str, Any]) -> None:
-        """Write a canonical offset into its navigate BT YAML (PositionOffset).
+        """Write a canonical offset into its navigate BT YAML (ParkingOffset).
 
         Unlike colors (whose params shipped in the factory YAMLs from day one),
         a pre-existing per-user tree may lack the parameter entirely -- upsert
@@ -365,7 +384,7 @@ class PreferenceSession:
             return
         data = _load_yaml(fpath)
         value = nav_offset_to_bt(offset)
-        if _set_param_value(data, "PositionOffset", value):
+        if _set_param_value(data, "ParkingOffset", value):
             _save_yaml(fpath, data)
         else:
             data.setdefault("parameters", []).append({**_NAV_OFFSET_PARAM, "value": value})
@@ -388,17 +407,25 @@ class PreferenceSession:
     def _pinned_split(self) -> tuple[Dict[str, Any], Dict[str, Any]]:
         """Finalized values split into (corrected, confirmed), both pinned during
         (re)prediction so they never flip. Corrected = dims the user actively
-        changed this meal; confirmed = dims they accepted as-predicted."""
+        changed this meal; confirmed = dims they accepted as-predicted.
+
+        Both dicts are ordered by ``_SETTINGS_DISPLAY_ORDER`` -- the fixed order the
+        dims are ASKED to the user during the meal -- rather than by the hash order
+        of the ``finalized`` set. This makes the rendered prompt blocks deterministic
+        (stable across runs / prompt-cache friendly) and lists the user's responses
+        in the sequence they were actually made (see the ordering note in
+        bundle_prediction.txt). ``_SETTINGS_DISPLAY_ORDER`` covers all bundle fields,
+        so no finalized dim is dropped."""
         with self._lock:
             corrected = {
                 f: self.bundle[f]
-                for f in self.finalized
-                if f in self.corrected and f in self.bundle
+                for f in _SETTINGS_DISPLAY_ORDER
+                if f in self.finalized and f in self.corrected and f in self.bundle
             }
             confirmed = {
                 f: self.bundle[f]
-                for f in self.finalized
-                if f not in self.corrected and f in self.bundle
+                for f in _SETTINGS_DISPLAY_ORDER
+                if f in self.finalized and f not in self.corrected and f in self.bundle
             }
         return corrected, confirmed
 
@@ -425,6 +452,7 @@ class PreferenceSession:
         color_seeds: Optional[Dict[str, Any]] = None,
         nav_offset_seeds: Optional[Dict[str, Any]] = None,
         activity_msg: str = "Thinking about your food preferences… (this can take ~30s)",
+        trigger: Optional[str] = None,
     ) -> Dict[str, Any]:
         # predict_bundle may call an LLM (slow). Callers must NOT hold self._lock
         # across this (see _repredict_open) so the settings worker / execution
@@ -432,6 +460,11 @@ class PreferenceSession:
         # seeds so they can later detect external YAML writes that landed while
         # the LLM call was in flight.
         corrected, confirmed = self._pinned_split()
+        # Within-meal only: feed the model its own earlier predictions from THIS
+        # meal (never crosses days). None disables the prompt block entirely.
+        prior_predictions = (
+            list(self._prediction_history) if self._provide_prior_predictions else None
+        )
         # Surface the slow Opus reasoning as a concrete "why we're waiting" line
         # (claude-opus-4-8 at PREDICTION_EFFORT: ~30 s mean at medium -- keep
         # the estimate in the default activity_msg in sync with llm_config).
@@ -442,15 +475,42 @@ class PreferenceSession:
             confirmed=confirmed,
             color_seeds=color_seeds if color_seeds is not None else self._color_seeds(),
             nav_offset_seeds=nav_offset_seeds if nav_offset_seeds is not None else self._nav_offset_seeds(),
+            prior_predictions=prior_predictions,
         )
         # Per-open-dim reasons + latent-factor inference from this prediction
         # (logged at start(); shown by the terminal emulator). Best-effort:
         # absent on models without them.
         self.last_explanations = dict(getattr(self._model, "last_explanations", {}) or {})
         self.last_latent_inference = str(getattr(self._model, "last_latent_inference", "") or "")
+        self.last_latent_scores = dict(getattr(self._model, "last_latent_scores", {}) or {})
+        self._record_prediction(trigger, pred)
         return pred
 
-    def _repredict_open(self) -> None:
+    def _record_prediction(self, trigger: Optional[str], pred: Dict[str, Any]) -> None:
+        """Append this (re)prediction to the within-meal history so later
+        repredicts can self-diagnose same-context bias. Stores the latent-trait
+        scores + latent-factor inference (the compact, bias-relevant reasoning)
+        and the predicted values of the still-open categorical/text dims (color
+        and nav-offset dims are context, not latent-bias signals, so they are
+        omitted). In-memory only; never persisted (see _prediction_history)."""
+        with self._lock:
+            open_predicted = {
+                f: pred[f]
+                for f in pred
+                if f not in self.finalized
+                and f not in _COLOR_FIELD_SET
+                and f not in _NAV_OFFSET_FIELD_SET
+            }
+        self._prediction_history.append(
+            {
+                "trigger": trigger,
+                "latent_scores": dict(self.last_latent_scores),
+                "latent_inference": self.last_latent_inference,
+                "predicted": open_predicted,
+            }
+        )
+
+    def _repredict_open(self, triggers: Optional[List[str]] = None) -> None:
         """Refresh predictions for all still-open dims (finalized dims pinned).
 
         Runs on the background repredict worker (normal path) or on whatever
@@ -468,6 +528,7 @@ class PreferenceSession:
         pred = self._predict(  # LLM OUTSIDE all locks
             color_seeds, nav_offset_seeds,
             activity_msg="Updating your preferences in the background…",
+            trigger="; ".join(triggers) if triggers else "reprediction",
         )
         with self._bt_write_mutex:
             with self._lock:
@@ -485,6 +546,9 @@ class PreferenceSession:
                         "[preference-session] external write landed during "
                         f"reprediction; keeping it for: {sorted(stale)}"
                     )
+                open_fields = [f for f in PREF_FIELDS
+                               if f not in self.finalized and f not in stale]
+                prev = self._loggable_bundle(only=open_fields)  # RLock: safe here
                 for field in PREF_FIELDS:
                     if field in self.finalized or field in stale:
                         continue
@@ -502,18 +566,32 @@ class PreferenceSession:
                     offset = self.bundle.get(field)
                     if isinstance(offset, dict):
                         self._write_nav_offset_to_bt(field, offset)
+                new = self._loggable_bundle(only=open_fields)
+        # The correction-propagation record: which open dims this pass actually
+        # moved, and which external writes it deferred to. Logged outside the
+        # locks; values are the same display forms as preference_predicted.
+        self._log(
+            "preference_repredicted",
+            triggers=list(triggers or []),
+            changed={f: {"from": prev[f], "to": new[f]}
+                     for f in open_fields if prev[f] != new[f]},
+            kept_external=sorted(stale),
+            open_dims=open_fields,
+        )
 
     # ------------------------------------------------------------------ #
     # Background reprediction worker
     # ------------------------------------------------------------------ #
-    def _schedule_repredict(self) -> None:
+    def _schedule_repredict(self, trigger: str = "unspecified") -> None:
         """Queue a background reprediction (repredict open dims + re-apply).
 
         Coalescing: at most one worker runs at a time; a trigger while one is
         in flight marks the state dirty and the worker runs one more pass with
         the newest corrections before exiting. Callers return immediately --
-        consumers synchronize via ``wait_for_reprediction``."""
+        consumers synchronize via ``wait_for_reprediction``. ``trigger``
+        labels what caused the pass for the preference_repredicted event."""
         with self._repredict_cv:
+            self._repredict_triggers.append(trigger)
             self._repredict_dirty = True
             if not self._repredict_running:
                 self._repredict_running = True
@@ -533,16 +611,12 @@ class PreferenceSession:
                     self._clear_activity()
                     return
                 self._repredict_dirty = False
+                triggers = self._repredict_triggers
+                self._repredict_triggers = []
             try:
-                self._repredict_open()
-                # Apply repredicted categorical values to the BTs + FLAIR. The
-                # transfer-object reconstruction must happen on the MAIN thread
-                # (never under an in-flight motion), so defer it exactly like
-                # the settings-edit path does: flush_pending_inmemory() runs it
-                # at the next skill boundary.
-                self._apply_non_planning(reinit_transfer=False)
-                with self._lock:
-                    self._pending_transfer_reinit = True
+                self._repredict_open(triggers)
+                # Apply repredicted categorical values to the BTs + FLAIR.
+                self._apply_non_planning()
             except Exception as e:  # a failed repredict must never wedge joiners
                 # Previous predictions stay applied; the next correction (or
                 # this loop's dirty pass) retries with a fresh LLM call.
@@ -565,21 +639,17 @@ class PreferenceSession:
     # ------------------------------------------------------------------ #
     # Apply
     # ------------------------------------------------------------------ #
-    def _apply_non_planning(self, *, reinit_transfer: bool = True) -> List[str]:
-        """Apply all BT-parameter dims + (optionally) transfer mode + dip from the
-        current bundle. Idempotent and free of planner side effects (microwave atom is
-        applied separately via apply_microwave).
-
-        ``reinit_transfer=False`` skips the transfer-object reconstruction
-        (apply_transfer_mode); the settings-edit worker and the background
-        repredict worker pass this and defer that reconstruction to
-        flush_pending_inmemory() on the main thread so the transfer object is
-        never swapped under an in-flight transfer motion."""
+    def _apply_non_planning(self) -> List[str]:
+        """Apply all BT-parameter dims + dip + bite ordering from the current
+        bundle, and validate transfer_mode (apply_transfer_mode never applies
+        anything -- the robot's transfer type is fixed by the command line --
+        but raises loudly on an unsupported 'inside mouth transfer' value).
+        Idempotent and free of planner side effects (microwave atom is applied
+        separately via apply_microwave)."""
         with self._bt_write_mutex:
             bundle = self._categorical_bundle()  # single consistent snapshot
             warnings = apply_bundle_to_behavior_trees(bundle, self._bt_dir)
-            if reinit_transfer and self._scene is not None:
-                apply_transfer_mode(bundle, self._scene, self._hla_map)
+            apply_transfer_mode(bundle)
             apply_dip_preference(bundle, self._flair)
             apply_bite_ordering(bundle, self._flair)
             return warnings
@@ -637,7 +707,7 @@ class PreferenceSession:
         self._apply_food_items()
         with self._lock:
             finalized_before = set(self.finalized)
-        pred = self._predict()
+        pred = self._predict(trigger="initial")
         with self._bt_write_mutex:
             with self._lock:
                 # Merge rather than replace: a settings edit racing start()'s
@@ -659,23 +729,19 @@ class PreferenceSession:
             # Its own scheduled repredict pass may already have finished, in
             # which case the merge above just overwrote the open dims with
             # predictions NOT conditioned on that edit -- run one more pass.
-            self._schedule_repredict()
+            self._schedule_repredict("initial_predict_overlap")
         self._log(
             "preference_predicted",
             stage="start",
             predicted_bundle=self._loggable_bundle(),
             explanations=dict(self.last_explanations),
+            latent_inference=self.last_latent_inference,
+            latent_scores=dict(self.last_latent_scores),
         )
         # Stop the "thinking about your preferences" timer now that the initial
         # prediction is done (a scheduled background repredict, if any, sets and
         # clears its own activity).
         self._clear_activity()
-
-    @property
-    def wait_seconds(self) -> float:
-        """Autocontinue timeout for correction pages, from the (possibly
-        finalized) wait_before_autocontinue_seconds preference."""
-        return _wait_pref_to_seconds(self.bundle.get("wait_before_autocontinue_seconds"))
 
     def ask(self, dims: List[str]) -> None:
         """Show the prediction for each categorical dim in ``dims`` one at a
@@ -701,7 +767,7 @@ class PreferenceSession:
             return
 
         total = len(dims)
-        self._web.start_preference_correction(total, self.wait_seconds)
+        self._web.start_preference_correction(total, PREFERENCE_PAGE_AUTOCONTINUE_SECONDS)
         try:
             for step, field in enumerate(dims):
                 # Join any in-flight background reprediction before reading the
@@ -718,7 +784,7 @@ class PreferenceSession:
                     options=list(PREF_OPTIONS.get(field, [])),
                     step=step,
                     total=total,
-                    autocontinue_seconds=self.wait_seconds,
+                    autocontinue_seconds=PREFERENCE_PAGE_AUTOCONTINUE_SECONDS,
                     kind=PREF_KIND.get(field, "categorical"),
                 )
                 if user_value is None:
@@ -732,16 +798,21 @@ class PreferenceSession:
                 if changed:
                     # The correction itself is locked synchronously (above);
                     # refreshing the open dims happens in the background.
-                    self._schedule_repredict()
+                    self._schedule_repredict(f"correction:{field}")
         finally:
             self._web.finish_preference_correction()
 
         self._apply_non_planning()
+        # Per-dim answer mode from the webapp ('tap' | 'autocontinue' | None
+        # for interfaces without the side-channel): distinguishes engaged
+        # confirms from passive countdown expiries in the learning analysis.
+        actions = getattr(self._web, "preference_user_actions", None) or {}
         self._log(
             "preference_asked",
             dims=dims,
             ground_truth=self._loggable_bundle(only=dims),
             corrected=[d for d in dims if d in self.corrected],
+            user_actions={d: actions.get(d) for d in dims},
         )
 
     def apply_microwave(self, current_atoms: set, food_heated_atom: Any) -> Optional[int]:
@@ -790,7 +861,7 @@ class PreferenceSession:
         if changed:
             # Propagation to the other open color dims happens in the
             # background; the next pickup joins before reading its YAML.
-            self._schedule_repredict()
+            self._schedule_repredict(f"record_color:{field}")
 
         self._log(
             "preference_color_recorded",
@@ -830,7 +901,7 @@ class PreferenceSession:
         with self._bt_write_mutex:
             self._write_nav_offset_to_bt(field, observed)
         if changed:
-            self._schedule_repredict()
+            self._schedule_repredict(f"record_nav_offset:{field}")
 
         self._log(
             "preference_nav_offset_recorded",
@@ -852,7 +923,7 @@ class PreferenceSession:
         marked ``editable=False``. Safe to call from the WebInterface thread."""
         out: List[Dict[str, Any]] = []
         with self._lock:
-            for field in PREF_FIELDS:  # stable display order
+            for field in _SETTINGS_DISPLAY_ORDER:  # match the ask order
                 # Color dims use the live-camera picker; text dims (e.g.
                 # bite_ordering) have no option list to render as chips and are
                 # only editable at their ask() step; nav-offset dims are
@@ -864,7 +935,7 @@ class PreferenceSession:
                     "label": _PREF_LABELS.get(field, field.replace("_", " ").title()),
                     "value": self.bundle.get(field),
                     "options": list(PREF_OPTIONS.get(field, [])),
-                    "description": PREF_DESCRIPTIONS.get(field, ""),
+                    "description": _PREF_SHORT_DESCRIPTIONS.get(field, ""),
                     "editable": field not in self._locked,
                 })
         return out
@@ -874,8 +945,7 @@ class PreferenceSession:
 
         Treated as a *correction* to ground truth: updates the bundle, records it in
         ``corrected``, re-predicts the still-open dims against the new value, and
-        applies it to the BTs immediately. The transfer-object re-init is deferred to
-        flush_pending_inmemory() (main thread). Returns True if applied, False if the
+        applies it to the BTs immediately. Returns True if applied, False if the
         edit was ignored (color dim, locked, or not a valid option). Called from the
         WebInterface apply-worker thread; the slow LLM re-prediction runs outside the
         session lock."""
@@ -892,29 +962,13 @@ class PreferenceSession:
         self._finalize(field, value, changed=changed)
         if changed:
             # Apply the edited value to the BTs + dip immediately (fast, no
-            # LLM) so the next skill sees it even before the reprediction
-            # lands; defer the transfer-object reconstruction so it never
-            # swaps under an in-flight transfer (flush_pending_inmemory).
-            self._apply_non_planning(reinit_transfer=False)
-            if field == "transfer_mode":
-                with self._lock:
-                    self._pending_transfer_reinit = True
+            # LLM) so the next skill sees it even before the reprediction lands.
+            self._apply_non_planning()
             # Re-propagate the still-open dims in the background; consumers
             # (ask steps, prediction-consuming skills) join before reading.
-            self._schedule_repredict()
+            self._schedule_repredict(f"settings_edit:{field}")
         self._log("preference_settings_edit", field=field, value=value, changed=changed)
         return True
-
-    def flush_pending_inmemory(self) -> None:
-        """Run deferred in-memory applies on the MAIN thread at a safe boundary
-        (run.py calls this just before each execute_action). Currently only the
-        transfer-object re-init, deferred from edit() so the transfer object is
-        never reconstructed under an in-flight transfer motion."""
-        with self._lock:
-            pending = self._pending_transfer_reinit
-            self._pending_transfer_reinit = False
-        if pending and self._scene is not None:
-            apply_transfer_mode(self._categorical_bundle(), self._scene, self._hla_map)
 
     def finalize_meal(self, day: int) -> Dict[str, Any]:
         """Single per-day memory update with the full finalized bundle.
