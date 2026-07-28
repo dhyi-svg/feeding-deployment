@@ -2,13 +2,16 @@
 This senses a collision in the robot arm using joint force torque sensing
 """
 try:
-    import rospy
+    from feeding_deployment.ros2_utils import node_handle
+    from feeding_deployment.ros2_utils import rospy_compat
     from std_msgs.msg import Bool, Float32MultiArray
     from sensor_msgs.msg import JointState
-    from feeding_deployment_msgs.srv import (
-        SetCollisionThreshold,
-        SetCollisionThresholdResponse,
-    )
+    # TODO(ros2): only the top-level `SetCollisionThreshold` srv class is
+    # verified importable from feeding_deployment_msgs.srv (per task brief);
+    # Request/Response are nested attributes (SetCollisionThreshold.Request /
+    # .Response) in rosidl-generated Python, not separate top-level names like
+    # the old genpy SetCollisionThresholdResponse -- adjusted accordingly below.
+    from feeding_deployment_msgs.srv import SetCollisionThreshold
     ROSPY_IMPORTED = True
 except ModuleNotFoundError:
     ROSPY_IMPORTED = False
@@ -43,39 +46,47 @@ class CollisionSensor:
         self.data = self.model.createData()
         self.q_pin = np.zeros(self.model.nq)
 
-        self._collision_pub = rospy.Publisher("/collision_free", Bool, queue_size=1)
+        self._collision_pub = node_handle.get_node().create_publisher(Bool, "/collision_free", 1)
         # Publishes [current_max_error, peak_last_10s, threshold] for the watchdog to
         # render in its status panel (instead of this node printing to the shared terminal).
-        self._collision_force_pub = rospy.Publisher(
-            "/collision_force", Float32MultiArray, queue_size=1
+        self._collision_force_pub = node_handle.get_node().create_publisher(
+            Float32MultiArray, "/collision_force", 1
         )
-        self._joint_state_sub = rospy.Subscriber(
-            "/robot_joint_states", JointState, self._joint_state_callback
+        # TODO(ros2): original rospy.Subscriber had no explicit queue_size (rospy
+        # default is unbounded); rclpy create_subscription requires an integer
+        # depth -- picked 10 as a reasonable default, verify this is adequate for
+        # /robot_joint_states' actual publish rate.
+        self._joint_state_sub = node_handle.get_node().create_subscription(
+            JointState, "/robot_joint_states", self._joint_state_callback, 10
         )
 
         self._recent_max_errors = collections.deque()  # (timestamp, max_error) pairs
 
         self._disable_collision_sensor = False
-        self._disable_collision_sensor_sub = rospy.Subscriber(
-            "/disable_collision_sensor", Bool, self._disable_collision_sensor_callback
+        # TODO(ros2): original rospy.Subscriber had no explicit queue_size (rospy
+        # default is unbounded); picked 10 as a reasonable default, verify.
+        self._disable_collision_sensor_sub = node_handle.get_node().create_subscription(
+            Bool, "/disable_collision_sensor", self._disable_collision_sensor_callback, 10
         )
 
         self._collision_threshold = self.DEFAULT_COLLISION_THRESHOLD
-        self._set_threshold_srv = rospy.Service(
-            "/set_collision_threshold",
+        self._set_threshold_srv = node_handle.get_node().create_service(
             SetCollisionThreshold,
+            "/set_collision_threshold",
             self._set_threshold_callback,
         )
 
     def _set_threshold_callback(
-        self, req: "SetCollisionThreshold"
-    ) -> "SetCollisionThresholdResponse":
+        self,
+        request: "SetCollisionThreshold.Request",
+        response: "SetCollisionThreshold.Response",
+    ) -> "SetCollisionThreshold.Response":
         previous = self._collision_threshold
-        self._collision_threshold = req.threshold
-        print(f"Collision threshold set: {previous:.1f} -> {req.threshold:.1f}")
-        return SetCollisionThresholdResponse(
-            success=True, previous_threshold=previous
-        )
+        self._collision_threshold = request.threshold
+        print(f"Collision threshold set: {previous:.1f} -> {request.threshold:.1f}")
+        response.success = True
+        response.previous_threshold = previous
+        return response
 
     def _disable_collision_sensor_callback(self, msg: "Bool") -> None:
         if msg.data:
@@ -175,6 +186,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     args = parser.parse_args()
 
-    rospy.init_node("collision_sensor")
+    node_handle.init_node("collision_sensor")
     monitor = CollisionSensor()
-    rospy.spin()
+    rospy_compat.spin()

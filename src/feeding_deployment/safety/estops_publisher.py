@@ -3,7 +3,8 @@ import time
 import argparse
 import pyaudio
 
-import rospy
+from feeding_deployment.ros2_utils import node_handle
+from feeding_deployment.ros2_utils import rospy_compat as rospy
 from std_msgs.msg import Bool
 
 from feeding_deployment.safety.button import Button as EStop
@@ -23,7 +24,7 @@ class EStopsPublisher:
 
         self.experimentor_estop = EStop(experimentor_estop_id)
 
-        self.experimentor_estop_pub = rospy.Publisher("/experimentor_estop", Bool, queue_size=1)
+        self.experimentor_estop_pub = node_handle.get_node().create_publisher(Bool, "/experimentor_estop", 1)
 
     def run(self):
         while not rospy.is_shutdown():
@@ -55,6 +56,6 @@ if __name__ == "__main__":
                 print(f"Device {i}: {device_info['name']}")
         raise ValueError("Please provide the input device index")
 
-    rospy.init_node("estop_publisher")
+    node_handle.init_node("estop_publisher")
     estop_publisher = EStopsPublisher(experimentor_estop_id=args.id)
     estop_publisher.run()

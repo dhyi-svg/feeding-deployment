@@ -61,7 +61,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-import rospy
+from feeding_deployment.ros2_utils import node_handle
+from feeding_deployment.ros2_utils import rospy_compat as rospy
 from sensor_msgs.msg import Imu, LaserScan, CameraInfo
 from std_msgs.msg import String
 
@@ -134,8 +135,14 @@ class TopicMonitor:
 
     def on_msg(self, msg):
         now = time.time()
+        # TODO(ros2): ROS2 message headers carry builtin_interfaces/Time
+        # (fields `sec` int32 + `nanosec` uint32), not a ROS1-style
+        # rospy.Time-like object with a `.to_sec()` method -- converted
+        # accordingly. This follows rosidl's standard Header shape (high
+        # confidence), but flagging since it's a message-field semantics
+        # change, not a rospy/rclpy API-surface one.
         try:
-            stamp = msg.header.stamp.to_sec()
+            stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         except AttributeError:
             stamp = None
         with self._lock:
@@ -272,10 +279,13 @@ def resubscribe_stale_streams(hz_by_key, dead_windows, stream_subs, event_log):
         if info is None:
             continue
         try:
-            info["sub"].unregister()
-            info["sub"] = rospy.Subscriber(
-                info["topic"], info["msg_type"], info["monitor"].on_msg,
-                queue_size=info["queue"])
+            # TODO(ros2): rospy.Subscriber.unregister() has no rclpy method of
+            # the same name -- destroying a subscription is done via the owning
+            # Node instead (node.destroy_subscription(sub)).
+            node_handle.get_node().destroy_subscription(info["sub"])
+            info["sub"] = node_handle.get_node().create_subscription(
+                info["msg_type"], info["topic"], info["monitor"].on_msg,
+                info["queue"])
             event_log.write(
                 f"RESUB  {key} silent {dead_windows[key]} windows while others live "
                 f"-> recreated subscriber to {info['topic']} (stale after relaunch?)")
@@ -706,7 +716,20 @@ def main():
         gpu_csv = open(outdir / "gpu_procs.csv", "w", buffering=1)
         gpu_csv.write("wall_iso,elapsed_s,pid,type,sm_pct,mem_pct,fb_mb,label,cmd\n")
 
-    rospy.init_node("sensor_diag_logger", anonymous=True, disable_signals=True)
+    # TODO(ros2): rospy anonymous=True replaced with an explicit unique suffix
+    # (os.getpid()), verify this is still unique enough for this daemon's use
+    # case (multiple diagnostic runs could plausibly be launched concurrently
+    # by different people on the same machine, unlike the single-instance
+    # safety daemons elsewhere in this batch).
+    # TODO(ros2): disable_signals=True had no rclpy equivalent applied here,
+    # verify signal handling behavior for this daemon -- this script's own
+    # `except KeyboardInterrupt:` in the main loop below relied on rospy NOT
+    # installing its own SIGINT handler (disable_signals=True) so Ctrl+C would
+    # propagate as a normal Python KeyboardInterrupt instead of triggering
+    # rospy's shutdown-and-swallow behavior; rclpy's default signal handling
+    # may behave differently here and needs verification before relying on
+    # Ctrl+C to reach the except block.
+    node_handle.init_node(f"sensor_diag_logger_{os.getpid()}")
 
     # Incident snapshots for ZED dropouts only: the lidars' failure modes are
     # already understood (hub/serial), and the ZED's are the silent SDK stalls
@@ -721,7 +744,7 @@ def main():
         drop_gap = max(DROPOUT_FLOOR_S, DROPOUT_PERIODS / nominal_hz)
         mon = TopicMonitor(key, event_log, drop_gap,
                            snapshotter=snapshotter if key.startswith("zed") else None)
-        sub = rospy.Subscriber(topic, msg_type, mon.on_msg, queue_size=queue)
+        sub = node_handle.get_node().create_subscription(msg_type, topic, mon.on_msg, queue)
         monitors.append((key, mon, topic, drop_gap))
         stream_subs[key] = {"sub": sub, "topic": topic, "msg_type": msg_type,
                             "queue": queue, "monitor": mon}
@@ -730,7 +753,7 @@ def main():
     # Track the currently-executing skill (logged on change), so a stall can be
     # tied to whatever skill was running at the time.
     skill_tracker = SkillTracker(event_log)
-    rospy.Subscriber(args.skill_topic, String, skill_tracker.on_msg, queue_size=10)
+    node_handle.get_node().create_subscription(String, args.skill_topic, skill_tracker.on_msg, 10)
 
     # CSV header: three columns per stream, then system metrics.
     cols = ["wall_iso", "elapsed_s"]

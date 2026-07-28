@@ -31,7 +31,8 @@ import os
 import socket
 import struct
 
-import rospy
+from feeding_deployment.ros2_utils import node_handle
+from feeding_deployment.ros2_utils import rospy_compat as rospy
 from std_msgs.msg import Bool
 
 # Forward packet, Mac -> NUC. Must match estop_sender.py.
@@ -55,7 +56,7 @@ BULLDOG_STATUS_TIMEOUT_S = 0.5
 
 class EStopUDPBridge:
     def __init__(self, port: int = UDP_PORT, timeout_s: float = RECV_TIMEOUT_S) -> None:
-        self.exp_pub = rospy.Publisher("/experimentor_estop", Bool, queue_size=1)
+        self.exp_pub = node_handle.get_node().create_publisher(Bool, "/experimentor_estop", 1)
 
         # Per-launch identity. A restarted bridge gets a new epoch, which the Mac
         # sender detects and refuses to keep running against (forces relaunch).
@@ -66,7 +67,7 @@ class EStopUDPBridge:
         self.first_status_seen = False
         self.last_status_time = 0.0       # rospy.Time.now().to_sec()
         self.last_status_value = False
-        rospy.Subscriber("/bulldog_status", Bool, self._bulldog_status_cb, queue_size=1)
+        node_handle.get_node().create_subscription(Bool, "/bulldog_status", self._bulldog_status_cb, 1)
 
         # Session source-pinning: lock onto the first sender, ignore the rest.
         self.sender_addr = None
@@ -83,7 +84,12 @@ class EStopUDPBridge:
 
     def _bulldog_status_cb(self, msg: Bool) -> None:
         self.first_status_seen = True
-        self.last_status_time = rospy.Time.now().to_sec()
+        # TODO(ros2): rospy.Time.now() (a classmethod on rospy.Time) has no
+        # direct rclpy.time.Time equivalent -- Time.now() does not exist on
+        # rclpy's Time class, only on a Clock (node.get_clock().now()), which
+        # is what rospy_compat.now() wraps. Also verify `.to_sec()` exists on
+        # this rclpy version's Time object; if not, use `.nanoseconds / 1e9`.
+        self.last_status_time = rospy.now().to_sec()
         self.last_status_value = bool(msg.data)
 
     def _bulldog_alive(self) -> bool:
@@ -91,11 +97,19 @@ class EStopUDPBridge:
         # so /experimentor_estop flows and bulldog can launch against it.
         if not self.first_status_seen:
             return True
-        fresh = (rospy.Time.now().to_sec() - self.last_status_time) <= BULLDOG_STATUS_TIMEOUT_S
+        # TODO(ros2): same rospy.Time.now().to_sec() caveat as _bulldog_status_cb.
+        fresh = (rospy.now().to_sec() - self.last_status_time) <= BULLDOG_STATUS_TIMEOUT_S
         return fresh and self.last_status_value
 
     def run(self) -> None:
-        report_at = rospy.Time.now() + rospy.Duration(5.0)
+        # TODO(ros2): rclpy.duration.Duration is keyword-only (seconds=...),
+        # unlike rospy.Duration(5.0) which took a positional arg -- converted to
+        # Duration(seconds=5.0) below. Also see the rospy.Time.now() TODO above;
+        # `rospy.now() + Duration(...)` returning a comparable rclpy.time.Time
+        # (used a few lines down with `now >= report_at`) is assumed to work the
+        # same way rclpy.time.Time + Duration normally does, but not verified
+        # here since rclpy is not importable in this dev environment.
+        report_at = rospy.now() + rospy.Duration(seconds=5.0)
         while not rospy.is_shutdown():
             # Couple our life to bulldog's: once bulldog has been alive and then
             # goes stale/False, stop acking and exit (the Mac then self-exits).
@@ -137,12 +151,16 @@ class EStopUDPBridge:
             if exp_pressed:
                 rospy.loginfo(f"PRESS relayed: experimentor={exp_pressed} (seq={seq})")
 
-            now = rospy.Time.now()
+            # TODO(ros2): rospy.Time.now() -> rospy_compat.now(); see the caveat
+            # above _bulldog_status_cb.
+            now = rospy.now()
             if now >= report_at:
                 rospy.loginfo(f"bridge alive: {self.received} packets relayed")
-                report_at = now + rospy.Duration(5.0)
+                report_at = now + rospy.Duration(seconds=5.0)
 
 
 if __name__ == "__main__":
-    rospy.init_node("estop_udp_bridge", anonymous=True)
+    # TODO(ros2): rospy anonymous=True replaced with an explicit unique suffix,
+    # verify this is still unique enough for this daemon's use case.
+    node_handle.init_node(f"estop_udp_bridge_{os.getpid()}")
     EStopUDPBridge().run()

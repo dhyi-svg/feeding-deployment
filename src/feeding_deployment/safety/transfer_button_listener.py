@@ -3,17 +3,18 @@ import time
 import argparse
 import pyaudio
 
-import rospy
+from feeding_deployment.ros2_utils import node_handle
+from feeding_deployment.ros2_utils import rospy_compat as rospy
 from std_msgs.msg import Bool
 
-from feeding_deployment.safety.button import Button 
+from feeding_deployment.safety.button import Button
 BUTTON_CHECK_FREQUENCY = 100
 
 class TransferButtonListener:
     def __init__(self, button_id: int):
 
         self.button = Button(button_id)
-        self.button_pub = rospy.Publisher("/transfer_button", Bool, queue_size=1)
+        self.button_pub = node_handle.get_node().create_publisher(Bool, "/transfer_button", 1)
 
     def run(self):
         while not rospy.is_shutdown():
@@ -44,6 +45,6 @@ if __name__ == "__main__":
                 print(f"Device {i}: {device_info['name']}")
         raise ValueError("Please provide the input device index")
     
-    rospy.init_node("transfer_button_listener")
+    node_handle.init_node("transfer_button_listener")
     estop_publisher = TransferButtonListener(button_id=args.button_id)
     estop_publisher.run()

@@ -9,13 +9,13 @@ It validates the following:
 If any of the above is not true, the watchdog will return the corresponding AnomalyStatus.
 '''
 
-import rospy
 import numpy as np
 import time
 from enum import Enum
 import queue
 import signal
 import sys
+import os
 
 from sensor_msgs.msg import CameraInfo, Image, LaserScan, JointState
 from geometry_msgs.msg import WrenchStamped, Pose
@@ -26,8 +26,16 @@ import time
 import numpy as np
 from pathlib import Path
 
-import rospy
+import rclpy
+import rclpy.qos
+from feeding_deployment.ros2_utils import node_handle
+from feeding_deployment.ros2_utils import rospy_compat as rospy
 from std_msgs.msg import Bool, String
+# TODO(ros2): netft_rdt_driver is a ROS1 (industrial_core) package; per
+# CLAUDE.md it "has no public distribution at all" for ROS2 as of this
+# migration. This import (and the ServiceProxy usage below) is left in place
+# syntactically-converted but is UNVERIFIED to actually resolve/build under
+# ROS2 -- flag for a human before running this file for real.
 from netft_rdt_driver.srv import String_cmd
 
 from feeding_deployment.control.robot_controller.arm_interface import ArmInterface, ArmManager, NUC_HOSTNAME, ARM_RPC_PORT, RPC_AUTHKEY
@@ -64,42 +72,64 @@ class WatchDog:
         self._arm_interface = self.manager.ArmInterface()
 
         # bias FT sensor
-        bias = rospy.ServiceProxy('/forque/bias_cmd', String_cmd)
-        bias('bias')
+        # TODO(ros2): rospy.ServiceProxy(...)('bias') built a String_cmd request
+        # from a single positional arg ('bias') per ROS1's genpy field-order
+        # convention. The rosidl-generated String_cmd.Request's actual field
+        # name is UNVERIFIED here (guessed as `cmd`, the conventional name for
+        # this well-known industrial_core srv, but not confirmed against a
+        # built ROS2 message for this package -- see the import TODO above).
+        # Also see collision_threshold.py's _call() for the same
+        # call_async/spin_until_future_complete pattern this mirrors.
+        bias_client = node_handle.get_node().create_client(String_cmd, '/forque/bias_cmd')
+        bias_request = String_cmd.Request()
+        bias_request.cmd = 'bias'
+        bias_future = bias_client.call_async(bias_request)
+        rclpy.spin_until_future_complete(node_handle.get_node(), bias_future)
         time.sleep(2.0) # wait for bias to complete
 
+        # TODO(ros2): buff_size dropped throughout this block, no rclpy
+        # equivalent. queue_size (1000 in rospy) is passed through as the rclpy
+        # subscription depth for every subscriber below.
         queue_size = 1000
-        self.camera_info_sub = rospy.Subscriber("/camera/color/camera_info", CameraInfo, self.cameraCallback, queue_size = queue_size, buff_size = 65536*queue_size)
+        self.camera_info_sub = node_handle.get_node().create_subscription(
+            CameraInfo, "/camera/color/camera_info", self.cameraCallback, queue_size)
         self.camera_timestamps = PeekableQueue()
 
         # Depth stream is a distinct USB endpoint from color and can stall on its own;
         # RGBD perception (RealSenseInterface's exact-time sync) needs it, so monitor it.
-        self.camera_depth_sub = rospy.Subscriber("/camera/aligned_depth_to_color/image_raw", Image, self.cameraDepthCallback, queue_size = queue_size, buff_size = 65536*queue_size)
+        self.camera_depth_sub = node_handle.get_node().create_subscription(
+            Image, "/camera/aligned_depth_to_color/image_raw", self.cameraDepthCallback, queue_size)
         self.camera_depth_timestamps = PeekableQueue()
 
         # One-time camera resolution check at launch (not monitored every loop).
         self.camera_resolution_unexpected = self._check_camera_resolution()
 
-        self.camera_unexpected_sub = rospy.Subscriber("/head_perception/unexpected", Bool, self.cameraUnexpectedCallback, queue_size = queue_size, buff_size = 65536*queue_size)
-        self.camera_unexpected = False 
-        
-        self.ft_sub = rospy.Subscriber('/forque/forqueSensor', WrenchStamped, self.ftCallback, queue_size = queue_size, buff_size = 65536*queue_size)
+        self.camera_unexpected_sub = node_handle.get_node().create_subscription(
+            Bool, "/head_perception/unexpected", self.cameraUnexpectedCallback, queue_size)
+        self.camera_unexpected = False
+
+        self.ft_sub = node_handle.get_node().create_subscription(
+            WrenchStamped, '/forque/forqueSensor', self.ftCallback, queue_size)
         self.ft_timestamps = PeekableQueue()
         self.ft_unexpected = False
 
-        self.collision_free_sub = rospy.Subscriber('/collision_free', Bool, self.collisionFreeCallback, queue_size = queue_size, buff_size = 65536*queue_size)
+        self.collision_free_sub = node_handle.get_node().create_subscription(
+            Bool, '/collision_free', self.collisionFreeCallback, queue_size)
         self.collision_free_timestamps = PeekableQueue()
         self.collision_free_unexpected = False
 
         # Collision force/threshold for the status panel, published by collision_sensor.py
         # as [current_max_error, peak_last_10s, threshold]. None until first message.
-        self.collision_force_sub = rospy.Subscriber('/collision_force', Float32MultiArray, self.collisionForceCallback, queue_size = queue_size, buff_size = 65536*queue_size)
+        self.collision_force_sub = node_handle.get_node().create_subscription(
+            Float32MultiArray, '/collision_force', self.collisionForceCallback, queue_size)
         self.collision_force = None
 
-        self.lidar_l_sub = rospy.Subscriber('/lidar_l/scan', LaserScan, self.lidarLeftCallback, queue_size = queue_size, buff_size = 65536*queue_size)
+        self.lidar_l_sub = node_handle.get_node().create_subscription(
+            LaserScan, '/lidar_l/scan', self.lidarLeftCallback, queue_size)
         self.lidar_l_timestamps = PeekableQueue()
 
-        self.lidar_r_sub = rospy.Subscriber('/lidar_r/scan', LaserScan, self.lidarRightCallback, queue_size = queue_size, buff_size = 65536*queue_size)
+        self.lidar_r_sub = node_handle.get_node().create_subscription(
+            LaserScan, '/lidar_r/scan', self.lidarRightCallback, queue_size)
         self.lidar_r_timestamps = PeekableQueue()
 
         # ZED odom subscriber removed [2026-07-15]: the ZED runs IMU-only
@@ -107,21 +137,27 @@ class WatchDog:
         # makes the wrapper WARN "Cannot start Positional Tracking" every grab
         # cycle. Its frequency check had long been commented out below.
 
-        self.robot_joint_states_sub = rospy.Subscriber('/robot_joint_states', JointState, self.robotJointStatesCallback, queue_size = queue_size, buff_size = 65536*queue_size)
+        self.robot_joint_states_sub = node_handle.get_node().create_subscription(
+            JointState, '/robot_joint_states', self.robotJointStatesCallback, queue_size)
         self.robot_joint_states_timestamps = PeekableQueue()
 
-        self.robot_cartesian_state_sub = rospy.Subscriber('/robot_cartesian_state', Pose, self.robotCartesianStateCallback, queue_size = queue_size, buff_size = 65536*queue_size)
+        self.robot_cartesian_state_sub = node_handle.get_node().create_subscription(
+            Pose, '/robot_cartesian_state', self.robotCartesianStateCallback, queue_size)
         self.robot_cartesian_state_timestamps = PeekableQueue()
 
-        self.watchdog_status_pub = rospy.Publisher("/watchdog_status", Bool, queue_size=1)
+        self.watchdog_status_pub = node_handle.get_node().create_publisher(Bool, "/watchdog_status", 1)
         # Anomaly REASON for the dataset recorders (the NUC-master e-stop topics
         # are invisible to this roscore). Latched so a late subscriber still
-        # sees the last anomaly while the node lives.
-        self.watchdog_anomaly_pub = rospy.Publisher("/watchdog_anomaly", String, queue_size=1, latch=True)
+        # sees the last anomaly while the node lives -- latch=True -> QoS
+        # TRANSIENT_LOCAL durability per the migration cheatsheet.
+        self.watchdog_anomaly_pub = node_handle.get_node().create_publisher(
+            String, "/watchdog_anomaly",
+            rclpy.qos.QoSProfile(
+                depth=1, durability=rclpy.qos.DurabilityPolicy.TRANSIENT_LOCAL))
 
         self.execution_log_path = Path(__file__).parent.parent / "integration" / "log" / "execution_log.txt"
 
-        self.disable_collision_sensor_pub = rospy.Publisher("/disable_collision_sensor", Bool, queue_size=1)
+        self.disable_collision_sensor_pub = node_handle.get_node().create_publisher(Bool, "/disable_collision_sensor", 1)
 
         self.second_counter = 0
         # Status-panel rendering state: number of lines drawn last refresh, so we can
@@ -295,8 +331,10 @@ class WatchDog:
 
 if __name__ == '__main__':
 
-    rospy.init_node('WatchDog', anonymous=True)
-    
+    # TODO(ros2): rospy anonymous=True replaced with an explicit unique suffix,
+    # verify this is still unique enough for this daemon's use case (only one
+    # WatchDog process is expected per compute machine).
+    node_handle.init_node(f'WatchDog_{os.getpid()}')
+
     watchdog = WatchDog()
     watchdog.run()
-    

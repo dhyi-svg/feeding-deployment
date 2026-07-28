@@ -2,7 +2,6 @@
 Runs a server-side (run on NUC) watchdog to ensure robot is not in a state of emergency stop (from the experimentor emergency stop button).
 '''
 
-import rospy
 import numpy as np
 import time
 from enum import Enum
@@ -17,7 +16,8 @@ import time
 import numpy as np
 from pathlib import Path
 
-import rospy
+from feeding_deployment.ros2_utils import node_handle
+from feeding_deployment.ros2_utils import rospy_compat as rospy
 from std_msgs.msg import Bool
 
 from feeding_deployment.control.robot_controller.arm_interface import ArmInterface, ArmManager, NUC_HOSTNAME, ARM_RPC_PORT, RPC_AUTHKEY
@@ -62,7 +62,9 @@ class BullDog:
         self._base_interface = self.base_manager.BaseInterface()
 
         queue_size = 1000
-        self.experimentor_emergency_stop_sub = rospy.Subscriber('/experimentor_estop', Bool, self.experimentorEmergencyStopCallback, queue_size = queue_size, buff_size = 65536*queue_size)
+        # TODO(ros2): buff_size dropped, no rclpy equivalent
+        self.experimentor_emergency_stop_sub = node_handle.get_node().create_subscription(
+            Bool, '/experimentor_estop', self.experimentorEmergencyStopCallback, queue_size)
         self.experimentor_emergency_stop_timestamps = PeekableQueue()
         self.experimentor_emergency_stop_pressed = False
         # Debounce state: wall-clock time the rate first dipped below threshold in
@@ -71,7 +73,7 @@ class BullDog:
         # Lowest rate seen during the current low spell, for the near-miss log.
         self.experimentor_estop_low_freq_min = None
 
-        self.bulldog_status_pub = rospy.Publisher('/bulldog_status', Bool, queue_size=1)
+        self.bulldog_status_pub = node_handle.get_node().create_publisher(Bool, '/bulldog_status', 1)
 
         # Path is hardcoded because emprise uses two machines, 
         # isacc for compute and nuc for robot control, 
@@ -203,8 +205,11 @@ class BullDog:
 
 if __name__ == '__main__':
 
-    rospy.init_node('BullDog', anonymous=True)
+    # TODO(ros2): rospy anonymous=True replaced with an explicit unique suffix,
+    # verify this is still unique enough for this daemon's use case (was rospy's
+    # auto-generated anonymous suffix; only one BullDog process is expected per
+    # machine so a bare name is likely fine, but flagging per instructions).
+    node_handle.init_node(f'BullDog_{os.getpid()}')
     bulldog = BullDog()
-    
+
     bulldog.run()
-    
