@@ -12,7 +12,8 @@ import yaml
 from pathlib import Path
 
 try:
-    import rospy
+    from feeding_deployment.ros2_utils import node_handle
+    from feeding_deployment.ros2_utils import rospy_compat as rospy
     from sensor_msgs.msg import JointState
     from std_msgs.msg import Bool
     from geometry_msgs.msg import Pose
@@ -134,7 +135,10 @@ class ArmInterfaceClient:
 
 if __name__ == "__main__":
 
-    rospy.init_node("arm_interface_client", anonymous=True)
+    # TODO(ros2): rospy.init_node(..., anonymous=True) had no exact rclpy
+    # equivalent -- rclpy's create_node() has no "anonymous" name-uniquifying
+    # option; using the plain name.
+    node_handle.init_node("arm_interface_client")
     arm_client_interface = ArmInterfaceClient()
 
     _config_path = Path(__file__).parent.parent.parent / "simulation" / "configs" / "vention.yaml"

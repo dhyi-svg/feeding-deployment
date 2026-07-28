@@ -39,7 +39,8 @@ import os
 import sys
 import traceback
 
-import rospy
+from feeding_deployment.ros2_utils import node_handle
+from feeding_deployment.ros2_utils import rospy_compat as rospy
 from geometry_msgs.msg import Quaternion
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Float64, Float64MultiArray
@@ -79,13 +80,16 @@ class WheelOdomPublisher:
         add_ros_vention_src_to_path()
 
         # ---- params ----
-        self.poll_rate_hz = float(rospy.get_param("~poll_rate_hz", 20.0))
+        # TODO(ros2): "~name" (rospy private param) has no exact rclpy
+        # equivalent; declared as plain parameter names on this node instead.
+        _node = node_handle.get_node()
+        self.poll_rate_hz = float(_node.declare_parameter("poll_rate_hz", 20.0).value)
         # counts -> meters. Measured 2026-07-08 by a tape-measured 1.697 m
         # straight drive (8271 counts): 4874. This is ~26% below the parts-list
         # estimate of 6610 (28 counts/motor-rev x 71.2 / 0.3016 m/rev) -- the
         # real encoder/gear resolution or effective rolling diameter differs
         # from nominal; the measured value is authoritative.
-        self.counts_per_meter = float(rospy.get_param("~counts_per_meter", 4874.0))
+        self.counts_per_meter = float(_node.declare_parameter("counts_per_meter", 4874.0).value)
         # EFFECTIVE track width for skid-steer yaw. Measured 2026-07-08 over
         # three in-place spins: a 192 deg spin implied 0.766, but two clean
         # ~325 deg (near-full) spins both implied ~0.85 (wheels repeatable to
@@ -94,36 +98,37 @@ class WheelOdomPublisher:
         # substantial turns that matter and is ~2.1x the ~0.41 m geometric
         # wheelbase. Yaw stays advisory -- high covariance below -- and is
         # surface-dependent (will differ on rug vs this floor).
-        self.track_width_m = float(rospy.get_param("~track_width_m", 0.85))
+        self.track_width_m = float(_node.declare_parameter("track_width_m", 0.85).value)
         # Empirical (2026-07-08 spin test): driver A = RIGHT pair, driver B =
         # LEFT pair -- A=+/B=- spun the base COUNTERCLOCKWISE (positive yaw in
         # the z-up ROS/REP-103 frame ZED & Cartographer use), consistent with
         # A=right/B=left and dyaw=(d_right-d_left)/track. Signs +1/+1: both
         # sides count positive driving forward (confirmed by the creep test).
-        self.side_a_sign = float(rospy.get_param("~side_a_sign", 1.0))  # A = RIGHT pair
-        self.side_b_sign = float(rospy.get_param("~side_b_sign", 1.0))  # B = LEFT pair
-        self.odom_topic = rospy.get_param("~odom_topic", "/wheel_odom")
-        self.odom_frame = rospy.get_param("~odom_frame", "wheel_odom")
-        self.base_frame = rospy.get_param("~base_frame", "vention_base_link")
+        self.side_a_sign = float(_node.declare_parameter("side_a_sign", 1.0).value)  # A = RIGHT pair
+        self.side_b_sign = float(_node.declare_parameter("side_b_sign", 1.0).value)  # B = LEFT pair
+        self.odom_topic = _node.declare_parameter("odom_topic", "/wheel_odom").value
+        self.odom_frame = _node.declare_parameter("odom_frame", "wheel_odom").value
+        self.base_frame = _node.declare_parameter("base_frame", "vention_base_link").value
         # Front/rear wheels of one side are commanded identically; persistent
         # disagreement means slip or a failing encoder.
-        self.disagree_warn_m = float(rospy.get_param("~disagree_warn_m", 0.02))
+        self.disagree_warn_m = float(_node.declare_parameter("disagree_warn_m", 0.02).value)
         # Plausibility gate: a per-side implied speed above this can only be a
         # count glitch or a RoboClaw power-cycle (volatile encoder registers
         # zero on motor-power loss WITHOUT rebooting the Arduino), not real
         # base motion -- re-baseline instead of integrating the jump. Base tops
         # out ~0.6 m/s under teleop; 2.0 leaves generous margin.
-        self.max_plausible_speed_mps = float(rospy.get_param("~max_plausible_speed_mps", 2.0))
+        self.max_plausible_speed_mps = float(
+            _node.declare_parameter("max_plausible_speed_mps", 2.0).value)
 
         # ---- pubs ----
-        self.odom_pub = rospy.Publisher(self.odom_topic, Odometry, queue_size=10)
+        self.odom_pub = _node.create_publisher(Odometry, self.odom_topic, 10)
         # Raw per-motor counts for logging/debug:
         # [millis, a1, a2, b1, b2, ok_a, ok_b, resets] (Float64 is exact for uint32).
-        self.counts_pub = rospy.Publisher(self.odom_topic + "/counts",
-                                          Float64MultiArray, queue_size=10)
+        self.counts_pub = _node.create_publisher(
+            Float64MultiArray, self.odom_topic + "/counts", 10)
         # Per-tick max |front-rear| distance disagreement within a side (m).
-        self.disagree_pub = rospy.Publisher(self.odom_topic + "/side_disagreement",
-                                            Float64, queue_size=10)
+        self.disagree_pub = _node.create_publisher(
+            Float64, self.odom_topic + "/side_disagreement", 10)
 
         # ---- state ----
         self.client = None
@@ -138,7 +143,10 @@ class WheelOdomPublisher:
         self.yaw = 0.0
 
         self._connect_client(block=True)
-        rospy.Timer(rospy.Duration(1.0 / self.poll_rate_hz), self._tick)
+        # TODO(ros2): rospy.Timer callbacks receive a TimerEvent arg; rclpy
+        # timer callbacks take no args. self._tick(_evt) still accepts one
+        # positional arg for minimal diff, so pass None here.
+        _node.create_timer(1.0 / self.poll_rate_hz, lambda: self._tick(None))
         rospy.loginfo(
             "wheel_odom_publisher: polling get_encoders() at %.0f Hz -> %s "
             "(counts_per_meter=%.1f, track_width_m=%.3f, signs A=%+.0f B=%+.0f)",
@@ -295,7 +303,12 @@ class WheelOdomPublisher:
         # subtracting it introduces no cross-machine clock skew. Correct stamps
         # matter for time-aligning /wheel_odom against ZED odom (slip
         # detection, calibration, fusion).
-        odom.header.stamp = rospy.Time.now() - rospy.Duration.from_sec(max(0.0, age_s))
+        # TODO(ros2): rospy.Duration.from_sec has no direct rospy_compat
+        # equivalent; using Duration(seconds=...) instead. Time - Duration ->
+        # Time in rclpy (same as rospy), then .to_msg() for the header field.
+        odom.header.stamp = (
+            rospy.now() - rospy.Duration(seconds=max(0.0, age_s))
+        ).to_msg()
         odom.header.frame_id = self.odom_frame
         odom.child_frame_id = self.base_frame
 
@@ -332,7 +345,7 @@ class WheelOdomPublisher:
 
 
 def main():
-    rospy.init_node("wheel_odom_publisher", anonymous=False)
+    node_handle.init_node("wheel_odom_publisher")
     _ = WheelOdomPublisher()
     rospy.spin()
 

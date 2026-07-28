@@ -46,7 +46,8 @@ import threading
 import time
 import traceback
 
-import rospy
+from feeding_deployment.ros2_utils import node_handle
+from feeding_deployment.ros2_utils import rospy_compat as rospy
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Bool, Float64
 
@@ -76,7 +77,11 @@ class CmdVelBridgeBasicmicro:
             rospy.logerr("Failed to connect to base RPC server (is base_server.py running on the NUC?):\n" + traceback.format_exc())
             raise
         # ---- ROS params ----
-        self.cmd_vel_topic = rospy.get_param("~cmd_vel_topic", "/cmd_vel")
+        # TODO(ros2): ~private param names (e.g. "~cmd_vel_topic") had no exact
+        # rclpy equivalent for a private/relative-remap-style name; declared as
+        # plain parameter names on this node instead. Verify remapping story.
+        _node = node_handle.get_node()
+        self.cmd_vel_topic = _node.declare_parameter("cmd_vel_topic", "/cmd_vel").value
 
         # Convert m/s and rad/s into "speed units" used by your motor controller.
         # Defaults physically calibrated 2026-07-09 (direct-serial sweeps):
@@ -84,15 +89,15 @@ class CmdVelBridgeBasicmicro:
         # angular_scale (2600) from measured rotation (250 counts/s -> 0.096 rad/s).
         # Govern speed via TEB max_vel_*, NOT by detuning these. (launch files
         # override; angular measured on a slip-prone patch -- verify on real floor.)
-        self.linear_scale = float(rospy.get_param("~linear_scale", 4874.0))
-        self.angular_scale = float(rospy.get_param("~angular_scale", 2600.0))
+        self.linear_scale = float(_node.declare_parameter("linear_scale", 4874.0).value)
+        self.angular_scale = float(_node.declare_parameter("angular_scale", 2600.0).value)
 
         # Deadband on angular velocity (rad/s) to avoid sign-flip jitter.
-        self.w_deadband = float(rospy.get_param("~w_deadband", 0.03))
+        self.w_deadband = float(_node.declare_parameter("w_deadband", 0.03).value)
 
         # Clamp output units.
         # max_speed_units should match what your controller expects safely.
-        self.max_speed_units = int(rospy.get_param("~max_speed_units", 800))
+        self.max_speed_units = int(_node.declare_parameter("max_speed_units", 800).value)
 
         # Ratio-preserving stiction floor (units). When a command is nonzero but
         # the dominant wheel falls below this, BOTH wheels are scaled up by the
@@ -101,15 +106,15 @@ class CmdVelBridgeBasicmicro:
         # IMPORTANT: do NOT reintroduce a per-wheel minimum here -- forcing each
         # wheel up independently snaps gentle arcs to pure-straight/pure-spin,
         # which is the "translate OR rotate, never both" bug this replaced.
-        self.min_move_units = int(rospy.get_param("~min_move_units", 100))
+        self.min_move_units = int(_node.declare_parameter("min_move_units", 100).value)
 
         # If your wiring is flipped, you can invert left/right or swap outputs:
-        self.invert_left = bool(rospy.get_param("~invert_left", False))
-        self.invert_right = bool(rospy.get_param("~invert_right", False))
-        self.swap_left_right = bool(rospy.get_param("~swap_left_right", False))
+        self.invert_left = bool(_node.declare_parameter("invert_left", False).value)
+        self.invert_right = bool(_node.declare_parameter("invert_right", False).value)
+        self.swap_left_right = bool(_node.declare_parameter("swap_left_right", False).value)
 
         # If your robot turns the wrong way for positive angular.z, flip rotation sign:
-        self.flip_angular = bool(rospy.get_param("~flip_angular", False))
+        self.flip_angular = bool(_node.declare_parameter("flip_angular", False).value)
 
         # NOTE: the lost-command stop lives on the NUC (BaseInterface), not here.
         # This node only translates /cmd_vel into set_speeds RPC calls.
@@ -124,15 +129,15 @@ class CmdVelBridgeBasicmicro:
         # Fail-safe: once we've ever heard the monitor, a stale flag (monitor
         # died) also holds; if the monitor was never launched, we never hold
         # (backward compatible).
-        self.hold_topic = rospy.get_param("~safety_hold_topic", "/nav_safety_hold")
-        self.hold_stale_s = float(rospy.get_param("~safety_hold_stale_s", 1.0))
+        self.hold_topic = _node.declare_parameter("safety_hold_topic", "/nav_safety_hold").value
+        self.hold_stale_s = float(_node.declare_parameter("safety_hold_stale_s", 1.0).value)
         self.safety_hold = False
         self.hold_last_msg = None
 
         # ---- Teleop priority (see module docstring) ----
-        self.teleop_cmd_vel_topic = rospy.get_param("~teleop_cmd_vel_topic",
-                                                    "/cmd_vel_teleop")
-        self.teleop_mute_s = float(rospy.get_param("~teleop_mute_s", 0.5))
+        self.teleop_cmd_vel_topic = _node.declare_parameter(
+            "teleop_cmd_vel_topic", "/cmd_vel_teleop").value
+        self.teleop_mute_s = float(_node.declare_parameter("teleop_mute_s", 0.5).value)
         self.last_teleop_active = None  # wall time of the last NONZERO teleop cmd
 
         # Each subscription's callbacks run on their own thread; serialize the
@@ -140,21 +145,23 @@ class CmdVelBridgeBasicmicro:
         self.cmd_lock = threading.Lock()
 
         # ---- ROS wiring ----
-        self.sub = rospy.Subscriber(self.cmd_vel_topic, Twist, self.cb, queue_size=10)
-        self.teleop_sub = rospy.Subscriber(self.teleop_cmd_vel_topic, Twist,
-                                           self.cb_teleop, queue_size=10)
-        self.hold_sub = rospy.Subscriber(self.hold_topic, Bool, self.cb_hold, queue_size=5)
+        self.sub = _node.create_subscription(Twist, self.cmd_vel_topic, self.cb, 10)
+        self.teleop_sub = _node.create_subscription(
+            Twist, self.teleop_cmd_vel_topic, self.cb_teleop, 10)
+        self.hold_sub = _node.create_subscription(Bool, self.hold_topic, self.cb_hold, 5)
 
         # Diagnostics echo of the effectively-applied command (after the
         # stiction floor and clamp), converted back to m/s / rad/s so it can
         # be overlaid against the incoming /cmd_vel.
-        self.applied_pub = rospy.Publisher("~applied", Twist, queue_size=10)
+        # TODO(ros2): "~applied" (rospy private-name topic) has no direct rclpy
+        # equivalent; using a plain relative topic name "applied" instead.
+        self.applied_pub = _node.create_publisher(Twist, "applied", 10)
 
         # Diagnostics: measured wall time of the set_speeds RPC round-trip
         # (compute -> NUC -> serial write/flush -> return). This is the command
         # latency the ~applied echo does NOT capture. Published, not written to
         # disk, so the hot path stays free of I/O; nav_diag_logger records it.
-        self.rpc_latency_pub = rospy.Publisher("~rpc_latency_s", Float64, queue_size=10)
+        self.rpc_latency_pub = _node.create_publisher(Float64, "rpc_latency_s", 10)
 
         rospy.loginfo("cmd_vel bridge running. Waiting for %s (autonomous, hold-gated) "
                       "and %s (teleop, priority, mute %.2fs)...",
@@ -179,7 +186,7 @@ class CmdVelBridgeBasicmicro:
 
     def cb_hold(self, msg: Bool):
         self.safety_hold = bool(msg.data)
-        self.hold_last_msg = rospy.Time.now()
+        self.hold_last_msg = rospy.now()
 
     def _held(self) -> bool:
         """True if the ZED-divergence interlock says stop. Fail-safe: if we have
@@ -189,13 +196,15 @@ class CmdVelBridgeBasicmicro:
             return False
         if self.safety_hold:
             return True
-        return (rospy.Time.now() - self.hold_last_msg).to_sec() > self.hold_stale_s
+        # TODO(ros2): rclpy Duration has no .to_sec(); using .nanoseconds / 1e9.
+        return (rospy.now() - self.hold_last_msg).nanoseconds / 1e9 > self.hold_stale_s
 
     def _teleop_active(self) -> bool:
         """True while a nonzero teleop command arrived within ~teleop_mute_s."""
         if self.last_teleop_active is None:
             return False
-        return (rospy.Time.now() - self.last_teleop_active).to_sec() < self.teleop_mute_s
+        # TODO(ros2): rclpy Duration has no .to_sec(); using .nanoseconds / 1e9.
+        return (rospy.now() - self.last_teleop_active).nanoseconds / 1e9 < self.teleop_mute_s
 
     def cb(self, msg: Twist):
         # Autonomous stream: muted while a human is actively driving, then
@@ -220,7 +229,7 @@ class CmdVelBridgeBasicmicro:
         # Human stream: priority, no hold gate (see module docstring). Only
         # nonzero commands arm the mute; zeros still execute (stops are safe).
         if msg.linear.x != 0.0 or msg.angular.z != 0.0:
-            self.last_teleop_active = rospy.Time.now()
+            self.last_teleop_active = rospy.now()
         self._execute(msg)
 
     def _execute(self, msg: Twist):
@@ -280,7 +289,7 @@ class CmdVelBridgeBasicmicro:
 
 
 def main():
-    rospy.init_node("cmd_vel_bridge_basicmicro", anonymous=False)
+    node_handle.init_node("cmd_vel_bridge_basicmicro")
     _ = CmdVelBridgeBasicmicro()
     rospy.spin()
 

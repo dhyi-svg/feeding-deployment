@@ -45,9 +45,30 @@ SUCCEEDED. That something is this node.
 
 import threading
 
-import actionlib
-import rospy
+# TODO(ros2): actionlib (ROS1) has no rclpy equivalent package; using
+# rclpy.action instead (ActionClient/ActionServer). This is a real
+# architectural change -- ROS2 actions are natively async/futures-based
+# (goal handles + async send/cancel/result) rather than the blocking
+# SimpleActionClient/SimpleActionServer model this file was written against.
+# See TODO(ros2) markers below at each meaningfully-changed call site.
+import rclpy.action
+from feeding_deployment.ros2_utils import node_handle
+from feeding_deployment.ros2_utils import rospy_compat as rospy
+# TODO(ros2): actionlib_msgs/GoalStatus (ROS1) does not exist in ROS2; ROS2
+# actions report status via action_msgs/msg/GoalStatus, whose constants are
+# STATUS_{UNKNOWN,ACCEPTED,EXECUTING,CANCELING,SUCCEEDED,CANCELED,ABORTED} --
+# not the same names/values as the ROS1 actionlib_msgs constants used below
+# (PREEMPTED, ABORTED, REJECTED, RECALLED, LOST, ACTIVE, SUCCEEDED). This
+# import and every _TERMINAL_FAILURE / mb_state comparison below is left
+# structurally in place but is NOT correct against ROS2 action status codes
+# without a real rework; not guessing at the remap here.
 from actionlib_msgs.msg import GoalStatus
+# TODO(ros2): move_base_msgs (ROS1 .action package with a move_base_msgs
+# python module) has no known ROS2 port available to this migration; ROS2
+# navigation (nav2) uses nav2_msgs/action/NavigateToPose instead, which has a
+# different goal/result shape (PoseStamped goal vs MoveBaseGoal, no
+# MoveBaseResult). Left as-is (import will fail until this is resolved) since
+# guessing at a nav2 message substitution would silently change behavior.
 from move_base_msgs.msg import MoveBaseAction, MoveBaseResult
 from std_msgs.msg import Bool, Empty, String
 
@@ -66,26 +87,29 @@ _TERMINAL_FAILURE = (
 
 class SharedAutonomyManager:
     def __init__(self) -> None:
-        self.navigate_action = rospy.get_param("~navigate_action", "navigate")
-        self.move_base_action = rospy.get_param("~move_base_action", "move_base")
-        self.takeover_topic = rospy.get_param(
-            "~takeover_topic", "/shared_autonomy/takeover"
-        )
-        self.done_topic = rospy.get_param("~done_topic", "/shared_autonomy/done")
-        self.resume_topic = rospy.get_param(
-            "~resume_topic", "/shared_autonomy/resume"
-        )
-        self.cancel_topic = rospy.get_param(
-            "~cancel_topic", "/shared_autonomy/cancel"
-        )
-        self.safety_hold_topic = rospy.get_param(
-            "~safety_hold_topic", "/nav_safety_hold"
-        )
-        self.safety_hold_reason_topic = rospy.get_param(
-            "~safety_hold_reason_topic", self.safety_hold_topic + "_reason"
-        )
-        self.loop_hz = float(rospy.get_param("~loop_hz", 20.0))
-        self.move_base_wait_s = float(rospy.get_param("~move_base_wait_s", 30.0))
+        # TODO(ros2): "~name" (rospy private param) has no exact rclpy
+        # equivalent; declared as plain parameter names on this node instead.
+        _node = node_handle.get_node()
+        self.navigate_action = _node.declare_parameter("navigate_action", "navigate").value
+        self.move_base_action = _node.declare_parameter("move_base_action", "move_base").value
+        self.takeover_topic = _node.declare_parameter(
+            "takeover_topic", "/shared_autonomy/takeover"
+        ).value
+        self.done_topic = _node.declare_parameter("done_topic", "/shared_autonomy/done").value
+        self.resume_topic = _node.declare_parameter(
+            "resume_topic", "/shared_autonomy/resume"
+        ).value
+        self.cancel_topic = _node.declare_parameter(
+            "cancel_topic", "/shared_autonomy/cancel"
+        ).value
+        self.safety_hold_topic = _node.declare_parameter(
+            "safety_hold_topic", "/nav_safety_hold"
+        ).value
+        self.safety_hold_reason_topic = _node.declare_parameter(
+            "safety_hold_reason_topic", self.safety_hold_topic + "_reason"
+        ).value
+        self.loop_hz = float(_node.declare_parameter("loop_hz", 20.0).value)
+        self.move_base_wait_s = float(_node.declare_parameter("move_base_wait_s", 30.0).value)
 
         # Edge flags set by topic callbacks, consumed in the execute loop.
         self._lock = threading.Lock()
@@ -101,36 +125,54 @@ class SharedAutonomyManager:
         self._hold_reason = ""
 
         # Client to the real move_base.
-        self.mb_client = actionlib.SimpleActionClient(
-            self.move_base_action, MoveBaseAction
+        # TODO(ros2): actionlib.SimpleActionClient -> rclpy.action.ActionClient.
+        # wait_for_server/send_goal/cancel_goal/get_state/get_result below are
+        # all blocking-call sites in the ROS1 code; rclpy's ActionClient is
+        # async-only (goal handles + futures), so those calls needed real
+        # restructuring, not a 1:1 swap -- see per-call TODOs below.
+        self.mb_client = rclpy.action.ActionClient(
+            _node, MoveBaseAction, self.move_base_action
         )
         rospy.loginfo(
             "shared_autonomy_manager: waiting for '%s' action server...",
             self.move_base_action,
         )
-        if not self.mb_client.wait_for_server(rospy.Duration(self.move_base_wait_s)):
+        if not self.mb_client.wait_for_server(timeout_sec=self.move_base_wait_s):
             raise RuntimeError(
                 f"Timed out waiting for move_base action server "
                 f"'{self.move_base_action}'"
             )
 
-        rospy.Subscriber(self.takeover_topic, Empty, self._on_takeover, queue_size=1)
-        rospy.Subscriber(self.done_topic, Empty, self._on_done, queue_size=1)
-        rospy.Subscriber(self.resume_topic, Empty, self._on_resume, queue_size=1)
-        rospy.Subscriber(self.cancel_topic, Empty, self._on_cancel, queue_size=1)
-        rospy.Subscriber(self.safety_hold_topic, Bool, self._on_hold, queue_size=1)
-        rospy.Subscriber(
-            self.safety_hold_reason_topic, String, self._on_hold_reason, queue_size=1
+        _node.create_subscription(Empty, self.takeover_topic, self._on_takeover, 1)
+        _node.create_subscription(Empty, self.done_topic, self._on_done, 1)
+        _node.create_subscription(Empty, self.resume_topic, self._on_resume, 1)
+        _node.create_subscription(Empty, self.cancel_topic, self._on_cancel, 1)
+        _node.create_subscription(Bool, self.safety_hold_topic, self._on_hold, 1)
+        _node.create_subscription(
+            String, self.safety_hold_reason_topic, self._on_hold_reason, 1
         )
 
-        # Our own action server. auto_start=False so we can start() after setup.
-        self.server = actionlib.SimpleActionServer(
-            self.navigate_action,
+        # Our own action server.
+        # TODO(ros2): actionlib.SimpleActionServer(execute_cb=..., auto_start=False)
+        # -> rclpy.action.ActionServer(execute_callback=...). rclpy's
+        # ActionServer has no auto_start concept -- it starts accepting goals
+        # as soon as it's constructed, so the explicit .start() call below is
+        # dropped. More importantly, rclpy's execute_callback signature takes
+        # a `goal_handle` (not the plain `goal` this file's self._execute
+        # expects), and success/abort/preempt are reported by calling
+        # goal_handle.succeed()/abort()/canceled() + returning a Result from
+        # within the callback -- NOT via self.server.set_succeeded/
+        # set_aborted/set_preempted(...) as the body of _execute below still
+        # does. This is flagged, not silently rewritten: _execute's control
+        # flow (server.is_preempt_requested(), server.set_succeeded(), etc.)
+        # needs a real per-call rework against goal_handle semantics before
+        # this will function under rclpy. See TODOs inside _execute.
+        self.server = rclpy.action.ActionServer(
+            _node,
             MoveBaseAction,
-            execute_cb=self._execute,
-            auto_start=False,
+            self.navigate_action,
+            execute_callback=self._execute,
         )
-        self.server.start()
         rospy.loginfo(
             "shared_autonomy_manager ready. Serving '%s', forwarding to '%s'.",
             self.navigate_action,
@@ -189,6 +231,15 @@ class SharedAutonomyManager:
         paused_reason = ""
 
         rospy.loginfo("shared_autonomy_manager: new goal -> forwarding to move_base.")
+        # TODO(ros2): actionlib SimpleActionClient.send_goal(goal) was
+        # fire-and-forget (state polled via get_state() below).
+        # rclpy.action.ActionClient has no send_goal() -- only
+        # send_goal_async(goal), which returns a Future[ClientGoalHandle] that
+        # must itself be awaited/spun before the goal is even accepted, and a
+        # SEPARATE get_result_async() future for the terminal result. This
+        # whole method's poll loop (get_state()/get_result() below) assumes
+        # the blocking SimpleActionClient model and needs a real rework to a
+        # future/callback-based one; not guessing at that rework here.
         self.mb_client.send_goal(goal)
         # Don't trust move_base's terminal status until the goal we just sent has
         # actually gone ACTIVE. Right after send_goal (initial send AND every
@@ -200,6 +251,14 @@ class SharedAutonomyManager:
         rate = rospy.Rate(self.loop_hz)
         while not rospy.is_shutdown():
             # Upstream caller cancelled (e.g. NavigateHLA timed out and cancelled).
+            # TODO(ros2): SimpleActionServer.is_preempt_requested() has no
+            # rclpy.action.ActionServer equivalent -- preemption/cancellation
+            # in ROS2 actions is delivered via a cancel_callback on the
+            # ActionServer and goal_handle.is_cancel_requested inside
+            # execute_callback, not polled here. set_preempted()/set_succeeded()/
+            # set_aborted() below are similarly SimpleActionServer-only; ROS2
+            # equivalents are goal_handle.canceled()/succeed()/abort() called
+            # with a Result, from within execute_callback(goal_handle).
             if self.server.is_preempt_requested():
                 self.mb_client.cancel_goal()
                 rospy.logwarn("shared_autonomy_manager: caller preempted the goal.")
@@ -211,6 +270,11 @@ class SharedAutonomyManager:
             if takeover and state == AUTONOMOUS:
                 state = TELEOP
                 paused = False
+                # TODO(ros2): actionlib cancel_goal() had no rclpy.action
+                # equivalent (ActionClient has no cancel_goal(); cancelling
+                # requires the ClientGoalHandle returned by send_goal_async(),
+                # via goal_handle.cancel_goal_async()). Needs runtime
+                # verification once send_goal above is reworked to async.
                 self.mb_client.cancel_goal()
                 rospy.loginfo(
                     "shared_autonomy_manager: TAKEOVER -> move_base cancelled, "
@@ -223,6 +287,12 @@ class SharedAutonomyManager:
                         "shared_autonomy_manager: DONE -> reporting SUCCEEDED "
                         "(human-completed)."
                     )
+                    # TODO(ros2): SimpleActionServer.set_succeeded(result, text)
+                    # has no rclpy.action.ActionServer equivalent -- reporting
+                    # a terminal result in ROS2 is done by calling
+                    # goal_handle.succeed() then returning the Result from
+                    # execute_callback(goal_handle), not by calling a method
+                    # on self.server from arbitrary code.
                     self.server.set_succeeded(
                         MoveBaseResult(), "Goal completed by human teleoperation."
                     )
@@ -246,6 +316,9 @@ class SharedAutonomyManager:
                     "shared_autonomy_manager: CANCEL -> reporting ABORTED "
                     "(takeover ended without reaching the goal)."
                 )
+                # TODO(ros2): see set_succeeded TODO above -- same
+                # goal_handle.abort()-from-within-execute_callback rework
+                # needed for set_aborted().
                 self.server.set_aborted(
                     MoveBaseResult(), "Teleop takeover cancelled by human."
                 )
@@ -257,7 +330,7 @@ class SharedAutonomyManager:
                 # so move_base doesn't reject it as stale; re-arm the latch so the
                 # newly-sent goal's status is what we act on.
                 state = AUTONOMOUS
-                goal.target_pose.header.stamp = rospy.Time.now()
+                goal.target_pose.header.stamp = rospy.now().to_msg()
                 self.mb_client.send_goal(goal)
                 seen_active = False
                 rospy.loginfo(
@@ -282,7 +355,7 @@ class SharedAutonomyManager:
                     )
                 elif not self._hold and paused:
                     paused = False
-                    goal.target_pose.header.stamp = rospy.Time.now()
+                    goal.target_pose.header.stamp = rospy.now().to_msg()
                     self.mb_client.send_goal(goal)
                     seen_active = False
                     rospy.loginfo(
@@ -294,6 +367,13 @@ class SharedAutonomyManager:
                     rate.sleep()
                     continue
 
+                # TODO(ros2): SimpleActionClient.get_state() (synchronous,
+                # returns the latest actionlib_msgs/GoalStatus int) has no
+                # rclpy.action.ActionClient equivalent -- status lives on the
+                # ClientGoalHandle from send_goal_async(), and is only
+                # observable via that handle's status field or a
+                # goal_handle.status callback, not polled from the client
+                # object itself.
                 mb_state = self.mb_client.get_state()
                 if mb_state == GoalStatus.ACTIVE:
                     seen_active = True
@@ -304,6 +384,11 @@ class SharedAutonomyManager:
                     rospy.loginfo(
                         "shared_autonomy_manager: move_base SUCCEEDED -> relaying."
                     )
+                    # TODO(ros2): get_result() (synchronous) has no
+                    # rclpy.action.ActionClient equivalent -- only
+                    # get_result_async() on a ClientGoalHandle, which itself
+                    # requires the goal to already be accepted/tracked via
+                    # the send_goal_async() future.
                     result = self.mb_client.get_result() or MoveBaseResult()
                     self.server.set_succeeded(result, "move_base reached the goal.")
                     return
@@ -317,6 +402,7 @@ class SharedAutonomyManager:
                         "without a takeover -> aborting.",
                         mb_state,
                     )
+                    # TODO(ros2): see get_result() TODO above.
                     result = self.mb_client.get_result() or MoveBaseResult()
                     self.server.set_aborted(
                         result, f"move_base terminated in state {mb_state}."
@@ -326,11 +412,12 @@ class SharedAutonomyManager:
             rate.sleep()
 
         # rospy shutting down mid-goal.
+        # TODO(ros2): see cancel_goal() TODO above.
         self.mb_client.cancel_goal()
 
 
 def main() -> None:
-    rospy.init_node("shared_autonomy_manager")
+    node_handle.init_node("shared_autonomy_manager")
     SharedAutonomyManager()
     rospy.spin()
 

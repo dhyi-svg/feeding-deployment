@@ -6,7 +6,8 @@ import threading
 import time
 import numpy as np
 
-import rospy
+from feeding_deployment.ros2_utils import node_handle
+from feeding_deployment.ros2_utils import rospy_compat as rospy
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import Pose
 
@@ -26,8 +27,9 @@ class JointStatesPublisher:
         self._arm_interface = self.manager.ArmInterface()
 
         # create joint/cartesian states publishers
-        self.joint_states_pub = rospy.Publisher("/robot_joint_states", JointState, queue_size=10)
-        self.cartesian_states_pub = rospy.Publisher("/robot_cartesian_state", Pose, queue_size=10)
+        _node = node_handle.get_node()
+        self.joint_states_pub = _node.create_publisher(JointState, "/robot_joint_states", 10)
+        self.cartesian_states_pub = _node.create_publisher(Pose, "/robot_cartesian_state", 10)
 
     def publish_joint_states(self):
 
@@ -37,7 +39,7 @@ class JointStatesPublisher:
             raise Exception(f"Error getting state: {e}")
         
         joint_state_msg = JointState()
-        joint_state_msg.header.stamp = rospy.Time.now()
+        joint_state_msg.header.stamp = rospy.now().to_msg()
         joint_state_msg.name = [
             "arm_joint_1",
             "arm_joint_2",
@@ -75,6 +77,9 @@ class JointStatesPublisher:
 
 if __name__ == "__main__":
 
-    rospy.init_node("joint_states_publisher", anonymous=True)
+    # TODO(ros2): rospy.init_node(..., anonymous=True) had no exact rclpy
+    # equivalent -- rclpy's create_node() has no "anonymous" name-uniquifying
+    # option; using the plain name.
+    node_handle.init_node("joint_states_publisher")
     joint_states_publisher = JointStatesPublisher()
     joint_states_publisher.run()

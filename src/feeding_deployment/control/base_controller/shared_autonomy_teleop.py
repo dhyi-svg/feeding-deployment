@@ -30,7 +30,8 @@ Safety:
     dormant and keeps trying to (re)connect.
 """
 
-import rospy
+from feeding_deployment.ros2_utils import node_handle
+from feeding_deployment.ros2_utils import rospy_compat as rospy
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Empty
 
@@ -50,39 +51,50 @@ def clamp(value: float, lo: float, hi: float) -> float:
 class SharedAutonomyTeleop:
     def __init__(self) -> None:
         # ---- Topics ----
-        self.cmd_vel_topic = rospy.get_param("~cmd_vel_topic", "/cmd_vel")
-        self.takeover_topic = rospy.get_param(
-            "~takeover_topic", "/shared_autonomy/takeover"
-        )
-        self.done_topic = rospy.get_param("~done_topic", "/shared_autonomy/done")
+        # TODO(ros2): "~name" (rospy private param) has no exact rclpy
+        # equivalent; declared as plain parameter names on this node instead.
+        _node = node_handle.get_node()
+        self.cmd_vel_topic = _node.declare_parameter("cmd_vel_topic", "/cmd_vel").value
+        self.takeover_topic = _node.declare_parameter(
+            "takeover_topic", "/shared_autonomy/takeover"
+        ).value
+        self.done_topic = _node.declare_parameter(
+            "done_topic", "/shared_autonomy/done"
+        ).value
 
         # ---- Controller mapping (pygame indices; Xbox defaults) ----
         # Left stick: axis 1 = forward/back (up is negative), axis 0 = left/right.
-        self.axis_linear = int(rospy.get_param("~axis_linear", 1))
-        self.axis_angular = int(rospy.get_param("~axis_angular", 0))
+        self.axis_linear = int(_node.declare_parameter("axis_linear", 1).value)
+        self.axis_angular = int(_node.declare_parameter("axis_angular", 0).value)
         # RB (right bumper) is commonly button 5; Start/Menu is commonly button 7.
-        self.deadman_button = int(rospy.get_param("~deadman_button", 5))
-        self.done_button = int(rospy.get_param("~done_button", 7))
+        self.deadman_button = int(_node.declare_parameter("deadman_button", 5).value)
+        self.done_button = int(_node.declare_parameter("done_button", 7).value)
 
         # ---- Velocity limits ----
         # Required (no defaults): the launch file is the single source of truth
         # for teleop speed, which is intentionally faster than the autonomy's
         # TEB limits. Missing params fail the node loudly at startup.
-        self.max_vel_x = float(rospy.get_param("~max_vel_x"))
-        self.max_vel_theta = float(rospy.get_param("~max_vel_theta"))
-        self.deadband = float(rospy.get_param("~deadband", 0.12))
+        # TODO(ros2): rospy.get_param(name) with no default raised if missing;
+        # declare_parameter requires SOME default/type in rclpy unless
+        # ParameterDescriptor(dynamic_typing=True) is used -- declaring with
+        # float("nan") as a sentinel and asserting it was actually overridden.
+        self.max_vel_x = float(_node.declare_parameter("max_vel_x", float("nan")).value)
+        assert self.max_vel_x == self.max_vel_x, "required parameter 'max_vel_x' not set"
+        self.max_vel_theta = float(_node.declare_parameter("max_vel_theta", float("nan")).value)
+        assert self.max_vel_theta == self.max_vel_theta, "required parameter 'max_vel_theta' not set"
+        self.deadband = float(_node.declare_parameter("deadband", 0.12).value)
 
         # Flip these if a stick drives the robot the wrong way on real hardware.
-        self.invert_linear = bool(rospy.get_param("~invert_linear", True))
-        self.invert_angular = bool(rospy.get_param("~invert_angular", True))
+        self.invert_linear = bool(_node.declare_parameter("invert_linear", True).value)
+        self.invert_angular = bool(_node.declare_parameter("invert_angular", True).value)
 
-        self.rate_hz = float(rospy.get_param("~rate", 20.0))
-        self.joystick_id = int(rospy.get_param("~joystick_id", 0))
+        self.rate_hz = float(_node.declare_parameter("rate", 20.0).value)
+        self.joystick_id = int(_node.declare_parameter("joystick_id", 0).value)
 
         # ---- Publishers ----
-        self.cmd_pub = rospy.Publisher(self.cmd_vel_topic, Twist, queue_size=1)
-        self.takeover_pub = rospy.Publisher(self.takeover_topic, Empty, queue_size=1)
-        self.done_pub = rospy.Publisher(self.done_topic, Empty, queue_size=1)
+        self.cmd_pub = _node.create_publisher(Twist, self.cmd_vel_topic, 1)
+        self.takeover_pub = _node.create_publisher(Empty, self.takeover_topic, 1)
+        self.done_pub = _node.create_publisher(Empty, self.done_topic, 1)
 
         # ---- State ----
         self.joystick = None
@@ -193,7 +205,7 @@ class SharedAutonomyTeleop:
 
 
 def main() -> None:
-    rospy.init_node("shared_autonomy_teleop")
+    node_handle.init_node("shared_autonomy_teleop")
     SharedAutonomyTeleop().spin()
 
 

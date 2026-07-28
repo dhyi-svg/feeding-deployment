@@ -9,7 +9,8 @@ import time
 import numpy as np
 
 try:
-    import rospy
+    from feeding_deployment.ros2_utils import node_handle
+    from feeding_deployment.ros2_utils import rospy_compat as rospy
     from sensor_msgs.msg import JointState
     from std_msgs.msg import Bool
     from geometry_msgs.msg import Pose
@@ -33,7 +34,7 @@ if __name__ == "__main__":
     time.sleep(args.sleep)
     
     assert ROSPY_IMPORTED, "ROS is required to run on the real robot"
-    rospy.init_node("close_gripper_action")
+    node_handle.init_node("close_gripper_action")
 
     # make sure watchdog is running
     print("Waiting for Watchdog status...")

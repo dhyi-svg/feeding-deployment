@@ -3,14 +3,25 @@ from scipy.spatial.transform import Rotation as R
 
 try:
     # ros imports
-    import rospy
+    import rclpy
+    from feeding_deployment.ros2_utils import node_handle
+    from feeding_deployment.ros2_utils import rospy_compat as rospy
     import tf2_ros
     from geometry_msgs.msg import Pose, TransformStamped
     from sensor_msgs.msg import JointState
     from visualization_msgs.msg import Marker, MarkerArray
 
     from wrist_driver_interfaces.msg import SimpleJointAngleCommand
-    from wrist_driver_interfaces.srv import SetWristMode, SetWristModeRequest, SetWristModeResponse
+    # TODO(ros2): wrist_driver_interfaces (a custom ROS1 .srv package, not
+    # part of this migration batch/repo) generated SetWristModeRequest and
+    # SetWristModeResponse as top-level names in ROS1; a ROS2 (rosidl)
+    # regeneration of the same .srv exposes them as nested
+    # SetWristMode.Request / SetWristMode.Response instead, with no top-level
+    # names to import. Left importing only SetWristMode; call sites below
+    # construct SetWristMode.Request() accordingly. Not able to verify the
+    # actual field names on that Request without the (unavailable in this
+    # repo) wrist_driver_interfaces source.
+    from wrist_driver_interfaces.srv import SetWristMode
 
     ROSPY_IMPORTED = True
 except ModuleNotFoundError as e:
@@ -22,23 +33,42 @@ class HorizontalSpoon:
 
         assert ROSPY_IMPORTED, "ROS is required to run Horizontal Spoon Controller"
 
-        self.wrist_state_pub = rospy.Publisher('/cmd_wrist_joint_angles', SimpleJointAngleCommand, queue_size=10)
+        _node = node_handle.get_node()
+        self.wrist_state_pub = _node.create_publisher(
+            SimpleJointAngleCommand, '/cmd_wrist_joint_angles', 10)
 
         self.last_pitch_angle = 0.0
 
         # subscribe to robot cartesian state
-        self.cartesian_state_sub = rospy.Subscriber('/robot_cartesian_state', Pose, self.cartesian_state_callback)
+        # TODO(ros2): rospy.Subscriber had no explicit queue_size here
+        # (rospy default is synchronous/unbuffered); using depth 10.
+        self.cartesian_state_sub = _node.create_subscription(
+            Pose, '/robot_cartesian_state', self.cartesian_state_callback, 10)
 
         # set wrist control mode to velocity
-        rospy.wait_for_service('set_wrist_mode')
+        # TODO(ros2): rospy.ServiceProxy + wait_for_service(name)-by-name ->
+        # rclpy requires a client constructed with the service TYPE up front.
+        set_wrist_mode_client = _node.create_client(SetWristMode, 'set_wrist_mode')
+        rospy.wait_for_service(set_wrist_mode_client)
         try:
-            set_wrist_mode = rospy.ServiceProxy('set_wrist_mode', SetWristMode)
-            resp1 = set_wrist_mode(0)
-            if resp1.success:
+            # TODO(ros2): ROS1 rospy.ServiceProxy(...)(0) called the proxy
+            # with a bare positional value, which rospy maps onto the
+            # service's single request field. ROS2 requires an explicit
+            # Request message; field name "mode" is ASSUMED (not verified --
+            # wrist_driver_interfaces' SetWristMode.srv is not in this repo).
+            request = SetWristMode.Request()
+            request.mode = 0  # TODO(ros2): verify this is the real field name
+            future = set_wrist_mode_client.call_async(request)
+            rclpy.spin_until_future_complete(_node, future)
+            resp1 = future.result()
+            if resp1 is not None and resp1.success:
                 print("Successfully set wrist mode to velocity")
             else:
                 print("Failed to set wrist mode to velocity")
-        except rospy.ServiceException as e:
+        # TODO(ros2): rospy.ServiceException has no direct rclpy equivalent;
+        # a failed call_async() future generally resolves to result() is None
+        # or raises from the underlying rcl layer -- catching broadly here.
+        except Exception as e:
             print("Service call failed: %s"%e)
 
     def set_wrist_state(self, pitch, roll, vel=4):
@@ -204,13 +234,18 @@ class HorizontalSpoon:
     def cleanup(self):
         """Clean up resources (like unsubscribing from topics, stopping publishers)."""
         if self.cartesian_state_sub:
-            self.cartesian_state_sub.unregister()
+            # TODO(ros2): rospy Subscriber.unregister() -> rclpy
+            # node.destroy_subscription(subscription).
+            node_handle.get_node().destroy_subscription(self.cartesian_state_sub)
         # Unregister other publishers/subscribers if needed
         print("HorizontalSpoon cleaned up!")
-    
+
 
 if __name__ == "__main__":
-    rospy.init_node('horizontal_spoon', anonymous=True)
+    # TODO(ros2): rospy.init_node(..., anonymous=True) had no exact rclpy
+    # equivalent -- rclpy's create_node() has no "anonymous" name-uniquifying
+    # option; using the plain name.
+    node_handle.init_node('horizontal_spoon')
     hs = HorizontalSpoon()
     # hs.run()
     rospy.spin()

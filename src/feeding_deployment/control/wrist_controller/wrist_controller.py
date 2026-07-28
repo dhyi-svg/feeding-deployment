@@ -4,11 +4,17 @@ import threading
 import time
 
 try:
-    import rospy
+    import rclpy
+    from feeding_deployment.ros2_utils import node_handle
+    from feeding_deployment.ros2_utils import rospy_compat as rospy
     from sensor_msgs.msg import JointState
 
     from wrist_driver_interfaces.msg import SimpleJointAngleCommand
-    from wrist_driver_interfaces.srv import SetWristMode, SetWristModeRequest, SetWristModeResponse
+    # TODO(ros2): see the matching TODO in horizontal_spoon.py -- ROS2
+    # (rosidl) service generation exposes Request/Response nested inside
+    # SetWristMode rather than as top-level SetWristModeRequest/Response
+    # names; dropped those two imports accordingly.
+    from wrist_driver_interfaces.srv import SetWristMode
     ROSPY_IMPORTED = True
 except ModuleNotFoundError as e:
     # print(f"ROS not imported: {e}")
@@ -43,7 +49,8 @@ class WristInterface:
 
         assert ROSPY_IMPORTED, "ROS is required to control the real wrist"
 
-        self.wrist_state_pub = rospy.Publisher('/cmd_wrist_joint_angles', SimpleJointAngleCommand, queue_size=10)
+        self.wrist_state_pub = node_handle.get_node().create_publisher(
+            SimpleJointAngleCommand, '/cmd_wrist_joint_angles', 10)
 
         self.offset_pitch = offset_pitch
         self.offset_roll = offset_roll
@@ -70,15 +77,29 @@ class WristInterface:
 
     def set_velocity_mode(self):
         # set wrist control mode to velocity
-        rospy.wait_for_service('set_wrist_mode')
+        # TODO(ros2): rospy.ServiceProxy + wait_for_service(name)-by-name ->
+        # rclpy requires a client constructed with the service TYPE up front.
+        _node = node_handle.get_node()
+        set_wrist_mode_client = _node.create_client(SetWristMode, 'set_wrist_mode')
+        rospy.wait_for_service(set_wrist_mode_client)
         try:
-            set_wrist_mode = rospy.ServiceProxy('set_wrist_mode', SetWristMode)
-            resp1 = set_wrist_mode(1)
-            if resp1.success:
+            # TODO(ros2): ROS1 rospy.ServiceProxy(...)(1) called the proxy
+            # with a bare positional value, which rospy maps onto the
+            # service's single request field. ROS2 requires an explicit
+            # Request message; field name "mode" is ASSUMED (not verified --
+            # wrist_driver_interfaces' SetWristMode.srv is not in this repo).
+            request = SetWristMode.Request()
+            request.mode = 1  # TODO(ros2): verify this is the real field name
+            future = set_wrist_mode_client.call_async(request)
+            rclpy.spin_until_future_complete(_node, future)
+            resp1 = future.result()
+            if resp1 is not None and resp1.success:
                 print("Successfully set wrist mode to velocity")
             else:
                 print("Failed to set wrist mode to velocity")
-        except rospy.ServiceException as e:
+        # TODO(ros2): rospy.ServiceException has no direct rclpy equivalent;
+        # catching broadly here.
+        except Exception as e:
             print("Service call failed: %s"%e)
 
     def reset(self):
@@ -309,7 +330,10 @@ class WristInterface:
         self.set_wrist_state(current_pitch, current_roll + math.pi/8)
 
 if __name__ == '__main__':
-    rospy.init_node('wrist_controller', anonymous=True)
+    # TODO(ros2): rospy.init_node(..., anonymous=True) had no exact rclpy
+    # equivalent -- rclpy's create_node() has no "anonymous" name-uniquifying
+    # option; using the plain name.
+    node_handle.init_node('wrist_controller')
     wrist_controller = WristInterface()
     wrist_controller.set_velocity_mode()
 
