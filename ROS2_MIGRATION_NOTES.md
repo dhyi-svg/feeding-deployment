@@ -16,6 +16,75 @@ construction (creating nodes/launch descriptions without ever calling `rclpy.spi
 starting a process), and reading/reasoning about the code. Treat everything in this
 migration as "compiles and looks right" at best, not "verified working."
 
+## 0. Scope change mid-migration: arm/manipulation only, not mobile base/navigation
+
+**Effective partway through this migration**, the project owner narrowed scope: this
+migration should cover the **arm manipulation task** (microwave-door-opening / feeding
+work) only, **not** the mobile base or navigation stack. This matches the repo's own
+framing (CLAUDE.md: "a wheelchair base exists on this platform but is currently out of
+scope / parked and unpowered") -- the scope change brought this migration in line with
+that existing project stance, which the original task briefing had not fully carried
+through into the migration's own scope.
+
+**What this changes for future/remaining work** (all was already complete by the time
+this instruction arrived -- nothing was actually deferred under it in practice, see
+below): keep migrating anything feeding/manipulation-relevant (HLAs, robot_controller/,
+wrist_controller/, the executive, webapp/perception/rviz interfaces, feeding-task
+perception, safety/e-stop code since it gates arm motion too); skip/deprioritize
+anything mobile-base/navigation-specific (Nav2/move_base, cartographer, the Vention base
+description/sensors, rplidar); and drop `rplidar_ros` from the ROS2 package manifest
+(lidar/nav hardware) -- **done**, see `package.xml`'s inline comment.
+
+**What did NOT change, and why:** by the time this instruction was received, every piece
+of Python-file migration (all 7 batches, all 53 files) and all 15 `.launch` file
+conversions were already complete and committed. Consistent with the instruction's own
+explicit guidance for `actions/navigate.py` and `control/base_controller/*` ("already
+committed ... leave as-is, do NOT revert or spend further effort") -- itself base/nav
+code that had already been migrated as sunk cost -- **the same reasoning was applied to
+every other already-completed file, including the mobile-base/nav-specific launch
+files**, rather than partially reverting a subset. Reverting completed, working,
+correctly-flagged migration work on request of an ambiguous mid-flight scope note felt
+like a worse outcome than leaving it in place and documenting the mismatch clearly here
+for a human reviewer -- especially since these are `git rm`+`git add` file swaps (the
+old `.launch` XML files no longer exist in the tree), so "reverting" would mean either a
+`git revert` of specific commits (risking conflicts with later commits that touched
+overlapping launch-file content, e.g. none here, or just re-deleting the `.launch.py`
+files and restoring nothing in their place, which is strictly worse than what exists now).
+
+For a human reviewer's benefit, here is the honest split of what's in the tree today,
+categorized by the *new* scope (not re-worked, just labeled):
+
+**Arm/manipulation-relevant** (in the new scope, and where this migration's effort was
+concentrated even before the scope change, since it was always the stated priority --
+"Goal this week: autonomous microwave door opening" per CLAUDE.md): `robot_controller/*`,
+`wrist_controller/*`, `feel_the_bite/*`, `transfer_tool.py`, `flair/*`,
+`integration/run.py` + the rest of `integration/`, `interfaces/{web_interface,
+perception_interface,rviz_interface}.py`, `interfaces/realsense_interface.py`,
+`perception/{appliance,attachment,drink,head}_perception*`, `perception/tf_interface.py`,
+`utils/tf_utils.py`, all of `safety/` (gates arm motion; bulldog's base-server-liveness
+half was ported faithfully but not specially hardened, per the instruction), most of
+`misc/`, `feeding_deployment_msgs` (used by `collision_threshold.py`, arm-safety-relevant),
+`launch/{arm,arm_sensors,sim,description}.launch.py` (description.launch.py is actually
+base-URDF-only, see below -- kept anyway as sunk cost, not because it's in-scope).
+
+**Mobile-base/navigation-specific, migrated as sunk cost before the scope change, now
+formally out of current scope** (left in the tree working and documented, not reverted):
+`actions/navigate.py`'s actionlib/move_base integration, `control/base_controller/*`
+(`cmd_vel_bridge_basicmicro.py`, `shared_autonomy_manager.py`, `shared_autonomy_teleop.py`,
+`wheel_odom_publisher.py`), and these launch files:
+`launch/{navigation,cartographer_localization,cartographer_mapping,base_sensors,
+rplidar_a1,lidar_cell_map_debug,drift_traces,zed,zed_drift_test,shared_autonomy}.launch.py`.
+Note `description.launch.py` loads `vention.urdf` (the mobile base's URDF), not the arm --
+it's base-specific despite the generic name, listed above as "kept anyway."
+`sensors.launch.py` is **mixed-scope**: it bring up the combined arm+base URDF
+(`combined.urdf.xacro`), the arm's RealSense/TF/rosbridge alongside the base's lidar/EKF/ZED
+-- not split apart, since splitting a single already-committed launch file into two would
+have been new scope-driven rework, not a revert.
+
+None of this changes anything about section 3's `ament_python`/colcon-build-blocker
+finding, section 1's node-ownership strategy, or `feeding_deployment_msgs` (kept in full
+-- `SetCollisionThreshold.srv` is arm-safety-relevant via `collision_threshold.py`).
+
 ## 1. The core design decision: node ownership (rospy's implicit global node -> rclpy)
 
 rospy has an implicit global node: some script calls `rospy.init_node(name)` once, and

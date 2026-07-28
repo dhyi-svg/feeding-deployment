@@ -15,9 +15,6 @@
          rviz           -> rviz2   (confirmed available: apt package
                                      ros-jazzy-rviz2, ROS package name
                                      "rviz2")
-         rplidar_ros    -> rplidar_ros (confirmed available and SAME
-                                     package name on Jazzy: apt package
-                                     ros-jazzy-rplidar-ros)
        Added because the code actually uses them (grep-confirmed) even
        though the ROS1 package.xml never declared them explicitly:
          tf2_ros was already declared; also add message_filters, cv_bridge
@@ -30,6 +27,14 @@
          (custom srv package, was only an exec_depend before; kept as
          exec_depend since nothing in this package's own interfaces
          depends on it at build/generation time).
+       DROPPED per an explicit scope-change instruction mid-migration (see
+       ROS2_MIGRATION_NOTES.md's "Scope change" section): rplidar_ros. It
+       is lidar/mobile-base hardware, out of scope now that this migration
+       is arm/manipulation-only; the wheelchair base is separately
+       documented as parked/unpowered/out of scope. rplidar_ros WAS
+       confirmed available for Jazzy (same package name, apt package
+       ros-jazzy-rplidar-ros) before being dropped here; removed for
+       scope reasons, not because it was unavailable.
   -->
   <buildtool_depend>ament_python</buildtool_depend>
 
@@ -39,7 +44,6 @@
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>tf2_geometry_msgs</exec_depend>
-  <exec_depend>rplidar_ros</exec_depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>message_filters</exec_depend>
   <exec_depend>cv_bridge</exec_depend>
