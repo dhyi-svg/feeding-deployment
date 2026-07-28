@@ -37,6 +37,163 @@ the bypass (fresh server re-locks motion). Verify with `get_state()` → expect
 
 ---
 
+## 2026-07-28 — Pachirisu: hover approach + real grasp validated end-to-end, door-arc model found wrong twice (direction + non-vertical hinge axis), one real motion incident
+
+Follow-on from 2026-07-27's unresolved IK convergence. Goal: resolve it and push toward a
+full detect->grasp->open attempt. Got much further than expected -- hover approach and
+grasp are now proven on real hardware -- but the door-opening arc surfaced two real
+modeling bugs and one real safety incident.
+
+### IK convergence root cause: the fixed grasp quaternion's approach axis was pointing backwards
+
+Diagnosed the 2026-07-27 unresolved IK convergence with software-only checks before
+touching real detection: position-only IK converges instantly from any seed; 150+ wide
+random-restart full-joint-space seeds ALL plateau at the same ~17cm residual regardless
+of seed (the signature of a truly unreachable pose, not a bad seed); a full 360deg roll
+sweep about the approach axis made zero difference. Root cause: the repo's fixed
+grasp-orientation constant (`(0.5,-0.5,-0.5,0.5)` / `GRASP_QUAT=(-0.5,0.5,0.5,-0.5)`, same
+rotation) has its local-Z (approach) axis pointing exactly opposite the real look-at
+vector to the handle -- a 180deg inversion, not a minor offset. Re-pointing the axis at
+the true look-at vector (shortest-arc rotation, preserving the original roll) took IK
+from ~17cm error to 0.01cm, fully within joint limits, from every seed tried.
+
+Also found and fixed a real bug in that fix's own first draft: the exactly-antiparallel
+special case (exactly what happens whenever the look-at direction is a pure world axis,
+e.g. a pure -x back-off) picked an arbitrary fallback rotation axis that could coincide
+with the vector being flipped, silently making the "fix" a no-op. Rewrote as a single
+correct `geometry_corrected_quat()` helper in `scripts/scratch/debug_ik_convergence2.py`.
+
+### Real detection, twice, on the actual Comfee microwave
+
+Brought up roscore + `realsense2_camera` (`align_depth:=true`) and `arm_server.py`
+(read-only) fresh this session. Started from the arm in a fully-retracted/tucked pose
+(`ee_pos~(0.15,0.04,0.19)`) with the wrist camera pointed at the floor -- confirmed
+visually before trusting any detection. User manually repositioned the arm to face the
+microwave (twice -- once initially, once after moving the microwave further away);
+`detect_handle_and_placement("microwave handle", ...)` fired both times at 0.41-0.49
+confidence, `handle_pixels.png` visually confirmed landing squarely on the real chrome
+handle bar both times.
+
+Also fixed a real, unguarded crash in the repo itself: `appliance_perception.py`'s DBSCAN
+clustering call had no empty-list check before `.fit(handle_points)`, unlike the
+identical pattern one block earlier in the same function
+(`if len(bounding_box_points_3d) == 0`) -- added the matching guard (now returns
+`None, None, None, None` gracefully instead of crashing sklearn's `check_array`).
+
+### Hover approach validated live, twice (30cm and 15cm back-off)
+
+Recomputed the hover target from the real detected handle position using the
+geometry-corrected orientation, verified via a full seeded chain (from the arm's actual
+current joints, not an arbitrary seed) that tracking held within joint limits the whole
+way, then commanded it for real:
+- 30cm back-off: landed within **0.7mm** of target.
+- 15cm back-off (closer, per user request): landed within **3.7mm**.
+
+Both moves used `set_joint_position` (not `set_ee_pose`, consistent with 2026-07-27's
+finding that cartesian moves can jerk unexpectedly) after computing joints via
+`p.calculateInverseKinematics`, seeded from the real current joints.
+
+User then manually moved the gripper the rest of the way to touch the handle and asked
+for the offset to be noted (empirically ~7cm forward + ~1.6cm lateral from the computed
+hover point, though user asked to record it as ~12-13cm per their own estimate -- noted
+as instructed, not reconciled against the computed number).
+
+### Grasp succeeded; one transient, unexplained arm-state anomaly
+
+`close_gripper()` from the user-positioned touch point closed successfully (visually
+confirmed) -- but the arm's `get_arm_state()` briefly reported
+`ARMSTATE_SERVOING_MANUALLY_CONTROLLED` right after, even though the user was not
+touching the arm. `arm_server.log` showed a `REACH_JOINT_ANGLES` action hit
+`ACTION_ABORT` (`abort_details: ROBOT_MOVEMENT_IN_PROGRESS`) at that moment -- gripper
+actuation is implemented as a joint-angle action on this Kortex firmware, and it
+apparently collided with residual settling from the prior move. State reverted to
+`ARMSTATE_SERVOING_READY` on its own within a few seconds, no fault latched. Not fully
+root-caused; flagging as a watch-item (echoes 2026-07-21's unresolved `METHOD_FAILED`
+abort oddity -- another Kortex-session quirk on this rig that resolved itself without
+full explanation).
+
+### Door-opening arc: two real modeling bugs found, one real safety incident
+
+Reused the Jetson's exact proven one-waypoint-per-call pattern
+(`scripts/real_gen3_open_microwave.py`, state persisted, per-step tracking-error abort)
+via a new `scripts/scratch/run_door_arc_step.py`, but two things about this specific
+rig/microwave broke the ported defaults:
+
+1. **Radius mismatch.** The repo's own `detect_handle_and_placement` supplies a real
+   hinge position; on this microwave it put the handle only ~12cm from the hinge (vs.
+   the Jetson's blind `DOOR_W=0.32m` guess). Reusing the Jetson's `arc_length_m=0.55`
+   constant at this radius demands ~262deg of rotation -- immediately exceeds the ~90cm
+   reach guard by waypoint 2. Fixed by sizing `arc_length_m = radius * target_angle_rad`
+   for an explicit target angle (started with a conservative 25deg test swing, not a
+   full open) instead of reusing an absolute-length constant tuned for a different rig's
+   geometry.
+2. **Direction sign.** The repo's own default for `handle_type=="microwave"` is
+   `direction=-1`. At this rig's real hinge geometry, `-1` swings the handle AWAY from
+   the base (immediately over the reach guard); user correctly reasoned that opening a
+   door by pulling the handle should bring it TOWARD the arm, not away. Flipping to
+   `direction=1` both matched that physical intuition AND kept every waypoint
+   comfortably under the reach guard (87-89cm vs. 92-95cm) -- confirming the Jetson's
+   `-1` default was tuned for that rig's specific (mirrored) microwave-to-arm layout, not
+   a universal constant.
+3. **Real safety incident.** Step 1 (with the two fixes above) was commanded and
+   produced a violent, unpredictable ~150deg swing on J1/J3/J7 even though the Cartesian
+   target was only ~1cm off (ik_err 0.01cm) -- the grip held (lucky), no fault latched,
+   but this was flagged by the user as dangerous. Root cause:
+   `_generate_door_arc_waypoints`'s IK (following the Jetson script's own documented
+   "deliberately UNSEEDED" pattern) was solved in a **freshly-created simulator with a
+   default/arbitrary initial joint state**, not seeded from the arm's actual current
+   posture -- found a Cartesian-correct but joint-space-distant alternate solution
+   branch (elbow/wrist flip). `set_joint_position` has no path planning, so the real arm
+   swept through that reconfiguration directly. **The Jetson script's "unseeded is fine
+   for small arc waypoints" note does not hold in general** -- it depended on the fresh
+   sim's default init happening to already be close to that rig's working posture; it is
+   not a safe pattern to reuse blindly on a different rig/starting configuration.
+   - Fix (implemented in `run_door_arc_step.py`, verified in sim before any further real
+     motion): seed IK from `ai.get_state()["position"]` (the actual current real
+     joints), and explicitly guard on **joint-space delta** (`>25deg` aborts), not just
+     Cartesian `ik_err`. Verified step 2 (18deg max delta) and step 3 (9.7deg) both
+     converge cleanly under this guard before re-attempting.
+   - Step 2 was then run for real with the fix: reached within 1cm, no wild swing this
+     time (user: "kinda moved unpredictably, but not really badly" -- worth another look
+     next session, 18deg on J6 in a single step is still non-trivial and this posture may
+     be kinematically sensitive/near a singularity).
+4. **Arc geometry model also wrong: assumes a purely vertical hinge axis, but this door
+   isn't a simple pivot.** After step 2, the user manually walked the gripper (still
+   holding the handle) to where they judged the true "waypoint 2" should be, for
+   comparison: real point `(0.7166, -0.0725, 0.5239)` vs. the computed step-2 target
+   `(0.728,-0.177,0.466)` -- off by **+10.5cm in y and +5.8cm in z**. The z discrepancy is
+   the important one: `_generate_door_arc_waypoints` assumes the door rotates about a
+   purely vertical (z) axis (constant height throughout), but the real door's height
+   clearly changes as it opens -- this microwave's door mechanism is not a simple single
+   vertical-axis pivot (likely a multi-bar/lift-type hinge). This is a second,
+   independent reason not to trust the formula-driven waypoints beyond a single verified
+   step at a time.
+
+### End-of-session state
+
+Gripper is holding the microwave handle at the user's manually-demonstrated "waypoint 2"
+pose `(0.7166, -0.0725, 0.5239)`, door partially open. `arm_server.py` +
+`stub_base_server.py` + `bulldog_bypass.py` all still running (motion unlocked) at
+session end -- pick up from here or restart the bring-up per the "Setup" section above.
+No fault latched, `ARMSTATE_SERVOING_READY` as of the last read.
+
+### Not done / next session
+
+- Door-arc kinematics need a real model of this microwave's actual hinge mechanism (not
+  a pure vertical-axis circle) -- either have the user demonstrate several more real
+  waypoints by hand and fit/interpolate from those directly (working well so far), or
+  investigate the physical hinge to build a correct parametric model.
+- The J6-heavy, 18deg-in-one-step posture around step 2 may be kinematically sensitive
+  (near a singularity) -- worth a closer look before trusting further automated steps
+  through this region.
+- Empirical grasp-approach offset for this rig noted as ~12-13cm (per user) -- not yet
+  reconciled with the ~7cm/1.6cm delta actually measured between the computed hover
+  point and the user's touch point.
+- Continue the door-opening test swing from the current real waypoint-2 pose, or
+  re-plan from scratch with a corrected (non-vertical-axis) arc model.
+
+---
+
 ## 2026-07-27 — Pachirisu: recalibration root-caused and fixed (5.3cm), approach-hover attempt hit a real motion incident + unresolved IK convergence
 
 Follow-on session, continuing from the ~20-27cm calibration error found 2026-07-22. Goal:

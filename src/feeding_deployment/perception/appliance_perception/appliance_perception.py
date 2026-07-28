@@ -523,6 +523,10 @@ class AppliancePerception(TFInterface):
             vis[v, u] = (0, 255, 0)
         self._log_image("handle_pixels", vis)
 
+        if len(handle_points) == 0:
+            print("-------------- ERROR: No protruding (handle) points in front of the door plane.")
+            return None, None, None, None
+
         # -----------------------------
         # DBSCAN clustering (7 cm)
         # -----------------------------
