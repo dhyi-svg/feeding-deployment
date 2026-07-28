@@ -294,7 +294,47 @@ All 4 files verified via `ast.parse` (both by the migrating agent and independen
 re-verified before commit). Committed as `270fb0e7`.
 
 ### 4e. perception/ + utils/ batch
-*(pending)*
+8 files: `tf_interface.py`, `utils/tf_utils.py`, `appliance_perception.py` (848 lines),
+`attachment_perception.py`, `drink_perception.py`, `head_perception/ros_wrapper.py`,
+`record_gesture_data.py`, `visualize_gesture_data.py`.
+
+  - **tf2 consistency confirmed across all 3 tf2-using files** in this batch
+    (`tf_interface.py`, `tf_utils.py`, `ros_wrapper.py`): identical pattern --
+    `tf2_ros.Buffer()` unchanged, `TransformListener(buffer, node_handle.get_node())`,
+    `TransformBroadcaster(node_handle.get_node())`. No divergence.
+  - `builtin_interfaces/Time` field rename (`secs/nsecs` -> `sec/nanosec`) fixed directly
+    in `tf_interface.py` and `tf_utils.py` (unambiguous, same treatment as the
+    interfaces/ and misc/ batches gave the identical rename elsewhere in the codebase).
+    `tf_interface.py`'s JSON sidecar log format deliberately kept its **output** keys as
+    `secs`/`nsecs` for on-disk log-format compatibility -- only the source attribute
+    names changed, a good example of the batch distinguishing "wire/API rename" from
+    "our own log format," worth double-checking during review.
+  - **Proactive, unambiguous correctness fix** (not a guess): `ros_wrapper.py`'s two
+    `header.seq = 0` assignments were removed -- `std_msgs/Header` has no `seq` field at
+    all in ROS2 (dropped from the message definition), so this line would have raised
+    `AttributeError` immediately on any real run. Flagged here for visibility even though
+    it wasn't left as a TODO, since it's a behavior change (however clearly correct).
+  - `appliance_perception.py` (the active GroundingDINO `detect_items`/
+    `detect_handle_and_placement` pipeline central to the current Pachirisu hardware
+    work per CLAUDE.md) has only 2 unused `Publisher` calls plus `__main__` boilerplate
+    touched by rospy -- the actual detection/DBSCAN/plane-fit logic has zero rospy
+    touchpoints and was left completely untouched, minimizing risk to that active work.
+  - `record_gesture_data.py`/`visualize_gesture_data.py` both depend on an external
+    `rs_ros.RealSenseROS` class outside this 8-file scope; if it uses `rospy` internally,
+    it was NOT migrated -- flagged as a likely runtime gap for whoever picks this up.
+  - `anonymous=True` dropped in `record_gesture_data.py`, `visualize_gesture_data.py`,
+    and `ros_wrapper.py`'s `__main__`, each with its own TODO(ros2), consistent with how
+    every other batch handled this same rospy kwarg.
+  - Pre-existing bugs noted, not fixed: `ros_wrapper.py`'s `__main__` passes a
+    `HeadPerception` instance into `HeadPerceptionROSWrapper`'s constructor positionally,
+    but the wrapper's `__init__` silently discards it and builds its own separate
+    `HeadPerception` instance internally -- looks like a real bug, unrelated to this
+    migration. `appliance_perception.py`'s `handle_points_pub`/`handle_center_pub` and
+    the equivalent pair in `attachment_perception.py` are constructed but (at least the
+    appliance ones) never published to anywhere in the file -- dead code, pre-existing.
+
+All 8 files verified via `ast.parse` (both by the migrating agent and independently
+re-verified before commit). Committed as `c243984c`.
 
 ### 4f. safety/ batch (safety-critical -- read this one closely before merging)
 *(pending)*
