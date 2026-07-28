@@ -1,7 +1,8 @@
 import time
 import numpy as np
 from scipy.spatial.transform import Rotation
-import rospy
+from feeding_deployment.ros2_utils import node_handle
+from feeding_deployment.ros2_utils import rospy_compat
 import tf2_ros
 from geometry_msgs.msg import TransformStamped
 from pybullet_helpers.geometry import Pose
@@ -10,14 +11,14 @@ from pybullet_helpers.geometry import Pose
 class TFInterface:
     def __init__(self):
         self.tfBuffer = tf2_ros.Buffer()
-        self.listener = tf2_ros.TransformListener(self.tfBuffer)
-        self.broadcaster = tf2_ros.TransformBroadcaster()
+        self.listener = tf2_ros.TransformListener(self.tfBuffer, node_handle.get_node())
+        self.broadcaster = tf2_ros.TransformBroadcaster(node_handle.get_node())
         time.sleep(1.0)
 
     def updateTF(self, source_frame, target_frame, pose):
         t = TransformStamped()
 
-        t.header.stamp = rospy.Time.now()
+        t.header.stamp = rospy_compat.now().to_msg()
         t.header.frame_id = source_frame
         t.child_frame_id = target_frame
 
@@ -36,10 +37,13 @@ class TFInterface:
     def get_frame_to_frame_transform(self, camera_info_data, frame_A="arm_base_link", target_frame="camera_color_optical_frame"):
         stamp = camera_info_data.header.stamp
         try:
+            # ROS2 builtin_interfaces/Time uses sec/nanosec (renamed from ROS1's
+            # secs/nsecs); camera_info_data.header.stamp is expected to already be
+            # a ROS2-shaped message by the time it reaches here.
             transform = self.tfBuffer.lookup_transform(
                 frame_A,
                 target_frame,
-                rospy.Time(secs=stamp.secs, nsecs=stamp.nsecs),
+                rospy_compat.Time(seconds=stamp.sec, nanoseconds=stamp.nanosec),
             )
             return transform
         except Exception as e:
@@ -122,7 +126,9 @@ class TFInterface:
             "P": [float(x) for x in getattr(camera_info, "P", [])],
         }
         if stamp is not None:
-            info["stamp"] = {"secs": int(stamp.secs), "nsecs": int(stamp.nsecs)}
+            # JSON sidecar keys kept as "secs"/"nsecs" (external log format); source
+            # attrs are ROS2's sec/nanosec.
+            info["stamp"] = {"secs": int(stamp.sec), "nsecs": int(stamp.nanosec)}
         return info
 
     def transform_to_dict(self, transform):
@@ -136,7 +142,7 @@ class TFInterface:
         return {
             "parent": transform.header.frame_id,
             "child": transform.child_frame_id,
-            "stamp": {"secs": int(stamp.secs), "nsecs": int(stamp.nsecs)},
+            "stamp": {"secs": int(stamp.sec), "nsecs": int(stamp.nanosec)},
             "translation": [float(t.x), float(t.y), float(t.z)],
             "quaternion_xyzw": [float(q.x), float(q.y), float(q.z), float(q.w)],
             "matrix": self.make_homogeneous_transform(transform).tolist(),

@@ -14,7 +14,8 @@ import open3d as o3d
 from pybullet_helpers.geometry import Pose, Pose3D
 
 # ros imports
-import rospy
+from feeding_deployment.ros2_utils import node_handle
+from feeding_deployment.ros2_utils import rospy_compat as rospy
 from sensor_msgs.msg import CameraInfo
 from geometry_msgs.msg import Point
 from visualization_msgs.msg import MarkerArray, Marker
@@ -78,8 +79,8 @@ class AppliancePerception(TFInterface):
         self.handle_type = None
         self.num_perception_samples = num_perception_samples
 
-        self.handle_points_pub = rospy.Publisher("/handle_points", Marker, queue_size=1)
-        self.handle_center_pub = rospy.Publisher("/handle_center", Marker, queue_size=1)
+        self.handle_points_pub = node_handle.get_node().create_publisher(Marker, "/handle_points", 1)
+        self.handle_center_pub = node_handle.get_node().create_publisher(Marker, "/handle_center", 1)
 
         # All detection images flow through the per-day data logger into the
         # active skill's folder (images/<skill>/<run>_<name>.png). We also keep the
@@ -815,7 +816,7 @@ if __name__ == '__main__':
                         help='Handle type to detect (e.g. "microwave handle", "bottom textured fridge door")')
     args = parser.parse_args()
 
-    rospy.init_node('AppliancePerception')
+    node_handle.init_node('AppliancePerception')
     grounded_sam = GroundedSAM()
     appliance_perception = AppliancePerception(grounded_sam)
 

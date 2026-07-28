@@ -1,6 +1,6 @@
 import sys
 import os
-import rospy
+from feeding_deployment.ros2_utils import node_handle
 import imageio
 import time
 from pynput import keyboard
@@ -61,8 +61,10 @@ def record_example(camera, command, example_type, index):
     print(f"Saved {example_type} example {index}")
 
 if __name__ == "__main__":
-    rospy.init_node('record_gesture_data', anonymous=True)
-    
+    # TODO(ros2): rospy's anonymous=True has no equivalent via
+    # node_handle.init_node's **kwargs -> rclpy.create_node; dropped.
+    node_handle.init_node('record_gesture_data')
+
     camera = RealSenseROS()
 
     command = input("What gesture do you want to create a detector for? ").strip().replace(" ", "_")

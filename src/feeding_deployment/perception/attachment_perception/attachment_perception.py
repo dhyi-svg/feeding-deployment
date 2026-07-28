@@ -12,7 +12,8 @@ import open3d as o3d
 from pybullet_helpers.geometry import Pose, Pose3D
 
 # ros imports
-import rospy
+from feeding_deployment.ros2_utils import node_handle
+from feeding_deployment.ros2_utils import rospy_compat
 from sensor_msgs.msg import CameraInfo
 from geometry_msgs.msg import Point
 from visualization_msgs.msg import MarkerArray, Marker
@@ -30,8 +31,8 @@ class AttachmentPerception(TFInterface):
 
         self.num_perception_samples = num_perception_samples
 
-        self.attachment_points_pub = rospy.Publisher("/attachment_points", Marker, queue_size=1)
-        self.attachment_center_pub = rospy.Publisher("/attachment_center", Marker, queue_size=1)
+        self.attachment_points_pub = node_handle.get_node().create_publisher(Marker, "/attachment_points", 1)
+        self.attachment_center_pub = node_handle.get_node().create_publisher(Marker, "/attachment_center", 1)
 
         # Route detection images through the per-day data logger (into the active
         # skill's folder) and cache the latest frame per name so PerceptionInterface
@@ -470,7 +471,7 @@ class AttachmentPerception(TFInterface):
 
         marker = Marker()
         marker.header.frame_id = "camera_color_optical_frame"  # IMPORTANT: match your camera TF
-        marker.header.stamp = rospy.Time.now()
+        marker.header.stamp = rospy_compat.now().to_msg()
 
         marker.ns = "attachment_points"
         marker.id = 0
@@ -488,7 +489,7 @@ class AttachmentPerception(TFInterface):
         marker.color.a = 1.0
 
         # Lifetime (0 = forever)
-        marker.lifetime = rospy.Duration(0)
+        marker.lifetime = rospy_compat.Duration(seconds=0).to_msg()
 
         # Fill points
         for x, y, z in points:
@@ -510,7 +511,7 @@ class AttachmentPerception(TFInterface):
         # --- Center marker (green sphere) ---
         corner_marker = Marker()
         corner_marker.header.frame_id = "camera_color_optical_frame"
-        corner_marker.header.stamp = rospy.Time.now()
+        corner_marker.header.stamp = rospy_compat.now().to_msg()
 
         corner_marker.ns = "attachment_corners"
         corner_marker.id = 1
@@ -526,7 +527,7 @@ class AttachmentPerception(TFInterface):
         corner_marker.color.b = 1.0
         corner_marker.color.a = 1.0
 
-        corner_marker.lifetime = rospy.Duration(0)
+        corner_marker.lifetime = rospy_compat.Duration(seconds=0).to_msg()
 
         for x, y, z in points_3d:
             p = Point()

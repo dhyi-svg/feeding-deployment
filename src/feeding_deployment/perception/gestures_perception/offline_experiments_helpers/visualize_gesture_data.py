@@ -1,6 +1,6 @@
 import sys
 import os
-import rospy
+from feeding_deployment.ros2_utils import node_handle
 import imageio
 import time
 import pickle
@@ -8,7 +8,9 @@ import argparse
 import cv2
 
 if __name__ == "__main__":
-    rospy.init_node('visualize_gesture_data', anonymous=True)
+    # TODO(ros2): rospy's anonymous=True has no equivalent via
+    # node_handle.init_node's **kwargs -> rclpy.create_node; dropped.
+    node_handle.init_node('visualize_gesture_data')
 
     parser = argparse.ArgumentParser(description='Visualize gesture data')
     parser.add_argument('--path', type=str, help='Path to the gesture datapoint')

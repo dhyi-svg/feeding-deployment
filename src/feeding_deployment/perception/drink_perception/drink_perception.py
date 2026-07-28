@@ -9,7 +9,8 @@ import math
 from scipy.spatial.transform import Rotation
 
 # ros imports
-import rospy
+from feeding_deployment.ros2_utils import node_handle
+from feeding_deployment.ros2_utils import rospy_compat as rospy
 from sensor_msgs.msg import CameraInfo
 from geometry_msgs.msg import Point, Pose
 from visualization_msgs.msg import MarkerArray, Marker
@@ -29,9 +30,9 @@ class DrinkPerception(TFInterface):
 
         self.num_perception_samples = num_perception_samples
         self.aruco_pose_queues = {0: deque(maxlen=num_perception_samples), 1: deque(maxlen=num_perception_samples)}
-        self.aruco_pose_publisher =  rospy.Publisher("/aruco_pose", Pose, queue_size=10)
-        self.aruco_pose_publisher_0 = rospy.Publisher("/aruco_pose_0", Pose, queue_size=10)
-        self.aruco_pose_publisher_1 = rospy.Publisher("/aruco_pose_1", Pose, queue_size=10)
+        self.aruco_pose_publisher = node_handle.get_node().create_publisher(Pose, "/aruco_pose", 10)
+        self.aruco_pose_publisher_0 = node_handle.get_node().create_publisher(Pose, "/aruco_pose_0", 10)
+        self.aruco_pose_publisher_1 = node_handle.get_node().create_publisher(Pose, "/aruco_pose_1", 10)
 
     def update(self, rgb_image, camera_info_msg, depth_image):
         """Process images and detect ArUco markers. Publishes results on ROS topics."""
@@ -191,6 +192,6 @@ class DrinkPerception(TFInterface):
         return scale, R.as_matrix(), t
     
 if __name__ == '__main__':
-    rospy.init_node('DrinkPerception')
+    node_handle.init_node('DrinkPerception')
     drink_perception = DrinkPerception()
     rospy.spin()

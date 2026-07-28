@@ -9,7 +9,8 @@ import cv2
 import argparse
 import message_filters
 import numpy as np
-import rospy
+from feeding_deployment.ros2_utils import node_handle
+from feeding_deployment.ros2_utils import rospy_compat as rospy
 import tf2_ros
 from cv_bridge import CvBridge, CvBridgeError
 from geometry_msgs.msg import Point, TransformStamped, WrenchStamped
@@ -28,26 +29,26 @@ class HeadPerceptionROSWrapper:
         self.head_perception = HeadPerception(record_goal_pose)
 
         # Head Pose Visualisation
-        self.voxel_publisher = rospy.Publisher(
-            "/head_perception/voxels/marker_array", MarkerArray, queue_size=10
+        self.voxel_publisher = node_handle.get_node().create_publisher(
+            MarkerArray, "/head_perception/voxels/marker_array", 10
         )
 
-        self.tool_publisher = rospy.Publisher(
-            "/head_perception/tool/marker_array", MarkerArray, queue_size=10
+        self.tool_publisher = node_handle.get_node().create_publisher(
+            MarkerArray, "/head_perception/tool/marker_array", 10
         )
 
-        self.noisy_reading_publisher = rospy.Publisher(
-            "/head_perception/unexpected", Bool, queue_size=10
+        self.noisy_reading_publisher = node_handle.get_node().create_publisher(
+            Bool, "/head_perception/unexpected", 10
         )
 
         self.tf_buffer_lock = Lock()
         self.tfBuffer = tf2_ros.Buffer()
-        self.listener = tf2_ros.TransformListener(self.tfBuffer)
-        self.broadcaster = tf2_ros.TransformBroadcaster()
+        self.listener = tf2_ros.TransformListener(self.tfBuffer, node_handle.get_node())
+        self.broadcaster = tf2_ros.TransformBroadcaster(node_handle.get_node())
 
         self.filter_noisy_readings = False
-        self.filter_noisy_readings_sub = rospy.Subscriber(
-            "/head_perception/set_filter_noisy_readings", Bool, self.setFilterNoisyReadingsCallback, queue_size=1
+        self.filter_noisy_readings_sub = node_handle.get_node().create_subscription(
+            Bool, "/head_perception/set_filter_noisy_readings", self.setFilterNoisyReadingsCallback, 1
         )
 
     def setFilterNoisyReadingsCallback(self, msg):
@@ -58,10 +59,11 @@ class HeadPerceptionROSWrapper:
         stamp = camera_info_data.header.stamp
         try:
             with self.tf_buffer_lock:
+                # ROS2 builtin_interfaces/Time uses sec/nanosec (ROS1: secs/nsecs).
                 transform = self.tfBuffer.lookup_transform(
                     "arm_base_link",
                     target_frame,
-                    rospy.Time(secs=stamp.secs, nsecs=stamp.nsecs),
+                    rospy.Time(seconds=stamp.sec, nanoseconds=stamp.nanosec),
                 )
                 return transform
         except (
@@ -126,7 +128,7 @@ class HeadPerceptionROSWrapper:
 
         t = TransformStamped()
 
-        t.header.stamp = rospy.Time.now()
+        t.header.stamp = rospy.now().to_msg()
         t.header.frame_id = source_frame
         t.child_frame_id = target_frame
 
@@ -149,8 +151,10 @@ class HeadPerceptionROSWrapper:
         markerArray = MarkerArray()
 
         tool_marker = Marker()
-        tool_marker.header.seq = 0
-        tool_marker.header.stamp = rospy.Time.now()
+        # TODO(ros2): std_msgs/Header dropped the `seq` field in ROS2 (was auto
+        # -incrementing in ROS1); no equivalent, dropped rather than crash on
+        # AttributeError.
+        tool_marker.header.stamp = rospy.now().to_msg()
         if self.head_perception.record_goal_pose:
             tool_marker.header.frame_id = "camera_color_optical_frame"
         else:
@@ -170,7 +174,7 @@ class HeadPerceptionROSWrapper:
         
         tool_marker.mesh_use_embedded_materials = True
         tool_marker.action = tool_marker.ADD  # ADD
-        tool_marker.lifetime = rospy.Duration()
+        tool_marker.lifetime = rospy.Duration().to_msg()
 
         tool_marker.color.a = 1.0
         tool_marker.color.r = 0.5
@@ -202,8 +206,9 @@ class HeadPerceptionROSWrapper:
         markerArray = MarkerArray()
 
         marker = Marker()
-        marker.header.seq = 0
-        marker.header.stamp = rospy.Time.now()
+        # TODO(ros2): std_msgs/Header dropped the `seq` field in ROS2; no
+        # equivalent, dropped rather than crash on AttributeError.
+        marker.header.stamp = rospy.now().to_msg()
         marker.header.frame_id = "arm_base_link"
         marker.ns = namespace
         marker.id = 1
@@ -211,7 +216,7 @@ class HeadPerceptionROSWrapper:
         # CUBE LIST
         marker.action = 0
         # ADD
-        marker.lifetime = rospy.Duration()
+        marker.lifetime = rospy.Duration().to_msg()
         marker.scale.x = 0.01
         marker.scale.y = 0.01
         marker.scale.z = 0.01
@@ -269,7 +274,11 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    rospy.init_node("head_perception", anonymous=True)
+    # TODO(ros2): rospy's anonymous=True (random suffix for a unique node name)
+    # has no equivalent via node_handle.init_node's **kwargs -> rclpy.create_node;
+    # dropped. If running multiple instances of this script in one process/host
+    # matters, pass an explicit unique name instead.
+    node_handle.init_node("head_perception")
 
     head_perception = HeadPerception(record_goal_pose=args.record_goal_pose)
     head_perception_ros_wrapper = HeadPerceptionROSWrapper(head_perception)

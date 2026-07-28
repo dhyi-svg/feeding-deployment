@@ -3,7 +3,8 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 try:
-    import rospy
+    from feeding_deployment.ros2_utils import node_handle
+    from feeding_deployment.ros2_utils import rospy_compat
     import tf2_ros
     from geometry_msgs.msg import Pose, PoseStamped
     from geometry_msgs.msg import Pose, TransformStamped
@@ -16,16 +17,18 @@ except ModuleNotFoundError as e:
 class TFUtils:
     def __init__(self):
         self.tfBuffer = tf2_ros.Buffer() # Using default cache time of 10 secs
-        self.listener = tf2_ros.TransformListener(self.tfBuffer)
-        self.broadcaster = tf2_ros.TransformBroadcaster()
-        self.control_rate = rospy.Rate(100)
-    
+        self.listener = tf2_ros.TransformListener(self.tfBuffer, node_handle.get_node())
+        self.broadcaster = tf2_ros.TransformBroadcaster(node_handle.get_node())
+        self.control_rate = rospy_compat.Rate(100)
+
     def getTransformationFromTF(self, source_frame, target_frame):
 
-        while not rospy.is_shutdown():
+        while not rospy_compat.is_shutdown():
             try:
                 # print(f"Looking for transform from {source_frame} to {target_frame} using tfBuffer.lookup_transform...")
-                transform = self.tfBuffer.lookup_transform(source_frame, target_frame, rospy.Time())
+                # rospy.Time() (ROS1 "latest available") -> rospy_compat.Time() (default
+                # zero time, same "latest available" semantics under tf2).
+                transform = self.tfBuffer.lookup_transform(source_frame, target_frame, rospy_compat.Time())
                 # print("Got transform!")
                 break
             except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
@@ -47,7 +50,7 @@ class TFUtils:
 
         t = TransformStamped()
 
-        t.header.stamp = rospy.Time.now()
+        t.header.stamp = rospy_compat.now().to_msg()
         t.header.frame_id = source_frame
         t.child_frame_id = target_frame
 
