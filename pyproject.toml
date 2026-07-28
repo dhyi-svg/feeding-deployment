@@ -75,9 +75,20 @@ disallow_untyped_calls = true
 warn_unreachable = true
 exclude = [
     "venv/*",
-    "src/feeding_deployment/robot_controller/*",
-    "src/feeding_deployment/head_perception/*",
-    "src/feeding_deployment/integration/perception_interface.py",
+    # NOTE (found during the ROS2 migration, fixed here as a small
+    # pre-existing-bug fix, not part of the migration itself): these three
+    # paths never matched any real file/directory in this repo (verified
+    # with `ls` -- the actual paths are one level deeper, under
+    # control/ and perception/ respectively, and perception_interface.py
+    # lives under interfaces/, not integration/). mypy's `exclude` was
+    # therefore silently excluding nothing since whenever this list was
+    # written, presumably predating a directory reorg. Corrected to the
+    # real paths below so these hardware-coupled files are actually
+    # skipped, matching the documented intent in CLAUDE.md ("mypy excludes
+    # ... hardware-coupled, not meaningfully type-checkable").
+    "src/feeding_deployment/control/robot_controller/*",
+    "src/feeding_deployment/perception/head_perception/*",
+    "src/feeding_deployment/interfaces/perception_interface.py",
 ]
 
 [[tool.mypy.overrides]]
@@ -85,5 +96,23 @@ module = [
     "pybullet.*",
     "pyaudio.*",
     "scipy.*",
+    # Added for the ROS2 (rclpy/Jazzy) migration: none of these ship
+    # inline type stubs as of this writing, so mypy can't resolve them
+    # without these overrides (mirrors the pattern already used above for
+    # pybullet/pyaudio/scipy).
+    "rclpy.*",
+    "rcl_interfaces.*",
+    "launch.*",
+    "launch_ros.*",
+    "ament_index_python.*",
+    "tf2_ros.*",
+    "tf2_geometry_msgs.*",
+    "cv_bridge.*",
+    "message_filters.*",
+    "rosbridge_library.*",
+    # Generated at colcon-build time by rosidl; not resolvable by mypy
+    # without a real ROS2 workspace build (see ROS2_MIGRATION_NOTES.md
+    # section 3 for the colcon build status of this repo).
+    "feeding_deployment_msgs.*",
 ]
 ignore_missing_imports = true
