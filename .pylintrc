@@ -294,7 +294,15 @@ ignored-classes=optparse.Values,thread._local,_thread._local,argparse.Namespace
 # (useful for modules/projects where namespaces are manipulated during runtime
 # and thus existing member attributes cannot be deduced by static analysis. It
 # supports qualified module names, as well as Unix pattern matching.
-ignored-modules=mit_semseg,semseg
+# Added for the ROS2 migration: these are installed via apt/ROS's package
+# index (/opt/ros/jazzy), not pip, so pylint's static import resolution
+# can't see them in this repo's normal pip-installed environment even
+# though they're legitimately available at runtime under a sourced ROS2
+# setup.bash (mirrors the pre-existing mit_semseg/semseg pattern here for
+# the same reason). feeding_deployment_msgs is additionally generated at
+# colcon-build time by rosidl, so it never exists as a static package for
+# pylint to inspect at all outside a real ROS2 workspace build.
+ignored-modules=mit_semseg,semseg,rclpy,rclpy.action,rclpy.qos,rclpy.time,rclpy.duration,launch,launch_ros,ament_index_python,tf2_ros,tf2_geometry_msgs,cv_bridge,message_filters,rosbridge_library,feeding_deployment_msgs
 
 # Show a hint with possible names when a member name was not found. The aspect
 # of finding the hint is based on edit distance.
