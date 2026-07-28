@@ -214,14 +214,112 @@ instructed never to execute/import-run any file (syntax-only validation via
 `ast.parse`), and the safety/ batch was given extra emphasis on faithful, no-guess
 porting given its role as the e-stop/liveness layer.
 
-<!-- FILLED IN BELOW ONCE EACH BATCH REPORTS BACK. Do not merge this document with this
-     placeholder still present. -->
+**Final tally: all 53 files migrated, all committed, zero remaining `import rospy`
+anywhere under `src/`** (verified with a repo-wide grep after all 7 batches landed). An
+independent final `ast.parse` sweep over every Python file changed across the whole
+migration (71 files total, including `ros2_utils/` and the 53 rospy files) found zero
+syntax errors.
+
+One additional file outside the 52-file scope was noticed: `tests/test_preference_integration.py`
+mentions `rospy` only in a comment (listing heavy optional deps the test intentionally
+skips outside the robot extras) -- not real usage, nothing to migrate, confirmed by
+reading it.
 
 ### 4a. actions/ batch
-*(pending)*
+6 files: `feel_the_bite/base.py`, `feel_the_bite/inside_mouth_transfer.py`,
+`feel_the_bite/outside_mouth_transfer.py`, `flair/food_manipulation_skill_library.py`,
+`navigate.py` (1880 -> ~1930 lines), `transfer_tool.py`.
+
+`navigate.py` is the significant file here. It uses `actionlib.SimpleActionClient`
+throughout a ~250-line watchdog/recovery loop (`_await_nav_result`, `_drive_to_pose`,
+`_await_goal_active`) built entirely around actionlib's *blocking* `send_goal()`/
+`wait_for_result()`/`get_state()`/`cancel_goal()` API. rclpy's `rclpy.action.ActionClient`
+is natively async/goal-handle-based -- there's no mechanical 1:1 translation. Rather than
+either (a) blindly renaming methods that don't exist on the new type, producing code that
+fails at import/attribute-access time, or (b) silently rewriting the whole control-flow
+to be async (a real behavior change to safety-relevant navigation code, guessed at
+without review), the batch wrote a new `_BlockingActionClient` shim class: a
+synchronous-shaped wrapper around `rclpy.action.ActionClient` that spins the shared node
+under the hood to fake the old blocking calls, preserving the existing loop's structure.
+This is explicitly flagged as a best-effort structural port, not a verified-equivalent
+one -- see its class docstring (TODO block) for the itemized semantic gaps: goal
+rejection now raises where actionlib never did; `get_goal_status_text()` has no ROS2
+equivalent and always returns `""` (making one existing fallback branch,
+`"human teleoperation" in get_goal_status_text()`, permanently dead code -- the primary
+signal `_done_pressed_this_leg` is unaffected, but this is a silent capability loss worth
+a reviewer's attention); `GoalStatus.ACTIVE`/`SUCCEEDED` -> `STATUS_EXECUTING`/
+`STATUS_SUCCEEDED` mappings are unverified against real ROS2 status codes (may also need
+`STATUS_ACCEPTED`).
+
+**The single biggest architectural gap found in this entire migration** is also in this
+file: `rospy.get_param("move_base/TebLocalPlannerROS/yaw_goal_tolerance")` relied on
+ROS1's global parameter server letting any node read *any other node's* parameters.
+ROS2 has no global parameter server at all -- parameters are strictly per-node, reachable
+only via that node's own parameter *service* (a real RPC call to a specific node, not a
+free read). This has no mechanical translation. Implemented as a local
+`declare_parameter`/`get_parameter` with a fail-loud `RuntimeError` if unset, clearly
+flagged as needing a real fix (a parameter-service client against the actual future Nav2
+node) once the ROS2 nav stack (see section 5's `navigation.launch.py` TODO) is finalized
+-- this is a downstream consequence of the still-unfinished Nav2 migration, not something
+resolvable in isolation here.
+
+Two dead-code cleanups made in passing (unused rospy imports, not functional changes):
+`inside_mouth_transfer.py`/`outside_mouth_transfer.py`'s `import rospy` was never
+referenced; `food_manipulation_skill_library.py`'s entire `try/except` rospy+tf2_ros+
+message-type import block was unused anywhere in the file (removed with an explanatory
+comment rather than migrated, since migrating dead code just moves the deadness around).
+
+All 6 files verified via `ast.parse` (both by the migrating agent and independently
+re-verified before commit). Committed as `9770a9ed`.
 
 ### 4b. control/ batch
-*(pending)*
+15 files (the task briefing undercounted this as "14" but listed 15 paths; all 15 were
+migrated): `base_controller/{cmd_vel_bridge_basicmicro,shared_autonomy_manager,
+shared_autonomy_teleop,wheel_odom_publisher}.py`, `robot_controller/{arm_client,
+joint_states_publisher,kinova}.py`, `robot_controller/preset_actions/{acquisition,
+close_gripper,home,open_gripper,retract,transfer}.py`,
+`wrist_controller/{horizontal_spoon,wrist_controller}.py`.
+
+  - **`kinova.py` (1425 lines) was deliberately left completely untouched** -- confirmed
+    by grep that every `rospy` reference in the file is already inside a comment (a
+    commented-out e-stop subscriber/callback); there is no active rospy usage anywhere in
+    it. Given this file zeroes arm torque offsets and is used before inside-mouth
+    transfer (per CLAUDE.md), "there is nothing to convert" is the correct and safest
+    finding here, not an oversight.
+  - **`shared_autonomy_manager.py`** gets the same treatment as `navigate.py`'s action
+    client (section 4a): `SimpleActionServer`/`SimpleActionClient` calls (`send_goal`,
+    `cancel_goal`, `get_state`, `get_result`, `is_preempt_requested`, `set_succeeded`,
+    `set_aborted`, `set_preempted`) are left **structurally in place** (same method
+    names, same call sites) with a TODO at each, rather than guessed-at rewrites, since
+    none of those methods exist on rclpy's async goal-handle-based `ActionClient`/
+    `ActionServer`. Also flags (not fixed): `actionlib_msgs.GoalStatus` constants used in
+    `_TERMINAL_FAILURE` don't exist in ROS2's `action_msgs/GoalStatus` (different
+    `STATUS_*` names/values), and `move_base_msgs` (ROS1-only, no ROS2 port available) is
+    imported as-is. **This file cannot function correctly against ROS2 until a human
+    makes a real Nav2-action design decision** -- directly downstream of
+    `navigation.launch.py`'s TODO from the launch-file conversion (section 5); tracked
+    here so the connection between the two is explicit.
+  - **Widespread pattern**: `rospy.get_param("~name", ...)` (ROS1's private/relative
+    parameter names, resolved via each node's own private namespace) has no rclpy
+    equivalent -- ROS2 parameter names are flat per-node with no `~` resolution concept.
+    Flagged with a TODO at every call site across `cmd_vel_bridge_basicmicro.py`,
+    `shared_autonomy_manager.py`, `shared_autonomy_teleop.py`, `wheel_odom_publisher.py`
+    rather than silently stripping the `~` and hoping the flat name doesn't collide with
+    anything.
+  - `wrist_controller/{horizontal_spoon,wrist_controller}.py`: `ServiceProxy` calls
+    against `wrist_driver_interfaces/SetWristMode.srv` needed a guessed request field
+    name (`request.mode = ...`) -- that package doesn't exist anywhere in this
+    repo/workspace to check the real generated field name against. Flagged explicitly as
+    a best-guess placeholder, same category of gap as `watchdog.py`'s `String_cmd.srv`
+    guess in the safety/ batch (section 4f).
+  - rclpy `Duration` lacking a `.to_sec()` method (unlike rospy's `Duration`) surfaced
+    repeatedly (`cmd_vel_bridge_basicmicro.py`, `wheel_odom_publisher.py`) -- converted to
+    `.nanoseconds / 1e9` with a TODO at each site rather than assuming `.to_sec()` exists
+    on this rclpy version.
+
+All 15 files verified via `ast.parse` (both by the migrating agent and independently
+re-verified before commit); 14 have real diffs, `kinova.py` has none. Committed as
+`ec20342f`.
 
 ### 4c. integration/ batch
 6 files: `data_logger.py`, `researcher_timer.py`, `run.py` (the executive, 1607 lines
@@ -561,6 +659,19 @@ was changed.
     scope.
   - Verifying `zed_wrapper` (ROS2 ZED driver) is actually installed/has the assumed
     launch API anywhere.
+  - **`README.md` was NOT updated** -- it is entirely ROS1 procedure documentation
+    (`roslaunch feeding_deployment sensors.launch`, `source devel/setup.bash`,
+    `catkin build`, etc.), and per CLAUDE.md's own instruction that file is
+    "deployment-procedure documentation ... not something to re-derive here." Rewriting
+    it for ROS2 (`ros2 launch feeding_deployment sensors.launch.py`, `source
+    install/setup.bash`, `colcon build`) is a real, separate documentation task, not
+    attempted. **Also worth flagging independent of the migration**: several
+    `roslaunch` invocations in `README.md` already reference launch file names that
+    don't exist in this repo's `launch/` directory at all (e.g. `vention_description.launch`,
+    `vention_rplidar_a1.launch`, `vention_odm_d435.launch`, `vention_cartographer_lidar.launch`
+    -- the real files are `description.launch`(`.py`), `rplidar_a1.launch`(`.py`), no
+    `odm_d435`/`cartographer_lidar` equivalent found at all) -- this doc was already stale
+    against ROS1 reality before this migration touched anything.
   - `scripts/*.py` (18 additional files there also `grep`-match `rospy`, e.g.
     `scan_gate.py`, `drift_lock.py`, `zed_pose_to_odom_feedback.py`, referenced by several
     converted launch files as `feeding_deployment` executables) -- **out of scope**: the
