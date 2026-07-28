@@ -9,7 +9,8 @@ from pybullet_helpers.joint import JointPositions
 from scipy.spatial.transform import Rotation as R
 
 try:
-    import rospy
+    from feeding_deployment.ros2_utils import node_handle
+    from feeding_deployment.ros2_utils import rospy_compat as rospy
     from sensor_msgs.msg import JointState
     from std_msgs.msg import String
     from visualization_msgs.msg import MarkerArray, Marker
@@ -33,17 +34,19 @@ class RVizInterface:
 
         self._scene_description = scene_description
 
+        self._node = node_handle.get_node()
+
         # Create publishers for rviz simulation.
-        self.sim_joint_publishers = rospy.Publisher("/sim/robot_joint_states", JointState, queue_size=10)
-        self.marker_pub = rospy.Publisher("/visualization_marker", Marker, queue_size=100)
-        self.utensil_visualization_pub = rospy.Publisher('utensil_visualization_marker_array', MarkerArray, queue_size=10)
-        self.food_visualization_pub = rospy.Publisher('food_visualization_marker_array', MarkerArray, queue_size=10)
-        
+        self.sim_joint_publishers = self._node.create_publisher(JointState, "/sim/robot_joint_states", 10)
+        self.marker_pub = self._node.create_publisher(Marker, "/visualization_marker", 100)
+        self.utensil_visualization_pub = self._node.create_publisher(MarkerArray, 'utensil_visualization_marker_array', 10)
+        self.food_visualization_pub = self._node.create_publisher(MarkerArray, 'food_visualization_marker_array', 10)
+
         # Create a static transform broadcaster for rviz simulation.
-        self.static_transform_broadcaster = tf2_ros.StaticTransformBroadcaster()
+        self.static_transform_broadcaster = tf2_ros.StaticTransformBroadcaster(self._node)
 
         # Create a broadcaster for tf2 transforms.
-        self.broadcaster = tf2_ros.TransformBroadcaster()
+        self.broadcaster = tf2_ros.TransformBroadcaster(self._node)
 
         # Wait for RViz to subscribe to the topic.
         rospy.sleep(1)
@@ -110,7 +113,7 @@ class RVizInterface:
     def publish_static_transform(self, parent_frame: str, child_frame: str, pose: Pose) -> None:
 
         static_transform_stamped = TransformStamped()
-        static_transform_stamped.header.stamp = rospy.Time.now()
+        static_transform_stamped.header.stamp = rospy.now().to_msg()
         static_transform_stamped.header.frame_id = parent_frame
         static_transform_stamped.child_frame_id = child_frame
 
@@ -155,7 +158,7 @@ class RVizInterface:
                 tip = origin + axis_length * axis_dir
 
                 marker = Marker()
-                marker.header.stamp = rospy.Time.now()
+                marker.header.stamp = rospy.now().to_msg()
                 marker.header.frame_id = frame_id
                 marker.ns = ns
                 marker.id = 3 * i + axis_idx
@@ -163,7 +166,7 @@ class RVizInterface:
                 marker.action = Marker.ADD
 
                 # Keep markers persistent until replaced/deleted.
-                marker.lifetime = rospy.Duration(0)
+                marker.lifetime = rospy.Duration(seconds=0).to_msg()
 
                 # Arrow defined by start/end points.
                 start = PoseMsg().position
@@ -196,7 +199,7 @@ class RVizInterface:
         marker.ns = "cube"
         marker.id = marker_id
         marker.type = Marker.CUBE
-        marker.header.stamp = rospy.Time.now()
+        marker.header.stamp = rospy.now().to_msg()
         marker.header.frame_id = "sim/arm_base_link"
         marker.action = marker.ADD
 
@@ -231,7 +234,7 @@ class RVizInterface:
         marker.type = Marker.MESH_RESOURCE
         marker.mesh_resource = mesh_path
         marker.mesh_use_embedded_materials = True
-        marker.header.stamp = rospy.Time.now()
+        marker.header.stamp = rospy.now().to_msg()
         marker.header.frame_id = "sim/arm_base_link"
         marker.action = marker.ADD
 
@@ -253,7 +256,7 @@ class RVizInterface:
 
         t = TransformStamped()
 
-        t.header.stamp = rospy.Time.now()
+        t.header.stamp = rospy.now().to_msg()
         t.header.frame_id = source_frame
         t.child_frame_id = target_frame
 
@@ -299,7 +302,7 @@ class RVizInterface:
         marker_array = MarkerArray()
         marker = Marker()
         marker.id = 0
-        marker.header.stamp = rospy.Time.now()
+        marker.header.stamp = rospy.now().to_msg()
         marker.header.frame_id = "arm_base_link"
         marker.type = marker.MESH_RESOURCE
         marker.action = marker.ADD
@@ -327,7 +330,7 @@ class RVizInterface:
         marker_array = MarkerArray()
         marker = Marker()
         marker.id = id
-        marker.header.stamp = rospy.Time.now()
+        marker.header.stamp = rospy.now().to_msg()
         marker.header.frame_id = "arm_base_link"
         marker.type = marker.CUBE
         marker.action = marker.ADD

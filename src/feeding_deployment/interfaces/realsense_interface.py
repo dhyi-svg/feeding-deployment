@@ -9,7 +9,8 @@ import cv2
 import argparse
 import message_filters
 import numpy as np
-import rospy
+from feeding_deployment.ros2_utils import node_handle
+from feeding_deployment.ros2_utils import rospy_compat as rospy
 import tf2_ros
 from cv_bridge import CvBridge, CvBridgeError
 from geometry_msgs.msg import Point, TransformStamped, WrenchStamped
@@ -31,30 +32,33 @@ class RealSenseInterface:
 
         self.bridge = CvBridge()
 
+        self._node = node_handle.get_node()
+
         self.tf_buffer_lock = Lock()
         self.tfBuffer = tf2_ros.Buffer()  # Using default cache time of 10 secs
-        self.listener = tf2_ros.TransformListener(self.tfBuffer)
+        self.listener = tf2_ros.TransformListener(self.tfBuffer, self._node)
 
-        self.broadcaster = tf2_ros.TransformBroadcaster()
+        self.broadcaster = tf2_ros.TransformBroadcaster(self._node)
 
         queue_size = 1000
+        # TODO(ros2): buff_size dropped, no rclpy equivalent
         self.color_image_sub = message_filters.Subscriber(
-            "/camera/color/image_raw",
+            self._node,
             Image,
-            queue_size=queue_size,
-            buff_size=65536 * queue_size,
+            "/camera/color/image_raw",
+            qos_profile=queue_size,
         )
         self.camera_info_sub = message_filters.Subscriber(
-            "/camera/color/camera_info",
+            self._node,
             CameraInfo,
-            queue_size=queue_size,
-            buff_size=65536 * queue_size,
+            "/camera/color/camera_info",
+            qos_profile=queue_size,
         )
         self.depth_image_sub = message_filters.Subscriber(
-            "/camera/aligned_depth_to_color/image_raw",
+            self._node,
             Image,
-            queue_size=queue_size,
-            buff_size=65536 * queue_size,
+            "/camera/aligned_depth_to_color/image_raw",
+            qos_profile=queue_size,
         )
         ts_top = message_filters.TimeSynchronizer(
             [self.color_image_sub, self.camera_info_sub, self.depth_image_sub],
@@ -102,7 +106,10 @@ class RealSenseInterface:
                 transform = self.tfBuffer.lookup_transform(
                     "base_link",
                     target_frame,
-                    rospy.Time(secs=stamp.secs, nsecs=stamp.nsecs),
+                    # ROS2 builtin_interfaces/Time fields are `sec`/`nanosec`
+                    # (renamed from ROS1's `secs`/`nsecs`); rclpy Time takes
+                    # `seconds`/`nanoseconds`.
+                    rospy.Time(seconds=stamp.sec, nanoseconds=stamp.nanosec),
                 )
                 T = np.zeros((4,4))
                 T[:3,:3] = Rotation.from_quat([transform.transform.rotation.x, transform.transform.rotation.y, transform.transform.rotation.z, transform.transform.rotation.w]).as_matrix()

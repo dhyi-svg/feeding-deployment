@@ -16,10 +16,12 @@ import queue
 from pathlib import Path
 
 try:
-    import rospy
+    from feeding_deployment.ros2_utils import node_handle
+    from feeding_deployment.ros2_utils import rospy_compat as rospy
     from sensor_msgs.msg import CompressedImage
     from std_msgs.msg import String, Empty
     from cv_bridge import CvBridge
+    from rclpy.qos import QoSProfile, DurabilityPolicy
 
 except ModuleNotFoundError:
     pass
@@ -71,32 +73,38 @@ class WebInterface:
         # Queue containing all messages from the web interface.
         self.received_web_interface_messages = queue.Queue()
         
+        self._node = node_handle.get_node()
+
+        # QoS for topics that used ROS1 `latch=True`: TRANSIENT_LOCAL durability
+        # delivers the last published message to late-joining subscribers.
+        _latched_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+
         # Create a publisher for communication with the web interface.
-        self.web_interface_publisher = rospy.Publisher("/robot_to_webapp", String, queue_size=10)
+        self.web_interface_publisher = self._node.create_publisher(String, "/robot_to_webapp", 10)
         # Latched so a page that subscribes mid-skill (e.g. the teleop screens,
         # which only mount after takeover) immediately receives the current plan.
-        self.skill_plan_publisher = rospy.Publisher("/skill_plan", String, queue_size=1, latch=True)
-        self.web_interface_image_publisher = rospy.Publisher("/camera/image/compressed", CompressedImage, queue_size=10)
+        self.skill_plan_publisher = self._node.create_publisher(String, "/skill_plan", _latched_qos)
+        self.web_interface_image_publisher = self._node.create_publisher(CompressedImage, "/camera/image/compressed", 10)
         self.image_bridge = CvBridge()
         self.user_preference = None
-        self.web_interface_sub = rospy.Subscriber("/webapp_to_robot", String, self._message_callback, queue_size=100)
-        self.base_takeover_sub = rospy.Subscriber(
+        self.web_interface_sub = self._node.create_subscription(String, "/webapp_to_robot", self._message_callback, 100)
+        self.base_takeover_sub = self._node.create_subscription(
+            Empty,
             "/shared_autonomy/takeover",
-            Empty,
             self._on_base_takeover,
-            queue_size=1,
+            1,
         )
-        self.base_done_sub = rospy.Subscriber(
+        self.base_done_sub = self._node.create_subscription(
+            Empty,
             "/shared_autonomy/done",
-            Empty,
             self._on_base_done,
-            queue_size=1,
+            1,
         )
-        self.base_resume_sub = rospy.Subscriber(
-            "/shared_autonomy/resume",
+        self.base_resume_sub = self._node.create_subscription(
             Empty,
+            "/shared_autonomy/resume",
             self._on_base_resume,
-            queue_size=1,
+            1,
         )
 
         # --- Settings overlay (view/edit already-set preferences) ---
@@ -104,11 +112,11 @@ class WebInterface:
         # /webapp_to_robot queue or the takeover/confirmation path. The robot->app
         # topic is latched so an overlay opening mid-meal immediately gets the current
         # prefs without a round-trip race.
-        self.settings_publisher = rospy.Publisher(
-            "/robot_settings_to_webapp", String, queue_size=1, latch=True
+        self.settings_publisher = self._node.create_publisher(
+            String, "/robot_settings_to_webapp", _latched_qos
         )
-        self.settings_sub = rospy.Subscriber(
-            "/webapp_settings_to_robot", String, self._settings_callback, queue_size=20
+        self.settings_sub = self._node.create_subscription(
+            String, "/webapp_settings_to_robot", self._settings_callback, 20
         )
         # Accessors into the live PreferenceSession, registered by run.py while a meal
         # session exists; None between meals (the overlay then shows the empty state).

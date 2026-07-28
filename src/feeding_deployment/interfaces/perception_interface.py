@@ -26,7 +26,9 @@ LED_BAUD_RATE = 115200
 ATTACHMENT_CROP_FRAC = 0.65
 
 try:
-    import rospy
+    import rclpy
+    from feeding_deployment.ros2_utils import node_handle
+    from feeding_deployment.ros2_utils import rospy_compat as rospy
     from sensor_msgs.msg import JointState
     from std_msgs.msg import String, Bool
     import tf2_ros
@@ -68,8 +70,9 @@ class PerceptionInterface:
             self._grounded_sam = None
         else:
             self.simulation = False
+            self._node = node_handle.get_node()
             self.tfBuffer = tf2_ros.Buffer()
-            self.listener = tf2_ros.TransformListener(self.tfBuffer)
+            self.listener = tf2_ros.TransformListener(self.tfBuffer, self._node)
 
             print("Initializing RealSense interface ...")
             self._realsense = RealSenseInterface(record_goal_pose=record_goal_pose)
@@ -93,13 +96,13 @@ class PerceptionInterface:
 
             self._head_perception_warm_started = False
 
-            self.speak_pub = rospy.Publisher('/speak', String, queue_size=1)
+            self.speak_pub = self._node.create_publisher(String, '/speak', 1)
 
             self.transfer_button = False
-            self.transfer_button_sub = rospy.Subscriber('/transfer_button', Bool, self.transfer_button_callback)
-            
+            self.transfer_button_sub = self._node.create_subscription(Bool, '/transfer_button', self.transfer_button_callback, 10)
+
             self.ft_threshold_exceeded = False
-            self.ft_sensor_sub = rospy.Subscriber('/forque/forqueSensor', WrenchStamped, self.ft_callback)
+            self.ft_sensor_sub = self._node.create_subscription(WrenchStamped, '/forque/forqueSensor', self.ft_callback, 10)
 
         self.head_perception_data_lock = threading.Lock()
         # this term is updated in the run_head_perception method and read in the get_tool_tip_pose method
@@ -126,8 +129,16 @@ class PerceptionInterface:
         # return # not using FT for now
         if self.simulation:
             return
-        bias = rospy.ServiceProxy('/forque/bias_cmd', String_cmd)
-        bias('bias')
+        client = self._node.create_client(String_cmd, '/forque/bias_cmd')
+        request = String_cmd.Request()
+        # TODO(ros2): verify request field name -- ROS1 rospy allowed
+        # positional-arg construction (`String_cmd('bias')`); the ROS2 .srv
+        # field name for netft_rdt_driver/String_cmd's request is unverified
+        # here (package not installed on this box).
+        request.cmd = 'bias'
+        future = client.call_async(request)
+        rclpy.spin_until_future_complete(self._node, future)
+        result = future.result()  # TODO(ros2): verify async call semantics at this call site
         
     def speak(self, text):
         print("Speaking: ", text)
