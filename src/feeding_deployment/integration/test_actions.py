@@ -6,7 +6,7 @@ import queue
 import time
 
 try:
-    import rospy
+    from feeding_deployment.ros2_utils import node_handle
 
     ROSPY_IMPORTED = True
 except ModuleNotFoundError:
@@ -153,7 +153,7 @@ def _main(
     """Testing pick and stow tool actions."""
 
     if ROSPY_IMPORTED:
-        rospy.init_node("test_actions")
+        node_handle.init_node("test_actions")
     else:
         assert not run_on_robot, "Need ROS to run on robot"
 

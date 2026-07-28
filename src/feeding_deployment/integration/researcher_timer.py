@@ -138,15 +138,24 @@ def _append_record(day_dir: Path, record: dict) -> None:
 def _mirror_to_ros(record: dict) -> None:
     """Best-effort publish onto /deployment/annotations for the meal rosbags.
 
-    Uses a one-shot ``rostopic pub`` in a daemon thread instead of an in-process
-    rospy node: a subprocess cannot take the Flask server down with it, needs no
-    node-lifecycle management across roscore restarts, and simply fails quietly
-    when ROS is down (the JSONL file is the source of truth regardless).
+    Uses a one-shot ``ros2 topic pub`` in a daemon thread instead of an
+    in-process rclpy node: a subprocess cannot take the Flask server down with
+    it, needs no node-lifecycle management across roscore/daemon restarts, and
+    simply fails quietly when ROS is down (the JSONL file is the source of
+    truth regardless).
     """
     def _publish() -> None:
         try:
+            # TODO(ros2): ros2 topic pub parses its message argument as YAML,
+            # not JSON -- json.dumps({"data": ...}) happens to be valid YAML
+            # flow-mapping syntax for simple cases (JSON is a YAML subset),
+            # but this has not been verified against a real ros2 daemon on
+            # this codebase; watch for quoting/escaping issues if the
+            # annotation payload ever contains characters YAML treats
+            # specially. --once replaces rostopic pub's `-1` one-shot flag.
             subprocess.run(
-                ["rostopic", "pub", "-1", ANNOTATIONS_TOPIC, "std_msgs/String",
+                ["ros2", "topic", "pub", "--once", ANNOTATIONS_TOPIC,
+                 "std_msgs/msg/String",
                  json.dumps({"data": json.dumps(record, default=str)})],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 timeout=20, check=False)

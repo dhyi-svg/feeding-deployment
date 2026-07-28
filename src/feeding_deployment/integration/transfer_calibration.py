@@ -8,7 +8,8 @@ import shutil
 import queue
 
 try:
-    import rospy
+    from feeding_deployment.ros2_utils import node_handle
+    from feeding_deployment.ros2_utils import rospy_compat as rospy
     from std_msgs.msg import Bool
 
     ROSPY_IMPORTED = True
@@ -45,8 +46,9 @@ def _main(
     """Testing components of the system."""
 
     if ROSPY_IMPORTED:
-        rospy.init_node("transfer_calibration")
-        disable_collision_sensor_pub = rospy.Publisher("/disable_collision_sensor", Bool, queue_size=1)
+        node_handle.init_node("transfer_calibration")
+        disable_collision_sensor_pub = node_handle.get_node().create_publisher(
+            Bool, "/disable_collision_sensor", 1)
     else:
         raise RuntimeError("ROS not imported. Please run this script in a ROS environment and with the real robot.")
 

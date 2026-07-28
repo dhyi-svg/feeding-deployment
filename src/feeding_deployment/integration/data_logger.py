@@ -52,7 +52,7 @@ except ModuleNotFoundError:
     _NUMPY_IMPORTED = False
 
 try:
-    import rospy
+    from feeding_deployment.ros2_utils import node_handle
     from std_msgs.msg import String as _RosString
 
     _ROSPY_IMPORTED = True
@@ -105,13 +105,13 @@ class DataLogger:
         self._ann_attempts = 0
         if _ROSPY_IMPORTED:
             try:
-                self._ann_pub = rospy.Publisher(
-                    "/deployment/annotations", _RosString, queue_size=50)
+                self._ann_pub = node_handle.get_node().create_publisher(
+                    _RosString, "/deployment/annotations", 50)
                 # A message published immediately after Publisher() is dropped
                 # before subscribers connect; give an already-running recorder
                 # up to 2 s to attach so the meal_start annotation lands.
                 deadline = time.time() + 2.0
-                while (self._ann_pub.get_num_connections() == 0
+                while (self._ann_pub.get_subscription_count() == 0
                        and time.time() < deadline):
                     time.sleep(0.05)
             except Exception:  # noqa: BLE001 - e.g. node not initialized (tests)
@@ -168,8 +168,8 @@ class DataLogger:
                     return
                 self._ann_attempts += 1
                 try:
-                    self._ann_pub = rospy.Publisher(
-                        "/deployment/annotations", _RosString, queue_size=50)
+                    self._ann_pub = node_handle.get_node().create_publisher(
+                        _RosString, "/deployment/annotations", 50)
                 except Exception:  # noqa: BLE001
                     return
             record = {**self._timestamp(), "category": category, **fields}

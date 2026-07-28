@@ -21,7 +21,8 @@ from dataclasses import dataclass
 from PIL import Image
 
 try:
-    import rospy
+    from feeding_deployment.ros2_utils import node_handle
+    from feeding_deployment.ros2_utils import rospy_compat
     from std_msgs.msg import String
 
     ROSPY_IMPORTED = True
@@ -1513,7 +1514,17 @@ if __name__ == "__main__":
         if not ROSPY_IMPORTED:
             raise ModuleNotFoundError("Need ROS to run on robot or use interface")
         else:
-            rospy.init_node("feeding_deployment", anonymous=True)
+            # This is the process's real entry point, so this is the canonical
+            # place the shared node gets its name for the whole run.py process
+            # -- everything else (HLAs, interfaces, controllers) just calls
+            # node_handle.get_node()/rospy_compat.X and picks up this node.
+            # TODO(ros2): rospy's anonymous=True (unique auto-suffixed node
+            # name, e.g. so two run.py processes / a run.py + a standalone
+            # test harness never collide) has no node_handle.init_node/
+            # rclpy.create_node equivalent kwarg -- if concurrent processes
+            # ever need distinct node names, pass an explicit unique name
+            # here instead.
+            node_handle.init_node("feeding_deployment")
 
     physical_profile_label: str | None = None
     if args.pref_mode in ("terminal", "interface"):
@@ -1600,4 +1611,4 @@ if __name__ == "__main__":
         runner.make_video(output_path)
 
     if args.run_on_robot:
-        rospy.spin()
+        rospy_compat.spin()

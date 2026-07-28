@@ -154,20 +154,24 @@ def test_navigate_action(
     assume_from: str | None = None,
 ) -> None:
     """Instantiate NavigateHLA and navigate to a named location."""
-    rospy_mod = None
+    node_handle_mod = None
     if run_on_robot or use_interface:
         # Mirror run.py: the node must exist BEFORE ArmInterfaceClient, whose
-        # constructor blocks on rospy.wait_for_message("/watchdog_status", ...)
-        # -- without an initialized node that wait never connects and hangs.
-        # disable_signals=True (unlike run.py, which lives in rospy.spin())
-        # keeps Ctrl+C raising a normal KeyboardInterrupt in this script.
-        import rospy
+        # constructor blocks on a wait-for-message on "/watchdog_status" --
+        # without an initialized node that wait never connects and hangs.
+        from feeding_deployment.ros2_utils import node_handle
 
-        rospy_mod = rospy
-        if not rospy.core.is_initialized():
-            rospy.init_node(
-                "test_navigate_action", anonymous=True, disable_signals=True
-            )
+        node_handle_mod = node_handle
+        if not node_handle.has_node():
+            # TODO(ros2): rospy's anonymous=True (unique auto-suffixed node
+            # name, so multiple harness instances never collide) and
+            # disable_signals=True (keep Ctrl+C as a plain KeyboardInterrupt
+            # instead of rospy's own SIGINT handler, since this script relies
+            # on catching KeyboardInterrupt itself below) have no equivalent
+            # kwarg on node_handle.init_node/rclpy.create_node. Node-name
+            # collisions across concurrent harness runs and Ctrl+C behavior
+            # under rclpy are unverified here.
+            node_handle.init_node("test_navigate_action")
 
     if run_on_robot:
         robot_interface = ArmInterfaceClient()  # type: ignore  # pylint: disable=no-member
@@ -204,7 +208,7 @@ def test_navigate_action(
         # nav failures get the same recovery teleop as a real meal. Requires
         # the rosbridge/webapp stack to be up with a client connected (the
         # feeding tmux scripts), otherwise the page handshakes block forever.
-        # The rospy node was already initialized above (before
+        # The shared node was already initialized above (before
         # ArmInterfaceClient); imports stay local so sim-only runs never need
         # ROS.
         import queue
@@ -294,17 +298,18 @@ def test_navigate_action(
                 navigate_hla, location, nominal_pose, commanded_pose, position_offset
             )
     finally:
-        # Unlike run.py (which parks in rospy.spin() and lives until its tmux
-        # pane is killed), this script must return to the shell: stop the
-        # WebInterface's non-daemon worker threads and shut rospy down, or the
-        # interpreter never exits after main() returns.
+        # Unlike run.py (which parks in rospy_compat.spin() and lives until
+        # its tmux pane is killed), this script must return to the shell:
+        # stop the WebInterface's non-daemon worker threads and shut the
+        # shared node down, or the interpreter never exits after main()
+        # returns.
         if web_interface is not None:
             try:
                 web_interface.stop_all_threads()
             except Exception as e:
                 print(f"Could not stop web-interface threads cleanly: {e}")
-        if rospy_mod is not None:
-            rospy_mod.signal_shutdown("test_navigate_action complete")
+        if node_handle_mod is not None:
+            node_handle_mod.shutdown()
     print("test_navigate_action done.")
 
 
