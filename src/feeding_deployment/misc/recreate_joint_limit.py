@@ -31,7 +31,8 @@ import sys
 import time
 
 import numpy as np
-import rospy
+
+from feeding_deployment.ros2_utils import node_handle
 
 from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceClient
 from feeding_deployment.control.robot_controller.command_interface import (
@@ -125,7 +126,9 @@ def main():
     from_stuck = "--from-stuck" in sys.argv[1:]
     reset_before_arc = "--reset-before-arc" in sys.argv[1:]
 
-    rospy.init_node("recreate_joint_limit", anonymous=True)
+    # TODO(ros2): anonymous=True dropped -- no rclpy equivalent under the singleton-node
+    # model this migration uses (only one node exists per process regardless).
+    node_handle.init_node("recreate_joint_limit")
     client = ArmInterfaceClient()
 
     print_state(client, "Current")

@@ -9,7 +9,8 @@ import math
 from scipy.spatial.transform import Rotation
 
 # ros imports
-import rospy
+from feeding_deployment.ros2_utils import node_handle
+from feeding_deployment.ros2_utils import rospy_compat
 import message_filters
 from sensor_msgs.msg import Image, CameraInfo
 from cv_bridge import CvBridge, CvBridgeError
@@ -30,15 +31,16 @@ from geometry_msgs.msg import Pose as pose_msg
 class TFInterface:
     def __init__(self):
         self.tfBuffer = tf2_ros.Buffer()  # Using default cache time of 10 secs
-        self.listener = tf2_ros.TransformListener(self.tfBuffer)
-        self.broadcaster = tf2_ros.TransformBroadcaster()
+        # ROS2: TransformListener/TransformBroadcaster now require the node explicitly.
+        self.listener = tf2_ros.TransformListener(self.tfBuffer, node_handle.get_node())
+        self.broadcaster = tf2_ros.TransformBroadcaster(node_handle.get_node())
         time.sleep(1.0)
 
     def updateTF(self, source_frame, target_frame, pose):
 
         t = TransformStamped()
 
-        t.header.stamp = rospy.Time.now()
+        t.header.stamp = rospy_compat.now().to_msg()
         t.header.frame_id = source_frame
         t.child_frame_id = target_frame
 
@@ -57,10 +59,11 @@ class TFInterface:
     def get_frame_to_frame_transform(self, camera_info_data, frame_A = "arm_base_link", target_frame = "camera_color_optical_frame"):
         stamp = camera_info_data.header.stamp
         try:
+            # ROS2: builtin_interfaces/Time fields renamed secs/nsecs -> sec/nanosec.
             transform = self.tfBuffer.lookup_transform(
                 frame_A,
                 target_frame,
-                rospy.Time(secs=stamp.secs, nsecs=stamp.nsecs),
+                rospy_compat.Time(seconds=stamp.sec, nanoseconds=stamp.nanosec),
             )
             return transform
         except (
@@ -109,16 +112,17 @@ class TFInterface:
 
 class DrinkPerception(TFInterface):
     def __init__(self, num_perception_samples=10):
-        rospy.init_node('DrinkPerception')
+        node_handle.init_node('DrinkPerception')
 
         self.num_perception_samples = num_perception_samples
         self.bridge = CvBridge()
         self.aruco_pose_queue = deque(maxlen=num_perception_samples)
-        self.aruco_pose_publisher =  rospy.Publisher("/aruco_pose", Pose, queue_size=10)
+        self.aruco_pose_publisher = node_handle.get_node().create_publisher(Pose, "/aruco_pose", 10)
 
-        self.color_image_sub = message_filters.Subscriber('/camera/color/image_raw', Image)
-        self.camera_info_sub = message_filters.Subscriber('/camera/color/camera_info', CameraInfo)
-        self.depth_image_sub = message_filters.Subscriber('/camera/aligned_depth_to_color/image_raw', Image)
+        # ROS2: message_filters.Subscriber now takes the node explicitly (node, type, topic).
+        self.color_image_sub = message_filters.Subscriber(node_handle.get_node(), Image, '/camera/color/image_raw')
+        self.camera_info_sub = message_filters.Subscriber(node_handle.get_node(), CameraInfo, '/camera/color/camera_info')
+        self.depth_image_sub = message_filters.Subscriber(node_handle.get_node(), Image, '/camera/aligned_depth_to_color/image_raw')
         ts = message_filters.TimeSynchronizer([self.color_image_sub, self.camera_info_sub, self.depth_image_sub], 1)
         ts.registerCallback(self.rgbdCallback)
 
@@ -277,7 +281,8 @@ class DrinkPerception(TFInterface):
 class DrinkManipulation(TFInterface):
     def __init__(self):
         self.robot_interface = ArmInterfaceClient()
-        self.aruco_pose_sub =  message_filters.Subscriber("/aruco_pose", Pose)
+        # ROS2: message_filters.Subscriber now takes the node explicitly (node, type, topic).
+        self.aruco_pose_sub = message_filters.Subscriber(node_handle.get_node(), Pose, "/aruco_pose")
         self.aruco_pose_sub.registerCallback(self.update_aruco_pose)
         self.aruco_pose = None
         super().__init__()

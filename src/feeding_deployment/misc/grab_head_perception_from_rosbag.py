@@ -1,6 +1,11 @@
 #!/usr/bin/env python
 
-import rospy
+from feeding_deployment.ros2_utils import node_handle
+from feeding_deployment.ros2_utils import rospy_compat
+# TODO(ros2): rosbag -> rosbag2_py API differs significantly, needs a real port + a ROS2 bag
+# file to test against. rosbag.Bag(...)/read_messages() below are ROS1 rosbag Python API
+# calls left intact (not silently translated) -- rosbag2_py's reader is sqlite3/mcap-backed
+# with a different open/iterate/write API and no drop-in equivalent.
 import rosbag
 from tf2_msgs.msg import TFMessage
 
@@ -28,12 +33,15 @@ def extract_topics(input_bag, output_bag, topics_to_extract, frames_to_extract):
                         new_tf_msg = TFMessage(transforms=filtered_transforms)
                         out_bag.write('/tf', new_tf_msg, t)
                         
-    rospy.loginfo(f"Extracted topics and specific tf frames saved to {output_bag}")
+    rospy_compat.loginfo(f"Extracted topics and specific tf frames saved to {output_bag}")
 
 if __name__ == '__main__':
-    # Initialize the rospy node (optional, you can remove it if not needed)
-    rospy.init_node('rosbag_extractor', anonymous=True)
-    
+    # Initialize the shared node (optional, you can remove it if not needed)
+    # TODO(ros2): anonymous=True dropped -- node_handle's create_node has no rospy-style
+    # "anonymous" auto-unique-naming kwarg; not load-bearing under the singleton-node
+    # model this migration uses (only one node exists per process regardless).
+    node_handle.init_node('rosbag_extractor')
+
     # Input and output bag file paths
     input_bag = '/home/isacc/deployment_ws/2024-09-07-18-26-32.bag'  
     output_bag = '/home/isacc/deployment_ws/benjamin_head_perception.bag'

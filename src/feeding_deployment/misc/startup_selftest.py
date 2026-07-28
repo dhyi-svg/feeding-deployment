@@ -27,9 +27,11 @@ import sys
 import time
 from pathlib import Path
 
+import rclpy
 import serial
 
-import rospy
+from feeding_deployment.ros2_utils import node_handle
+from feeding_deployment.ros2_utils import rospy_compat
 from std_msgs.msg import String
 
 # The Feather LED is the same device/protocol used by PerceptionInterface
@@ -81,14 +83,15 @@ def test_speaker(text):
     """
     _hr()
     print("[1/4] SPEAKER -- publishing to /speak")
-    pub = rospy.Publisher(SPEAK_TOPIC, String, queue_size=1)
+    pub = node_handle.get_node().create_publisher(String, SPEAK_TOPIC, 1)
 
     # Wait briefly for the Speak node to connect to our publisher.
+    # ROS2: rospy.Publisher.get_num_connections() -> rclpy Publisher.get_subscription_count().
     deadline = time.time() + 3.0
-    while pub.get_num_connections() == 0 and time.time() < deadline:
+    while pub.get_subscription_count() == 0 and time.time() < deadline:
         time.sleep(0.05)
 
-    subscribers = pub.get_num_connections()
+    subscribers = pub.get_subscription_count()
     if subscribers == 0:
         print(f"  [!] no subscribers on {SPEAK_TOPIC} -- is speak.py running?")
         print("      (publishing anyway; the iPad webapp may still pick it up)")
@@ -123,7 +126,7 @@ def test_transfer_button(timeout_s):
     # queue_size must cover the jump+arm+expl burst below: at 1, rospy's outbound
     # queue drops the older messages and only 'explanation' reaches subscribers
     # (the arm then only gets through by luck). WebInterface uses 10 for this topic.
-    to_robot = rospy.Publisher(ROBOT_TO_WEBAPP_TOPIC, String, queue_size=10)
+    to_robot = node_handle.get_node().create_publisher(String, ROBOT_TO_WEBAPP_TOPIC, 10)
     pressed = {"ok": False}
 
     def on_msg(msg):
@@ -134,7 +137,7 @@ def test_transfer_button(timeout_s):
         if d.get("state") == "button_press" and d.get("status") == "pressed":
             pressed["ok"] = True
 
-    sub = rospy.Subscriber(WEBAPP_TO_ROBOT_TOPIC, String, on_msg, queue_size=10)
+    sub = node_handle.get_node().create_subscription(String, WEBAPP_TO_ROBOT_TOPIC, on_msg, 10)
     jump = String(data=json.dumps({"state": "robot_executing", "status": "jump"}))
     arm = String(data=json.dumps({"state": "button_arm", "status": "on"}))
     # Mirror the real transfer flow, which fix_explanation()s this before blocking so
@@ -144,7 +147,7 @@ def test_transfer_button(timeout_s):
     try:
         time.sleep(0.5)  # let pub/sub connect over rosbridge
         deadline = time.time() + timeout_s
-        while not pressed["ok"] and time.time() < deadline and not rospy.is_shutdown():
+        while not pressed["ok"] and time.time() < deadline and not rospy_compat.is_shutdown():
             # Re-send jump + arm + explanation (~1.5s cadence) so a late-mounting
             # robot_executing page still gets routed, armed, and shows the prompt.
             to_robot.publish(jump)
@@ -152,13 +155,18 @@ def test_transfer_button(timeout_s):
             to_robot.publish(expl)
             next_resend = time.time() + 1.5
             while time.time() < next_resend and not pressed["ok"]:
-                time.sleep(0.05)
+                # ROS2: rospy ran subscriber callbacks on an implicit background
+                # thread; rclpy does not -- on_msg() never fires unless the node is
+                # spun, so replace the plain time.sleep with spin_once to actually
+                # service the subscription while polling `pressed`.
+                rclpy.spin_once(node_handle.get_node(), timeout_sec=0.05)
     finally:
         to_robot.publish(String(data=json.dumps({"state": "button_arm", "status": "off"})))
         # Replace the prompt so the page doesn't sit on a stale "waiting" line.
         done_text = "Button press received (self-test)" if pressed["ok"] else "Self-test: button wait ended"
         to_robot.publish(String(data=json.dumps({"state": "explanation", "status": done_text})))
-        sub.unregister()
+        # ROS2: rospy Subscriber.unregister() -> Node.destroy_subscription(sub).
+        node_handle.get_node().destroy_subscription(sub)
 
     if pressed["ok"]:
         print("  [ok] press relayed on /webapp_to_robot (button_press:pressed).")
@@ -258,7 +266,12 @@ def main():
 
     skip = {s.strip().lower() for s in args.skip.split(",") if s.strip()}
 
-    rospy.init_node("startup_selftest", anonymous=True, disable_signals=True)
+    # TODO(ros2): anonymous=True and disable_signals=True dropped -- node_handle.init_node's
+    # rclpy.create_node() has no equivalent kwargs. disable_signals in particular let rospy
+    # keep its own SIGINT handling separate from the process's; the closest rclpy analogue
+    # is signal_handler_options passed to rclpy.init() (not create_node()), which
+    # node_handle.init_node() does not currently expose.
+    node_handle.init_node("startup_selftest")
 
     results = {}
     if "speaker" not in skip:
