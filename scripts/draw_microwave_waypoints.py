@@ -23,12 +23,24 @@ from pathlib import Path
 import numpy as np
 import pybullet as p
 import pybullet_data
-from pybullet_helpers.geometry import Pose
+from pybullet_helpers.geometry import Pose, multiply_poses
 from scipy.spatial.transform import Rotation as R
 
 # Generated artifacts (pkl template + screenshot) go to a temp dir by default so
 # they never dirty the tracked scripts/ folder; override with --out.
 OUT = Path(tempfile.gettempdir()) / "microwave_waypoints"
+
+# Repo's own fixed microwave-handle grasp orientation, verbatim from
+# appliance_perception.py:627-629 (detect_handle_and_placement) -- used
+# whenever --handle-pos gives a real (not placeholder) handle position.
+GRASP_QUAT = (-0.5, 0.5, 0.5, -0.5)
+# Same empirical constants as scripts/real_gen3_detect_grasp_microwave.py /
+# real_gen3_open_microwave.py: grasp EE = handle - GRIP_EXT along the local
+# approach (-z) axis; hinge estimated one door-width to +y from the grasp EE
+# (wrist cam can't see the hinge while grasping the handle).
+GRIP_EXT = 0.065
+PRE_GRASP_EXTRA = 0.10
+DOOR_W = 0.32
 
 
 # --- verbatim copy of perception_interface._generate_door_arc_waypoints ------
@@ -68,17 +80,31 @@ def generate_door_arc_waypoints(start_pose, hinge_position, arc_length_m,
 # ----------------------------------------------------------------------------
 
 
-def build_microwave_poses():
+def build_microwave_poses(handle_pos=None):
     """Plausible left-hinged microwave, ~0.30 m door, ~0.30 m off the base.
 
-    EDIT hinge/grasp here (or replace with values from a real recording) to
-    match your microwave. Arc params below mirror perceive_handle_opening_poses
-    for handle_type == "microwave".
+    With no args: the original arbitrary placeholder geometry. Pass
+    ``handle_pos`` (arm_base_link frame, e.g. a teleop ground-truth handle
+    position) to instead derive grasp/hinge from real geometry, using the
+    repo's own grasp orientation + empirical offsets (see GRASP_QUAT /
+    GRIP_EXT / DOOR_W above) -- the same math real_gen3_detect_grasp_microwave.py
+    and real_gen3_open_microwave.py use on hardware. Arc params below mirror
+    perceive_handle_opening_poses for handle_type == "microwave".
     """
-    # gripper facing the door: point tool +z toward -x (into the door front)
-    grasp_orient = R.from_euler("z", np.pi).as_quat()
-    grasp_pose = Pose(position=(0.50, 0.15, 0.30), orientation=grasp_orient)
-    hinge_pos = (0.50, -0.15, 0.30)              # left-hinged (to the -y side)
+    if handle_pos is None:
+        # gripper facing the door: point tool +z toward -x (into the door front)
+        grasp_orient = R.from_euler("z", np.pi).as_quat()
+        grasp_pose = Pose(position=(0.50, 0.15, 0.30), orientation=grasp_orient)
+        pre_grasp = Pose(position=(0.38, 0.15, 0.30), orientation=grasp_orient)
+        hinge_pos = (0.50, -0.15, 0.30)          # left-hinged (to the -y side)
+    else:
+        handle_pose = Pose(position=tuple(handle_pos), orientation=GRASP_QUAT)
+        grasp_pose = multiply_poses(
+            handle_pose, Pose((0.0, 0.0, -GRIP_EXT), (0.0, 0.0, 0.0, 1.0)))
+        pre_grasp = multiply_poses(
+            handle_pose, Pose((0.0, 0.0, -(GRIP_EXT + PRE_GRASP_EXTRA)), (0.0, 0.0, 0.0, 1.0)))
+        gx, gy, gz = grasp_pose.position
+        hinge_pos = (gx, gy + DOOR_W, gz)        # left-hinged (to the +y side)
 
     opening = generate_door_arc_waypoints(
         start_pose=grasp_pose, hinge_position=hinge_pos,
@@ -91,7 +117,6 @@ def build_microwave_poses():
         arc_length_m=0.50, waypoint_spacing_m=0.05,
         direction=-1, rotate_orientation=True)
 
-    pre_grasp = Pose(position=(0.38, 0.15, 0.30), orientation=grasp_orient)
     post_release = Pose(position=opening[-1].position, orientation=opening[-1].orientation)
     return {
         "grasp_pose": grasp_pose, "pre_grasp_pose": pre_grasp,
@@ -172,12 +197,17 @@ def main():
     ap.add_argument("--mode", choices=["gui", "direct"], default="direct")
     ap.add_argument("--out", type=Path, default=OUT,
                     help="dir for the pkl template + screenshot (default: a temp dir)")
+    ap.add_argument("--handle-pos", type=float, nargs=3, default=None,
+                    metavar=("X", "Y", "Z"),
+                    help="real handle position (arm_base_link frame) to derive "
+                         "grasp/hinge from, instead of the arbitrary placeholder "
+                         "geometry, e.g. teleop ground truth")
     args = ap.parse_args()
 
     OUT = args.out
     OUT.mkdir(parents=True, exist_ok=True)
 
-    poses = build_microwave_poses()
+    poses = build_microwave_poses(handle_pos=args.handle_pos)
     pkl_path, d = save_pkl_template(poses)
     print(f"opening_waypoints: {len(poses['opening_waypoints'])} | "
           f"push_waypoints: {len(poses['push_waypoints'])}")

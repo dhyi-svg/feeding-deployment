@@ -3,38 +3,41 @@
 from __future__ import annotations
 
 import abc
+import functools
+import inspect
+import itertools
+import re
+import string
+import time
+import traceback
 from dataclasses import dataclass, field
+from operator import attrgetter
 from pathlib import Path
 from typing import Any, Callable
-from gymnasium.spaces import Space, Box, Text
-from tomsutils.spaces import EnumSpace
-import functools
-from operator import attrgetter
-import itertools
-import string
-import traceback
-import re
-import inspect
-
-import yaml
 
 import numpy as np
-import time
+import yaml
+from gymnasium.spaces import Box, Space, Text
+from tomsutils.spaces import EnumSpace
 
 
 class TeleopTakeoverException(Exception):
-    """Raised when user takes over control via teleoperation during skill execution.
+    """Raised when user takes over control via teleoperation during skill
+    execution.
 
     redo_current: if True, the user asked to re-run the interrupted skill after
     teleop; if False, they asked to treat it as done and continue to the next.
     """
+
     def __init__(self, message: str = "", redo_current: bool = False) -> None:
         super().__init__(message)
         self.redo_current = redo_current
 
+
 from pybullet_helpers.geometry import Pose, multiply_poses
-from pybullet_helpers.spaces import PoseSpace
+from pybullet_helpers.gui import visualize_pose
 from pybullet_helpers.joint import JointPositions
+from pybullet_helpers.spaces import PoseSpace
 from relational_structs import (
     GroundAtom,
     GroundOperator,
@@ -45,15 +48,10 @@ from relational_structs import (
     Type,
     Variable,
 )
-from pybullet_helpers.gui import visualize_pose
-
 from tomsutils.llm import LargeLanguageModel
 
-from feeding_deployment.interfaces.perception_interface import PerceptionInterface
-from feeding_deployment.interfaces.web_interface import WebInterface, WebInterfaceTakeoverInterrupt
-from feeding_deployment.interfaces.rviz_interface import RVizInterface
+import feeding_deployment.perception.gestures_perception.static_gesture_detectors as static_gesture_detectors
 from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceClient
-from feeding_deployment.control.wrist_controller.wrist_controller import WristInterface
 from feeding_deployment.control.robot_controller.command_interface import (
     CartesianCommand,
     CartesianTrajectoryCommand,
@@ -62,14 +60,19 @@ from feeding_deployment.control.robot_controller.command_interface import (
     KinovaCommand,
     OpenGripperCommand,
 )
-
+from feeding_deployment.control.wrist_controller.wrist_controller import WristInterface
+from feeding_deployment.interfaces.perception_interface import PerceptionInterface
+from feeding_deployment.interfaces.rviz_interface import RVizInterface
+from feeding_deployment.interfaces.web_interface import (
+    WebInterface,
+    WebInterfaceTakeoverInterrupt,
+)
 from feeding_deployment.simulation.planning import (
     _get_plan_to_execute_grasp,
     _get_plan_to_execute_ungrasp,
 )
 from feeding_deployment.simulation.simulator import FeedingDeploymentPyBulletSimulator
 from feeding_deployment.simulation.state import FeedingDeploymentWorldState
-import feeding_deployment.perception.gestures_perception.static_gesture_detectors as static_gesture_detectors
 
 # Master switch for mid-skill manual takeover (the global "Take Over" button).
 # When True, execute_robot_command checks for a takeover request before/after
@@ -96,7 +99,7 @@ appliance_type = Type("appliance", parent=nav_target_type)
 fridge_type = Type("fridge", parent=appliance_type)
 microwave_type = Type("microwave", parent=appliance_type)
 
-# Whether it is safe to navigate 
+# Whether it is safe to navigate
 SafeToNavigate = Predicate("SafeToNavigate", [])
 
 # Non-navigable plate location attached to the robot.
@@ -120,6 +123,7 @@ ResetPos = Predicate("ResetPos", [])
 HomePos = Predicate("HomePos", [])
 IsUtensil = Predicate("IsUtensil", [tool_type])
 TableSeen = Predicate("TableSeen", [])
+
 
 # Define high-level actions.
 class HighLevelAction(abc.ABC):
@@ -183,7 +187,8 @@ class HighLevelAction(abc.ABC):
         objects: tuple[Object, ...],
         params: dict[str, Any],
     ) -> str:
-        """Get the YAML filename (not path, just name) for the behavior tree."""
+        """Get the YAML filename (not path, just name) for the behavior
+        tree."""
 
     def execute_action(
         self,
@@ -192,8 +197,9 @@ class HighLevelAction(abc.ABC):
     ) -> None:
         """Execute the action on the robot.
 
-        Raises TeleopTakeoverException if user takes over via teleoperation.
-        Raises RuntimeError if the action fails due to hardware constraints.
+        Raises TeleopTakeoverException if user takes over via
+        teleoperation. Raises RuntimeError if the action fails due to
+        hardware constraints.
         """
         bt_filename = self.get_behavior_tree_filename(objects, params)
         bt_filepath = self.behavior_tree_dir / bt_filename
@@ -229,12 +235,14 @@ class HighLevelAction(abc.ABC):
         new_node_type: str,
         new_node_parameters: dict[str, Any],
         anchor_node_name: str,
-        before_or_after: str
+        before_or_after: str,
     ) -> str:
         """Validate and add a new node into the behavior tree for this HLA."""
         # Create the dictionary for the new node.
         new_node_name = f"UserGeneratedNode{next(self.new_node_counter)}"
-        new_node_dict, node_dict_msg = self.create_user_addition_node_dict(new_node_name, new_node_type, new_node_parameters)
+        new_node_dict, node_dict_msg = self.create_user_addition_node_dict(
+            new_node_name, new_node_type, new_node_parameters
+        )
         if new_node_dict is None:  # node addition was misspecified / not safe
             return f"The new node could not be added. {node_dict_msg}."
         if before_or_after not in ("before", "after"):
@@ -248,7 +256,9 @@ class HighLevelAction(abc.ABC):
         bt = load_behavior_tree(bt_filepath, self)
         # Get the anchor node.
         anchor_node = bt.get_node(anchor_node_name)
-        if anchor_node is None or not isinstance(anchor_node, ParameterizedActionBehaviorTreeNode):
+        if anchor_node is None or not isinstance(
+            anchor_node, ParameterizedActionBehaviorTreeNode
+        ):
             return f"Invalid node name: {anchor_node_name}"
         # Special case: the anchor node is not part of a sequence.
         if not isinstance(anchor_node.parent, SequenceBehaviorTreeNode):
@@ -257,7 +267,12 @@ class HighLevelAction(abc.ABC):
             assert anchor_node.parent is None
             assert anchor_node is bt
             # Wrap it in a sequence node.
-            bt = SequenceBehaviorTreeNode("Autogen", "Autogenerated sequence node", self.behavior_tree_execution_log, [anchor_node])
+            bt = SequenceBehaviorTreeNode(
+                "Autogen",
+                "Autogenerated sequence node",
+                self.behavior_tree_execution_log,
+                [anchor_node],
+            )
         # Now the anchor node is part of a sequence.
         assert isinstance(anchor_node.parent, SequenceBehaviorTreeNode)
         # Special case: make sure retracts are only added after certain safe nodes.
@@ -277,10 +292,13 @@ class HighLevelAction(abc.ABC):
         params: dict[str, Any],
         node_name: str,
         parameter_name: str,
-        new_parameter_value: Any
+        new_parameter_value: Any,
     ) -> None:
         """Validate and update the behavior tree for this HLA."""
-        print(f"Attempting BT update for {self.get_name()} in node {node_name}... ", end="")
+        print(
+            f"Attempting BT update for {self.get_name()} in node {node_name}... ",
+            end="",
+        )
         # Load the current behavior tree.
         bt_filename = self.get_behavior_tree_filename(objects, params)
         bt_filepath = self.behavior_tree_dir / bt_filename
@@ -310,7 +328,7 @@ class HighLevelAction(abc.ABC):
         self,
         new_node_name: str,
         new_node_type: str,
-        new_node_parameters: dict[str, Any]
+        new_node_parameters: dict[str, Any],
     ) -> tuple[dict[str, Any] | None, str]:
         """Validate and create a new node from a user request."""
         if new_node_type == "Pause":
@@ -326,21 +344,21 @@ class HighLevelAction(abc.ABC):
                 "name": new_node_name,
                 "description": "User-added pause.",
                 "parameters": [
-                {
-                    "name": "Duration",
-                    "space": {
-                        "type": "Box",
-                        "lower": min_allowed_pause,
-                        "upper": max_allowed_pause,
+                    {
+                        "name": "Duration",
+                        "space": {
+                            "type": "Box",
+                            "lower": min_allowed_pause,
+                            "upper": max_allowed_pause,
+                        },
+                        "description": "Pause duration.",
+                        "is_user_editable": True,
+                        "value": duration,
                     },
-                    "description": "Pause duration.",
-                    "is_user_editable": True,
-                    "value": duration,
-                },
                 ],
                 "fn": self.pause,
             }, "Success"
-        
+
         if new_node_type == "WaitForGesture":
             if "gesture_fn_name" not in new_node_parameters:
                 return None, "Missing parameter gesture_fn_name"
@@ -350,15 +368,15 @@ class HighLevelAction(abc.ABC):
                 "name": new_node_name,
                 "description": "User-added gesture detector.",
                 "parameters": [
-                {
-                    "name": "GestureDetector",
-                    "space": {
-                        "type": "Text",
+                    {
+                        "name": "GestureDetector",
+                        "space": {
+                            "type": "Text",
+                        },
+                        "description": "Gesture detection function name.",
+                        "is_user_editable": True,
+                        "value": gesture_fn_name,
                     },
-                    "description": "Gesture detection function name.",
-                    "is_user_editable": True,
-                    "value": gesture_fn_name,
-                },
                 ],
                 "fn": self.wait_for_gesture,
             }, "Success"
@@ -369,17 +387,17 @@ class HighLevelAction(abc.ABC):
                 "name": new_node_name,
                 "description": "Move to retract position.",
                 "parameters": [
-                {
-                    "name": "RetractPosition",
-                    "space": {
-                        "type": "Box",
-                        "lower": self.arm_joint_lower_limits,
-                        "upper": self.arm_joint_upper_limits,
+                    {
+                        "name": "RetractPosition",
+                        "space": {
+                            "type": "Box",
+                            "lower": self.arm_joint_lower_limits,
+                            "upper": self.arm_joint_upper_limits,
+                        },
+                        "description": "The retract position of the robot.",
+                        "is_user_editable": False,
+                        "value": self.sim.scene_description.retract_pos,
                     },
-                    "description": "The retract position of the robot.",
-                    "is_user_editable": False,
-                    "value": self.sim.scene_description.retract_pos,
-                },
                 ],
                 "fn": self.move_to_joint_positions,
             }, "Success"
@@ -392,67 +410,84 @@ class HighLevelAction(abc.ABC):
         return np.asarray(self.robot_interface.get_state()["position"], dtype=float)
 
     def report_activity(self, text: str, busy: bool = True) -> None:
-        """Report a concrete, user-facing description of what this skill is doing
-        right now to the web app (e.g. "Grasping the fridge handle"). No-op when
-        there is no web interface (simulation / tests)."""
+        """Report a concrete, user-facing description of what this skill is
+        doing right now to the web app (e.g. "Grasping the fridge handle").
+
+        No-op when there is no web interface (simulation / tests).
+        """
         if self.web_interface is not None:
             self.web_interface.report_activity(text, busy=busy)
 
     def clear_activity(self) -> None:
-        """Clear the current activity so the web app hides the busy timer and the
-        fallback explanation line resumes. No-op without a web interface."""
+        """Clear the current activity so the web app hides the busy timer and
+        the fallback explanation line resumes.
+
+        No-op without a web interface.
+        """
         if self.web_interface is not None:
             self.web_interface.clear_activity()
 
     def move_to_joint_positions(self, joint_positions: list[float]) -> None:
 
         plan = None
-        # if not self.no_waits:
-        #     plan = self.sim.plan_to_joint_positions(joint_positions)
+        if not self.no_waits:
+            plan = self.sim.plan_to_joint_positions(joint_positions)
         if self.robot_interface is None:
             self.sim.visualize_plan(plan)
         else:
             self.execute_robot_command(JointCommand(pos=joint_positions), plan)
-            
+
     @staticmethod
     def _validate_ee_pose(pose: Pose) -> None:
-        """Reject non-finite positions and non-unit quaternions before commanding
-        the arm. A NaN/degenerate pose (e.g. from a failed perception back-project)
-        would otherwise surface as a cryptic "zero norm quaternions" error deep in
-        the Kinova driver -- or, worse, drive the arm to an undefined target."""
+        """Reject non-finite positions and non-unit quaternions before
+        commanding the arm.
+
+        A NaN/degenerate pose (e.g. from a failed perception back-
+        project) would otherwise surface as a cryptic "zero norm
+        quaternions" error deep in the Kinova driver -- or, worse, drive
+        the arm to an undefined target.
+        """
         position = np.asarray(pose.position, dtype=float)
         orientation = np.asarray(pose.orientation, dtype=float)
         if position.shape != (3,) or not np.all(np.isfinite(position)):
-            raise ValueError(f"Invalid EE-pose position (must be 3 finite values): {pose.position}")
+            raise ValueError(
+                f"Invalid EE-pose position (must be 3 finite values): {pose.position}"
+            )
         if orientation.shape != (4,) or not np.all(np.isfinite(orientation)):
-            raise ValueError(f"Invalid EE-pose quaternion (must be 4 finite values): {pose.orientation}")
+            raise ValueError(
+                f"Invalid EE-pose quaternion (must be 4 finite values): {pose.orientation}"
+            )
         norm = float(np.linalg.norm(orientation))
         if not np.isclose(norm, 1.0, atol=1e-3):
-            raise ValueError(f"Invalid EE-pose quaternion (norm {norm:.4f}, expected unit): {pose.orientation}")
+            raise ValueError(
+                f"Invalid EE-pose quaternion (norm {norm:.4f}, expected unit): {pose.orientation}"
+            )
 
     def move_to_ee_pose(self, pose: Pose) -> None:
 
         plan = None
-        # if not self.no_waits:
-        #     plan = self.sim.plan_to_ee_pose(pose)
+        if not self.no_waits:
+            plan = self.sim.plan_to_ee_pose(pose)
         if self.robot_interface is None:
             self.sim.visualize_plan(plan)
         else:
             self._validate_ee_pose(pose)
-            self.execute_robot_command(CartesianCommand(pos=pose.position, quat=pose.orientation), plan)
+            self.execute_robot_command(
+                CartesianCommand(pos=pose.position, quat=pose.orientation), plan
+            )
 
     def move_to_ee_pose_trajectory(self, traj: list[Pose]) -> None:
 
         plan = None
         # if not self.no_waits:
-        #     plan = self.sim.plan_to_ee_pose_trajectory(traj)
+        #     plan = self.sim.plan_to_ee_pose_trajectory(traj)  # not implemented on the simulator yet
         if self.robot_interface is None:
             self.sim.visualize_plan(plan)
         else:
             for pose in traj:
                 self._validate_ee_pose(pose)
             self.execute_robot_command(CartesianTrajectoryCommand(traj=traj), plan)
-    
+
     def grasp_tool(self, tool: str) -> None:
         self.sim.grasp_object(tool)
         if self.robot_interface is not None:
@@ -468,7 +503,7 @@ class HighLevelAction(abc.ABC):
             self.sim.robot.open_fingers()
         else:
             self.execute_robot_command(OpenGripperCommand())
-    
+
     def close_gripper(self) -> None:
         if self.robot_interface is None:
             self.sim.robot.close_fingers()
@@ -477,8 +512,9 @@ class HighLevelAction(abc.ABC):
 
     def _confirm_autocontinue_seconds(self) -> float:
         """Countdown for confirmation pages in autocontinue mode, from the live
-        wait_before_autocontinue_seconds preference (the provider run.py injects
-        into every HLA); 20 s when no preference session is wired in."""
+        wait_before_autocontinue_seconds preference (the provider run.py
+        injects into every HLA); 20 s when no preference session is wired
+        in."""
         provider = getattr(self, "get_autocontinue_seconds", None)
         if provider is None:
             return 20.0
@@ -488,10 +524,13 @@ class HighLevelAction(abc.ABC):
             return 20.0
 
     def _confirm_page_args(self, confirm_mode) -> tuple:
-        """Normalize a confirmation-mode BT param value into
-        ``(mode, autocontinue_seconds)`` for the detection/confirmation pages.
+        """Normalize a confirmation-mode BT param value into ``(mode,
+        autocontinue_seconds)`` for the detection/confirmation pages.
+
         None (per-user YAML predating the param) means today's blocking
-        behavior (mode 2); autocontinue seconds are only non-zero in mode 1."""
+        behavior (mode 2); autocontinue seconds are only non-zero in
+        mode 1.
+        """
         mode = 2 if confirm_mode is None else int(confirm_mode)
         return mode, (self._confirm_autocontinue_seconds() if mode == 1 else 0.0)
 
@@ -511,19 +550,23 @@ class HighLevelAction(abc.ABC):
             return
         mode = 2 if confirm_mode is None else int(confirm_mode)
         if mode == 0:
-            print(f"Plate release at {location}: confirmation disabled by preference; releasing.")
+            print(
+                f"Plate release at {location}: confirmation disabled by preference; releasing."
+            )
             return
         autocontinue_s = self._confirm_autocontinue_seconds() if mode == 1 else 0.0
         self.web_interface.get_plate_release_confirmation(location, autocontinue_s)
 
     def reset_wrist(self) -> None:
         if self.wrist_interface is not None:
-            time.sleep(1.0) # wait for the utensil to be connected
+            time.sleep(1.0)  # wait for the utensil to be connected
             print("Resetting wrist controller ...")
             self.wrist_interface.set_velocity_mode()
             self.wrist_interface.reset()
 
-    def run_manual_teleop_recovery(self, failure_context: str = None, session_id: str = None) -> None:
+    def run_manual_teleop_recovery(
+        self, failure_context: str = None, session_id: str = None
+    ) -> None:
         """Hand control to the user for manual recovery via the teleop screen.
 
         User-initiated: the user opens this from the iPad to take over (e.g. the
@@ -538,9 +581,12 @@ class HighLevelAction(abc.ABC):
         No-op in simulation (no robot or web interface).
         """
         if self.robot_interface is None or self.web_interface is None:
-            print("Manual teleop recovery requested but robot/web interface is unavailable; skipping.")
+            print(
+                "Manual teleop recovery requested but robot/web interface is unavailable; skipping."
+            )
             return None
         from feeding_deployment.actions.teleop_recovery import TeleopRecoverySession
+
         session = TeleopRecoverySession(
             robot_interface=self.robot_interface,
             web_interface=self.web_interface,
@@ -563,7 +609,8 @@ class HighLevelAction(abc.ABC):
         return post_action
 
     def sync_sim_to_real_arm(self) -> None:
-        """Push the real arm's current joint state into the sim model and RViz."""
+        """Push the real arm's current joint state into the sim model and
+        RViz."""
         if self.robot_interface is None or self.perception_interface is None:
             return
         try:
@@ -579,32 +626,42 @@ class HighLevelAction(abc.ABC):
         time.sleep(duration)
 
     def wait_for_gesture(self, gesture_fn_name: str) -> None:
-        static_gestures = inspect.getmembers(static_gesture_detectors, inspect.isfunction)
+        static_gestures = inspect.getmembers(
+            static_gesture_detectors, inspect.isfunction
+        )
         gestures = dict(static_gestures + self.load_synthesized_gestures())
         assert gesture_fn_name in gestures
         gesture_fn = gestures[gesture_fn_name]
         while True:
-             termination_event = None
-             timeout = 600.0
-             if gesture_fn(self.perception_interface, termination_event, timeout):
-                 break
+            termination_event = None
+            timeout = 600.0
+            if gesture_fn(self.perception_interface, termination_event, timeout):
+                break
 
-    def execute_robot_command(self, robot_command: KinovaCommand, plan_viz: list[FeedingDeploymentWorldState] = None, tool_update: str = None) -> None:
+    def execute_robot_command(
+        self,
+        robot_command: KinovaCommand,
+        plan_viz: list[FeedingDeploymentWorldState] = None,
+        tool_update: str = None,
+    ) -> None:
         """Execute the given commands on the robot.
 
-        Raises TeleopTakeoverException if the user takes over via teleoperation --
-        either an explicit mid-skill takeover, OR an automatic hand-off when the
-        command is rejected (joint limit / unreachable pose) and a web interface
-        is available for manual recovery.
-        Raises RuntimeError only when the command fails and there is no web
-        interface to recover through (e.g. simulation / misconfiguration).
+        Raises TeleopTakeoverException if the user takes over via
+        teleoperation -- either an explicit mid-skill takeover, OR an
+        automatic hand-off when the command is rejected (joint limit /
+        unreachable pose) and a web interface is available for manual
+        recovery. Raises RuntimeError only when the command fails and
+        there is no web interface to recover through (e.g. simulation /
+        misconfiguration).
         """
         if self.robot_interface is None:
             raise ValueError("Robot interface is not available to execute commands.")
 
         if not self.no_waits:
             if tool_update is not None:
-                self.rviz_interface.tool_update(True, tool_update, Pose((0, 0, 0), (0, 0, 0, 1))) # pickup the drink
+                self.rviz_interface.tool_update(
+                    True, tool_update, Pose((0, 0, 0), (0, 0, 0, 1))
+                )  # pickup the drink
             if plan_viz is not None:
                 self.rviz_interface.visualize_plan(plan_viz)
             input("Execute next command?")
@@ -639,7 +696,9 @@ class HighLevelAction(abc.ABC):
             # recovery via the teleop screen, then let them choose to redo or
             # continue past this skill -- exactly like a mid-skill takeover.
             if self.web_interface is not None:
-                print("Robot command failed (joint limit/reachability); handing control to the user.")
+                print(
+                    "Robot command failed (joint limit/reachability); handing control to the user."
+                )
                 post_action = self._run_takeover_recovery_and_get_choice(
                     failure_context="joint_limit_failure"
                 )
@@ -648,14 +707,21 @@ class HighLevelAction(abc.ABC):
                     redo_current=(post_action == "redo"),
                 )
             # No web interface (e.g. simulation / misconfiguration): fail loudly.
-            raise RuntimeError("Robot command failed to execute (joint limit or workspace reachability constraint)")
+            raise RuntimeError(
+                "Robot command failed to execute (joint limit or workspace reachability constraint)"
+            )
 
     def _run_takeover_recovery_and_get_choice(self, failure_context: str):
         """Run a manual teleop recovery session, route the iPad back to the
         explanation page, and return the user's post-teleop choice ("redo" or
-        "next"). Shared by the explicit mid-skill takeover and the automatic
-        joint-limit hand-off."""
-        post_action = self.run_manual_teleop_recovery(failure_context=failure_context) or "next"
+        "next").
+
+        Shared by the explicit mid-skill takeover and the automatic
+        joint-limit hand-off.
+        """
+        post_action = (
+            self.run_manual_teleop_recovery(failure_context=failure_context) or "next"
+        )
         # The teleop page announces a takeover on mount, which sets the takeover
         # event AFTER the recovery session cleared its queue. Clear it here so a
         # "redo" does not immediately re-trigger a mid-skill takeover on the first
@@ -670,15 +736,20 @@ class HighLevelAction(abc.ABC):
         return post_action
 
     def _maybe_handle_mid_skill_takeover(self):
-        """If the user requested a takeover, run teleop and route the iPad to the
-        'explanation' page on exit. Returns the user's post-teleop choice
-        ("redo" or "next") if a takeover was handled, else None."""
+        """If the user requested a takeover, run teleop and route the iPad to
+        the 'explanation' page on exit.
+
+        Returns the user's post-teleop choice ("redo" or "next") if a
+        takeover was handled, else None.
+        """
         if not MID_SKILL_TAKEOVER_ENABLED or self.web_interface is None:
             return None
         if not self.web_interface.consume_takeover():
             return None
         print("Mid-skill takeover requested; handing control to the user.")
-        return self._run_takeover_recovery_and_get_choice(failure_context="mid_skill_takeover")
+        return self._run_takeover_recovery_and_get_choice(
+            failure_context="mid_skill_takeover"
+        )
 
 
 @dataclass(frozen=True)
@@ -710,14 +781,30 @@ class GroundHighLevelAction:
         """Execute the command."""
         self.hla.execute_action(self.objects, self.params)
 
-    def process_behavior_tree_node_addition(self, new_node_type: str, new_node_parameters: dict[str, Any],
-                                            anchor_node_name: str, before_or_after: str) -> str:
+    def process_behavior_tree_node_addition(
+        self,
+        new_node_type: str,
+        new_node_parameters: dict[str, Any],
+        anchor_node_name: str,
+        before_or_after: str,
+    ) -> str:
         """Validate and add a new node into the behavior tree."""
-        return self.hla.process_behavior_tree_node_addition(self.objects, self.params, new_node_type, new_node_parameters, anchor_node_name, before_or_after)
+        return self.hla.process_behavior_tree_node_addition(
+            self.objects,
+            self.params,
+            new_node_type,
+            new_node_parameters,
+            anchor_node_name,
+            before_or_after,
+        )
 
-    def process_behavior_tree_parameter_update(self, node_name: str, parameter_name: str, new_parameter_value: Any) -> str:
+    def process_behavior_tree_parameter_update(
+        self, node_name: str, parameter_name: str, new_parameter_value: Any
+    ) -> str:
         """Validate and update the behavior tree for this ground HLA."""
-        return self.hla.process_behavior_tree_parameter_update(self.objects, self.params, node_name, parameter_name, new_parameter_value)
+        return self.hla.process_behavior_tree_parameter_update(
+            self.objects, self.params, node_name, parameter_name, new_parameter_value
+        )
 
 
 class ResetHLA(HighLevelAction):
@@ -734,7 +821,7 @@ class ResetHLA(HighLevelAction):
             add_effects={LiftedAtom(ResetPos, [])},
             delete_effects=set(),
         )
-    
+
     def get_behavior_tree_filename(
         self,
         objects: tuple[Object, ...],
@@ -757,6 +844,7 @@ class ResetHLA(HighLevelAction):
         if self.flair is not None:
             self.flair.clear_preference()
 
+
 class HomeHLA(HighLevelAction):
     """Move the robot to retract position without any tool."""
 
@@ -771,7 +859,7 @@ class HomeHLA(HighLevelAction):
             add_effects={LiftedAtom(HomePos, [])},
             delete_effects=set(),
         )
-    
+
     def get_behavior_tree_filename(
         self,
         objects: tuple[Object, ...],
@@ -812,10 +900,10 @@ def pddl_plan_to_hla_plan(
 @dataclass
 class BehaviorTreeParameter:
     """A single parameter for a policy in a behavior tree.
-    
+
     One policy may have multiple parameters.
     """
-    
+
     name: str
     description: str
     space: Space
@@ -823,10 +911,10 @@ class BehaviorTreeParameter:
 
     def __hash__(self):
         return hash(self.name)  # assume unique names
-    
+
     def __eq__(self, other: Any):
         return isinstance(other, BehaviorTreeParameter) and other.name == self.name
-    
+
     def get_yaml_dict(self) -> dict[str, Any]:
         """Get a YAML dict for this parameter."""
         space_dict = get_space_yaml_dict(self.space)
@@ -834,7 +922,7 @@ class BehaviorTreeParameter:
             "name": self.name,
             "description": self.description,
             "is_user_editable": self.is_user_editable,
-            "space": space_dict
+            "space": space_dict,
         }
 
 
@@ -859,8 +947,9 @@ class BehaviorTreeParameterizedPolicy(abc.ABC):
         ordered_parameter_values = []
         for parameter in parameters:
             value = bindings[parameter]
-            assert parameter.space.contains(value), (
-                f"Value {value} invalid for parameter {parameter}")
+            assert parameter.space.contains(
+                value
+            ), f"Value {value} invalid for parameter {parameter}"
             ordered_parameter_values.append(value)
 
         print(f"Executing parameterized policy {self._name} with bindings:")
@@ -877,8 +966,12 @@ class BehaviorTreeParameterizedPolicy(abc.ABC):
 class FunctionalBehaviorTreeParameterizedPolicy(BehaviorTreeParameterizedPolicy):
     """A parameterized policy defined by a given function."""
 
-    def __init__(self, name: str, parameters: list[BehaviorTreeParameter],
-                 fn: Callable[[Any], None]) -> None:
+    def __init__(
+        self,
+        name: str,
+        parameters: list[BehaviorTreeParameter],
+        fn: Callable[[Any], None],
+    ) -> None:
         super().__init__(name)
         self._parameters = parameters
         self._fn = fn
@@ -888,10 +981,10 @@ class FunctionalBehaviorTreeParameterizedPolicy(BehaviorTreeParameterizedPolicy)
 
     def get_function_name(self) -> str:
         return self._fn.__name__
-        
+
     def _execute(self, *args: Any) -> None:
         return self._fn(*args)
-    
+
 
 class BehaviorTreeNode(abc.ABC):
     """A node in a behavior tree."""
@@ -920,24 +1013,32 @@ class BehaviorTreeNode(abc.ABC):
 
     def log_start(self) -> None:
         """Log the start of execution."""
-        with open(self._execution_log_path, 'a') as f:
+        with open(self._execution_log_path, "a") as f:
             f.write(f"Starting node: {self.name}\n")
 
     def log_end(self) -> None:
         """Log the end of execution."""
-        with open(self._execution_log_path, 'a') as f:
+        with open(self._execution_log_path, "a") as f:
             f.write(f"Finished executing node: {self.name}\n")
 
 
 class ParameterizedActionBehaviorTreeNode(BehaviorTreeNode):
-    """A node in a behavior tree that executes a parameterized action open-loop.
-    
+    """A node in a behavior tree that executes a parameterized action open-
+    loop.
+
     For now, the status after execution is not checked.
 
     Parameters may or may not be user-editable.
     """
-    def __init__(self, name: str, description: str, execution_log_path:str, policy: BehaviorTreeParameterizedPolicy,
-                 bindings: dict[BehaviorTreeParameter, Any]) -> None:
+
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        execution_log_path: str,
+        policy: BehaviorTreeParameterizedPolicy,
+        bindings: dict[BehaviorTreeParameter, Any],
+    ) -> None:
         super().__init__(name, description, execution_log_path)
         self._policy = policy
         self._bindings = bindings
@@ -952,7 +1053,7 @@ class ParameterizedActionBehaviorTreeNode(BehaviorTreeNode):
         if name == self.name:
             return self
         return None
-    
+
     def walk(self) -> list[BehaviorTreeNode]:
         return [self]
 
@@ -979,7 +1080,7 @@ class ParameterizedActionBehaviorTreeNode(BehaviorTreeNode):
             if parameter.name == name:
                 return parameter
         return None
-    
+
     def set_parameter(self, parameter: BehaviorTreeParameter, value: Any) -> None:
         """Update the parameter binding."""
         assert parameter.space.contains(value)
@@ -988,10 +1089,17 @@ class ParameterizedActionBehaviorTreeNode(BehaviorTreeNode):
 
 class SequenceBehaviorTreeNode(BehaviorTreeNode):
     """A sequence node in a behavior tree.
-    
+
     For now, the status after execution is not checked.
     """
-    def __init__(self, name: str, description: str, execution_log_path: str, children: list[BehaviorTreeNode]) -> None:
+
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        execution_log_path: str,
+        children: list[BehaviorTreeNode],
+    ) -> None:
         super().__init__(name, description, execution_log_path)
         self._children = children
         for child in children:
@@ -1010,7 +1118,7 @@ class SequenceBehaviorTreeNode(BehaviorTreeNode):
             if child.get_node(name) is not None:
                 return child
         return None
-    
+
     def walk(self) -> list[BehaviorTreeNode]:
         lst = [self]
         for child in self._children:
@@ -1025,8 +1133,13 @@ class SequenceBehaviorTreeNode(BehaviorTreeNode):
             "type": "Sequence",
             "children": child_dicts,
         }
-    
-    def add_child(self, node: BehaviorTreeNode, anchor_node: BehaviorTreeNode, before_or_after: str) -> None:
+
+    def add_child(
+        self,
+        node: BehaviorTreeNode,
+        anchor_node: BehaviorTreeNode,
+        before_or_after: str,
+    ) -> None:
         """Add a new child node."""
         assert anchor_node in self._children
         anchor_index = self._children.index(anchor_node)
@@ -1057,14 +1170,18 @@ def load_behavior_tree(filepath: Path, hla: HighLevelAction) -> BehaviorTreeNode
     class CustomLoader(yaml.SafeLoader):
         pass
 
-    CustomLoader.add_constructor('!hla', functools.partial(_eval_expression, hla))
-    CustomLoader.add_constructor('!scene_description', functools.partial(_eval_expression,
-                                                                         hla.sim.scene_description))
+    CustomLoader.add_constructor("!hla", functools.partial(_eval_expression, hla))
+    CustomLoader.add_constructor(
+        "!scene_description",
+        functools.partial(_eval_expression, hla.sim.scene_description),
+    )
     root_dict = yaml.load(yaml_text, Loader=CustomLoader)
     return _parse_node(root_dict, hla.behavior_tree_execution_log)
 
 
-def save_behavior_tree(behavior_tree: BehaviorTreeNode, filepath: Path, hla: HighLevelAction) -> None:
+def save_behavior_tree(
+    behavior_tree: BehaviorTreeNode, filepath: Path, hla: HighLevelAction
+) -> None:
 
     yaml_dict = behavior_tree.get_yaml_dict(hla)
     yaml_str = yaml.dump(yaml_dict, sort_keys=False)
@@ -1093,8 +1210,12 @@ def _parse_node(node_dict: dict, execution_log_path: str) -> BehaviorTreeNode:
 
     if node_type == "Sequence":
         children_dicts = node_dict.get("children", [])
-        children_nodes = [_parse_node(child, execution_log_path) for child in children_dicts]
-        return SequenceBehaviorTreeNode(node_name, node_description, execution_log_path, children_nodes)
+        children_nodes = [
+            _parse_node(child, execution_log_path) for child in children_dicts
+        ]
+        return SequenceBehaviorTreeNode(
+            node_name, node_description, execution_log_path, children_nodes
+        )
 
     elif node_type == "Behavior":
         params_list = node_dict.get("parameters", [])
@@ -1107,9 +1228,11 @@ def _parse_node(node_dict: dict, execution_log_path: str) -> BehaviorTreeNode:
             space_spec = p["space"]
             space_type = space_spec["type"]
             if space_type == "Box":
-                space = Box(np.array(space_spec["lower"]),
-                            np.array(space_spec["upper"]),
-                            dtype=np.float64)
+                space = Box(
+                    np.array(space_spec["lower"]),
+                    np.array(space_spec["upper"]),
+                    dtype=np.float64,
+                )
             elif space_type == "Enum":
                 space = EnumSpace(space_spec["elements"])
             elif space_type == "PoseSpace":
@@ -1122,18 +1245,18 @@ def _parse_node(node_dict: dict, execution_log_path: str) -> BehaviorTreeNode:
                 name=p_name,
                 description=p_description,
                 space=space,
-                is_user_editable=p_is_user_editable
+                is_user_editable=p_is_user_editable,
             )
             parameters.append(param_obj)
             param_value = p["value"]
             bindings[param_obj] = param_value
-        fn = node_dict["fn"]  
+        fn = node_dict["fn"]
         policy = FunctionalBehaviorTreeParameterizedPolicy(
-            name=node_name,
-            parameters=parameters,
-            fn=fn
+            name=node_name, parameters=parameters, fn=fn
         )
-        return ParameterizedActionBehaviorTreeNode(node_name, node_description, execution_log_path, policy, bindings)
+        return ParameterizedActionBehaviorTreeNode(
+            node_name, node_description, execution_log_path, policy, bindings
+        )
 
     else:
         raise ValueError(f"Unknown node type: {node_type}")
@@ -1147,18 +1270,18 @@ def get_space_yaml_dict(space: Space) -> dict[str, Any]:
             "lower": space.low.tolist(),
             "upper": space.high.tolist(),
         }
-            
+
     if isinstance(space, EnumSpace):
         return {
             "type": "Enum",
             "elements": space.elements,
         }
-    
+
     if isinstance(space, PoseSpace):
         return {
             "type": "PoseSpace",
         }
-    
+
     if isinstance(space, Text):
         return {
             "type": "Text",
@@ -1189,10 +1312,11 @@ class NodeAdditionUserRequest(UserUpdateRequest):
     """A request to add a new node."""
 
     new_node_type: str  # can be "Retract" or "Pause"
-    new_node_parameters: dict[str, Any]  # {} for Retract and {"duration": float} for Pause
+    new_node_parameters: dict[
+        str, Any
+    ]  # {} for Retract and {"duration": float} for Pause
     anchor_node_name: str  # the name of an existing behavior tree node
     before_or_after: str  # "before" or "after"
-
 
 
 def interpret_user_update_request(
@@ -1203,21 +1327,27 @@ def interpret_user_update_request(
     max_retries: int = 3,
 ) -> list[UserUpdateRequest]:
     """Use an LLM to convert natural language into a user update request."""
-
     # First query the LLM to rephrase the original request into description of
     # what should be changed. This can help with cases like "the robot is too slow"
     # which otherwise can get mistaken for "make the robot slow" (probably because
     # the main prompt is really long and it's easy to get distracted).
-    rephrase_prompt = """Given the following text from a person who is using an assisted feeding robot, briefly rephrase their request into some kind of specific setting that should be changed in the robot's software.
-    
-For example, if the user said "I don't like the sound that the robot makes when it wants my attention", a good rephrasing would be "Use something other than the current sound to signal when the robot needs attention."
+    rephrase_prompt = (
+        """Given the following text from a person who is using an assisted
+        feeding robot, briefly rephrase their request into some kind of
+        specific setting that should be changed in the robot's software.
 
-Here is what the user said:
+        For example, if the user said "I don't like the sound that the robot makes when it wants my attention", a good rephrasing would be "Use something other than the current sound to signal when the robot needs attention."
 
-"%s"
-""" % request_txt
-    
-    rephrased_txt = llm.sample_completions(rephrase_prompt, imgs=None, temperature=0.0, seed=0)[0]
+        Here is what the user said:
+
+        "%s"
+        """
+        % request_txt
+    )
+
+    rephrased_txt = llm.sample_completions(
+        rephrase_prompt, imgs=None, temperature=0.0, seed=0
+    )[0]
     print("Original user request:", request_txt)
     print("Rephrased user request:", rephrased_txt)
 
@@ -1239,35 +1369,45 @@ You think they might mean:
 Which of the following skills may be relevant to this request?
 
 %s
-    """ % (request_txt, rephrased_txt, all_bt_names)
+    """ % (
+        request_txt,
+        rephrased_txt,
+        all_bt_names,
+    )
 
     # relevant_bts_response = llm.sample_completions(select_relevant_bts_prompt, imgs=None, temperature=0.0, seed=0)[0]
     # print("Selected relevant BTs:", relevant_bts_response)
 
     all_nodes_description = ""
-    
+
     # Load the behavior trees.
-    all_nodes_description += "Behavior Tree Nodes Related to Bite (synonyms: Feeding, Utensil, Food Item):\n"
+    all_nodes_description += (
+        "Behavior Tree Nodes Related to Bite (synonyms: Feeding, Utensil, Food Item):\n"
+    )
     for bite_node in bite:
         # if bite_node not in relevant_bts_response:
         #     continue
-        with open(behavior_log_path / f"{bite_node}.yaml", 'r') as f:
+        with open(behavior_log_path / f"{bite_node}.yaml", "r") as f:
             node_description = f.read()
         all_nodes_description += node_description + "\n---\n"
 
-    all_nodes_description += "Behavior Tree Nodes Related to Drink (synonyms: Mug, Sip, Liquid):\n"
+    all_nodes_description += (
+        "Behavior Tree Nodes Related to Drink (synonyms: Mug, Sip, Liquid):\n"
+    )
     for drink_node in drink:
         # if drink_node not in relevant_bts_response:
         #     continue
-        with open(behavior_log_path / f"{drink_node}.yaml", 'r') as f:
+        with open(behavior_log_path / f"{drink_node}.yaml", "r") as f:
             node_description = f.read()
         all_nodes_description += node_description + "\n---\n"
 
-    all_nodes_description += "Behavior Tree Nodes Related to Wipe (synonyms: Clean, Cloth):\n"
+    all_nodes_description += (
+        "Behavior Tree Nodes Related to Wipe (synonyms: Clean, Cloth):\n"
+    )
     for wipe_node in wipe:
         # if wipe_node not in relevant_bts_response:
         #     continue
-        with open(behavior_log_path / f"{wipe_node}.yaml", 'r') as f:
+        with open(behavior_log_path / f"{wipe_node}.yaml", "r") as f:
             node_description = f.read()
         all_nodes_description += node_description + "\n---\n"
 
@@ -1304,7 +1444,11 @@ The "hla" stands for high-level action. Each hla can be grounded with zero or mo
 IMPORTANT: make sure your hla_object_names and hla_name appear together in the list above!
 
 A NodeModificationUserUpdateRequest a request to modify one parameter for one node in a behavior tree associated with an hla.
-""" % (request_txt, rephrased_txt, hla_object_name_str)
+""" % (
+        request_txt,
+        rephrased_txt,
+        hla_object_name_str,
+    )
 
     behavior_tree_prompt = """
 Here are all behavior trees:
@@ -1332,9 +1476,12 @@ Return your answer in a format where calling eval() in python will directly prod
 
     # Validate the response.
     for _ in range(max_retries):
-        response_prompt = """I previously asked you to do this and you returned the following:
+        response_prompt = (
+            """I previously asked you to do this and you returned the following:
 %s     
-""" % response
+"""
+    % response
+        )
         # Case 1: an error is raised when we call eval().
         try:
             # This is really not safe but I'm not actually worried.
@@ -1346,14 +1493,24 @@ Return your answer in a format where calling eval() in python will directly prod
             error_prompt = """Evaluating that code produced the following exception:
 %s
 """ % tb_str
-            prompt = prompt_prefix + first_final_prompt + response_prompt + error_prompt + final_fix_prompt
-            response = llm.sample_completions(prompt, imgs=None, temperature=0.0, seed=0)[0]
+            prompt = (
+                prompt_prefix
+                + first_final_prompt
+                + response_prompt
+                + error_prompt
+                + final_fix_prompt
+            )
+            response = llm.sample_completions(
+                prompt, imgs=None, temperature=0.0, seed=0
+            )[0]
             response = _strip_python_response(response)
             continue
         error_prompt = None
         for request in pythonic_response:
             # Case 2: the request is not a NodeModificationUserUpdateRequest or NodeAdditionUserRequest.
-            if not isinstance(request, (NodeModificationUserUpdateRequest, NodeAdditionUserRequest)):
+            if not isinstance(
+                request, (NodeModificationUserUpdateRequest, NodeAdditionUserRequest)
+            ):
                 error_prompt = """The following request is invalid:
 
 %s
@@ -1375,7 +1532,10 @@ because the hla_name and hla_object_names do not appear in the list of possibili
                 break
             # Case 4: node_name is invalid. For now we check this very weakly because
             # it will require more changes to actually load the behavior trees.
-            if isinstance(request, NodeModificationUserUpdateRequest) and request.node_name not in behavior_tree_prompt:
+            if (
+                isinstance(request, NodeModificationUserUpdateRequest)
+                and request.node_name not in behavior_tree_prompt
+            ):
                 error_prompt = """The following request is invalid:
 
 %s
@@ -1386,7 +1546,10 @@ because the node_name is not in the behavior tree. Recall again all of the behav
 """ % (str(request), behavior_tree_prompt)
                 break
             # Case 5: the anchor name is invalid.
-            if isinstance(request, NodeAdditionUserRequest) and request.anchor_node_name not in behavior_tree_prompt:
+            if (
+                isinstance(request, NodeAdditionUserRequest)
+                and request.anchor_node_name not in behavior_tree_prompt
+            ):
                 error_prompt = """The following request is invalid:
 
 %s
@@ -1397,7 +1560,11 @@ because the anchor_node_name is not in the behavior tree. Recall again all of th
 """ % (str(request), behavior_tree_prompt)
                 break
             # Case 6: the parameter is invalid for the node.
-            if isinstance(request, NodeModificationUserUpdateRequest) and not _parameter_name_is_valid(request.parameter_name, request.node_name, behavior_tree_prompt):
+            if isinstance(
+                request, NodeModificationUserUpdateRequest
+            ) and not _parameter_name_is_valid(
+                request.parameter_name, request.node_name, behavior_tree_prompt
+            ):
                 error_prompt = """The following request is invalid:
 
 %s
@@ -1408,11 +1575,18 @@ because the parameter_name is not in the given behavior tree node. Make sure tha
 """ % (str(request), behavior_tree_prompt)
                 break
         if error_prompt is not None:
-            prompt = prompt_prefix + first_final_prompt + response_prompt + error_prompt + final_fix_prompt
-            response = llm.sample_completions(prompt, imgs=None, temperature=0.0, seed=0)[0]
+            prompt = (
+                prompt_prefix
+                + first_final_prompt
+                + response_prompt
+                + error_prompt
+                + final_fix_prompt
+            )
+            response = llm.sample_completions(
+                prompt, imgs=None, temperature=0.0, seed=0
+            )[0]
             response = _strip_python_response(response)
             continue
-
 
     return pythonic_response
 
@@ -1422,14 +1596,14 @@ def _strip_python_response(response: str) -> str:
     if isinstance(response, list):
         response = response[0]
     if response.startswith("```python"):
-        response = response[len("```python"):]
+        response = response[len("```python") :]
     if response.endswith("```"):
-        response = response[:-len("```")]
+        response = response[: -len("```")]
     return response
 
 
 def _parameter_name_is_valid(parameter_name, node_name, behavior_tree_prompt):
-    node_name_substring = f'name: {node_name}'
+    node_name_substring = f"name: {node_name}"
     with open("debug.txt", "w") as f:
         f.write("Parameter name being checked for validity: %s\n" % parameter_name)
         f.write("Node name: %s\n" % node_name)
@@ -1438,7 +1612,7 @@ def _parameter_name_is_valid(parameter_name, node_name, behavior_tree_prompt):
     for match in re.finditer(node_name_substring, behavior_tree_prompt):
         idx = match.start()
         end = behavior_tree_prompt[idx:].find("---")
-        if parameter_name in behavior_tree_prompt[idx:idx+end]:
+        if parameter_name in behavior_tree_prompt[idx : idx + end]:
             with open("debug.txt", "a") as f:
                 f.write("Parameter name is valid\n")
             return True

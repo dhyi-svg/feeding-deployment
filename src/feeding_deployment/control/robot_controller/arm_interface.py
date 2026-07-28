@@ -5,6 +5,7 @@
 # non-real-time process to avoid interfering with the real-time low-level
 # control and causing latency spikes.
 
+import os
 import queue
 import time
 import threading
@@ -14,7 +15,9 @@ import numpy as np
 from multiprocess.managers import BaseManager as MPBaseManager
 
 RPC_AUTHKEY = b"secret-key"
-NUC_HOSTNAME = "192.168.1.3"
+# Host the arm RPC server binds to / the client connects to. Defaults to the lab
+# NUC; override with ARM_RPC_HOST (e.g. 127.0.0.1 on a single-machine setup).
+NUC_HOSTNAME = os.environ.get("ARM_RPC_HOST", "192.168.1.3")
 ARM_RPC_PORT = 5000
 BULLDOG_HEARTBEAT_TIMEOUT = 1.0  # seconds
 

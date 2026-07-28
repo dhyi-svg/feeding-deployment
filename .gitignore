@@ -143,6 +143,9 @@ celerybeat.pid
 # SageMath parsed files
 *.sage.py
 
+# Machine-specific local config (arm presets, etc.) -- not shared/committed
+config/local_arm_presets.yaml
+
 # Environments
 .env
 .venv

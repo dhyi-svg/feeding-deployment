@@ -21,7 +21,7 @@ robot = [
    "relational_structs@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git#subdirectory=relational-structs",
    "prpl-utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git#subdirectory=prpl-utils",
    "tomsutils@git+https://github.com/tomsilver/toms-utils.git",
-   "pyaudio",
+   # "pyaudio",  # temporarily disabled: needs system portaudio19-dev, unrelated to sim-only arm work
    "imageio[ffmpeg]",
    "pin",
    "ruckig",

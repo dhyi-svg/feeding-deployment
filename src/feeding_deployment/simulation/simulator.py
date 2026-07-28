@@ -3,51 +3,55 @@
 from __future__ import annotations
 
 import time
-import numpy as np
 from pathlib import Path
-import imageio.v2 as iio
 from types import SimpleNamespace
 
+import imageio.v2 as iio
+import numpy as np
 import pybullet as p
-from pybullet_helpers.geometry import Pose, get_pose
-from pybullet_helpers.gui import create_gui_connection
-from pybullet_helpers.inverse_kinematics import set_robot_joints_with_held_object
+from pybullet_helpers.camera import capture_superimposed_image
+from pybullet_helpers.geometry import Pose, get_pose, multiply_poses
+from pybullet_helpers.gui import create_gui_connection, visualize_pose
+from pybullet_helpers.inverse_kinematics import add_fingers_to_joint_positions, \
+    set_robot_joints_with_held_object
+from pybullet_helpers.joint import JointPositions
+from pybullet_helpers.link import get_relative_link_pose
+from pybullet_helpers.motion_planning import run_motion_planning
 from pybullet_helpers.robots import create_pybullet_robot
 from pybullet_helpers.robots.single_arm import FingeredSingleArmPyBulletRobot
 from pybullet_helpers.utils import create_pybullet_block
-from pybullet_helpers.joint import JointPositions
-from pybullet_helpers.gui import visualize_pose
-from pybullet_helpers.camera import capture_superimposed_image
-from pybullet_helpers.inverse_kinematics import add_fingers_to_joint_positions
-from pybullet_helpers.motion_planning import run_motion_planning
-from pybullet_helpers.link import get_relative_link_pose
 
+from feeding_deployment.simulation.control import cartesian_control_step
+from feeding_deployment.simulation.planning import (
+    _get_plan_to_execute_grasp,
+    _get_plan_to_execute_ungrasp,
+    _plan_to_sim_state_trajectory,
+    remap_trajectory_to_constant_distance,
+)
 from feeding_deployment.simulation.scene_description import SceneDescription
 from feeding_deployment.simulation.state import FeedingDeploymentWorldState
 from feeding_deployment.simulation.world import FeedingDeploymentPyBulletWorld
-from feeding_deployment.simulation.planning import (
-    _plan_to_sim_state_trajectory,
-    remap_trajectory_to_constant_distance,
-    _get_plan_to_execute_grasp,
-    _get_plan_to_execute_ungrasp,
-)
-from feeding_deployment.simulation.control import cartesian_control_step
 
 
 class FeedingDeploymentPyBulletSimulator(FeedingDeploymentPyBulletWorld):
     """A PyBullet-based simulator for the feeding deployment environment."""
 
-    def __init__(self, scene_description: SceneDescription, use_gui: bool = True, ignore_user = False) -> None:
-        
+    def __init__(
+        self,
+        scene_description: SceneDescription,
+        use_gui: bool = True,
+        ignore_user=False,
+    ) -> None:
+
         super().__init__(scene_description, use_gui, ignore_user)
         self.recorded_states: list[FeedingDeploymentWorldState] = []
-    
+
     def set_robot_motors(self, target_positions: list[float]) -> None:
         """Move the robot to a given state."""
         self.robot.set_motors(target_positions)
         p.stepSimulation(physicsClientId=self.physics_client_id)
         # Rajat TODO: Update all the other objects in the scene as well.
-    
+
     def set_utensil_motors(self, target_positions: list[float]) -> None:
         """Move the utensil to a given state."""
         assert len(target_positions) == len(self.utensil_joints)
@@ -73,15 +77,27 @@ class FeedingDeploymentPyBulletSimulator(FeedingDeploymentPyBulletWorld):
             physicsClientId=self.physics_client_id,
         )
 
-    def plan_to_ee_pose(self, pose: Pose, max_control_time: float = 30.0) -> list[FeedingDeploymentWorldState]:
-        """Move the robot to the specified end effector pose using cartesian control."""
+    def plan_to_ee_pose(
+        self, pose: Pose, max_control_time: float = 30.0
+    ) -> list[FeedingDeploymentWorldState]:
+        """Move the robot to the specified end effector pose using cartesian
+        control.
+
+        ``pose`` is in the arm-base frame (same convention as what's
+        sent to the real Kinova controller), but PyBullet FK
+        (get_end_effector_pose) is in world frame -- the robot's base
+        itself sits at scene_description.robot_base_pose within the
+        scene. Convert once here so the IK loop below compares world-
+        frame poses throughout.
+        """
+        pose = multiply_poses(self.scene_description.robot_base_pose, pose)
 
         # visualize_pose(pose, self.physics_client_id)
         # visualize_pose(self.robot.get_end_effector_pose(), self.physics_client_id)
         initial_fingers_positions = self.robot.get_joint_positions()[7:]
-    
+
         joint_trajectory: list[JointPositions] = []
-            
+
         start_time = time.time()
         target_reached = False
         while time.time() - start_time < max_control_time:
@@ -92,24 +108,33 @@ class FeedingDeploymentPyBulletSimulator(FeedingDeploymentPyBulletWorld):
             current_joint_positions = self.robot.get_joint_positions()
             joint_trajectory.append(current_joint_positions)
             current_jacobian = self.robot.get_jacobian()
-            target_positions = cartesian_control_step(current_joint_positions, current_jacobian, current_pose, pose)
-            target_positions = np.concatenate((target_positions, initial_fingers_positions)) # Rajat ToDo: Remove hardcoding
+            target_positions = cartesian_control_step(
+                current_joint_positions, current_jacobian, current_pose, pose
+            )
+            target_positions = np.concatenate(
+                (target_positions, initial_fingers_positions)
+            )  # Rajat ToDo: Remove hardcoding
             self.set_robot_motors(target_positions)
-        
+
         if not target_reached:
-            raise RuntimeError("Sim cartesian controller: Failed to reach target pose in time")
+            raise RuntimeError(
+                "Sim cartesian controller: Failed to reach target pose in time"
+            )
 
         plan = _plan_to_sim_state_trajectory(joint_trajectory, self)
         plan = remap_trajectory_to_constant_distance(plan, self)
-        
+
         self.recorded_states.extend(plan)
         return plan
 
-    def plan_to_joint_positions(self, joint_positions: list[float], max_control_time: float = 30.0) -> list[FeedingDeploymentWorldState]:
+    def plan_to_joint_positions(
+        self, joint_positions: list[float], max_control_time: float = 30.0
+    ) -> list[FeedingDeploymentWorldState]:
         """Move the robot to the specified joint positions."""
-        
         initial_joint_positions = self.robot.get_joint_positions().copy()
-        target_joint_positions = add_fingers_to_joint_positions(self.robot, joint_positions)
+        target_joint_positions = add_fingers_to_joint_positions(
+            self.robot, joint_positions
+        )
 
         direct_path = run_motion_planning(
             robot=self.robot,
@@ -129,25 +154,34 @@ class FeedingDeploymentPyBulletSimulator(FeedingDeploymentPyBulletWorld):
             # Rajat ToDo: check if this is necessary
             # plan = remap_trajectory_to_constant_distance(plan, self)
         else:
-            raise NotImplementedError("No direct path found. But motion planning is not implemented yet.")
+            # Straight-line joint-space interpolation wasn't collision-free;
+            # fall back to full BiRRT. (This branch used to be dead code --
+            # a premature `raise NotImplementedError` above it, and the
+            # unreachable code below referenced an undefined `sim` /
+            # `robot_commands` and an unimported `simulated_trajectory_to_
+            # kinova_commands`, i.e. it had never actually run.)
             print("No direct path found. Running motion planning.")
-            plan = run_motion_planning(
-                robot=sim.robot,
+            birrt_path = run_motion_planning(
+                robot=self.robot,
                 initial_positions=initial_joint_positions,
                 target_positions=target_joint_positions,
-                collision_bodies=sim.get_collision_ids(),
+                collision_bodies=self.get_collision_ids(),
                 seed=0,
-                physics_client_id=sim.physics_client_id,
-                held_object=sim.held_object_id,
-                base_link_to_held_obj=sim.held_object_tf,
+                physics_client_id=self.physics_client_id,
+                held_object=self.held_object_id,
+                base_link_to_held_obj=self.held_object_tf,
             )
-            plan = _plan_to_sim_state_trajectory(plan, sim)
-            plan = remap_trajectory_to_constant_distance(plan, sim)
-            robot_commands.extend(simulated_trajectory_to_kinova_commands(plan))
-        
+            if birrt_path is None:
+                raise RuntimeError(
+                    "Sim motion planning: BiRRT found no collision-free path "
+                    "to the target joint positions."
+                )
+            plan = _plan_to_sim_state_trajectory(birrt_path, self)
+            plan = remap_trajectory_to_constant_distance(plan, self)
+
         self.recorded_states.extend(plan)
         return plan
-    
+
     def visualize_plan(self, plan: list[FeedingDeploymentWorldState]) -> None:
         """Visualize a plan in PyBullet."""
         for sim_state in plan:
@@ -198,21 +232,37 @@ class FeedingDeploymentPyBulletSimulator(FeedingDeploymentPyBulletWorld):
 
         try:
             if target_frame == "camera_color_optical_frame":
-                source_to_ee_frame = get_relative_link_pose(self.robot.robot_id, self.robot.link_from_name(source_frame), self.robot.link_from_name("end_effector_link"), self.physics_client_id)
+                source_to_ee_frame = get_relative_link_pose(
+                    self.robot.robot_id,
+                    self.robot.link_from_name(source_frame),
+                    self.robot.link_from_name("end_effector_link"),
+                    self.physics_client_id,
+                )
                 ee_frame_to_camera_frame = self.scene_description.camera_pose
                 return source_to_ee_frame.multiply(ee_frame_to_camera_frame)
             else:
-                source_to_target_frame = get_relative_link_pose(self.robot.robot_id, self.robot.link_from_name(source_frame), self.robot.link_from_name(target_frame), self.physics_client_id)
+                source_to_target_frame = get_relative_link_pose(
+                    self.robot.robot_id,
+                    self.robot.link_from_name(source_frame),
+                    self.robot.link_from_name(target_frame),
+                    self.physics_client_id,
+                )
                 return source_to_target_frame
         except:
-            raise NotImplementedError(f"{source_frame} to {target_frame} transform not implemented for simulation")
+            raise NotImplementedError(
+                f"{source_frame} to {target_frame} transform not implemented for simulation"
+            )
+
 
 class NullSimulator:
-    """Lightweight sim stub used when no_waits=True. Skips PyBullet entirely."""
+    """Lightweight sim stub used when no_waits=True.
+
+    Skips PyBullet entirely.
+    """
 
     # Kinova Gen3 7-DOF hardware limits (radians)
     _JOINT_LOWER = [-2.41, -2.41, -2.66, -2.66, -2.66, -2.66, -2.66]
-    _JOINT_UPPER = [ 2.41,  2.41,  2.66,  2.66,  2.66,  2.66,  2.66]
+    _JOINT_UPPER = [2.41, 2.41, 2.66, 2.66, 2.66, 2.66, 2.66]
 
     def __init__(self, scene_description):
         self.scene_description = scene_description
@@ -250,7 +300,9 @@ class NullSimulator:
         pass
 
     def plan_to_ee_pose(self, *args, **kwargs):
-        raise RuntimeError("plan_to_ee_pose called on NullSimulator; must not be reached when no_waits=True")
+        raise RuntimeError(
+            "plan_to_ee_pose called on NullSimulator; must not be reached when no_waits=True"
+        )
 
     def visualize_plan(self, *args, **kwargs):
         pass
