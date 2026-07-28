@@ -337,7 +337,66 @@ All 8 files verified via `ast.parse` (both by the migrating agent and independen
 re-verified before commit). Committed as `c243984c`.
 
 ### 4f. safety/ batch (safety-critical -- read this one closely before merging)
-*(pending)*
+8 files: `bulldog.py`, `collision_sensor.py`, `collision_threshold.py`,
+`estops_publisher.py`, `estop_udp_bridge.py`, `sensor_diag_logger.py` (864 lines),
+`transfer_button_listener.py`, `watchdog.py` (301 lines). Ported by careful reading
+only -- **nothing in this batch was ever executed, run, or imported for real**.
+
+19 `TODO(ros2)` comments across this batch (more than any other, correctly -- this is
+the e-stop/liveness layer). Every publish/subscribe queue depth, `latch=True` ->
+`DurabilityPolicy.TRANSIENT_LOCAL` conversion, and safety-relevant timing constant
+(frequency thresholds, debounce windows, UDP timeouts, e.g. `FT_FREQUENCY_THRESHOLD=300`,
+`CAMERA_FREQUENCY_THRESHOLD=2`, `EXPERIMENTOR_ESTOP_FREQUENCY_THRESHOLD=30`,
+`BULLDOG_STATUS_TIMEOUT_S=0.5`) was preserved byte-for-byte.
+
+**Real bugs caught and fixed** (not just syntax, spot-checked and confirmed correct
+before committing):
+  - `collision_sensor.py` imported a top-level `SetCollisionThreshold*Response`
+    (genpy/ROS1-style flat naming); the rosidl-generated ROS2 module nests these as
+    `SetCollisionThreshold.Request`/`.Response` (confirmed against the real `colcon
+    build` from section 2) -- fixed to the correct nested attribute access.
+  - `sensor_diag_logger.py`: `msg.header.stamp.to_sec()` doesn't exist on ROS2's
+    `builtin_interfaces/Time` (only `.sec`/`.nanosec` fields) -- fixed to
+    `stamp.sec + stamp.nanosec * 1e-9`. Its self-healing resubscribe logic called
+    `sub.unregister()`, which `rclpy.Subscription` has no equivalent for -- fixed to
+    `node.destroy_subscription(sub)`.
+  - `estop_udp_bridge.py`: `rospy.Duration(5.0)` (positional) -- `rclpy.duration.Duration`
+    is keyword-only -- fixed to `Duration(seconds=5.0)`.
+
+**Flagged, deliberately NOT silently fixed -- needs a human reviewer decision**
+(spot-checked directly, both are real and well-explained in-code, not just in the
+agent's report):
+  - `collision_threshold.py`: ROS1's `rospy.wait_for_service(timeout=...)` **raised**
+    on timeout, aborting before any threshold mutation. The rclpy port
+    (`rospy_compat.wait_for_service`) returns `True`/`False`, and the return value is
+    currently **unchecked** at the call site -- a timed-out wait falls through into a
+    call that will block forever in `spin_until_future_complete` with no timeout. Left
+    as an explicit TODO at the exact line (`collision_threshold.py:43-49` per the
+    in-code comment) rather than guessed at, since whether to raise, return early, or
+    add a call-level timeout is a real design decision.
+  - `collision_sensor.py`: two subscribers had no explicit rospy `queue_size` (rospy's
+    unbounded-by-default); depth=10 was picked for both ROS2 conversions and flagged as
+    a guess needing review.
+  - `watchdog.py`: the FT-sensor-bias `ServiceProxy` call (`netft_rdt_driver`'s
+    `String_cmd.srv` -- a package with, per CLAUDE.md, no known ROS2 port at all) had
+    its request field name **guessed** as `.cmd`; no build artifact exists anywhere to
+    confirm the real field name since the package isn't installed. Explicitly flagged as
+    unverified.
+  - `anonymous=True` (4 files: bulldog.py, watchdog.py, estop_udp_bridge.py,
+    sensor_diag_logger.py) replaced with a pid-suffixed node name -- uniqueness is not
+    guaranteed the same way rospy's `anonymous=True` guaranteed it (rospy hashes in a
+    random component too). `sensor_diag_logger.py`'s `disable_signals=True` also
+    flagged: its own `except KeyboardInterrupt:` (documented as this tool's "stop early
+    and still write the summary" path) may depend on rospy's non-default SIGINT
+    handling to work the way it currently does.
+
+Pre-existing, cosmetic-only issue noted, not touched: `bulldog.py` and `watchdog.py`
+each had `import rospy` duplicated twice at the top of the original file (harmless,
+collapsed naturally during the migration edit).
+
+All 8 files verified via `ast.parse` (both by the migrating agent and independently
+re-verified before commit, including a direct spot-check of the
+`collision_sensor.py`/`collision_threshold.py` fixes above). Committed as `3fa5d509`.
 
 ### 4g. misc/ batch
 6 files: `check_ft_readings.py`, `drink_manipulation_test.py`,
