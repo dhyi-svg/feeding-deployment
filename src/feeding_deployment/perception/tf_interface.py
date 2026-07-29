@@ -1,3 +1,4 @@
+import os
 import time
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -29,11 +30,20 @@ ROS_AVAILABLE = ROS_VERSION is not None
 
 
 class TFInterface:
+    # How long a ROS 2 transform lookup keeps retrying before giving up. Covers
+    # latched /tf_static arriving after the dynamic tree (see
+    # get_frame_to_frame_transform). Detection is not latency-critical, so a
+    # generous default costs nothing when the tree is already complete.
+    TF_LOOKUP_TIMEOUT_SEC = 10.0
+
     def __init__(self):
         self.tfBuffer = None
         self.listener = None
         self.broadcaster = None
         self._node = None
+        self.tf_lookup_timeout_sec = float(
+            os.environ.get("TF_LOOKUP_TIMEOUT_SEC", self.TF_LOOKUP_TIMEOUT_SEC)
+        )
         if not ROS_AVAILABLE:
             return
 
@@ -109,18 +119,37 @@ class TFInterface:
             # or near-static during a detection, so the newest TF is as good as
             # the frame-stamped one, and this is the difference between a usable
             # detection and none at all when the camera clock lags the tf tree.
+            #
+            # The retry matters as much as the fallback. /tf_static is latched
+            # (TRANSIENT_LOCAL), so a listener that has only just come up can
+            # have the dynamic tree from robot_state_publisher but not yet the
+            # static calibration -- tf2 then reports "two or more unconnected
+            # trees" and a single immediate retry fails too. Waiting a few
+            # seconds is the difference between a working detection and none.
             if ROS_VERSION == 2:
-                try:
-                    transform = self.tfBuffer.lookup_transform(
-                        frame_A, target_frame, _RclpyTime()
-                    )
-                    print(
-                        f"tf2 lookup at the frame stamp failed ({e}); "
-                        f"using the latest {frame_A} <- {target_frame} instead."
-                    )
-                    return transform
-                except Exception as e2:
-                    e = e2
+                deadline = time.time() + self.tf_lookup_timeout_sec
+                last_error = e
+                warned = False
+                while time.time() < deadline:
+                    try:
+                        transform = self.tfBuffer.lookup_transform(
+                            frame_A, target_frame, _RclpyTime()
+                        )
+                        print(
+                            f"tf2 lookup at the frame stamp failed ({e}); "
+                            f"using the latest {frame_A} <- {target_frame} instead."
+                        )
+                        return transform
+                    except Exception as e2:
+                        last_error = e2
+                        if not warned:
+                            print(
+                                f"Waiting up to {self.tf_lookup_timeout_sec:g}s for "
+                                f"{frame_A} <- {target_frame} (tf tree still incomplete) ..."
+                            )
+                            warned = True
+                        time.sleep(0.1)
+                e = last_error
             print("Exception finding transform between arm_base_link and", target_frame)
             print("Error:", e)
             return None

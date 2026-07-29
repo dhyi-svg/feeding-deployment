@@ -37,6 +37,101 @@ the bypass (fresh server re-locks motion). Verify with `get_state()` → expect
 
 ---
 
+## 2026-07-29 — Jetson: ROS 2 path runs on hardware; detection works, but the PERCEIVED HINGE IS ON THE WRONG SIDE
+
+### Result
+
+Rungs 0-3 of `docs/microwave_ros2_runbook.md` pass. **The arm was never
+commanded** — everything below is read-only. The ROS 2 TF chain came up on
+hardware for the first time and the repo's real `detect_handle_and_placement`
+ran end-to-end through it.
+
+### Rungs 0-2
+
+- Arm ethernet up (`192.168.1.18/24`), pings `192.168.1.10`; RealSense D435i enumerated.
+- The `arm_server.py` left running since Jul 14 was **wedged at 99.7% CPU** and its
+  Kortex session was dead (`INVALID_USER_SESSION_ACCESS`). Restarted clean.
+- **Gripper read 0.009 = open.** The arm was *not* still holding the door, contrary
+  to the standing warning in `CLAUDE.md`. That warning can be retired.
+- `/joint_states` 49.96 Hz, aligned depth ~14 Hz, and
+  `arm_base_link -> camera_color_optical_frame` = `[0.255, 0.018, 0.565]`.
+- Rung 3 was run **without** `bulldog_bypass.py`, so arm motion stayed locked.
+
+### Two blockers found and fixed
+
+1. `arm_client.py` had its own `assert ROSPY_IMPORTED` (missed in the port) — it
+   now accepts ROS 1 or ROS 2, and skips the `/watchdog_status` wait, which does
+   not exist when bulldog is bypassed.
+2. `detect_items()` unpacked a fixed 6-tuple from `supervision`. **0.6.0 is
+   installed here** (pinned by `groundingdino-py`) and yields 5; the lab's 0.21.x
+   yields 6. Now indexes `.confidence`/`.class_id`, working on both — no install.
+3. A **static-TF discovery race**: the listener had the dynamic tree from
+   `robot_state_publisher` but not yet the latched `/tf_static`, so tf2 reported
+   "two or more unconnected trees" and the immediate single retry also failed,
+   killing the detection. `get_frame_to_frame_transform` now retries for up to
+   `TF_LOOKUP_TIMEOUT_SEC` (10 s) instead of giving up at once.
+
+### Detection result
+
+`microwave handle` at **0.67** confidence (matches the 0.65-0.68 seen on
+Pachirisu). Plane depth 0.558 m. Poses in `arm_base_link`:
+
+| | x | y | z |
+|---|---|---|---|
+| handle | 0.7859 | -0.1358 | 0.4779 |
+| hinge | 0.8602 | -0.2729 | 0.4593 |
+| placement | 0.8182 | -0.1998 | 0.5215 |
+| top_of_appliance | 0.7745 | -0.1294 | 0.3853 |
+
+### ⚠️ The perceived hinge is on the WRONG SIDE — do not run the arc on it
+
+```
+perceived hinge - handle = [+0.074, -0.137, -0.019]
+assumed (standalone)     = [ 0.000, +0.320,  0.000]
+```
+
+The sign of **y is flipped**: the plane-fit puts the hinge ~13.7 cm to **-y**,
+the proven assumption puts it 32 cm to **+y**. Those are opposite edges of the
+door. Its magnitude is also far short of a real door width (~32 cm), so the
+"far edge of the fitted plane" heuristic (`np.max` anchor +2 cm strip) is not
+finding the true hinge from this viewpoint — likely only part of the door plane
+is visible.
+
+Feeding that hinge to `_generate_door_arc_waypoints` with `direction=-1` would
+sweep the door **the wrong way** — the exact failure that e-stopped rung 5 on
+2026-07-14 ("arc swept inward toward base"). **Keep using the `+0.32 m`
+assumption until the hinge heuristic is fixed and re-verified.**
+
+### ⚠️ The depth bias has CHANGED — do not apply DEPTH_CORR=0.16 blindly
+
+Against the 2026-07-14 teleop ground truth `[0.713, -0.099, 0.465]`:
+
+```
+delta  [+0.073, -0.037, +0.013]   |d| = 0.083 m
+range  perceived 0.930 m  vs  truth 0.857 m   -> +7.3 cm, NOT +16 cm
+```
+
+The overestimate is now **~7 cm**, less than half the documented 16 cm. That is
+expected in direction: the 16 cm was measured with the standalone calib chained
+to `get_state()["ee_pos"]`, whereas this goes through **tf2** (URDF FK from
+`robot_state_publisher` + the easy_handeye2 static transform) — a different FK
+source with a different systematic error. Applying `HANDLE_DEPTH_CORR=0.16` on
+this path would now **undershoot by ~9 cm**.
+
+**Caveat, unresolved:** this comparison assumes the microwave is in the same
+physical spot as on 2026-07-14. That was not confirmed. If it moved, part of the
+8.3 cm delta is the appliance, not bias. **Re-measure against a fresh teleop
+ground truth before trusting any correction constant on the tf2 path.**
+
+### Next step
+
+Establish a fresh teleop ground truth for the microwave's current position, then
+re-derive the depth/lateral corrections **for the tf2 path specifically**. Fix or
+bypass the hinge heuristic (simplest: keep the `+0.32 m` assumption in the HLA
+path). Only then attempt approach.
+
+---
+
 ## 2026-07-28 — Jetson: microwave path ported from ROS 1 to ROS 2 (no hardware run)
 
 ### What changed and why
