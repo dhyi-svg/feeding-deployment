@@ -289,13 +289,55 @@ the grasp point, and the same direction showed up in the correction check
 (1.4 cm). Two samples agree in sign, so `HANDLE_LAT_CORR` is worth deriving —
 but from a third measurement, not by fitting these two.
 
+### ✅ Full perception-driven grasp over ROS 2 — detect → pre-grasp → grasp → close
+
+```
+detect (39 cm view)  handle [0.6920, -0.1070, 0.4924]   1.5 cm from touched truth
+pre-grasp            target [0.5720, -0.1070, 0.4924]   tracking 0.5 cm
+grasp                target [0.6920, -0.1070, 0.4924]   tracking 0.7 cm
+close                gripper 1.0000  -> confirmed GRIPPING the handle (visual)
+```
+
+The whole chain runs through the ported ROS 2 path: TF → live GroundingDINO →
+corrected handle → repo pre-grasp geometry (with the rig's 180° wrist fix) →
+seeded IK → two joint moves → grip.
+
+**Detect ONCE, from a viewing distance.** Re-detecting at ~2 cm returned a handle
+6.7 cm off (mostly +6.6 cm in z) — the wrist camera cannot see the microwave from
+there and the plane fit is meaningless. The sequence caches the poses from a
+single look at ~39 cm, exactly as the HLA does.
+
+### ⚠️ `gripper_pos` does NOT tell you whether the grasp succeeded
+
+`gripper_pos` read **1.0000** after closing on the handle, and a first pass wrongly
+called that "closed empty". It is not: `LOCAL_DEPLOYMENT.md` documents 0.009 open ↔
+1.0 closed, and `CLAUDE.md` records **~0.99 while holding the door**. The value
+saturates at ~1.0 whether or not something thin is between the fingers, so it
+**cannot** discriminate a successful grasp.
+
+> Do not gate anything on `gripper_pos` alone. The proven 2026-07-14 flow already
+> did the right thing: `close_gripper` → **pause for a human grip check** before
+> opening. Keep that. A machine check would need gripper current/effort, which is
+> not currently exposed.
+
+### The lateral "bias" was detection variance, not bias
+
+Three detections of the same fixed handle gave y = −0.1307, −0.1066, −0.1070
+against a teleoped grasp y of −0.1098 — a ~2.4 cm spread with no consistent sign.
+The 2.1 cm "lateral offset" measured from a single teleop comparison was noise;
+applying it as a fixed correction overshot. **`LATERAL = 0`.** The 2F-85's 85 mm
+opening absorbs the remaining variance. Depth is a genuine fixed offset (verified
+at two distances); lateral is not — do not treat them the same way.
+
+Also: the reach gate at 0.85 m was over-tight and blocked a feasible grasp (IK
+solved exactly). The arm reaches 0.858 m under teleop; gate raised to 0.88 m
+against a ~0.90 m spec.
+
 ### Next step
 
-Grasp: command the measured grasp pose (= corrected handle, no `GRIP_EXT`), close
-the gripper, confirm it holds. Note the Xbox teleop may have faulted the Kortex
-session — `get_state` still answered, but restart `arm_server.py` + the bypass if
-the first motion command is refused. Keep the `+0.32 m` hinge assumption for the
-arc; the perceived hinge is still confirmed wrong-side.
+The opening arc — the last unproven stage. Use the **`+0.32 m` hinge assumption**,
+not the perceived hinge (confirmed wrong-side at two viewpoints). Arm is currently
+**gripping the handle**, so either continue straight into the arc or release first.
 
 ---
 
