@@ -93,6 +93,19 @@ class AppliancePerception(TFInterface):
 
         self.molmo_url = "https://exponent-sediment-professed.ngrok-free.dev/predict"
 
+        # How to locate the microwave start button:
+        #   "molmo"          remote Molmo VLM only (the lab's original behaviour)
+        #   "grounding_dino" local GroundingDINO only -- no network needed
+        #   "auto"           try Molmo, fall back to GroundingDINO (default)
+        # "auto" is identical to "molmo" whenever the Molmo server is reachable,
+        # and keeps the button skill working on rigs that cannot reach it.
+        self.button_backend = os.environ.get("BUTTON_BACKEND", "auto").lower()
+        if self.button_backend not in ("molmo", "grounding_dino", "auto"):
+            print(
+                f"Unknown BUTTON_BACKEND={self.button_backend!r}; falling back to 'auto'"
+            )
+            self.button_backend = "auto"
+
         self.handle_type = None
         self.num_perception_samples = num_perception_samples
 
@@ -373,6 +386,127 @@ class AppliancePerception(TFInterface):
         # Log the inputs (intrinsics + base<-camera transform) for offline replay.
         self._log_detection_inputs("detect_start_button", camera_info_msg, transform)
 
+        button_pixel = None
+        backend = self.button_backend
+        if backend in ("molmo", "auto"):
+            button_pixel = self._detect_start_button_pixel_molmo(rgb_image)
+            if button_pixel is None and backend == "auto":
+                print("Molmo unavailable; falling back to local GroundingDINO button detection.")
+        if button_pixel is None and backend in ("grounding_dino", "auto"):
+            button_pixel = self.detect_start_button_pixel_local(rgb_image)
+
+        if button_pixel is None:
+            print(f"No button pixel from the '{backend}' button backend")
+            return None
+
+        # User-facing overlay: red recording-style box + red dot on the button.
+        # Drawn raw; WebInterface._send_image applies the central 180 deg flip.
+        vis_image = self._draw_button_overlay(rgb_image, button_pixel)
+        self._log_image("rgb_button_pixel", vis_image)
+
+        ok, button_3d = self.pixel2World(
+            camera_info_msg, button_pixel[0], button_pixel[1], depth_image
+        )
+
+        if not ok:
+            print("Could not get valid 3D point for button")
+            return None
+
+        if transform is not None:
+            print("Got transform between arm_base_link and camera_color_optical_frame")
+            base_to_camera = self.make_homogeneous_transform(transform)
+
+            camera_to_button = np.eye(4)
+            camera_to_button[:3, 3] = button_3d
+            camera_to_button[3, 3] = 1
+            base_to_button = np.dot(base_to_camera, camera_to_button)
+            base_to_button[:3, :3] = Rotation.from_quat(
+                [-0.5, 0.5, 0.5, -0.5]
+            ).as_matrix()
+            return self.matrix_to_pose(base_to_button)
+
+        print(
+            "Could not get transform between arm_base_link and camera_color_optical_frame"
+        )
+        return None
+
+    # -- local (GroundingDINO) button detection ---------------------------
+    # The lab points a remote Molmo VLM at the control panel and asks it to
+    # "point to" the start button. That server is reachable only from the lab
+    # network, so on a standalone rig we locate the same button with the
+    # GroundingDINO model this class already loads for handle detection.
+    #
+    # Molmo's own prompt states the spatial rule we reproduce here: the start /
+    # "30 secs" button is the RIGHT one of the two rectangular buttons on the
+    # BOTTOM row of the control panel. All of that reasoning happens in the
+    # visually-upright (flipped) frame, because the wrist camera is mounted
+    # upside down -- detect_items returns boxes in original-image coordinates,
+    # so we flip them before comparing and flip the answer back at the end.
+
+    BUTTON_CLASSES = ["button"]
+    # A button occupying more than this fraction of the frame is a mis-detection
+    # (usually the whole control panel or the microwave itself).
+    BUTTON_MAX_AREA_FRAC = 0.08
+    # Buttons whose flipped-frame y-centres fall within this fraction of the
+    # image height of the lowest one count as the same "bottom row".
+    BUTTON_ROW_TOL_FRAC = 0.06
+
+    def detect_start_button_pixel_local(self, rgb_image):
+        """Locate the start button with GroundingDINO. Returns an (x, y) pixel in
+        original-image coordinates, or None."""
+        height, width = rgb_image.shape[:2]
+
+        detections = self.detect_items(rgb_image, self.BUTTON_CLASSES, return_all=True)
+        if detections is None or len(detections.xyxy) == 0:
+            print("No button detections from GroundingDINO")
+            return None
+
+        frame_area = float(width * height)
+        candidates = []
+        for (x1, y1, x2, y2), confidence in zip(detections.xyxy, detections.confidence):
+            area = max(0.0, float(x2 - x1)) * max(0.0, float(y2 - y1))
+            if area <= 0 or area / frame_area > self.BUTTON_MAX_AREA_FRAC:
+                continue
+            cx = (float(x1) + float(x2)) / 2.0
+            cy = (float(y1) + float(y2)) / 2.0
+            # Original -> visually-upright (the camera is mounted upside down).
+            candidates.append(
+                {
+                    "center": (cx, cy),
+                    "flipped_center": (width - cx, height - cy),
+                    "confidence": float(confidence),
+                }
+            )
+
+        if not candidates:
+            print(
+                f"All {len(detections.xyxy)} button detections were larger than "
+                f"{self.BUTTON_MAX_AREA_FRAC:.0%} of the frame; treating as no detection"
+            )
+            return None
+
+        # Bottom row in the upright view = largest flipped y.
+        lowest_y = max(c["flipped_center"][1] for c in candidates)
+        row_tol = self.BUTTON_ROW_TOL_FRAC * height
+        bottom_row = [
+            c for c in candidates if lowest_y - c["flipped_center"][1] <= row_tol
+        ]
+        # Rightmost of that row in the upright view = largest flipped x.
+        chosen = max(bottom_row, key=lambda c: c["flipped_center"][0])
+
+        print(
+            f"GroundingDINO button detection: {len(candidates)} candidate(s), "
+            f"{len(bottom_row)} in the bottom row; picked the rightmost at "
+            f"{chosen['center']} (confidence {chosen['confidence']:0.2f})"
+        )
+        return (int(round(chosen["center"][0])), int(round(chosen["center"][1])))
+
+    def _detect_start_button_pixel_molmo(self, rgb_image):
+        """Ask the remote Molmo server to point at the start button.
+
+        Returns an (x, y) pixel in original-image coordinates, or None if the
+        server is unreachable or gives nothing usable.
+        """
         rgb_image_flipped = cv2.flip(rgb_image.copy(), -1)
         self._log_image("rgb_flipped", rgb_image_flipped)
 
@@ -409,41 +543,10 @@ class AppliancePerception(TFInterface):
             print("Molmo response has no usable pixel_coords")
             return None
         # Flip pixel coords back since we flipped the image before sending to molmo
-        button_pixel = (
+        return (
             rgb_image.shape[1] - pixel_coords[0][0],
             rgb_image.shape[0] - pixel_coords[0][1],
         )
-
-        # User-facing overlay: red recording-style box + red dot on the button.
-        # Drawn raw; WebInterface._send_image applies the central 180 deg flip.
-        vis_image = self._draw_button_overlay(rgb_image, button_pixel)
-        self._log_image("rgb_button_pixel", vis_image)
-
-        ok, button_3d = self.pixel2World(
-            camera_info_msg, button_pixel[0], button_pixel[1], depth_image
-        )
-
-        if not ok:
-            print("Could not get valid 3D point for button")
-            return None
-
-        if transform is not None:
-            print("Got transform between arm_base_link and camera_color_optical_frame")
-            base_to_camera = self.make_homogeneous_transform(transform)
-
-            camera_to_button = np.eye(4)
-            camera_to_button[:3, 3] = button_3d
-            camera_to_button[3, 3] = 1
-            base_to_button = np.dot(base_to_camera, camera_to_button)
-            base_to_button[:3, :3] = Rotation.from_quat(
-                [-0.5, 0.5, 0.5, -0.5]
-            ).as_matrix()
-            return self.matrix_to_pose(base_to_button)
-
-        print(
-            "Could not get transform between arm_base_link and camera_color_optical_frame"
-        )
-        return None
 
     def detect_handle_and_placement(
         self, handle_type, rgb_image, camera_info_msg, depth_image
@@ -849,7 +952,7 @@ class AppliancePerception(TFInterface):
         )
         return None
 
-    def detect_items(self, input_image, classes_being_detected, log_path=None):
+    def detect_items(self, input_image, classes_being_detected, log_path=None, return_all=False):
 
         # flip image because camera is mounted upside down
         image = cv2.flip(input_image.copy(), -1)
@@ -921,6 +1024,13 @@ class AppliancePerception(TFInterface):
         for _, _, confidence, class_id, _, _ in detections:
             print(f"  {classes_being_detected[class_id]}: {confidence:0.2f}")
         print(detections.xyxy)
+
+        if return_all:
+            # Every surviving box, in original-image coordinates. Callers that
+            # need to reason about several instances at once (e.g. picking one
+            # button out of a control panel) use this; the default single-box
+            # return is unchanged.
+            return detections
 
         return detections.xyxy[0] if len(detections.xyxy) > 0 else None
 
