@@ -333,11 +333,64 @@ Also: the reach gate at 0.85 m was over-tight and blocked a feasible grasp (IK
 solved exactly). The arm reaches 0.858 m under teleop; gate raised to 0.88 m
 against a ~0.90 m spec.
 
+### ✅ FULL AUTONOMOUS MICROWAVE DOOR OPEN over ROS 2 — ~91°
+
+Detect → grasp → arc, all through the ported ROS 2 path. 10 of 11 waypoints ran,
+then a clean stop at the door's limit:
+
+```
+grasp pose   [0.6484, -0.1984, 0.4846]     hinge (assumed) [0.648, 0.122, 0.485]
+11 waypoints, arc 0.55 m, spacing 0.05, direction -1, seeded IK (all 0.00-0.07 cm)
+wp01..wp10   tracking 0.1 - 0.6 cm  (gripper 0.991 throughout)
+wp11         no motion, 4.7 cm -> natural stop, held
+swept 45.6 cm chord from the grasp pose
+```
+
+Waypoints come from the repo's **own** `_generate_door_arc_waypoints`
+(`perception_interface.py:424`), invoked unbound with the microwave parameters
+`perceive_handle_opening_poses` uses.
+
+**The `+0.32 m` hinge assumption is now validated, not just inherited.** Forcing
+the handle along a circular path about an assumed centre is a strong test: if the
+centre were wrong, the door would bind and the radius would not hold. Measured:
+
+| | |
+|---|---|
+| radius at grasp | 0.3204 m |
+| radius at finish | 0.3241 m |
+| **radius preserved** | **3.7 mm over a 90.8° sweep** |
+| z drift | −1.6 mm (hinge axis vertical, as assumed) |
+| swing angle | **90.8°** |
+
+So the assumed hinge is within a few mm of the true one, tracking stayed
+sub-centimetre throughout, and the stop at wp11 is the **door's own limit** — not
+a bind. That also retro-answers the earlier open question about the 2026-07-29
+first attempt (stopped at wp09, 37.9 cm): the geometry was fine there too, the arm
+had simply been positioned such that the last waypoints were unreachable.
+
+**The perceived hinge remains unusable** — it was wrong-side at two viewpoints.
+The working configuration is the repo's arc algorithm with the assumed hinge.
+
+### The appliance drifts, and that is why absolute references fail
+
+y across successive detections: −0.131 → −0.107 → −0.160 → −0.179 → −0.206, with x
+creeping outward too. Within-session detection pairs agree to **0.0–0.6 cm**, so
+this is not perception noise — **the microwave is nudged a little by every door
+swing.** Consequences, both now handled:
+
+- A touched ground-truth pose goes stale immediately; gating detection against it
+  rejects good detections (a 7.2 cm refusal). Replaced with a **two-detection
+  self-consistency** check plus a loose plausibility box — no ground truth needed.
+- The appliance drifted far enough out (grasp range 0.884 m) to exceed the reach
+  gate, and had to be slid back toward the arm. Expect to re-seat it periodically.
+
 ### Next step
 
-The opening arc — the last unproven stage. Use the **`+0.32 m` hinge assumption**,
-not the perceived hinge (confirmed wrong-side at two viewpoints). Arm is currently
-**gripping the handle**, so either continue straight into the arc or release first.
+Release and retract without loading the door: **release first**, then clear
+laterally, then back out — never withdraw while gripping. Then the remaining gap
+to running the HLA unmodified: the hinge heuristic, and the repo's
+`move_to_ee_pose_trajectory` cartesian path (this used per-waypoint joint moves,
+since cartesian aborts at extended configs on this arm).
 
 ---
 
