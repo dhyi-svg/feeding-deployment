@@ -37,6 +37,115 @@ the bypass (fresh server re-locks motion). Verify with `get_state()` → expect
 
 ---
 
+## 2026-07-28 — Jetson: microwave path ported from ROS 1 to ROS 2 (no hardware run)
+
+### What changed and why
+
+Previous Jetson sessions ran a **rospy-free** pipeline *alongside* the repo:
+`pyrealsense2` for frames, the easy_handeye2 calib chained with live FK instead
+of tf2, and standalone scripts instead of the HLAs. That proved the geometry on
+hardware but meant the real `open_microwave()` skill never actually ran.
+
+This box **does** have ROS 2 Humble, with `rclpy`, `tf2_ros`, `sensor_msgs`,
+`cv_bridge` and `realsense2_camera` all importable from the project venv
+(Python 3.10.12, matching Humble). So the perception path was **ported to ROS 2**
+rather than bypassed, and both `OpenDoorHLA` and `PressMicrowaveButtonHLA` now
+import and run unmodified.
+
+### The port is boundary-only
+
+Only two message spellings and the client library actually differ:
+
+| ROS 1 | ROS 2 |
+|---|---|
+| `CameraInfo.K/D/R/P` | `CameraInfo.k/d/r/p` |
+| `stamp.secs/.nsecs` | `stamp.sec/.nanosec` |
+| implicit global node | explicit `Node` + an executor something must spin |
+
+So `CameraInfoCompat` wraps a live ROS 2 message and re-exposes the ROS 1 names,
+and `ros2/node.py` provides the process-wide node rospy implied. **No detector
+math was rewritten** — `detect_handle_and_placement`, `detect_items`,
+`pixel2World` and `perceive_handle_opening_poses` are byte-identical to upstream.
+
+### The missing piece was joint states
+
+tf2 can only answer `arm_base_link → camera_color_optical_frame` if something
+publishes the arm's joints. The lab gets that from its Kinova ROS driver; this
+rig drives the arm over the repo's own RPC and has **no ROS arm driver at all**
+(deliberately — the ROS 2 workspace on this box belongs to other projects and is
+off-limits). `ros2/joint_state_bridge.py` closes the gap by republishing
+`get_state()` as `sensor_msgs/JointState`; `robot_state_publisher` does the rest.
+
+`kortex_description`'s `gen3.xacro dof:=7 gripper:=robotiq_2f_85` turned out to
+emit exactly `base_link` / `end_effector_link` — the frame names the saved
+calibration already refers to, so nothing had to be renamed. Verified by
+generating the URDF with `xacro`.
+
+### Button detection no longer needs Molmo
+
+`detect_start_button` reached the button only via a remote Molmo VLM behind an
+ngrok tunnel on the lab network — unreachable here, so the button skill could
+not run at all. Added a local GroundingDINO backend (the model is already loaded
+for handle detection) applying the rule Molmo's own prompt states: the **right**
+one of the two rectangular buttons on the **bottom** row of the control panel.
+
+**The trap is orientation.** The wrist camera is mounted upside down, so
+"bottom" and "right" mean the flipped (visually upright) view, while
+`detect_items` hands back raw original-image coordinates. Getting that backwards
+picks the diagonally opposite button and looks entirely plausible in a log.
+`tests/test_button_detection.py` pins it down (5 tests, models stubbed).
+
+`BUTTON_BACKEND=auto` (default) tries Molmo first, so **lab behaviour is
+unchanged**; `grounding_dino` forces local, `molmo` forces the original.
+
+### What was verified — and what was not
+
+Verified, no hardware:
+- `OpenDoorHLA` and `PressMicrowaveButtonHLA` import with `ROS2_IMPORTED = True`.
+- The genuine `perceive_handle_opening_poses("microwave")` runs offline with the
+  detector stubbed and produces all 21 pose entries (11 opening / 6 push / 10
+  closing / 10 offset-closing / 7 pull-closing / 13 push-closing waypoints) —
+  `scripts/generate_microwave_poses_offline.py`.
+- The real behaviour tree executes through staging → `settle_camera` →
+  perception → the RViz `None` guard → the second staging move.
+- Button selection, orientation flip, whole-panel rejection, empty case.
+- Full suite: **165 passed, 1 failed** — the failure
+  (`test_outside_mouth_distance_near`, expects 0.07, YAML says 0.05) is
+  **pre-existing on `origin/microwave-task`**, from the lab's "lower
+  outside-mouth transfer distances" commit; confirmed by running it on a clean
+  checkout of origin. Unrelated to the microwave task.
+- The launch file builds under system python3.
+
+**Not verified — no hardware run this session.** The arm was not commanded at
+all. In particular: the live TF chain has never been brought up, so
+`tf2_echo arm_base_link camera_color_optical_frame` is the **first thing to
+check** next session, before any motion.
+
+`validate_open_microwave_hla_sim.py` stops at the first Cartesian move with
+`Sim cartesian controller: Failed to reach target pose in time`. That is the
+**known IKFast wall on this box**, not a regression: a trivial 2 cm move from
+the arm's current pose fails identically. Sim motion validation stays
+unavailable here until IKFast or the sim cartesian controller is fixed.
+
+### Deliberately not used
+
+The ROS 2 workspace on this box (`~/ros2_ws`, Demo-Software) contains
+`cmu_door_opener` (YOLO-seg button detection + force-monitored push),
+`arm_driver` and `cornell_feeding`. These belong to other projects on the shared
+Jetson and were **not** built on, at the user's direction. Only distro-level
+ROS 2 (`rclpy`, `tf2_ros`, `realsense2_camera`, `kortex_description`) and the
+user's own easy_handeye2 calibration are used.
+
+### Next step
+
+Bring the TF chain up and confirm it (`tf2_echo`) before anything moves. Then a
+detection-only run through the ported path — compare the handle pose it reports
+against the rospy-free pipeline's known-good numbers, keeping the documented
+`DEPTH_CORR=0.16` / `LAT_CORR=0.07` biases in mind, since those corrections live
+in the standalone scripts and are **not** yet folded into the HLA path.
+
+---
+
 ## 2026-07-22 (evening) — Pachirisu: depth stable this session, full handle localization succeeded, but ~20cm base-frame error found in the eye-in-hand calibration
 
 Follow-on session. Goal was to retry `align_depth` (blocked twice before by USB controller

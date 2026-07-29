@@ -125,13 +125,103 @@ perception deps, `netft_rdt_driver` has no public distribution at all).
 
 ---
 
+### Perception — ROS 2 (Humble), the repo's own code path (2026-07-28)
+
+The rospy-free pipeline above proved the geometry on hardware, but it ran
+*alongside* the repo rather than through it. This box does have ROS 2 Humble, so
+the repo's perception path is now **ported to ROS 2** instead of bypassed —
+`OpenDoorHLA.open_microwave()` and `PressMicrowaveButtonHLA` run unmodified.
+
+Only the client library and two message spellings differ, so the port adapts at
+the boundary and leaves every detector's math untouched:
+
+| ROS 1 (lab) | ROS 2 (here) |
+|---|---|
+| `CameraInfo.K/D/R/P` | `CameraInfo.k/d/r/p` |
+| `stamp.secs/.nsecs` | `stamp.sec/.nanosec` |
+| implicit global node (`rospy.init_node`) | explicit `Node` + an executor that must be spun |
+
+`feeding_deployment/ros2/` holds the ROS 2 side:
+
+| Module | Role |
+|---|---|
+| `node.py` | one process-wide rclpy node, spun on a daemon thread (stands in for rospy's implicit global) |
+| `compat.py` | `CameraInfoCompat` — exposes ROS 1 field names over a live ROS 2 message, so `camera_info.K[0]` keeps working downstream |
+| `realsense_ros2_interface.py` | `realsense2_camera` consumer with the **same `get_camera_data()` contract** as the ROS 1 class |
+| `joint_state_bridge.py` | publishes `/joint_states` from the repo's own arm RPC (read-only) — there is no ROS arm driver on this rig |
+| `calibration_tf.py` | latches the saved easy_handeye2 calib as static TF, plus an identity `base_link → arm_base_link` alias |
+
+**Why the joint-state bridge:** tf2 can only answer
+`arm_base_link → camera_color_optical_frame` if something publishes the arm's
+joints. The lab gets that from its Kinova ROS driver; here the arm is behind
+`arm_server.py`'s RPC, so the bridge republishes `get_state()` as `JointState`
+and `robot_state_publisher` builds the rest of the tree:
+
+```
+base_link --(robot_state_publisher + joint_state_bridge)--> end_effector_link
+end_effector_link --(easy_handeye2 calib, static)--------> camera_color_optical_frame
+base_link --(identity, static)---------------------------> arm_base_link
+```
+
+`kortex_description`'s `gen3.xacro dof:=7 gripper:=robotiq_2f_85` emits exactly
+`base_link` / `end_effector_link` — the frame names the saved calibration refers
+to, so no renaming is needed.
+
+**Bring-up** (arm servers first, as always — see the ladder above):
+
+```bash
+ros2 launch launch/ros2/microwave_bringup.launch.py
+# verify BEFORE moving the arm:
+ros2 run tf2_ros tf2_echo arm_base_link camera_color_optical_frame
+```
+
+> `ros2 launch` must run under **system python3** (it needs `lark`, which the
+> project venv lacks). The launch file starts the repo's own modules with the
+> venv interpreter, so both sides get what they need — nothing to install.
+
+> `align_depth.enable:=true` is not optional: the handle pipeline reads depth at
+> colour pixel coordinates.
+
+**Button detection without Molmo.** `detect_start_button` reached the button only
+through a remote Molmo VLM behind an ngrok tunnel on the lab network. There is
+now a local GroundingDINO backend that applies the rule Molmo's own prompt
+states — the *right* one of the two rectangular buttons on the *bottom* row of
+the control panel. Selected with `BUTTON_BACKEND`:
+
+| value | behaviour |
+|---|---|
+| `auto` (default) | try Molmo, fall back to GroundingDINO — identical to the old code whenever Molmo is reachable |
+| `grounding_dino` | local only, no network |
+| `molmo` | the lab's original behaviour |
+
+> **Orientation is the trap:** the wrist camera is mounted upside down, so
+> "bottom row" and "rightmost" are evaluated in the *flipped* view while
+> `detect_items` returns raw original-image coordinates. Getting it backwards
+> selects the diagonally opposite button — which looks perfectly plausible in a
+> log. Covered by `tests/test_button_detection.py`.
+
+**Offline validation (no arm, no camera):**
+
+```bash
+python scripts/generate_microwave_poses_offline.py --log_dir <dir>   # real geometry
+python scripts/validate_open_microwave_hla_sim.py --log_dir <dir>    # real HLA
+```
+
+The first runs the genuine `perceive_handle_opening_poses("microwave")` with the
+detector stubbed. The second replays it through the real behaviour tree — it
+gets through staging, perception and the RViz guard, then stops at the first
+Cartesian move because `plan_to_ee_pose` is broken on this box (see below), not
+because of anything in the skill.
+
+---
+
 ## ❌ Broken / blocked
 
 | What | Symptom | Root cause | Workaround |
 |---|---|---|---|
 | IKFast (repo sim IK) | hangs indefinitely | IKFast build fails on this custom Gen3 URDF (aarch64) | PyBullet native `calculateInverseKinematics` |
 | `plan_to_ee_pose` (sim cartesian) | never converges | needs a stepping/real-time loop + IKFast | native IK + `resetJointState` for kinematic playback |
-| `rospy` (bulldog, PerceptionInterface, tf2) | not installed | **ROS 1 Noetic repo vs ROS 2 Humble / Ubuntu 22.04 box** — Noetic only targets 20.04 | bulldog → **bypass**; camera → `pyrealsense2`; **tf2 → easy_handeye2 calib + arm FK** |
+| `rospy` (bulldog, PerceptionInterface, tf2) | not installed | **ROS 1 Noetic repo vs ROS 2 Humble / Ubuntu 22.04 box** — Noetic only targets 20.04 | **the perception path is now ported to ROS 2** (see below); bulldog still → **bypass** |
 | bulldog | won't start | needs arm **and** base RPC servers up | stub base server + (real bulldog still needs rospy) |
 | ViT-H on GPU | CUDA OOM (`NvMap error 12`) | 2.5 GB model + double-copy on 8 GB shared RAM | lazy SAM; use lighter SAM / bigger Jetson for the food path |
 | GroundingDINO on GPU | `NVML_SUCCESS==r ASSERT` in torch allocator | Tegra iGPU lacks NVML/PCI interface torch expects | run detection on **CPU** (`CUDA_VISIBLE_DEVICES=""`), ~34 s/frame. (YOLO via `yolo_env`'s Jetson torch runs GPU fine.) |
