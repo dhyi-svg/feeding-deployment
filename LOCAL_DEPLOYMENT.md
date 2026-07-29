@@ -125,6 +125,25 @@ perception deps, `netft_rdt_driver` has no public distribution at all).
 
 ---
 
+### Frame convention on this rig (`arm_base_link`)
+
+| axis | direction |
+|---|---|
+| **+x** | **out / forward**, away from the robot toward the appliance |
+| **+y** | left |
+| **+z** | **up** |
+
+So a larger x means *further from the arm*, and any approach standoff must be at
+**smaller x than the target** — in front of the appliance, on the arm's side.
+
+> **Watch the grasp-offset sign.** `GRASP_QUAT = (-0.5, 0.5, 0.5, -0.5)` (fixed in
+> `detect_handle_and_placement`) maps **local +z to base −x**. So the repo's
+> `pre_grasp = handle_transform @ trans(0, 0, -0.12)` moves **+0.12 in base x —
+> away from the arm, behind the microwave**, which is both unreachable
+> (0.98 m vs the Gen3's ~0.90 m) and physically impossible. On this rig the
+> standoff offsets must be applied along **+z local** so they land at smaller x.
+> Caught on 2026-07-29 by the approach script's reach gate.
+
 ### Perception — ROS 2 (Humble), the repo's own code path (2026-07-28)
 
 The rospy-free pipeline above proved the geometry on hardware, but it ran

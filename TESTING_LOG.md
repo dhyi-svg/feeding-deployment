@@ -204,11 +204,66 @@ assumption              = [ 0.000, +0.320,  0.000]
 one-off bad frame — the plane-fit far-edge heuristic genuinely picks the wrong
 edge on this microwave/viewpoint. Do not drive the arc from the perceived hinge.
 
+### ✅ First autonomous approach through the ROS 2 path — 1 mm
+
+Approach-only (no grasp, no arc), `set_speed("low")`, gates on:
+
+```
+handle (corrected)  [0.6922, -0.1307, 0.4970]   1.5 cm from touched truth
+pre-grasp target    [0.5722, -0.1307, 0.4970]   12.0 cm standoff, range 0.77 m
+final EE            [0.5724, -0.1309, 0.4959]
+tracking error      [+0.0002, -0.0002, -0.0012]   |e| = 0.1 cm
+gripper             0.0087 (untouched)
+```
+
+Full chain end to end: ROS 2 TF → live GroundingDINO → corrected handle →
+repo pre-grasp geometry → seeded IK → one joint move → **1 mm**.
+
+### ⚠️ `GRASP_QUAT` is 180° off about y on this rig
+
+The blocker before that move was **not** the offsets — it was the orientation.
+`detect_handle_and_placement` stamps every pose with a fixed
+`GRASP_QUAT = (-0.5, 0.5, 0.5, -0.5)`, which in this base frame maps **local +z
+to base −x**: the gripper faces *backward, at the robot*. With that orientation
+the repo's `pre_grasp = handle @ trans(0,0,-0.12)` lands **behind the microwave**
+at range 0.96 m — past the Gen3's ~0.90 m reach, and physically unreachable
+(the appliance is in the way).
+
+Frame convention here, for the avoidance of doubt: **+x is out/forward, +z is up.**
+
+Flipping the offset sign is the wrong fix — it puts the EE in front of the handle
+but still facing away, an awkward wrist pose (IK error 15.8 cm, 169° flip). IK
+sweep over candidates:
+
+| orientation / offset | gripper +z | range | IK err | joint jump |
+|---|---|---|---|---|
+| repo quat, −0.12 | −x (backward) | 0.961 | 39.0 cm | 172° |
+| repo quat, +0.12 | −x (backward) | 0.769 | 15.8 cm | 169° |
+| **quat·Ry(180), −0.12** | **+x (forward)** | **0.769** | **0.00 cm** | **43°** |
+
+Rotating 180° about local y turns the gripper to face the appliance, and then the
+repo's **own** `−0.12` offset puts the standoff in front of the handle. Only
+candidate that solves exactly, and it needs the least joint motion.
+
+**Open question:** whether the lab's `arm_base_link` is oriented differently (making
+the constant correct there) or whether this is a latent bug upstream. Until that is
+settled, treat the 180° y-rotation as **rig-specific** and do not change the shared
+constant.
+
+### Two smaller things
+
+- `JointCommand` takes `pos=`, not `joint_positions=`. The wrong keyword raised a
+  `TypeError` *before* anything was commanded — a safe failure, but worth knowing.
+- The sim scene puts the robot at a world offset, so an `arm_base_link` target must
+  be lifted via `multiply_poses(scene.robot_base_pose, pose)` before PyBullet IK.
+  Skipping that gives a 227 cm IK error — caught by the IK gate.
+
 ### Next step
 
-Motion. Keep the `+0.32 m` hinge assumption in the HLA path, corrections on at
-0.094 / 0.0, `set_speed("low")`, hand on the e-stop. **Approach only — no grasp —
-first.**
+Grasp. The remaining unknowns are the grasp depth (`GRIP_EXT`, proven at 0.065 on
+the old path) and whether the gripper closes cleanly on the handle at this
+orientation. Keep the `+0.32 m` hinge assumption for the arc — the perceived hinge
+is still confirmed wrong-side.
 
 ---
 
