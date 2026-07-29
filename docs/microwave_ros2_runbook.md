@@ -117,9 +117,15 @@ Corrections are **off by default**. Turn them on only once rung 3 confirms the
 bias is still what it was:
 
 ```bash
-export HANDLE_DEPTH_CORR=0.16     # perception overestimates depth
-export HANDLE_LAT_CORR=0.07       # centroid sits off the latch
+export HANDLE_DEPTH_CORR=0.094    # measured 2026-07-29 on the tf2 path
+export HANDLE_LAT_CORR=0.0        # lateral residual is <1cm on this path
 ```
+
+> **Not 0.16.** That value belongs to the old calib+FK path and undershoots by
+> ~6 cm here. 0.094 was measured against a fresh touch ground truth at two
+> distances (offset moved 5 mm over 13.7 cm, so it is a fixed offset, not a
+> scale error). Re-measure after any recalibration, and re-touch the handle
+> first -- the microwave moved 4.7 cm between 07-14 and 07-29.
 
 Re-run rung 3 and confirm the corrected handle lands within ~1–2 cm of truth.
 

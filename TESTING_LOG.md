@@ -123,12 +123,52 @@ physical spot as on 2026-07-14. That was not confirmed. If it moved, part of the
 8.3 cm delta is the appliance, not bias. **Re-measure against a fresh teleop
 ground truth before trusting any correction constant on the tf2 path.**
 
+### Fresh ground truth + two-distance check — the bias is a fixed OFFSET
+
+Gripper hand-guided to touch the handle: true handle (EE origin) =
+**`[0.6932, -0.1171, 0.5031]`**. Note the handle has **moved 4.7 cm** since
+2026-07-14, so part of the delta against the old ground truth was the appliance,
+not bias — always re-touch before trusting a correction.
+
+Detected from two camera distances against that fixed truth:
+
+| | camera->handle true | perceived | offset | scale |
+|---|---|---|---|---|
+| #1 | 0.4627 m | 0.5595 m | **+0.0968** | 1.2092 |
+| #2 | 0.3258 m | 0.4176 m | **+0.0918** | 1.2818 |
+
+Over a 13.7 cm change in distance the **offset moved 5 mm** while the **scale
+moved 0.073**. So the error is a constant offset, not a proportional one:
+
+> **`HANDLE_DEPTH_CORR = 0.094`, `HANDLE_LAT_CORR = 0.0`** on the tf2 path.
+> The documented `0.16` belongs to the old calib+FK path and would undershoot
+> by ~6 cm here. Lateral residual is <1 cm, nothing like the old `0.07`.
+
+**Independent validation, worth noting:** the perceived handle came out at
+`[0.7859, -0.1358, 0.4779]` and `[0.7826, -0.1280, 0.4779]` from two very
+different arm poses — **8 mm apart**. The TF chain (joint bridge +
+robot_state_publisher + easy_handeye2) is therefore self-consistent across
+viewpoints; the 9.4 cm is a systematic offset, not calibration noise or jitter.
+
+**Unresolved ambiguity.** A two-distance test separates offset from scale but
+*cannot* separate a genuine perception offset from a constant EE-frame
+convention offset (tool tip vs tool flange) — both are distance-invariant.
+`kinova.py:420` says `get_state` returns the **tool tip** pose, which favours
+this being real perception error (the handle centroid landing at/near the door
+plane rather than on the protruding handle), but the same comment says it "isn't
+exactly the same as" the tool frame, leaving ~cm of doubt. Resolve by measuring
+the handle's protrusion from the door with a ruler and comparing to 9.4 cm.
+
+**This also kills the scale hypothesis for Pachirisu's ~20 cm error** — if the
+error model is a fixed offset, sitting further back does not inflate it, so that
+box's problem is something else (still most likely its calibration reference
+frame, per 2026-07-22).
+
 ### Next step
 
-Establish a fresh teleop ground truth for the microwave's current position, then
-re-derive the depth/lateral corrections **for the tf2 path specifically**. Fix or
-bypass the hinge heuristic (simplest: keep the `+0.32 m` assumption in the HLA
-path). Only then attempt approach.
+Set `HANDLE_DEPTH_CORR=0.094`, re-run detection, and confirm the corrected handle
+lands within ~1-2 cm of `[0.6932, -0.1171, 0.5031]`. Keep the `+0.32 m` hinge
+assumption — the perceived hinge is still on the wrong side. Only then approach.
 
 ---
 
