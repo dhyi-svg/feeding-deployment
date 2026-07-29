@@ -109,6 +109,17 @@ class AppliancePerception(TFInterface):
         self.handle_type = None
         self.num_perception_samples = num_perception_samples
 
+        # Rig-specific empirical handle corrections (camera frame), applied by
+        # _apply_handle_corrections. Default 0.0 = upstream behaviour unchanged;
+        # the Jetson rig's proven values are 0.16 / 0.07.
+        self.handle_depth_corr = float(os.environ.get("HANDLE_DEPTH_CORR", 0.0))
+        self.handle_lat_corr = float(os.environ.get("HANDLE_LAT_CORR", 0.0))
+        if self.handle_depth_corr or self.handle_lat_corr:
+            print(
+                f"Handle corrections enabled: depth {self.handle_depth_corr:.3f}m, "
+                f"lateral {self.handle_lat_corr:.3f}m"
+            )
+
         self.handle_points_pub, self.handle_center_pub = self._make_marker_publishers()
 
         # All detection images flow through the per-day data logger into the
@@ -429,6 +440,48 @@ class AppliancePerception(TFInterface):
             "Could not get transform between arm_base_link and camera_color_optical_frame"
         )
         return None
+
+    def _apply_handle_corrections(self, centroid_cam):
+        """Apply the rig's empirical handle-pose corrections, in CAMERA frame.
+
+        The 2026-07-14 teleop ground-truth comparison on the Jetson rig found the
+        perceived handle sat ~16 cm too far away and ~7 cm off the latch. Left
+        uncorrected, that overshoots the grasp (the arm pushes the microwave) and
+        also triggers spurious "out of reach" aborts.
+
+        Depth is corrected by shortening the whole camera-origin -> point ray
+        proportionally, NOT by shifting z: the error is a range error along the
+        viewing ray, so a plain z-shift would leave x/y wrong off-axis. This
+        mirrors scripts/real_gen3_detect_grasp_microwave.py exactly.
+
+        These constants are **rig-specific** -- they encode this camera, this
+        mount and this calibration. They are OFF by default so no other
+        deployment silently inherits them; enable per-rig with::
+
+            HANDLE_DEPTH_CORR=0.16 HANDLE_LAT_CORR=0.07
+
+        Re-measure against teleop ground truth after any recalibration.
+        """
+        if self.handle_depth_corr == 0.0 and self.handle_lat_corr == 0.0:
+            return centroid_cam
+
+        centroid_cam = np.asarray(centroid_cam, dtype=float).copy()
+        depth = float(centroid_cam[2])
+        if depth <= self.handle_depth_corr:
+            # Correcting past the camera would flip the ray; leave it alone and
+            # let the caller's reachability checks reject it.
+            print(
+                f"Handle depth {depth:.3f}m <= correction {self.handle_depth_corr:.3f}m; "
+                f"skipping depth correction"
+            )
+        elif self.handle_depth_corr != 0.0:
+            centroid_cam *= (depth - self.handle_depth_corr) / depth
+        centroid_cam[1] -= self.handle_lat_corr
+        print(
+            f"Applied handle corrections (depth {self.handle_depth_corr:+.3f}m, "
+            f"lateral {-self.handle_lat_corr:+.3f}m): {np.round(centroid_cam, 3)}"
+        )
+        return centroid_cam
 
     # -- local (GroundingDINO) button detection ---------------------------
     # The lab points a remote Molmo VLM at the control panel and asks it to
@@ -762,6 +815,10 @@ class AppliancePerception(TFInterface):
             return None, None, None, None
 
         transform = self.get_frame_to_frame_transform(camera_info_msg)
+
+        # Empirical camera-frame corrections, applied before the base transform
+        # (see _apply_handle_corrections). Off unless configured.
+        handle_centroid_3d = self._apply_handle_corrections(handle_centroid_3d)
 
         if transform is not None:
             base_to_camera = self.make_homogeneous_transform(transform)
