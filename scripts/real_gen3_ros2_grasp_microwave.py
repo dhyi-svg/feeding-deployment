@@ -121,5 +121,9 @@ print("\nclosing gripper ...")
 ai.execute_command(CloseGripperCommand()); time.sleep(3.5)
 gf = float(ai.get_state().get("gripper_pos"))
 print(f"gripper after close: {gf:.4f}")
-print("VERDICT:", "GRIPPING the handle" if 0.15 < gf < 0.95
-      else "CLOSED EMPTY -- missed" if gf >= 0.95 else "close failed")
+# Deliberately no automated verdict. gripper_pos saturates near 1.0 whether or
+# not the handle is between the fingers (CLAUDE.md records ~0.99 while holding the
+# door), so it cannot tell success from a miss -- an earlier version called a
+# confirmed-good grasp "closed empty". The proven flow uses a human grip check.
+print("Gripper closed. gripper_pos cannot confirm a grasp on this rig --")
+print("CHECK VISUALLY before running the arc.")
