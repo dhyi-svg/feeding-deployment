@@ -38,7 +38,7 @@ from pathlib import Path
 import rclpy
 import yaml
 from geometry_msgs.msg import TransformStamped
-from tf2_ros import StaticTransformBroadcaster
+from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
 from feeding_deployment.ros2.node import get_node
 
@@ -128,11 +128,25 @@ def _make_transform(node, parent: str, child: str, xyz, quat_xyzw) -> TransformS
 def publish_calibration_tf(
     calib_path: Path | str = DEFAULT_CALIB_PATH,
     publish_arm_base_alias: bool = True,
-) -> StaticTransformBroadcaster:
-    """Publish the hand-eye calibration (and the arm-base alias) as static TF.
+    repeat_hz: float = 20.0,
+):
+    """Publish the hand-eye calibration (and the arm-base alias) as TF.
 
-    Returns the broadcaster; keep a reference to it for as long as the
-    transforms should stay latched.
+    Sends them once on ``/tf_static`` AND re-sends them on ``/tf`` at
+    ``repeat_hz`` with fresh timestamps.
+
+    The repeat is not redundancy for its own sake. ``/tf_static`` is latched
+    (TRANSIENT_LOCAL), which in principle serves late-joining listeners -- but
+    with several independent static publishers on the topic (here:
+    robot_state_publisher plus this node) a listener can end up with only some
+    publishers' transforms and report "two or more unconnected trees". That
+    happened live on 2026-07-29 and killed a detection mid-run. Re-sending on
+    ``/tf`` is what actually guarantees delivery, and the fresh stamps also stop
+    lookups at a recent camera timestamp from failing with "extrapolation into
+    the past".
+
+    Returns ``(static_broadcaster, dynamic_broadcaster)``; keep a reference to
+    both for as long as the transforms should stay published.
     """
     calib = load_calibration(calib_path)
     node = get_node()
@@ -155,12 +169,32 @@ def publish_calibration_tf(
         )
 
     broadcaster.sendTransform(transforms)
+
+    # Re-send on /tf with current stamps. See the docstring: latched /tf_static
+    # alone has proved unreliable with multiple publishers on this rig.
+    dynamic_broadcaster = TransformBroadcaster(node)
+    specs = [
+        (t.header.frame_id, t.child_frame_id,
+         (t.transform.translation.x, t.transform.translation.y, t.transform.translation.z),
+         (t.transform.rotation.x, t.transform.rotation.y,
+          t.transform.rotation.z, t.transform.rotation.w))
+        for t in transforms
+    ]
+
+    def _republish():
+        dynamic_broadcaster.sendTransform(
+            [_make_transform(node, parent, child, xyz, quat) for parent, child, xyz, quat in specs]
+        )
+
+    node.create_timer(1.0 / repeat_hz, _republish)
+
     node.get_logger().info(
         f"Published {calib['calibration_type']} calibration from {calib['path']}: "
         f"{calib['parent_frame']} -> {calib['child_frame']}"
         + (f", plus base_link -> {REPO_ARM_BASE_FRAME}" if publish_arm_base_alias else "")
+        + f" (static, and repeated on /tf at {repeat_hz:g} Hz)"
     )
-    return broadcaster
+    return broadcaster, dynamic_broadcaster
 
 
 def main() -> None:
@@ -176,7 +210,7 @@ def main() -> None:
     node = get_node()
     # Held for the process lifetime: a StaticTransformBroadcaster that goes out
     # of scope stops latching its transforms.
-    _broadcaster = publish_calibration_tf(  # noqa: F841
+    _broadcasters = publish_calibration_tf(  # noqa: F841
         args.calib, publish_arm_base_alias=not args.no_arm_base_alias
     )
     node.get_logger().info("Static calibration TF latched; Ctrl-C to stop.")
