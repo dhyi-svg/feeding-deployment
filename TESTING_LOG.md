@@ -258,12 +258,44 @@ constant.
   be lifted via `multiply_poses(scene.robot_base_pose, pose)` before PyBullet IK.
   Skipping that gives a 227 cm IK error — caught by the IK gate.
 
+### Measured grasp pose — `GRIP_EXT` is ~0 on this path, NOT 0.065
+
+The 12 cm pre-grasp standoff was too far to grasp from, so the arm was driven in
+by Xbox teleop to where the gripper should actually close, and the pose read back:
+
+```
+grasp EE (teleop)   [0.6965, -0.1098, 0.4952]   gripper +z = [1.00, -0.00, 0.01]
+corrected handle    [0.6922, -0.1307, 0.4970]
+EE - handle (base)  [+0.0043, +0.0209, -0.0018]   |d| = 2.1 cm
+  in handle-local:  along approach (z) +0.4 cm ; lateral (x) +2.1 cm
+```
+
+**Along the approach axis the offset is ~0.4 cm — effectively zero.** The
+inherited `GRIP_EXT = 0.065` does *not* transfer to this path.
+
+The reason is that the two constants are **coupled**: `HANDLE_DEPTH_CORR = 0.094`
+was fitted so the corrected handle coincides with the EE pose when the gripper is
+touching the handle. So the corrected handle *is already* the grasp point, and
+applying `GRIP_EXT` on top would back the gripper off by a further 6.5 cm and
+miss. Use one or the other, never both.
+
+> **Rule:** with `HANDLE_DEPTH_CORR` calibrated against a touched EE pose,
+> **grasp EE target = corrected handle**, `GRIP_EXT = 0`. If the depth correction
+> is ever re-derived against the handle *surface* instead of the touched EE pose,
+> `GRIP_EXT` has to come back.
+
+**A repeatable ~2 cm lateral bias.** The perceived handle sits ~2 cm to base −y of
+the grasp point, and the same direction showed up in the correction check
+(1.4 cm). Two samples agree in sign, so `HANDLE_LAT_CORR` is worth deriving —
+but from a third measurement, not by fitting these two.
+
 ### Next step
 
-Grasp. The remaining unknowns are the grasp depth (`GRIP_EXT`, proven at 0.065 on
-the old path) and whether the gripper closes cleanly on the handle at this
-orientation. Keep the `+0.32 m` hinge assumption for the arc — the perceived hinge
-is still confirmed wrong-side.
+Grasp: command the measured grasp pose (= corrected handle, no `GRIP_EXT`), close
+the gripper, confirm it holds. Note the Xbox teleop may have faulted the Kortex
+session — `get_state` still answered, but restart `arm_server.py` + the bypass if
+the first motion command is refused. Keep the `+0.32 m` hinge assumption for the
+arc; the perceived hinge is still confirmed wrong-side.
 
 ---
 
