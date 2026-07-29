@@ -29,7 +29,7 @@ def main():
         text_threshold=0.3,
     )
 
-    labels = [f"{args.prompt} {c:0.2f}" for _, _, c, _, _, _ in detections]
+    labels = [f"{args.prompt} {float(c):0.2f}" for c in detections.confidence]
     annotated = sv.BoxAnnotator().annotate(scene=image, detections=detections, labels=labels)
     cv2.imwrite(args.out, annotated)
     print(f"{len(detections.xyxy)} boxes, confidences={[round(float(c), 3) for c in detections.confidence]} -> {args.out}")

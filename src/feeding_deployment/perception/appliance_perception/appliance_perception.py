@@ -1024,9 +1024,12 @@ class AppliancePerception(TFInterface):
 
         # annotate image with detections
         box_annotator = sv.BoxAnnotator()
+        # supervision's Detections tuple grew a field between 0.6.0 (pinned by
+        # groundingdino-py) and 0.21.x (what the lab installs), so unpacking a
+        # fixed arity breaks on one of them. Index the arrays instead.
         labels = [
-            f"{classes_being_detected[class_id]} {confidence:0.2f}"
-            for _, _, confidence, class_id, _, _ in detections
+            f"{classes_being_detected[int(class_id)]} {float(confidence):0.2f}"
+            for confidence, class_id in zip(detections.confidence, detections.class_id)
         ]
 
         # NMS post process
@@ -1056,8 +1059,8 @@ class AppliancePerception(TFInterface):
 
         print("Image size:", image.shape)
         print("Detections (flipped):")
-        for _, _, confidence, class_id, _, _ in detections:
-            print(f"  {classes_being_detected[class_id]}: {confidence:0.2f}")
+        for confidence, class_id in zip(detections.confidence, detections.class_id):
+            print(f"  {classes_being_detected[int(class_id)]}: {float(confidence):0.2f}")
         print(detections.xyxy)
 
         # flip back the image and detections to original orientation
@@ -1078,8 +1081,8 @@ class AppliancePerception(TFInterface):
 
         print("Image size:", image.shape)
         print("Detections:")
-        for _, _, confidence, class_id, _, _ in detections:
-            print(f"  {classes_being_detected[class_id]}: {confidence:0.2f}")
+        for confidence, class_id in zip(detections.confidence, detections.class_id):
+            print(f"  {classes_being_detected[int(class_id)]}: {float(confidence):0.2f}")
         print(detections.xyxy)
 
         if return_all:

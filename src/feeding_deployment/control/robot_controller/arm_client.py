@@ -22,6 +22,23 @@ except ModuleNotFoundError as e:
     # print(f"ROS not imported: {e}")
     ROSPY_IMPORTED = False
 
+# ROS 2 (Humble) fallback for the single-machine rig. The arm itself is reached
+# over this repo's own RPC, not over ROS, so ROS is only needed here for the
+# watchdog handshake -- see ArmInterfaceClient.__init__.
+ROS2_IMPORTED = False
+if not ROSPY_IMPORTED:
+    try:
+        import rclpy  # noqa: F401
+        from sensor_msgs.msg import JointState
+        from std_msgs.msg import Bool
+        from geometry_msgs.msg import Pose
+
+        ROS2_IMPORTED = True
+    except ModuleNotFoundError:
+        ROS2_IMPORTED = False
+
+ROS_AVAILABLE = ROSPY_IMPORTED or ROS2_IMPORTED
+
 def load_robot_config(config_path: str) -> types.SimpleNamespace:
     with open(config_path, "r") as f:
         raw = yaml.safe_load(f)
@@ -39,12 +56,24 @@ from feeding_deployment.safety.collision_threshold import collision_threshold
 class ArmInterfaceClient:
     def __init__(self):
 
-        assert ROSPY_IMPORTED, "ROS is required to run on the real robot"
+        assert ROS_AVAILABLE, "ROS (1 or 2) is required to run on the real robot"
 
-        # make sure watchdog is running
-        print("Waiting for Watchdog status...")
-        rospy.wait_for_message("/watchdog_status", Bool)
-        print("Watchdog is running, continuing...")
+        if ROSPY_IMPORTED:
+            # make sure watchdog is running
+            print("Waiting for Watchdog status...")
+            rospy.wait_for_message("/watchdog_status", Bool)
+            print("Watchdog is running, continuing...")
+        else:
+            # ROS 2 rig: the real bulldog/watchdog is ROS 1-only and is replaced
+            # by scripts/bulldog_bypass.py, which holds bulldog_ready and
+            # heartbeats is_alive() directly over the arm RPC -- there is no
+            # /watchdog_status topic to wait on. The bypass is still a liveness
+            # guarantee: if it dies, the arm e-stops within ~1 s. But there is
+            # NO software e-stop, so the physical one is the only stop.
+            print(
+                "ROS 2 rig: skipping the /watchdog_status wait "
+                "(liveness comes from bulldog_bypass.py; physical e-stop only)."
+            )
 
         # Register ArmInterface (no lambda needed on the client-side)
         ArmManager.register("ArmInterface")
