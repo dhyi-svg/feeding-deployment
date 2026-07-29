@@ -25,6 +25,18 @@ LED_BAUD_RATE = 115200
 # (attachment) flow -- see _center_crop_rgbd / perceive_attachment_poses.
 ATTACHMENT_CROP_FRAC = 0.65
 
+# ROS 1 (lab NUC) and ROS 2 (single-machine Jetson) are both supported. The
+# ROS 2 deployment only brings up what the appliance/microwave path needs --
+# head/drink/attachment perception and the netft F/T driver are ROS 1-only
+# (netft_rdt_driver has no public distribution at all), so they are imported
+# best-effort and the features that use them degrade to no-ops.
+ROSPY_IMPORTED = False
+ROS2_IMPORTED = False
+HEAD_PERCEPTION_AVAILABLE = False
+DRINK_PERCEPTION_AVAILABLE = False
+ATTACHMENT_PERCEPTION_AVAILABLE = False
+FT_SENSOR_AVAILABLE = False
+
 try:
     import rospy
     from sensor_msgs.msg import JointState
@@ -39,8 +51,35 @@ try:
     from feeding_deployment.perception.drink_perception.drink_perception import DrinkPerception
     from feeding_deployment.perception.appliance_perception.appliance_perception import AppliancePerception
     from feeding_deployment.perception.attachment_perception.attachment_perception import AttachmentPerception
+
+    ROSPY_IMPORTED = True
+    HEAD_PERCEPTION_AVAILABLE = True
+    DRINK_PERCEPTION_AVAILABLE = True
+    ATTACHMENT_PERCEPTION_AVAILABLE = True
+    FT_SENSOR_AVAILABLE = True
 except ModuleNotFoundError:
     ROSPY_IMPORTED = False
+
+if not ROSPY_IMPORTED:
+    try:
+        import rclpy
+        import tf2_ros
+        from sensor_msgs.msg import JointState
+        from std_msgs.msg import String, Bool
+        from geometry_msgs.msg import Point, Pose as PoseMsg
+
+        from feeding_deployment.ros2.node import get_node as _get_ros2_node
+        from feeding_deployment.ros2.realsense_ros2_interface import (
+            RealSenseROS2Interface as RealSenseInterface,
+        )
+        from feeding_deployment.perception.grounded_sam import GroundedSAM
+        from feeding_deployment.perception.appliance_perception.appliance_perception import AppliancePerception
+
+        ROS2_IMPORTED = True
+    except ModuleNotFoundError as _e:
+        print(f"[perception_interface] No ROS 1 or ROS 2 available: {_e}")
+
+ROS_AVAILABLE = ROSPY_IMPORTED or ROS2_IMPORTED
 
 from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceClient
 from feeding_deployment.utils.camera_utils import CustomCameraInfo
@@ -68,38 +107,66 @@ class PerceptionInterface:
             self._grounded_sam = None
         else:
             self.simulation = False
+            self._ros2_node = _get_ros2_node() if ROS2_IMPORTED else None
             self.tfBuffer = tf2_ros.Buffer()
-            self.listener = tf2_ros.TransformListener(self.tfBuffer)
+            if ROS2_IMPORTED:
+                self.listener = tf2_ros.TransformListener(self.tfBuffer, self._ros2_node)
+            else:
+                self.listener = tf2_ros.TransformListener(self.tfBuffer)
 
             print("Initializing RealSense interface ...")
-            self._realsense = RealSenseInterface(record_goal_pose=record_goal_pose)
+            if ROS2_IMPORTED:
+                # The ROS 2 consumer takes its topics from the realsense2_camera
+                # driver and has no goal-pose recording (a ROS 1 rosbag feature).
+                self._realsense = RealSenseInterface()
+            else:
+                self._realsense = RealSenseInterface(record_goal_pose=record_goal_pose)
             print("RealSense interface initialized")
 
             print("Initializing shared GroundedSAM ...")
             self._grounded_sam = GroundedSAM()
             print("GroundedSAM initialized")
 
-            print("Initializing head perception ROS wrapper ...")
-            self._head_perception = HeadPerceptionROSWrapper(record_goal_pose)
-            print("Head perception ROS wrapper initialized")
+            if HEAD_PERCEPTION_AVAILABLE:
+                print("Initializing head perception ROS wrapper ...")
+                self._head_perception = HeadPerceptionROSWrapper(record_goal_pose)
+                print("Head perception ROS wrapper initialized")
+            else:
+                self._head_perception = None
 
-            print("Initializing drink perception ...")
-            self._drink_perception = DrinkPerception()
+            if DRINK_PERCEPTION_AVAILABLE:
+                print("Initializing drink perception ...")
+                self._drink_perception = DrinkPerception()
+            else:
+                self._drink_perception = None
+
             print("Initializing handle perception ...")
             self._appliance_perception = AppliancePerception(self._grounded_sam, data_logger=self.data_logger)
-            print("Initializing attachment perception ...")
-            self._attachment_perception = AttachmentPerception(data_logger=self.data_logger)
+
+            if ATTACHMENT_PERCEPTION_AVAILABLE:
+                print("Initializing attachment perception ...")
+                self._attachment_perception = AttachmentPerception(data_logger=self.data_logger)
+            else:
+                self._attachment_perception = None
             print("Perception interface initialized")
 
             self._head_perception_warm_started = False
 
-            self.speak_pub = rospy.Publisher('/speak', String, queue_size=1)
-
             self.transfer_button = False
-            self.transfer_button_sub = rospy.Subscriber('/transfer_button', Bool, self.transfer_button_callback)
-            
             self.ft_threshold_exceeded = False
-            self.ft_sensor_sub = rospy.Subscriber('/forque/forqueSensor', WrenchStamped, self.ft_callback)
+
+            if ROSPY_IMPORTED:
+                self.speak_pub = rospy.Publisher('/speak', String, queue_size=1)
+                self.transfer_button_sub = rospy.Subscriber('/transfer_button', Bool, self.transfer_button_callback)
+                self.ft_sensor_sub = rospy.Subscriber('/forque/forqueSensor', WrenchStamped, self.ft_callback)
+            else:
+                # ROS 2: /speak and the transfer button exist; the forque F/T
+                # sensor does not (netft_rdt_driver is ROS 1-only), so
+                # ft_threshold_exceeded simply stays False.
+                self.speak_pub = self._ros2_node.create_publisher(String, '/speak', 1)
+                self.transfer_button_sub = self._ros2_node.create_subscription(
+                    Bool, '/transfer_button', self.transfer_button_callback, 1)
+                self.ft_sensor_sub = None
 
         self.head_perception_data_lock = threading.Lock()
         # this term is updated in the run_head_perception method and read in the get_tool_tip_pose method
@@ -403,16 +470,41 @@ class PerceptionInterface:
 
         return tool_tip_staging_pose
 
-    def getTransformationFromTF(self, source_frame, target_frame):
+    def getTransformationFromTF(self, source_frame, target_frame, timeout_sec: float = 10.0):
 
-        while not rospy.is_shutdown():
-            try:
-                # print("Looking for transform")
-                transform = self.tfBuffer.lookup_transform(source_frame, target_frame, rospy.Time())
-                break
-            except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
-                self.control_rate.sleep()
-                continue
+        if ROSPY_IMPORTED:
+            while not rospy.is_shutdown():
+                try:
+                    # print("Looking for transform")
+                    transform = self.tfBuffer.lookup_transform(source_frame, target_frame, rospy.Time())
+                    break
+                except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
+                    self.control_rate.sleep()
+                    continue
+        else:
+            # ROS 2: same "block until the tree has it" retry, but bounded --
+            # an unbounded wait here would hang the executive if a frame is
+            # simply never published (e.g. the joint-state bridge is down).
+            from rclpy.time import Time as _RclpyTime
+
+            deadline = time.time() + timeout_sec
+            transform = None
+            while rclpy.ok() and time.time() < deadline:
+                try:
+                    transform = self.tfBuffer.lookup_transform(
+                        source_frame, target_frame, _RclpyTime()
+                    )
+                    break
+                except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
+                    time.sleep(0.05)
+                    continue
+            if transform is None:
+                raise RuntimeError(
+                    f"Timed out after {timeout_sec:g}s waiting for TF "
+                    f"{source_frame} <- {target_frame}. Is the joint-state bridge "
+                    f"(feeding_deployment.ros2.joint_state_bridge) and "
+                    f"robot_state_publisher running?"
+                )
 
         T = np.zeros((4,4))
         T[:3,:3] = R.from_quat([transform.transform.rotation.x, transform.transform.rotation.y, transform.transform.rotation.z, transform.transform.rotation.w]).as_matrix()

@@ -13,20 +13,27 @@ import numpy as np
 import open3d as o3d
 import requests
 
-# ros imports
-import rospy
 import supervision as sv
 import torch
 import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as transforms
-from geometry_msgs.msg import Point
-from geometry_msgs.msg import Pose as pose_msg
 from pybullet_helpers.geometry import Pose, Pose3D
 from scipy.spatial.transform import Rotation
-from sensor_msgs.msg import CameraInfo
 from sklearn.cluster import DBSCAN
-from visualization_msgs.msg import Marker, MarkerArray
+
+# ros imports -- ROS 1 (lab) and ROS 2 (single-machine Jetson) both supported.
+# The message types below are identical across distros; only the client library
+# and the publisher API differ. See feeding_deployment/ros2/ for the ROS 2 side.
+from feeding_deployment.perception.tf_interface import ROS_VERSION
+
+if ROS_VERSION == 1:
+    import rospy
+if ROS_VERSION is not None:
+    from geometry_msgs.msg import Point
+    from geometry_msgs.msg import Pose as pose_msg
+    from sensor_msgs.msg import CameraInfo
+    from visualization_msgs.msg import Marker, MarkerArray
 
 from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceClient
 from feeding_deployment.control.robot_controller.command_interface import (
@@ -89,8 +96,7 @@ class AppliancePerception(TFInterface):
         self.handle_type = None
         self.num_perception_samples = num_perception_samples
 
-        self.handle_points_pub = rospy.Publisher("/handle_points", Marker, queue_size=1)
-        self.handle_center_pub = rospy.Publisher("/handle_center", Marker, queue_size=1)
+        self.handle_points_pub, self.handle_center_pub = self._make_marker_publishers()
 
         # All detection images flow through the per-day data logger into the
         # active skill's folder (images/<skill>/<run>_<name>.png). We also keep the
@@ -98,6 +104,29 @@ class AppliancePerception(TFInterface):
         # confirmation vis to the iPad without re-reading it from disk.
         self._data_logger = data_logger
         self._last_images = {}
+
+    @staticmethod
+    def _make_marker_publishers():
+        """RViz debug marker publishers for the handle point cloud / centroid.
+
+        Returns ``(points_pub, center_pub)``, or ``(None, None)`` when no ROS is
+        available -- these are visualisation-only, so running without them costs
+        nothing but the RViz overlay.
+        """
+        if ROS_VERSION == 1:
+            return (
+                rospy.Publisher("/handle_points", Marker, queue_size=1),
+                rospy.Publisher("/handle_center", Marker, queue_size=1),
+            )
+        if ROS_VERSION == 2:
+            from feeding_deployment.ros2.node import get_node
+
+            node = get_node()
+            return (
+                node.create_publisher(Marker, "/handle_points", 1),
+                node.create_publisher(Marker, "/handle_center", 1),
+            )
+        return None, None
 
     def _log_image(self, name, image):
         """Log a detection image by semantic name (e.g. "rgb",
@@ -983,8 +1012,6 @@ class AppliancePerception(TFInterface):
 if __name__ == "__main__":
     import argparse
 
-    from feeding_deployment.interfaces.realsense_interface import RealSenseInterface
-
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--handle_type",
@@ -994,30 +1021,59 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    rospy.init_node("AppliancePerception")
+    if ROS_VERSION == 1:
+        from feeding_deployment.interfaces.realsense_interface import RealSenseInterface
+
+        rospy.init_node("AppliancePerception")
+        realsense_cls = RealSenseInterface
+
+        def _sleep(seconds):
+            rospy.sleep(seconds)
+
+        def _running():
+            return not rospy.is_shutdown()
+
+    elif ROS_VERSION == 2:
+        import rclpy
+
+        from feeding_deployment.ros2.realsense_ros2_interface import (
+            RealSenseROS2Interface,
+        )
+
+        realsense_cls = RealSenseROS2Interface
+
+        def _sleep(seconds):
+            time.sleep(seconds)
+
+        def _running():
+            return rclpy.ok()
+
+    else:
+        raise SystemExit(
+            "No ROS install found. This tester needs ROS 1 (rospy) or ROS 2 (rclpy)."
+        )
+
     grounded_sam = GroundedSAM()
     appliance_perception = AppliancePerception(grounded_sam)
 
     print("Waiting for camera data...")
-    realsense = RealSenseInterface()
+    realsense = realsense_cls()
 
     camera_data = None
-    rate = rospy.Rate(10)
-    while not rospy.is_shutdown():
+    while _running():
         camera_data = realsense.get_camera_data()
         if camera_data["rgb_image"] is not None:
             break
-        rate.sleep()
+        _sleep(0.1)
 
     print(
         f"Running detect_handle_and_placement loop with handle_type='{args.handle_type}' (Ctrl-C to stop)"
     )
-    rate = rospy.Rate(1)
-    while not rospy.is_shutdown():
+    while _running():
         camera_data = realsense.get_camera_data()
         if camera_data["rgb_image"] is None:
             print("No camera data, waiting...")
-            rate.sleep()
+            _sleep(1.0)
             continue
         result = appliance_perception.detect_handle_and_placement(
             args.handle_type,
@@ -1026,4 +1082,4 @@ if __name__ == "__main__":
             camera_data["depth_image"],
         )
         print("Result:", result)
-        rate.sleep()
+        _sleep(1.0)
