@@ -164,11 +164,51 @@ error model is a fixed offset, sitting further back does not inflate it, so that
 box's problem is something else (still most likely its calibration reference
 frame, per 2026-07-22).
 
+### Correction verified live: 1.6 cm
+
+With `HANDLE_DEPTH_CORR=0.094`, `HANDLE_LAT_CORR=0.0`:
+
+```
+corrected handle [0.6902, -0.1314, 0.4965]
+truth            [0.6932, -0.1171, 0.5031]
+error            [-0.0030, -0.0143, -0.0066]   |e| = 1.6 cm    PASS
+```
+
+Matches the ~1–2 cm the proven standalone pipeline achieved. The residual is
+mostly lateral (1.4 cm); a small `HANDLE_LAT_CORR` could shave it, but one sample
+does not justify tuning — leave at 0.0 until measured twice.
+
+### A `/tf_static` failure worth knowing about
+
+Mid-session a detection died with "two or more unconnected trees" even though the
+calibration publisher was alive and `tf2_echo` had worked minutes earlier.
+`/tf_static` carried only `robot_state_publisher`'s transforms; ours were absent.
+Latched (TRANSIENT_LOCAL) `/tf_static` is **not reliable with several independent
+publishers** — a late-joining listener can receive some publishers' transforms and
+not others.
+
+Fix: `calibration_tf.py` now also re-sends the calibration on `/tf` at 20 Hz with
+fresh stamps. That guarantees delivery regardless of join order, and the fresh
+stamps also cut the "extrapolation into the past" fallbacks. After the fix the
+tree resolved immediately and detection ran clean.
+
+### Hinge error reproduced from a second viewpoint
+
+```
+pose #1  hinge - handle = [+0.074, -0.137, -0.019]
+pose #2  hinge - handle = [+0.139, -0.113, -0.033]
+assumption              = [ 0.000, +0.320,  0.000]
+```
+
+**y is negative at both poses** while the working assumption is +0.32. Not a
+one-off bad frame — the plane-fit far-edge heuristic genuinely picks the wrong
+edge on this microwave/viewpoint. Do not drive the arc from the perceived hinge.
+
 ### Next step
 
-Set `HANDLE_DEPTH_CORR=0.094`, re-run detection, and confirm the corrected handle
-lands within ~1-2 cm of `[0.6932, -0.1171, 0.5031]`. Keep the `+0.32 m` hinge
-assumption — the perceived hinge is still on the wrong side. Only then approach.
+Motion. Keep the `+0.32 m` hinge assumption in the HLA path, corrections on at
+0.094 / 0.0, `set_speed("low")`, hand on the e-stop. **Approach only — no grasp —
+first.**
 
 ---
 
