@@ -5,6 +5,7 @@ see the microwave and the plane fit returns a handle ~7 cm off (2026-07-29).
 Does NOT run the opening arc -- the perceived hinge is wrong-side.
 """
 import argparse, sys, time
+from pathlib import Path
 import numpy as np, pybullet as p
 from scipy.spatial.transform import Rotation as R
 from pybullet_helpers.geometry import Pose, multiply_poses
@@ -19,8 +20,21 @@ from feeding_deployment.ros2.realsense_ros2_interface import RealSenseROS2Interf
 from feeding_deployment.simulation.scene_description import create_scene_description_from_config
 from feeding_deployment.simulation.simulator import FeedingDeploymentPyBulletSimulator
 
-TRUTH = np.array([0.6932, -0.1171, 0.5031])   # touched handle
-MAX_TRUTH_DEV = 0.05      # detection must agree with truth; catches a bad close-up fit
+# Stale reference: measured before the arc, and the microwave has since shifted.
+# Kept for REPORTING only -- no longer gated on.
+STALE_TRUTH = np.array([0.6932, -0.1171, 0.5031])
+
+# Self-consistency gate, replacing the absolute-truth one. Two independent
+# detections of the same handle must agree. This needs no ground truth (which
+# goes stale the moment the appliance moves) and directly catches the failure we
+# actually see: the centroid sliding along the handle bar, a 7.3 cm spread in y
+# across five looks while x and z stay within 1 cm.
+DETECT_AGREE = 0.03
+# Loose absolute plausibility box for a microwave handle in arm_base_link
+# (+x forward, +z up). Catches a wild fit without assuming a position.
+PLAUSIBLE_X = (0.45, 0.85)
+PLAUSIBLE_Y = (-0.40, 0.20)
+PLAUSIBLE_Z = (0.35, 0.65)
 PRE_STANDOFF = 0.12
 GRIP_EXT = 0.0            # coupled with HANDLE_DEPTH_CORR -- see TESTING_LOG
 # No lateral correction. A third detection put the handle within 3 mm of the
@@ -47,15 +61,34 @@ rs = RealSenseROS2Interface()
 if not rs.wait_for_frames(30.0): sys.exit("No RGB-D frames")
 apc = AppliancePerception(GroundedSAM())
 if apc.handle_depth_corr == 0.0: sys.exit("HANDLE_DEPTH_CORR not set -- refusing.")
-d = rs.get_camera_data()
-handle, hinge, _, _ = apc.detect_handle_and_placement(
-    "microwave handle", d["rgb_image"], d["camera_info"], d["depth_image"])
-if handle is None: sys.exit("NO DETECTION")
-h = np.asarray(handle.position)
-dev = float(np.linalg.norm(h - TRUTH))
-print(f"handle {np.round(h,4)}   {dev*100:.1f} cm from touched truth")
-if dev > MAX_TRUTH_DEV:
-    sys.exit(f"Detection {dev*100:.1f} cm from truth (> {MAX_TRUTH_DEV*100:.0f}) -- bad view, refusing.")
+def detect_once(tag):
+    d = rs.get_camera_data()
+    hh, _, _, top = apc.detect_handle_and_placement(
+        "microwave handle", d["rgb_image"], d["camera_info"], d["depth_image"])
+    if hh is None:
+        sys.exit(f"NO DETECTION ({tag})")
+    v = np.asarray(hh.position)
+    # top_of_appliance drives the repo's post_release_pose (lift to top + 5 cm),
+    # which is how open_microwave() exits -- straight up, not backwards.
+    tz = float(np.asarray(top.position)[2]) if top is not None else float("nan")
+    print(f"  detect {tag}: {np.round(v,4)}   top_of_appliance z {tz:.4f}")
+    return hh, v, tz
+
+h1o, h1, tz1 = detect_once("1")
+h2o, h2, tz2 = detect_once("2")
+spread = float(np.linalg.norm(h1 - h2))
+print(f"detections agree to {spread*100:.1f} cm (limit {DETECT_AGREE*100:.0f})")
+if spread > DETECT_AGREE:
+    sys.exit(f"Detections disagree by {spread*100:.1f} cm -- unstable, refusing.")
+h = (h1 + h2) / 2.0
+handle = h2o
+top_z = float(np.nanmean([tz1, tz2]))
+print(f"top_of_appliance z {top_z:.4f} -> post-release lift target {top_z+0.05:.4f}")
+Path("/tmp/microwave_top_z.txt").write_text(str(top_z))
+for nm, v, lo_hi in (("x", h[0], PLAUSIBLE_X), ("y", h[1], PLAUSIBLE_Y), ("z", h[2], PLAUSIBLE_Z)):
+    if not (lo_hi[0] <= v <= lo_hi[1]):
+        sys.exit(f"handle {nm}={v:.3f} outside plausible {lo_hi} -- refusing.")
+print(f"handle (mean) {np.round(h,4)}   {np.linalg.norm(h-STALE_TRUTH)*100:.1f} cm from the STALE pre-arc truth (informational)")
 print(f"camera->handle {np.linalg.norm(h-ee0)*100:.0f} cm (viewing distance)")
 
 quat = (R.from_quat(np.asarray(handle.orientation)) * R.from_euler("y", np.pi)).as_quat()

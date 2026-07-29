@@ -243,11 +243,32 @@ because of anything in the skill.
 | `rospy` (bulldog, PerceptionInterface, tf2) | not installed | **ROS 1 Noetic repo vs ROS 2 Humble / Ubuntu 22.04 box** — Noetic only targets 20.04 | **the perception path is now ported to ROS 2** (see below); bulldog still → **bypass** |
 | bulldog | won't start | needs arm **and** base RPC servers up | stub base server + (real bulldog still needs rospy) |
 | ViT-H on GPU | CUDA OOM (`NvMap error 12`) | 2.5 GB model + double-copy on 8 GB shared RAM | lazy SAM; use lighter SAM / bigger Jetson for the food path |
-| GroundingDINO on GPU | `NVML_SUCCESS==r ASSERT` in torch allocator | Tegra iGPU lacks NVML/PCI interface torch expects | run detection on **CPU** (`CUDA_VISIBLE_DEVICES=""`), ~34 s/frame. (YOLO via `yolo_env`'s Jetson torch runs GPU fine.) |
+| GroundingDINO on GPU | two modes, see below | **NVML assert AND genuine OOM — they trade off** | run detection on **CPU** (`CUDA_VISIBLE_DEVICES=""`). (YOLO via `yolo_env`'s Jetson torch runs GPU fine.) |
 | real-arm motion (all `set_*`) | `AssertionError: Bulldog is not running` | every motion method calls `_require_bulldog()` | bypass unlocks it |
 | door arc rung 5 | swept inward toward base → e-stopped | arc was generated sweeping toward the base | **sweep forward/away from base**; verify reachability first |
 
 ---
+
+> **GroundingDINO on GPU — re-tested 2026-07-29 with torch 2.11, still not viable.**
+> CUDA itself is fine now: `torch.cuda.init()` succeeds and a real GPU matmul runs
+> (the old blanket "Tegra can't do CUDA" reading was wrong). But Swin-B inference
+> hits one of two walls depending on the allocator, and they trade off:
+>
+> | config | model load | inference |
+> |---|---|---|
+> | default | NvMap OOM (`error 12`) | — |
+> | `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` | OK, 25.8 s, 1601 MB peak | `NVML_SUCCESS == r` assert, `CUDACachingAllocator.cpp:1165` |
+> | + `PYTORCH_NO_CUDA_MEMORY_CACHING=1` | OK, 106.9 s | CUDA OOM |
+>
+> With caching you need the NVML interface the iGPU does not expose; without it you
+> run out of memory for real. ~4.3 GB was free, so it is the Tegra GPU carveout, not
+> total RAM. Not fixable by configuration.
+>
+> **Two untried levers, if CPU's ~85 s/frame becomes the bottleneck:** downscale the
+> frame before detection (1280x720 -> 640x360 cuts activation memory ~4x and would
+> speed up CPU too, but coarsens the handle centroid that feeds the grasp, so it
+> needs validating against a touched ground truth); or a Swin-T checkpoint instead of
+> Swin-B (smaller, but it is not on disk — a download).
 
 ## ⚠️ Gotchas & safety
 
