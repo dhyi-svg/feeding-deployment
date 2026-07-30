@@ -37,6 +37,154 @@ the bypass (fresh server re-locks motion). Verify with `get_state()` → expect
 
 ---
 
+## 2026-07-30 — Pachirisu: USB fault fixed for good (autosuspend), grasp roll bug found+fixed live, arc wrong-direction incident (again, different cause), HLA duck-typing investigated
+
+Live session, user recording video for a working-demo / raw-code comparison. Full stack
+brought up fresh (nothing survived from 07-28's session end). Got further on real
+findings than on the video itself.
+
+### USB: two independent faults, both fixed without a reboot
+
+First, a **full xHCI controller fault** — `lsusb` showed zero devices at all (not even
+keyboard/mouse), worse than any previously-logged instance. Fixed via the same
+unbind/rebind on the PCI driver (`0000:00:14.0`) as 2026-07-22, without rebooting —
+important because another lab member (niharika) had an active session + a GPU job
+(`serve_policy.py`, ~10.8GB VRAM) that a reboot would have killed with no warning.
+Root-caused which controller: both the keyboard/mouse's USB bus *and* the camera's are
+children of the same PCI device, so the fix (and the fault) always affects both
+together — the mouse dying mid-fix was this, not a separate problem, and self-recovered
+once the bus finished re-enumerating.
+
+Second, **even after that fix, the camera enumerated but wouldn't stream** (`control_transfer`
+errors climbing, zero frames ever reaching `/camera/color/image_raw`). Root cause: USB
+**autosuspend was on** (`power/control=auto`) for the camera. The repo already ships a
+targeted fix for this exact symptom — `scripts/usb_hardening.sh` /
+`config/udev/99-usb-hardening.rules` (from earlier upstream work titled "extend usb
+autosuspend hardening to owc tb4 hub chain (suspended camera breaks stream start)") —
+and it already lists this camera's exact USB ID (`8086:0b3a`) as a target. Running it
+fixed the stream immediately (stable ~30Hz color + aligned-depth for the rest of the
+session). Known gap, documented in the script itself and reproduced live: a hardware
+reset/re-enumeration resets `power/control` back to `auto`, so it needs re-running
+after every such event — happened twice more this session (each subsequent
+replug/rebind) and was re-applied each time.
+
+### Hover approach: same branch-jump danger as the 07-28 arc incident, just earlier in the pipeline
+
+A **single seeded-IK jump** straight to a 30cm hover target converged positionally
+(~1cm) but wanted a **75-85° joint-space jump** from the arm's tucked start pose — the
+same "Cartesian-fine, joint-space-distant branch" danger documented for the door arc on
+07-28, just this time on the approach phase, which nobody had stress-tested with a
+large single jump before. Fixed the same way conceptually: a **chained/interpolated
+path** (12-24 small steps generated via Slerp + per-step seeded IK from the previous
+step), verified in sim (every step's joint delta and IK error checked against a
+guard) before any real motion. Executed cleanly multiple times this session — sub-cm
+tracking error throughout, once with 24 steps producing 0.0-0.1cm tracking error on
+every single step.
+
+### New bug found: grasp roll/orientation was never independently validated
+
+The 07-28 `geometry_corrected_quat()` fix only ever corrects the approach *axis*
+(shortest-arc rotation to point the gripper's local-Z at the real handle) — it
+explicitly *preserves* whatever roll the original, still-uncorrected `GRASP_QUAT`
+constant happened to have. A live visual check (via the recording) caught that the
+gripper was oriented wrong for this microwave's actual handle geometry — **a vertical
+chrome bar**, not the horizontal-bar geometry the original constant's roll was almost
+certainly tuned for on a different rig/appliance. Needed an empirical **+180° roll**
+correction, found in two live iterations (+90°, then another +90° after the first
+still looked wrong), verified by eye against the video each time before continuing.
+Root cause, as best understood: the shortest-arc axis correction inherits whatever roll
+the old (wrong) constant had as an arbitrary byproduct of that rotation — nothing has
+ever independently checked that roll against a specific handle's real orientation,
+because a wrong roll doesn't break IK convergence the way a backwards axis does (silent
+failure mode, not a hard one).
+
+Full sequence executed as three separate continuous (non-stepwise) motions per
+request — hover, grasp-approach, and gripper-close — each planned/verified in sim
+first: hover landed within 0.06cm, grasp-approach within 0.4cm (then backed off ~5cm on
+request, within 0.27cm of the new target), gripper closed on the handle (visually
+confirmed) after a brief user Xbox-teleop adjustment in between (which, as documented,
+faulted the Kortex session — recovered via the standard restart-`arm_server`-plus-
+re-run-`bulldog_bypass` procedure, plus a stale-lock removal this time: the lock file's
+PID belonged to a zombie/defunct process, so the usual liveness check via `os.kill(pid,
+0)` didn't detect it as dead).
+
+### Door-arc: wrong-direction incident, real e-stop, not root-caused this time
+
+Repeated the 07-28 fix (direction=+1, radius-based arc sizing, seeded IK, joint-delta
+guard) but computed the hinge as a relative offset from *today's* detected
+handle/hinge poses, applied to the arm's *current* grasp point (which had shifted from
+the manual backoff + Xbox adjustment above, not from the original detection pose). All
+3 planned waypoints passed sim verification (max joint delta 16.1°, matching the
+~12cm radius from 07-28). Commanded for real — swung the **wrong direction** on
+camera. User stopped it (hard e-stop): confirmed via `BrokenPipeError` /
+`Connection reset by peer` / `Network is unreachable` in `arm_server.log`, the same
+signature as the 07-27/07-28 incidents. **Not root-caused before the session ended** —
+leading candidate, untested: transferring the hinge *offset* (rather than an absolute
+hinge position) from detection time onto a grasp point that had moved via a manual
+Xbox nudge implicitly assumes the orientation at grasp time still matches the
+orientation at detection time; if the teleop nudge changed orientation non-trivially,
+the transferred offset vector no longer points at the true hinge. Worth checking first
+next session, before touching the arc math again.
+
+Recovered cleanly afterward: killed the stale `arm_server` PIDs, cleared the (again
+zombie-caused) stale `/tmp/kinova.lock`, relaunched, re-ran `bulldog_bypass`, verified
+`ARMSTATE_SERVOING_READY` before doing anything else.
+
+### HLA investigation: why the real `OpenDoorHLA`/`PerceptionInterface`/`ArmInterfaceClient` don't just run here, checked empirically (no motion)
+
+User asked directly why we've been calling low-level pieces from scratch scripts
+instead of the real HLA, given Pachirisu has real `rospy` (unlike the Jetson). Checked
+with actual imports/instantiation, not just re-reading docs:
+- `rospy` and `tf2_ros` import fine on Pachirisu — confirmed. Genuinely better than the
+  Jetson here.
+- `netft_rdt_driver` (the wrist F/T sensor's ROS driver) genuinely does not exist —
+  confirmed via a direct `import netft_rdt_driver` failure, not just documentation.
+- `perception_interface.py` bundles `rospy`, `tf2_ros`, and `netft_rdt_driver` in one
+  `try/except ModuleNotFoundError` — the missing `netft_rdt_driver` poisons the whole
+  group. Confirmed live: `PerceptionInterface`'s module-level `ROSPY_IMPORTED` is
+  `False` on this box, purely because of that bundling, even though `rospy`/`tf2_ros`
+  individually work.
+- `arm_client.py`'s own import block is narrower (doesn't bundle `netft_rdt_driver`),
+  so its `ROSPY_IMPORTED` is `True`. But constructing `ArmInterfaceClient()` live, it
+  prints `"Waiting for Watchdog status..."` then **hangs forever** on
+  `rospy.wait_for_message("/watchdog_status", Bool)` — had to kill it after a timeout.
+  The only thing that would ever publish that topic, `safety/watchdog.py`, has an
+  *unguarded* top-level `from netft_rdt_driver.srv import String_cmd`, so it can't even
+  be imported here.
+- Encouraging counterpoint: `HighLevelAction.__init__` just **stores** whatever
+  `robot_interface`/`perception_interface` objects it's handed — duck-typed, not
+  hard-wired to the real classes. So `OpenDoorHLA` itself isn't blocked by any of the
+  above; only the specific concrete `ArmInterfaceClient`/`PerceptionInterface`
+  implementations are. A thin adapter matching their method surface but backed by the
+  already-proven raw `ArmManager` + monkeypatched-transform `AppliancePerception` from
+  this session's scripts is a genuinely open, buildable path into the real HLA — not
+  yet attempted.
+
+### End-of-session state
+
+Arm moved by the user to a safe, ungripped position; microwave closed. Full clean
+shutdown performed and verified: `bulldog_bypass` → `stub_base_server` →
+`arm_server` (graceful SIGINT, no stale lock) → `roscore`, then the `feed-noetic`
+container itself stopped (`docker stop`). Nothing left running. A git worktree of the
+pristine pre-fork code (`a9e707bf`) was created for a planned raw-code comparison test
+but never used (the door-arc incident interrupted that plan) — removed at end of
+session.
+
+### Not done / next session
+- Root-cause the arc wrong-direction incident (see hypothesis above) before attempting
+  the door-arc again.
+- Actually attempt the thin-adapter approach into the real `OpenDoorHLA` (bypassing
+  `ArmInterfaceClient`/`PerceptionInterface`'s `netft_rdt_driver` dependency chain via
+  duck-typed substitutes), now that it's confirmed buildable rather than assumed
+  blocked.
+- The raw-code (pre-fork) comparison test was set up but never run; worth revisiting if
+  a side-by-side comparison is still wanted.
+- A written status summary combining this and prior sessions' findings (diff scope,
+  hardcoded values, robustness assessment, fridge-task applicability) was saved to
+  `MICROWAVE_FRIDGE_STATUS_SUMMARY.md` at the repo root.
+
+---
+
 ## 2026-07-28 — Pachirisu: hover approach + real grasp validated end-to-end, door-arc model found wrong twice (direction + non-vertical hinge axis), one real motion incident
 
 Follow-on from 2026-07-27's unresolved IK convergence. Goal: resolve it and push toward a
