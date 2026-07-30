@@ -128,6 +128,14 @@ def generate_launch_description():
         additional_env={"PYTHONPATH": pythonpath},
     )
 
+    color_profile_arg = DeclareLaunchArgument(
+        "color_profile", default_value="640,480,15",
+        description="RealSense colour profile W,H,FPS. Kept low: the default 1280x720 "
+                    "stalls the colour stream on this rig (see below).")
+    depth_profile_arg = DeclareLaunchArgument(
+        "depth_profile", default_value="640,480,15",
+        description="RealSense depth profile W,H,FPS.")
+
     realsense = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution(
@@ -140,6 +148,14 @@ def generate_launch_description():
             "align_depth.enable": "true",
             "camera_name": "camera",
             "camera_namespace": "",
+            # Bandwidth, not preference. At the driver's default (1280x720 colour +
+            # 848x480 depth) the COLOUR stream stalls on this rig within minutes
+            # while depth keeps running -- so the RGB-D synchroniser never fires and
+            # detection fails with "no synchronised frames" even though the camera
+            # node is alive and depth is healthy (observed repeatedly 2026-07-29).
+            # 640x480x15 on both streams cuts the USB load several-fold.
+            "rgb_camera.color_profile": LaunchConfiguration("color_profile"),
+            "depth_module.depth_profile": LaunchConfiguration("depth_profile"),
         }.items(),
     )
 
@@ -150,6 +166,8 @@ def generate_launch_description():
             arm_rpc_host_arg,
             python_arg,
             repo_src_arg,
+            color_profile_arg,
+            depth_profile_arg,
             robot_state_publisher,
             joint_state_bridge,
             calibration_tf,
