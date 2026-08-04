@@ -37,6 +37,90 @@ the bypass (fresh server re-locks motion). Verify with `get_state()` → expect
 
 ---
 
+## 2026-07-31 — Pachirisu: real OpenDoorHLA ticked end-to-end (sim-only, duck-typed adapter) -- the 07-30 "thin adapter" plan actually attempted
+
+Followed directly on 07-30's stated next step ("actually attempt the thin-adapter
+approach into the real OpenDoorHLA ... now that it's confirmed buildable"). No arm
+motion, no camera -- deliberately scoped to a sim-only wiring check first (see
+`scripts/scratch/sim_open_microwave_hla_dryrun.py`).
+
+### Result: it works
+`OpenDoorHLA` was constructed with `robot_interface=None`, `NullSimulator` (the
+existing `--no_waits` sim stub `run.py`/`test_navigate_action.py` already use), and a
+~15-line stub `perception_interface` implementing only `perceive_handle_opening_poses`
+(no camera, no ROS, hardcoded placeholder poses). `execute_action()` on it -- the real
+production path: load `open_microwave.yaml`, resolve its `!hla open_microwave` tag,
+tick the tree -- ran the entire `open_microwave()` control flow (both the pull-open
+phase and the previously-never-attempted push-open phase) to completion with zero
+exceptions. Confirms the 07-30 "duck-typed, not hard-wired" hypothesis empirically, not
+just at the import level: the real HLA/behavior-tree machinery runs against Pachirisu
+with no `ArmInterfaceClient`/`PerceptionInterface`/`netft_rdt_driver` in the loop at all.
+
+Note on the stub: with `robot_interface=None`, every `move_to_*` method's real-robot
+branch (the only place that reads `Pose` content or calls `_validate_ee_pose`) is
+unreachable -- `move_to_joint_positions`/`move_to_ee_pose`/`move_to_ee_pose_trajectory`
+all fall through to `sim.visualize_plan(...)`, which ignores its argument as long as the
+sim is `NullSimulator`. So this run validates *control flow*, not pose values -- the
+stub's `pre_grasp_pose`/`grasp_pose`/etc. are structural placeholders (needed only so
+dict keys exist and `push_waypoints[-5]` has length), not something to reuse for a real
+attempt.
+
+### New blocker found and fixed: `feeding_deployment.actions.base` doesn't import in `ros_env` without a second, undocumented source step
+Importing `feeding_deployment.actions.base` (needed for **any** HLA, not just
+`OpenDoorHLA` -- it unconditionally imports `ArmInterfaceClient` at module level for a
+type hint) failed with `ModuleNotFoundError: No module named 'feeding_deployment_msgs'`
+-- `arm_client.py` -> `safety/collision_threshold.py` -> `feeding_deployment_msgs.srv`.
+This is a catkin *message* package (needs code generation, not just pip), and unlike
+`ros-base` (installed via RoboStack/mamba) it isn't part of the conda env at all -- it
+lives in a **separate, already-built catkin workspace** at `/opt/msgs_ws`
+(`/opt/msgs_ws/devel/lib/python3/dist-packages/feeding_deployment_msgs`), invisible to
+`ros_env` until `source /opt/msgs_ws/devel/setup.bash` is run *after* `conda activate
+ros_env`. Fixed by sourcing it; not previously written down anywhere (the "Setup --
+talking to the arm" section above predates Pachirisu and doesn't mention it). The
+07-30 session's claim that `ArmInterfaceClient`'s "own import block... doesn't bundle
+`netft_rdt_driver`" and "gets further" must have had this already sourced in that
+terminal without writing it down -- worth carrying forward as a standing setup step for
+any future `ros_env` session that touches `feeding_deployment.actions.*` or
+`arm_client.py`.
+
+### Bonus finding: pure-PyBullet-sim mode (not `NullSimulator`) crashes on the first move, repo-wide
+Re-ran the same script with a real `FeedingDeploymentPyBulletSimulator(use_gui=False)`
+instead of `NullSimulator` (still `robot_interface=None`, still no hardware) to check a
+suspicion from reading `base.py`: every `move_to_joint_positions`/`move_to_ee_pose`
+method has its planning call commented out (`plan = None`, `# plan =
+self.sim.plan_to_...`), so `self.sim.visualize_plan(plan)` is always called with
+`plan=None` in pure-sim mode. `FeedingDeploymentPyBulletSimulator.visualize_plan()` does
+`for sim_state in plan:` -- confirmed it throws `TypeError: 'NoneType' object is not
+iterable` on the very first move (`open_microwave`'s initial retract). `NullSimulator
+.visualize_plan(*args, **kwargs): pass` is silently immune, which is presumably why this
+has never surfaced: every existing sim-only harness (`test_navigate_action.py --no_waits`,
+this session's script) already routes through `NullSimulator`, and nothing appears to
+exercise `move_to_joint_positions`/`move_to_ee_pose` against a real (non-Null)
+`FeedingDeploymentPyBulletSimulator` with `robot_interface=None`. Pre-existing, repo-wide
+(not introduced this session, not Pachirisu-specific); left unfixed -- out of scope for
+today, and the planning-disabled comments suggest it's mid-refactor rather than an
+oversight. Flagging in case a future PyBullet-GUI demo (for visually filming a sim run)
+hits it.
+
+### Not done
+- Live-detection version: swap the stub's hardcoded poses for a real
+  `AppliancePerception.detect_handle_and_placement()` call (monkeypatched-transform
+  pattern from `test_detect_handle_and_placement.py`) inside the adapter, so
+  `perceive_handle_opening_poses` returns a real, live handle pose through the actual
+  HLA path. Needs the full physical stack up (`feed-noetic` container was fully
+  stopped at 07-30 end-of-session; container itself was restarted this session, but
+  roscore/camera/`arm_server`/`stub_base_server`/`bulldog_bypass` were not -- no camera
+  or arm access was attempted, by design, while unattended). Since `robot_interface`
+  stays `None` either way, this would still be a no-motion, camera-only extension of
+  today's test, not a step toward the real door-opening arc.
+- The push-open phase's poses (`pre_push_pose`/`push_pose`/`push_waypoints`/closing
+  waypoints) remain entirely unbuilt for this rig -- today's stub only proved the
+  control flow *reaches* them without crashing, not that real values exist for them.
+- No behavior-tree parameter edits (`ManipulationConfirm`, etc.) were needed or
+  attempted; the stub perception adapter ignores confirm mode entirely.
+
+---
+
 ## 2026-07-30 — Pachirisu: USB fault fixed for good (autosuspend), grasp roll bug found+fixed live, arc wrong-direction incident (again, different cause), HLA duck-typing investigated
 
 Live session, user recording video for a working-demo / raw-code comparison. Full stack
