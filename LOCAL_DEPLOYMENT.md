@@ -1,8 +1,9 @@
 # Local (single-machine, arm-only) deployment — what works
 
 Running the EmPRISE feeding stack on **one Jetson Orin Nano with a Kinova Gen3 plugged
-in directly** — no NUC, no base, no lab safety wiring, no ROS. This documents what's
-been verified to work on this box, the exact commands, and what's broken/blocked.
+in directly** — no NUC, no base, no lab safety wiring, and **no ROS 1** (the perception
+path runs on distro ROS 2 Humble; `rospy`-dependent pieces like `bulldog` are bypassed).
+This documents what's been verified to work on this box and what's broken/blocked.
 
 > Reference lab setup (compute box + NUC + Cornell cluster) is in `README.md`. This
 > file is the *deviations* for the single-machine rig. Contains machine-specific
@@ -12,7 +13,7 @@ been verified to work on this box, the exact commands, and what's broken/blocked
 > (cold box → arm servers → ROS 2 → autonomous open) plus next steps. This file
 > is the reference behind it: what works, what's broken, and why.
 
-Last updated: 2026-07-21.
+Last updated: 2026-08-04.
 
 ---
 
@@ -25,7 +26,7 @@ Last updated: 2026-07-21.
 | Arm | Kinova Gen3 7-DOF at `192.168.1.10` (Kortex API port 10000). Box is `192.168.1.18`. |
 | Kortex SDK | **not** in `.venv` — installed in user site (`~/.local/lib/python3.10/site-packages`) |
 | Perception deps | `.venv` has GroundingDINO + SAM checkpoints (`~/Grounded-Segment-Anything/`), `open3d`, `pyrealsense2`, `sklearn` |
-| Camera | Intel RealSense **D435I** (color+depth) — grabbed directly via `pyrealsense2`, **no ROS** |
+| Camera | Intel RealSense **D435i** (color+depth), eye-in-hand — now via `realsense2_camera` (ROS 2) with `align_depth`; the older rospy-free scripts grab it directly with `pyrealsense2` |
 | YOLO (compare) | `~/yolo_env` (bottle project) — ultralytics + **Jetson-native torch, GPU works** + COCO `.pt`. Read-only use only. |
 
 **Command prefix** for anything that talks to the arm (pulls in the Kortex SDK and
@@ -69,19 +70,29 @@ export ARM_RPC_HOST=127.0.0.1
 python -u src/feeding_deployment/control/robot_controller/arm_server.py  # -u / PYTHONUNBUFFERED=1: avoid the stdout-buffering blind spot, see TESTING_LOG.md
 ```
 
-**Verified (read-only only, no motion this session):** network reachable (ping,
+> **This is the *env* reference only, and it is the older half of the story.**
+> `PACHIRISU_SETUP.md` is that box's bring-up runbook and `TESTING_LOG.md` has the
+> sessions. Since the 2026-07-21 read-only bring-up described here, that box has
+> gone much further: commanded motion, the real GroundingDINO stack on the RTX GPU,
+> its own eye-in-hand calibration (recalibrated to 5.3 cm after a ~20 cm error),
+> a validated hover approach and real grasp, and the real `OpenDoorHLA` ticked
+> end-to-end in sim against a duck-typed perception adapter. Don't read the
+> "not yet done" state below as current.
+
+**Verified 2026-07-21 (read-only, no motion that session):** network reachable (ping,
 dashboard, raw TCP to 10000), `arm_server.py` starts and binds `127.0.0.1:5000`, a direct
 `ArmManager` client (bypassing `ArmInterfaceClient`'s `rospy.wait_for_message` watchdog
 gate, mirroring `scripts/real_gen3_*.py`) reads `get_state()` cleanly — 7 finite joint
 angles, unit-norm EE quaternion, gripper at the documented "0.009 = open" reading, no
 fault. Clean `SIGINT` shutdown releases `/tmp/kinova.lock` both times tested.
 
-**Not yet done here:** any motion rungs (this box has only done Jetson's rung-1/2
-equivalent), the real `bulldog`/watchdog (rospy is finally available, so the bypass may
-no longer be necessary — untested), and the full perception stack (`torch`,
-`groundingdino`, `supervision`, and the lab's `netft_rdt_driver` F/T sensor ROS package
-are all still missing from `ros_env` — same gap as the Jetson's hand-installed
-perception deps, `netft_rdt_driver` has no public distribution at all).
+**Still open there:** the real `bulldog`/watchdog in place of the bypass (rospy *is*
+available in `ros_env`, so this is now evaluable — untested), and the lab's
+`netft_rdt_driver` F/T sensor ROS package, which has no public distribution at all.
+`torch`/`groundingdino`/`supervision` are no longer gaps — they are installed and
+running on the GPU. One setup step that bit a later session: `feeding_deployment.actions.*`
+and `arm_client.py` need `source /opt/msgs_ws/devel/setup.bash` **after**
+`conda activate ros_env`, or `feeding_deployment_msgs` won't import.
 
 ---
 
@@ -110,9 +121,16 @@ perception deps, `netft_rdt_driver` has no public distribution at all).
 | 2 | read-only telemetry | 2026-07-09 | `position`/`velocity`/`ee_pos`/`effort`, radians |
 | 3 | joint move (+5° on J4) | 2026-07-09 | `set_joint_position`, exact, other joints ~0 |
 | 4 | cartesian move (+5 cm z) | 2026-07-09 | `set_ee_pose(pos, quat)` works for **small** moves |
-| 5 | door-opening arc (real arm) | ✅ 2026-07-14 | **joint-space** (sim-IK → `set_joint_position`) is reliable; forward + lateral swing completed. Cartesian aborts at extended configs (see gotchas). |
+| 5 | door-opening arc (real arm) | ✅ 2026-07-14 | **joint-space** (sim-IK → `set_joint_position`) is reliable; forward + lateral swing completed. Cartesian is unreliable at extended configs (see gotchas). |
+| 6 | **full autonomous open over ROS 2** | ✅ 2026-07-29 | detect → pre-grasp → grasp → arc through the repo's own ROS 2 path. 10/11 waypoints, sub-cm tracking, **~91°**, clean stop at the door's limit. |
 
-### Perception — live, rospy-free (2026-07-14)
+### Perception — live, rospy-free (2026-07-14) — **superseded, kept for history**
+
+> This pipeline proved the geometry on hardware, but it ran *alongside* the repo.
+> The repo's own path is now ported to ROS 2 and has run the whole task on
+> hardware (see the ROS 2 section below) — **use that**. Its transform chain and
+> its correction constants both differ from the numbers in this section.
+
 | Step | How | Notes |
 |---|---|---|
 | grab color+depth | `pyrealsense2` direct (`rs.align`) | no ROS camera interface needed |
@@ -125,7 +143,14 @@ perception deps, `netft_rdt_driver` has no public distribution at all).
 
 > **Camera→arm calibration — use the saved easy_handeye2 one:** `~/.ros2/easy_handeye2/calibrations/wrist_camera_calib.calib` (eye_in_hand, `end_effector_link`→`camera_color_optical_frame`, ~180° about Z), chained with the live `get_state` EE pose. **Do NOT use the lab `sensors.launch` extrinsic** — it's for a different mount and drives the arm the *wrong way*.
 
-> **⚠️ Depth bias (~16 cm):** perception **overestimates depth by ~16 cm** (lateral accurate ~5 mm, height ~4 cm). Teleop ground-truth: real handle `[0.713,-0.099,0.465]` (0.86 m, **reachable**) vs perceived `[0.874,-0.104,0.428]` (0.98 m). This one bias caused grasp overshoot (pushed the microwave) *and* false "out of reach" aborts. **Correct depth before trusting close grasps.** Reach note: handle sits near the Gen3 ~0.9 m limit — keep the microwave ~0.6 m from the base.
+> **⚠️ Depth bias — the number depends on the transform path.** Perception overestimates depth, and the overshoot pushes the microwave *and* causes false "out of reach" aborts, so **correct depth before trusting any close grasp**. But the magnitude is path-specific:
+>
+> | path | depth | lateral |
+> |---|---|---|
+> | calib + live FK (the rospy-free scripts above, 2026-07-14) | `0.16` | `0.07` |
+> | **tf2 / ROS 2 (current, 2026-07-29)** | **`HANDLE_DEPTH_CORR=0.094`** | **`HANDLE_LAT_CORR=0.0`** |
+>
+> `0.094` is a **fixed offset**, not a scale error — measured at two distances against a fresh touched ground truth, it moved 5 mm over 13.7 cm. Applying `0.16` here undershoots by ~6 cm. The **lateral term is detection variance, not bias**: three looks at a stationary handle spread ~2.4 cm in y with no consistent sign, so a fixed correction overshoots; the 2F-85's 85 mm opening absorbs it. Re-measure depth after any recalibration, and re-touch the handle first — **the microwave gets nudged a few cm by every door swing**, so any absolute reference goes stale fast (that is also why the grasp script gates on two detections agreeing rather than on a stored truth). Reach note: the handle sits near the Gen3's ~0.9 m limit (it reaches 0.858 m under teleop) — keep the microwave ~0.6 m from the base.
 
 ---
 
@@ -148,12 +173,28 @@ So a larger x means *further from the arm*, and any approach standoff must be at
 > standoff offsets must be applied along **+z local** so they land at smaller x.
 > Caught on 2026-07-29 by the approach script's reach gate.
 
-### Perception — ROS 2 (Humble), the repo's own code path (2026-07-28)
+### Perception — ROS 2 (Humble), the repo's own code path (2026-07-28) — **the current path**
 
 The rospy-free pipeline above proved the geometry on hardware, but it ran
 *alongside* the repo rather than through it. This box does have ROS 2 Humble, so
 the repo's perception path is now **ported to ROS 2** instead of bypassed —
 `OpenDoorHLA.open_microwave()` and `PressMicrowaveButtonHLA` run unmodified.
+
+> **Verified on hardware 2026-07-29, through to a full autonomous open.** TF chain
+> up (`/joint_states` 49.96 Hz, aligned depth ~14 Hz,
+> `arm_base_link → camera_color_optical_frame` = `[0.255, 0.018, 0.565]`), the
+> repo's real `detect_handle_and_placement` at 0.55–0.68 confidence, corrected
+> handle within **1.6 cm** of a touched ground truth, then detect → pre-grasp →
+> grasp → arc: **~91°**, 10/11 waypoints, sub-centimetre tracking, clean stop at
+> the door's own limit. Runnable scripts: `scripts/real_gen3_ros2_approach_microwave.py`
+> → `..._grasp_microwave.py` → `..._open_arc_microwave.py` (see `JETSON_SETUP.md`).
+>
+> Two things that came out of that run and constrain the HLA conversion:
+> **the perceived hinge is wrong-side** (at two viewpoints) — the repo's assumed
+> `+0.32 m` door-width hinge is the one that works, and it is now *validated*
+> (radius held to 3.7 mm over a 90.8° sweep); and **`GRASP_QUAT` as fixed in
+> `detect_handle_and_placement` is 180° off about y on this rig**, corrected in the
+> scripts, not yet in the repo constant.
 
 Only the client library and two message spellings differ, so the port adapts at
 the boundary and leaves every detector's math untouched:
@@ -276,8 +317,11 @@ because of anything in the skill.
 
 ## ⚠️ Gotchas & safety
 
-- **Joint control >> cartesian on the real arm:** `set_ee_pose` (Kortex cartesian) aborts (`returns False`, no motion) at **extended/near-singular configs**; `set_joint_position` is reliable. For arcs, compute joint targets via **sim IK** (sim↔real joints aligned to 0.2 cm) and command joints. Also: a move can **return `False`/`True` before it settles and complete late** — always **wait for velocity≈0 then re-check the EE**, don't trust the return value.
-- **Camera→arm frame without ROS:** the RealSense is eye-in-hand — static `arm_end_effector_link→camera_link` in `launch/sensors.launch:110` `xyz(-0.046,0.084,0.11) quat(0.707,0,0,0.707)`. Chain it with the live EE pose (`get_state`) to convert camera-frame 3D → arm-base, replacing `tf2`. (Exact accuracy needs hand-eye calibration: verify the EE frame + the ~1.5 cm color-sensor offset.)
+- **Joint control >> cartesian on the real arm:** `set_ee_pose` (Kortex cartesian) is unreliable at **extended/near-singular configs**; `set_joint_position` is reliable. For arcs, compute joint targets via **sim IK** (sim↔real joints aligned to 0.2 cm) and command joints. Also: a move can **return `False`/`True` before it settles and complete late** — always **wait for velocity≈0 then re-check the EE**, don't trust the return value.
+  > **A `False` return does not mean "nothing moved."** This file used to say cartesian "aborts, no motion". On Pachirisu (2026-07-27, same arm) `set_ee_pose` returned `False` having **partially executed a real, jerky trajectory** that hit `JOINT_ACCELERATION_LIMIT_REACHED` mid-move. Treat a cartesian call as *motion attempted* regardless of return value.
+- **Camera→arm frame:** the RealSense is eye-in-hand. Use the saved **easy_handeye2** calibration (see the box above), published as static TF by the ROS 2 bring-up — or chained with the live `get_state()` EE pose if you are outside ROS. The lab's static `arm_end_effector_link→camera_link` in `launch/sensors.launch:110` (`xyz(-0.046,0.084,0.11) quat(0.707,0,0,0.707)`) is for a **different mount** and drives the arm the wrong way — do not use it on this rig.
+- **`gripper_pos` cannot confirm a grasp.** 0.009 = open, ~1.0 = closed, but it saturates at ~1.0 with or without something thin between the fingers. Keep the **human grip check** after `close_gripper`, before any door swing. A machine check would need gripper current/effort, which is not exposed.
+- **A long-lived `arm_server.py` can wedge** — one was found spinning at 99.7% CPU with a dead Kortex session (`INVALID_USER_SESSION_ACCESS`). Restart it at the start of a session rather than reusing it.
 - **Physical obstacle:** a camera rig for another project was mounted under the arm/wrist (now removable). When present, real-arm trajectories must stay **clear of the base/low region** — sweep forward and keep z up.
 - **After any e-stop:** the Kortex session faults (`ERROR_PROTOCOL_SERVER` on the next call). Recover by restarting `arm_server.py` (reconnects + clears faults + holds — no motion). Then re-run the bypass (fresh server = motion re-locked).
 - **Bypass has no software e-stop.** Physical e-stop is the only stop. If the bypass process dies, the arm e-stops within ~1 s (heartbeat lost) — that's the one retained safety property.
@@ -291,13 +335,22 @@ because of anything in the skill.
 - `88d49475` — SAM lazy-load (appliance path runs without ViT-H)
 - `67e3bd09` — sim door-opening scripts + IKFast-wall note in `CLAUDE.md`
 - `a8657982` — stub base server + bulldog bypass
-- *uncommitted:* `arm_interface.py` `ARM_RPC_HOST` override
+- `2c0e3498` — `arm_interface.py` `ARM_RPC_HOST` override (was uncommitted here until 2026-07-21)
+- `a16222fb` — `rviz_interface is None` guard in `open_microwave()` (`open_door.py:202`)
+- `5d8fe7a3` — perception path ported ROS 1 → ROS 2 (Humble)
+- `d86e960b` — the rig's empirical handle corrections folded into the perception path
+- `c2981b91` — full autonomous open over ROS 2 (~91°), hinge assumption validated
 
 ## TODO / untested
 
-- **Hand-eye calibration** — verify the EE frame + camera offset so the perception→arm-base target is accurate enough to grasp (pipeline is done; numbers need trust).
+Ranked next steps for the whole task live in `JETSON_SETUP.md` §9; this is the
+narrower "known-unverified" list.
+
+- **Release + retract without loading the door** — release *first*, then clear laterally, then back out. Currently done by hand after the arc.
+- Full `open_microwave` **HLA** on hardware. The rviz `None`-guard is fixed (`a16222fb`) and Pachirisu proved the HLA ticks end-to-end against a duck-typed perception adapter with `robot_interface=None` (2026-07-31), so the remaining gaps are the hinge heuristic (only the assumed `+0.32 m` works here) and `move_to_ee_pose_trajectory`'s cartesian path.
+- Push `GRASP_QUAT`'s 180°-about-y rig fix from the scripts into the repo constant, or make it configurable.
 - Confirm the protruding cluster is the actual **latch** vs the door bezel (this microwave has a subtle latch, not a fridge handle).
-- Turn the rospy-free perception result into a real `handle_opening_pos.pkl` (feed the arc geometry the HLA expects).
-- Full `open_microwave` HLA on hardware — needs the rviz `None`-guard fix at `open_door.py:202` (still **not** fixed) + wiring perception in without `PerceptionInterface`/rospy.
+- `press_start_button` on hardware — the local GroundingDINO backend is only exercised by `tests/test_button_detection.py`.
+- Detection speed: ~85 s/frame on CPU. Untried levers are downscaling the frame or a Swin-T checkpoint (see the GroundingDINO box above).
 - FastDownward (`FD_EXEC_PATH`) for actual PDDL **planner solve** (domain/problem already serialize as valid PDDL).
-- rospy/roscore path (or an x86 ROS 1 box) to run real bulldog + the full executive.
+- rospy/roscore path to run real bulldog + the full executive **on this box** — Pachirisu's RoboStack env already has rospy + the PRPL deps together, so evaluate there first.
