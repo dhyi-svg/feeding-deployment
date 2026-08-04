@@ -13,7 +13,7 @@ Last written: 2026-08-04.
 
 ## 0. Before you start
 
-- **Pachirisu is a shared machine.** Check `nvidia-smi` before assuming the GPU is
+ - Check `nvidia-smi` before assuming the GPU is
   free — another lab member's long-running jobs (e.g. `serve_policy.py`,
   `kinova_infra.control_node.*`) may already be using it. Don't kill other users'
   processes.
