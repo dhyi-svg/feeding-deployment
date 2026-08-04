@@ -37,6 +37,238 @@ the bypass (fresh server re-locks motion). Verify with `get_state()` → expect
 
 ---
 
+## 2026-07-31 — Pachirisu: real OpenDoorHLA ticked end-to-end (sim-only, duck-typed adapter) -- the 07-30 "thin adapter" plan actually attempted
+
+Followed directly on 07-30's stated next step ("actually attempt the thin-adapter
+approach into the real OpenDoorHLA ... now that it's confirmed buildable"). No arm
+motion, no camera -- deliberately scoped to a sim-only wiring check first (see
+`scripts/scratch/sim_open_microwave_hla_dryrun.py`).
+
+### Result: it works
+`OpenDoorHLA` was constructed with `robot_interface=None`, `NullSimulator` (the
+existing `--no_waits` sim stub `run.py`/`test_navigate_action.py` already use), and a
+~15-line stub `perception_interface` implementing only `perceive_handle_opening_poses`
+(no camera, no ROS, hardcoded placeholder poses). `execute_action()` on it -- the real
+production path: load `open_microwave.yaml`, resolve its `!hla open_microwave` tag,
+tick the tree -- ran the entire `open_microwave()` control flow (both the pull-open
+phase and the previously-never-attempted push-open phase) to completion with zero
+exceptions. Confirms the 07-30 "duck-typed, not hard-wired" hypothesis empirically, not
+just at the import level: the real HLA/behavior-tree machinery runs against Pachirisu
+with no `ArmInterfaceClient`/`PerceptionInterface`/`netft_rdt_driver` in the loop at all.
+
+Note on the stub: with `robot_interface=None`, every `move_to_*` method's real-robot
+branch (the only place that reads `Pose` content or calls `_validate_ee_pose`) is
+unreachable -- `move_to_joint_positions`/`move_to_ee_pose`/`move_to_ee_pose_trajectory`
+all fall through to `sim.visualize_plan(...)`, which ignores its argument as long as the
+sim is `NullSimulator`. So this run validates *control flow*, not pose values -- the
+stub's `pre_grasp_pose`/`grasp_pose`/etc. are structural placeholders (needed only so
+dict keys exist and `push_waypoints[-5]` has length), not something to reuse for a real
+attempt.
+
+### New blocker found and fixed: `feeding_deployment.actions.base` doesn't import in `ros_env` without a second, undocumented source step
+Importing `feeding_deployment.actions.base` (needed for **any** HLA, not just
+`OpenDoorHLA` -- it unconditionally imports `ArmInterfaceClient` at module level for a
+type hint) failed with `ModuleNotFoundError: No module named 'feeding_deployment_msgs'`
+-- `arm_client.py` -> `safety/collision_threshold.py` -> `feeding_deployment_msgs.srv`.
+This is a catkin *message* package (needs code generation, not just pip), and unlike
+`ros-base` (installed via RoboStack/mamba) it isn't part of the conda env at all -- it
+lives in a **separate, already-built catkin workspace** at `/opt/msgs_ws`
+(`/opt/msgs_ws/devel/lib/python3/dist-packages/feeding_deployment_msgs`), invisible to
+`ros_env` until `source /opt/msgs_ws/devel/setup.bash` is run *after* `conda activate
+ros_env`. Fixed by sourcing it; not previously written down anywhere (the "Setup --
+talking to the arm" section above predates Pachirisu and doesn't mention it). The
+07-30 session's claim that `ArmInterfaceClient`'s "own import block... doesn't bundle
+`netft_rdt_driver`" and "gets further" must have had this already sourced in that
+terminal without writing it down -- worth carrying forward as a standing setup step for
+any future `ros_env` session that touches `feeding_deployment.actions.*` or
+`arm_client.py`.
+
+### Bonus finding: pure-PyBullet-sim mode (not `NullSimulator`) crashes on the first move, repo-wide
+Re-ran the same script with a real `FeedingDeploymentPyBulletSimulator(use_gui=False)`
+instead of `NullSimulator` (still `robot_interface=None`, still no hardware) to check a
+suspicion from reading `base.py`: every `move_to_joint_positions`/`move_to_ee_pose`
+method has its planning call commented out (`plan = None`, `# plan =
+self.sim.plan_to_...`), so `self.sim.visualize_plan(plan)` is always called with
+`plan=None` in pure-sim mode. `FeedingDeploymentPyBulletSimulator.visualize_plan()` does
+`for sim_state in plan:` -- confirmed it throws `TypeError: 'NoneType' object is not
+iterable` on the very first move (`open_microwave`'s initial retract). `NullSimulator
+.visualize_plan(*args, **kwargs): pass` is silently immune, which is presumably why this
+has never surfaced: every existing sim-only harness (`test_navigate_action.py --no_waits`,
+this session's script) already routes through `NullSimulator`, and nothing appears to
+exercise `move_to_joint_positions`/`move_to_ee_pose` against a real (non-Null)
+`FeedingDeploymentPyBulletSimulator` with `robot_interface=None`. Pre-existing, repo-wide
+(not introduced this session, not Pachirisu-specific); left unfixed -- out of scope for
+today, and the planning-disabled comments suggest it's mid-refactor rather than an
+oversight. Flagging in case a future PyBullet-GUI demo (for visually filming a sim run)
+hits it.
+
+### Not done
+- Live-detection version: swap the stub's hardcoded poses for a real
+  `AppliancePerception.detect_handle_and_placement()` call (monkeypatched-transform
+  pattern from `test_detect_handle_and_placement.py`) inside the adapter, so
+  `perceive_handle_opening_poses` returns a real, live handle pose through the actual
+  HLA path. Needs the full physical stack up (`feed-noetic` container was fully
+  stopped at 07-30 end-of-session; container itself was restarted this session, but
+  roscore/camera/`arm_server`/`stub_base_server`/`bulldog_bypass` were not -- no camera
+  or arm access was attempted, by design, while unattended). Since `robot_interface`
+  stays `None` either way, this would still be a no-motion, camera-only extension of
+  today's test, not a step toward the real door-opening arc.
+- The push-open phase's poses (`pre_push_pose`/`push_pose`/`push_waypoints`/closing
+  waypoints) remain entirely unbuilt for this rig -- today's stub only proved the
+  control flow *reaches* them without crashing, not that real values exist for them.
+- No behavior-tree parameter edits (`ManipulationConfirm`, etc.) were needed or
+  attempted; the stub perception adapter ignores confirm mode entirely.
+
+---
+
+## 2026-07-30 — Pachirisu: USB fault fixed for good (autosuspend), grasp roll bug found+fixed live, arc wrong-direction incident (again, different cause), HLA duck-typing investigated
+
+Live session, user recording video for a working-demo / raw-code comparison. Full stack
+brought up fresh (nothing survived from 07-28's session end). Got further on real
+findings than on the video itself.
+
+### USB: two independent faults, both fixed without a reboot
+
+First, a **full xHCI controller fault** — `lsusb` showed zero devices at all (not even
+keyboard/mouse), worse than any previously-logged instance. Fixed via the same
+unbind/rebind on the PCI driver (`0000:00:14.0`) as 2026-07-22, without rebooting —
+important because another lab member (niharika) had an active session + a GPU job
+(`serve_policy.py`, ~10.8GB VRAM) that a reboot would have killed with no warning.
+Root-caused which controller: both the keyboard/mouse's USB bus *and* the camera's are
+children of the same PCI device, so the fix (and the fault) always affects both
+together — the mouse dying mid-fix was this, not a separate problem, and self-recovered
+once the bus finished re-enumerating.
+
+Second, **even after that fix, the camera enumerated but wouldn't stream** (`control_transfer`
+errors climbing, zero frames ever reaching `/camera/color/image_raw`). Root cause: USB
+**autosuspend was on** (`power/control=auto`) for the camera. The repo already ships a
+targeted fix for this exact symptom — `scripts/usb_hardening.sh` /
+`config/udev/99-usb-hardening.rules` (from earlier upstream work titled "extend usb
+autosuspend hardening to owc tb4 hub chain (suspended camera breaks stream start)") —
+and it already lists this camera's exact USB ID (`8086:0b3a`) as a target. Running it
+fixed the stream immediately (stable ~30Hz color + aligned-depth for the rest of the
+session). Known gap, documented in the script itself and reproduced live: a hardware
+reset/re-enumeration resets `power/control` back to `auto`, so it needs re-running
+after every such event — happened twice more this session (each subsequent
+replug/rebind) and was re-applied each time.
+
+### Hover approach: same branch-jump danger as the 07-28 arc incident, just earlier in the pipeline
+
+A **single seeded-IK jump** straight to a 30cm hover target converged positionally
+(~1cm) but wanted a **75-85° joint-space jump** from the arm's tucked start pose — the
+same "Cartesian-fine, joint-space-distant branch" danger documented for the door arc on
+07-28, just this time on the approach phase, which nobody had stress-tested with a
+large single jump before. Fixed the same way conceptually: a **chained/interpolated
+path** (12-24 small steps generated via Slerp + per-step seeded IK from the previous
+step), verified in sim (every step's joint delta and IK error checked against a
+guard) before any real motion. Executed cleanly multiple times this session — sub-cm
+tracking error throughout, once with 24 steps producing 0.0-0.1cm tracking error on
+every single step.
+
+### New bug found: grasp roll/orientation was never independently validated
+
+The 07-28 `geometry_corrected_quat()` fix only ever corrects the approach *axis*
+(shortest-arc rotation to point the gripper's local-Z at the real handle) — it
+explicitly *preserves* whatever roll the original, still-uncorrected `GRASP_QUAT`
+constant happened to have. A live visual check (via the recording) caught that the
+gripper was oriented wrong for this microwave's actual handle geometry — **a vertical
+chrome bar**, not the horizontal-bar geometry the original constant's roll was almost
+certainly tuned for on a different rig/appliance. Needed an empirical **+180° roll**
+correction, found in two live iterations (+90°, then another +90° after the first
+still looked wrong), verified by eye against the video each time before continuing.
+Root cause, as best understood: the shortest-arc axis correction inherits whatever roll
+the old (wrong) constant had as an arbitrary byproduct of that rotation — nothing has
+ever independently checked that roll against a specific handle's real orientation,
+because a wrong roll doesn't break IK convergence the way a backwards axis does (silent
+failure mode, not a hard one).
+
+Full sequence executed as three separate continuous (non-stepwise) motions per
+request — hover, grasp-approach, and gripper-close — each planned/verified in sim
+first: hover landed within 0.06cm, grasp-approach within 0.4cm (then backed off ~5cm on
+request, within 0.27cm of the new target), gripper closed on the handle (visually
+confirmed) after a brief user Xbox-teleop adjustment in between (which, as documented,
+faulted the Kortex session — recovered via the standard restart-`arm_server`-plus-
+re-run-`bulldog_bypass` procedure, plus a stale-lock removal this time: the lock file's
+PID belonged to a zombie/defunct process, so the usual liveness check via `os.kill(pid,
+0)` didn't detect it as dead).
+
+### Door-arc: wrong-direction incident, real e-stop, not root-caused this time
+
+Repeated the 07-28 fix (direction=+1, radius-based arc sizing, seeded IK, joint-delta
+guard) but computed the hinge as a relative offset from *today's* detected
+handle/hinge poses, applied to the arm's *current* grasp point (which had shifted from
+the manual backoff + Xbox adjustment above, not from the original detection pose). All
+3 planned waypoints passed sim verification (max joint delta 16.1°, matching the
+~12cm radius from 07-28). Commanded for real — swung the **wrong direction** on
+camera. User stopped it (hard e-stop): confirmed via `BrokenPipeError` /
+`Connection reset by peer` / `Network is unreachable` in `arm_server.log`, the same
+signature as the 07-27/07-28 incidents. **Not root-caused before the session ended** —
+leading candidate, untested: transferring the hinge *offset* (rather than an absolute
+hinge position) from detection time onto a grasp point that had moved via a manual
+Xbox nudge implicitly assumes the orientation at grasp time still matches the
+orientation at detection time; if the teleop nudge changed orientation non-trivially,
+the transferred offset vector no longer points at the true hinge. Worth checking first
+next session, before touching the arc math again.
+
+Recovered cleanly afterward: killed the stale `arm_server` PIDs, cleared the (again
+zombie-caused) stale `/tmp/kinova.lock`, relaunched, re-ran `bulldog_bypass`, verified
+`ARMSTATE_SERVOING_READY` before doing anything else.
+
+### HLA investigation: why the real `OpenDoorHLA`/`PerceptionInterface`/`ArmInterfaceClient` don't just run here, checked empirically (no motion)
+
+User asked directly why we've been calling low-level pieces from scratch scripts
+instead of the real HLA, given Pachirisu has real `rospy` (unlike the Jetson). Checked
+with actual imports/instantiation, not just re-reading docs:
+- `rospy` and `tf2_ros` import fine on Pachirisu — confirmed. Genuinely better than the
+  Jetson here.
+- `netft_rdt_driver` (the wrist F/T sensor's ROS driver) genuinely does not exist —
+  confirmed via a direct `import netft_rdt_driver` failure, not just documentation.
+- `perception_interface.py` bundles `rospy`, `tf2_ros`, and `netft_rdt_driver` in one
+  `try/except ModuleNotFoundError` — the missing `netft_rdt_driver` poisons the whole
+  group. Confirmed live: `PerceptionInterface`'s module-level `ROSPY_IMPORTED` is
+  `False` on this box, purely because of that bundling, even though `rospy`/`tf2_ros`
+  individually work.
+- `arm_client.py`'s own import block is narrower (doesn't bundle `netft_rdt_driver`),
+  so its `ROSPY_IMPORTED` is `True`. But constructing `ArmInterfaceClient()` live, it
+  prints `"Waiting for Watchdog status..."` then **hangs forever** on
+  `rospy.wait_for_message("/watchdog_status", Bool)` — had to kill it after a timeout.
+  The only thing that would ever publish that topic, `safety/watchdog.py`, has an
+  *unguarded* top-level `from netft_rdt_driver.srv import String_cmd`, so it can't even
+  be imported here.
+- Encouraging counterpoint: `HighLevelAction.__init__` just **stores** whatever
+  `robot_interface`/`perception_interface` objects it's handed — duck-typed, not
+  hard-wired to the real classes. So `OpenDoorHLA` itself isn't blocked by any of the
+  above; only the specific concrete `ArmInterfaceClient`/`PerceptionInterface`
+  implementations are. A thin adapter matching their method surface but backed by the
+  already-proven raw `ArmManager` + monkeypatched-transform `AppliancePerception` from
+  this session's scripts is a genuinely open, buildable path into the real HLA — not
+  yet attempted.
+
+### End-of-session state
+
+Arm moved by the user to a safe, ungripped position; microwave closed. Full clean
+shutdown performed and verified: `bulldog_bypass` → `stub_base_server` →
+`arm_server` (graceful SIGINT, no stale lock) → `roscore`, then the `feed-noetic`
+container itself stopped (`docker stop`). Nothing left running. A git worktree of the
+pristine pre-fork code (`a9e707bf`) was created for a planned raw-code comparison test
+but never used (the door-arc incident interrupted that plan) — removed at end of
+session.
+
+### Not done / next session
+- Root-cause the arc wrong-direction incident (see hypothesis above) before attempting
+  the door-arc again.
+- Actually attempt the thin-adapter approach into the real `OpenDoorHLA` (bypassing
+  `ArmInterfaceClient`/`PerceptionInterface`'s `netft_rdt_driver` dependency chain via
+  duck-typed substitutes), now that it's confirmed buildable rather than assumed
+  blocked.
+- The raw-code (pre-fork) comparison test was set up but never run; worth revisiting if
+  a side-by-side comparison is still wanted.
+- A written status summary combining this and prior sessions' findings (diff scope,
+  hardcoded values, robustness assessment, fridge-task applicability) was saved to
+  `MICROWAVE_FRIDGE_STATUS_SUMMARY.md` at the repo root.
+
+---
+
 ## 2026-07-29 — Jetson: ROS 2 path runs on hardware; detection works, but the PERCEIVED HINGE IS ON THE WRONG SIDE
 
 ### Result
@@ -394,6 +626,163 @@ since cartesian aborts at extended configs on this arm).
 
 ---
 
+## 2026-07-28 — Pachirisu: hover approach + real grasp validated end-to-end, door-arc model found wrong twice (direction + non-vertical hinge axis), one real motion incident
+
+Follow-on from 2026-07-27's unresolved IK convergence. Goal: resolve it and push toward a
+full detect->grasp->open attempt. Got much further than expected -- hover approach and
+grasp are now proven on real hardware -- but the door-opening arc surfaced two real
+modeling bugs and one real safety incident.
+
+### IK convergence root cause: the fixed grasp quaternion's approach axis was pointing backwards
+
+Diagnosed the 2026-07-27 unresolved IK convergence with software-only checks before
+touching real detection: position-only IK converges instantly from any seed; 150+ wide
+random-restart full-joint-space seeds ALL plateau at the same ~17cm residual regardless
+of seed (the signature of a truly unreachable pose, not a bad seed); a full 360deg roll
+sweep about the approach axis made zero difference. Root cause: the repo's fixed
+grasp-orientation constant (`(0.5,-0.5,-0.5,0.5)` / `GRASP_QUAT=(-0.5,0.5,0.5,-0.5)`, same
+rotation) has its local-Z (approach) axis pointing exactly opposite the real look-at
+vector to the handle -- a 180deg inversion, not a minor offset. Re-pointing the axis at
+the true look-at vector (shortest-arc rotation, preserving the original roll) took IK
+from ~17cm error to 0.01cm, fully within joint limits, from every seed tried.
+
+Also found and fixed a real bug in that fix's own first draft: the exactly-antiparallel
+special case (exactly what happens whenever the look-at direction is a pure world axis,
+e.g. a pure -x back-off) picked an arbitrary fallback rotation axis that could coincide
+with the vector being flipped, silently making the "fix" a no-op. Rewrote as a single
+correct `geometry_corrected_quat()` helper in `scripts/scratch/debug_ik_convergence2.py`.
+
+### Real detection, twice, on the actual Comfee microwave
+
+Brought up roscore + `realsense2_camera` (`align_depth:=true`) and `arm_server.py`
+(read-only) fresh this session. Started from the arm in a fully-retracted/tucked pose
+(`ee_pos~(0.15,0.04,0.19)`) with the wrist camera pointed at the floor -- confirmed
+visually before trusting any detection. User manually repositioned the arm to face the
+microwave (twice -- once initially, once after moving the microwave further away);
+`detect_handle_and_placement("microwave handle", ...)` fired both times at 0.41-0.49
+confidence, `handle_pixels.png` visually confirmed landing squarely on the real chrome
+handle bar both times.
+
+Also fixed a real, unguarded crash in the repo itself: `appliance_perception.py`'s DBSCAN
+clustering call had no empty-list check before `.fit(handle_points)`, unlike the
+identical pattern one block earlier in the same function
+(`if len(bounding_box_points_3d) == 0`) -- added the matching guard (now returns
+`None, None, None, None` gracefully instead of crashing sklearn's `check_array`).
+
+### Hover approach validated live, twice (30cm and 15cm back-off)
+
+Recomputed the hover target from the real detected handle position using the
+geometry-corrected orientation, verified via a full seeded chain (from the arm's actual
+current joints, not an arbitrary seed) that tracking held within joint limits the whole
+way, then commanded it for real:
+- 30cm back-off: landed within **0.7mm** of target.
+- 15cm back-off (closer, per user request): landed within **3.7mm**.
+
+Both moves used `set_joint_position` (not `set_ee_pose`, consistent with 2026-07-27's
+finding that cartesian moves can jerk unexpectedly) after computing joints via
+`p.calculateInverseKinematics`, seeded from the real current joints.
+
+User then manually moved the gripper the rest of the way to touch the handle and asked
+for the offset to be noted (empirically ~7cm forward + ~1.6cm lateral from the computed
+hover point, though user asked to record it as ~12-13cm per their own estimate -- noted
+as instructed, not reconciled against the computed number).
+
+### Grasp succeeded; one transient, unexplained arm-state anomaly
+
+`close_gripper()` from the user-positioned touch point closed successfully (visually
+confirmed) -- but the arm's `get_arm_state()` briefly reported
+`ARMSTATE_SERVOING_MANUALLY_CONTROLLED` right after, even though the user was not
+touching the arm. `arm_server.log` showed a `REACH_JOINT_ANGLES` action hit
+`ACTION_ABORT` (`abort_details: ROBOT_MOVEMENT_IN_PROGRESS`) at that moment -- gripper
+actuation is implemented as a joint-angle action on this Kortex firmware, and it
+apparently collided with residual settling from the prior move. State reverted to
+`ARMSTATE_SERVOING_READY` on its own within a few seconds, no fault latched. Not fully
+root-caused; flagging as a watch-item (echoes 2026-07-21's unresolved `METHOD_FAILED`
+abort oddity -- another Kortex-session quirk on this rig that resolved itself without
+full explanation).
+
+### Door-opening arc: two real modeling bugs found, one real safety incident
+
+Reused the Jetson's exact proven one-waypoint-per-call pattern
+(`scripts/real_gen3_open_microwave.py`, state persisted, per-step tracking-error abort)
+via a new `scripts/scratch/run_door_arc_step.py`, but two things about this specific
+rig/microwave broke the ported defaults:
+
+1. **Radius mismatch.** The repo's own `detect_handle_and_placement` supplies a real
+   hinge position; on this microwave it put the handle only ~12cm from the hinge (vs.
+   the Jetson's blind `DOOR_W=0.32m` guess). Reusing the Jetson's `arc_length_m=0.55`
+   constant at this radius demands ~262deg of rotation -- immediately exceeds the ~90cm
+   reach guard by waypoint 2. Fixed by sizing `arc_length_m = radius * target_angle_rad`
+   for an explicit target angle (started with a conservative 25deg test swing, not a
+   full open) instead of reusing an absolute-length constant tuned for a different rig's
+   geometry.
+2. **Direction sign.** The repo's own default for `handle_type=="microwave"` is
+   `direction=-1`. At this rig's real hinge geometry, `-1` swings the handle AWAY from
+   the base (immediately over the reach guard); user correctly reasoned that opening a
+   door by pulling the handle should bring it TOWARD the arm, not away. Flipping to
+   `direction=1` both matched that physical intuition AND kept every waypoint
+   comfortably under the reach guard (87-89cm vs. 92-95cm) -- confirming the Jetson's
+   `-1` default was tuned for that rig's specific (mirrored) microwave-to-arm layout, not
+   a universal constant.
+3. **Real safety incident.** Step 1 (with the two fixes above) was commanded and
+   produced a violent, unpredictable ~150deg swing on J1/J3/J7 even though the Cartesian
+   target was only ~1cm off (ik_err 0.01cm) -- the grip held (lucky), no fault latched,
+   but this was flagged by the user as dangerous. Root cause:
+   `_generate_door_arc_waypoints`'s IK (following the Jetson script's own documented
+   "deliberately UNSEEDED" pattern) was solved in a **freshly-created simulator with a
+   default/arbitrary initial joint state**, not seeded from the arm's actual current
+   posture -- found a Cartesian-correct but joint-space-distant alternate solution
+   branch (elbow/wrist flip). `set_joint_position` has no path planning, so the real arm
+   swept through that reconfiguration directly. **The Jetson script's "unseeded is fine
+   for small arc waypoints" note does not hold in general** -- it depended on the fresh
+   sim's default init happening to already be close to that rig's working posture; it is
+   not a safe pattern to reuse blindly on a different rig/starting configuration.
+   - Fix (implemented in `run_door_arc_step.py`, verified in sim before any further real
+     motion): seed IK from `ai.get_state()["position"]` (the actual current real
+     joints), and explicitly guard on **joint-space delta** (`>25deg` aborts), not just
+     Cartesian `ik_err`. Verified step 2 (18deg max delta) and step 3 (9.7deg) both
+     converge cleanly under this guard before re-attempting.
+   - Step 2 was then run for real with the fix: reached within 1cm, no wild swing this
+     time (user: "kinda moved unpredictably, but not really badly" -- worth another look
+     next session, 18deg on J6 in a single step is still non-trivial and this posture may
+     be kinematically sensitive/near a singularity).
+4. **Arc geometry model also wrong: assumes a purely vertical hinge axis, but this door
+   isn't a simple pivot.** After step 2, the user manually walked the gripper (still
+   holding the handle) to where they judged the true "waypoint 2" should be, for
+   comparison: real point `(0.7166, -0.0725, 0.5239)` vs. the computed step-2 target
+   `(0.728,-0.177,0.466)` -- off by **+10.5cm in y and +5.8cm in z**. The z discrepancy is
+   the important one: `_generate_door_arc_waypoints` assumes the door rotates about a
+   purely vertical (z) axis (constant height throughout), but the real door's height
+   clearly changes as it opens -- this microwave's door mechanism is not a simple single
+   vertical-axis pivot (likely a multi-bar/lift-type hinge). This is a second,
+   independent reason not to trust the formula-driven waypoints beyond a single verified
+   step at a time.
+
+### End-of-session state
+
+Gripper is holding the microwave handle at the user's manually-demonstrated "waypoint 2"
+pose `(0.7166, -0.0725, 0.5239)`, door partially open. `arm_server.py` +
+`stub_base_server.py` + `bulldog_bypass.py` all still running (motion unlocked) at
+session end -- pick up from here or restart the bring-up per the "Setup" section above.
+No fault latched, `ARMSTATE_SERVOING_READY` as of the last read.
+
+### Not done / next session
+
+- Door-arc kinematics need a real model of this microwave's actual hinge mechanism (not
+  a pure vertical-axis circle) -- either have the user demonstrate several more real
+  waypoints by hand and fit/interpolate from those directly (working well so far), or
+  investigate the physical hinge to build a correct parametric model.
+- The J6-heavy, 18deg-in-one-step posture around step 2 may be kinematically sensitive
+  (near a singularity) -- worth a closer look before trusting further automated steps
+  through this region.
+- Empirical grasp-approach offset for this rig noted as ~12-13cm (per user) -- not yet
+  reconciled with the ~7cm/1.6cm delta actually measured between the computed hover
+  point and the user's touch point.
+- Continue the door-opening test swing from the current real waypoint-2 pose, or
+  re-plan from scratch with a corrected (non-vertical-axis) arc model.
+
+---
+
 ## 2026-07-28 — Jetson: microwave path ported from ROS 1 to ROS 2 (no hardware run)
 
 ### What changed and why
@@ -500,6 +889,147 @@ detection-only run through the ported path — compare the handle pose it report
 against the rospy-free pipeline's known-good numbers, keeping the documented
 `DEPTH_CORR=0.16` / `LAT_CORR=0.07` biases in mind, since those corrections live
 in the standalone scripts and are **not** yet folded into the HLA path.
+
+---
+
+## 2026-07-27 — Pachirisu: recalibration root-caused and fixed (5.3cm), approach-hover attempt hit a real motion incident + unresolved IK convergence
+
+Follow-on session, continuing from the ~20-27cm calibration error found 2026-07-22. Goal:
+recalibrate, validate, then attempt the deferred approach-only (no grasp) hover test.
+Recalibration succeeded and is now validated to ~5cm; the hover test did not complete --
+a real-arm incident (unexpected jerky motion from a cartesian move) and then an
+unconverged IK solve stopped it short.
+
+### Recalibration: the real bug was TSAI instability, not (primarily) pose diversity or frame mismatch
+
+Before recapturing anything, the old calibration's raw sample dump
+(`~/deployment_ws/pachirisu_wrist_camera_calib/handeye_raw_samples.json`, still on disk
+even though the script that produced it is gone) was inspected directly: the 17 samples
+had a max pairwise gripper-translation distance of only **5.0cm** -- effectively a
+rotate-in-place pose set, which starves `cv2.calibrateHandEye()`'s translation solve.
+
+Recaptured with a new one-shot capture script (`scripts/scratch/capture_calib_sample.py`,
+non-interactive -- appends one sample per invocation so it can be driven by chat command
+while the user moves the arm by hand; an earlier interactive/`input()`-loop version was
+rejected for exactly this reason). Board geometry (12-marker ArUco board, `DICT_5X5_250`,
+marker 0 as reference, 5.08cm markers) reused as-is from the old JSON. Each sample reads
+`arm.get_state()['ee_pos']` directly at capture time (ruling out any reference-frame
+mismatch in a separately-derived FK, the leading theory from last session).
+
+Live camera preview: this container's `cv2` build is headless (no `imshow`) and no ROS
+image-viewer package (`image_view`/`rqt_image_view`) is installed in `ros_env`
+(`ros-base`, not `desktop-full`). Built a tiny MJPEG HTTP server instead
+(`scripts/scratch/mjpeg_preview.py`, serves `/camera/color/image_raw` on
+`:8095`) and opened it in a host browser via `DISPLAY=:3 xdg-open` -- simplest live view
+without adding GUI packages to the container.
+
+First 9-sample set (max translation 57.2cm, up from 5.0cm) made things **worse**, not
+better: TSAI gave a `t_cam2gripper` norm of 57.8cm (vs the old calibration's 20.4cm) and
+self-consistency spread of 15-22cm (vs the old set's 2-6cm). Comparing all 5 of OpenCV's
+hand-eye methods on the same samples isolated the actual cause: PARK/HORAUD/ANDREFF/
+DANIILIDIS all agreed closely (6.6-8.4cm norm, near the user's measured ~5cm ), while
+**TSAI alone was the outlier** -- both this time and, very likely, in the original
+20.4cm result. Filtering to only full-12-marker-visible samples (partial-marker frames
+add real solvePnP noise) and growing the set to 11 such samples brought even TSAI into
+much closer agreement with the others (8.5cm vs 6.6-8.4cm). Saved with **PARK**
+(agrees tightly with HORAUD/DANIILIDIS) as
+`~/deployment_ws/pachirisu_wrist_camera_calib/wrist_camera_calib_v2.json`.
+
+Self-consistency spread is still 20-45cm across samples even after these fixes -- not
+fully resolved, method-agreement was the trust signal used to proceed, not a clean
+consistency number.
+
+### Validation: manual-touch error closed from ~20-27cm to 5.3cm
+
+Re-ran `detect_handle_and_placement` (via `scripts/scratch/test_detect_handle_and_placement.py`,
+now with `CALIB_PATH` overridable by env var) against the new calibration --
+`microwave handle` fired at 0.57-0.61 confidence, handle pose repeatable to ~3.3cm across
+two detections minutes apart, consistent with prior sessions. User touched the arm to the
+physical handle; comparing `get_state()['ee_pos']` to the computed handle pose:
+
+| | pos | 
+|---|---|
+| touch (wrist `ee_pos`) | (0.634, -0.125, 0.478) |
+| computed handle | (0.683 / 0.716 across 2 detections, -0.116/-0.123, 0.459) |
+| delta | ~5.3cm |
+
+5.3cm is in the same range as the known, separate gripper-fingertip-to-wrist offset
+(~5-6cm, previously identified and ruled out as *the sole* cause of the old ~20cm error) --
+so this residual is plausibly just that offset, not leftover calibration error. GPU was
+unavailable for detection this session (see below), so this ran on CPU
+(`CUDA_VISIBLE_DEVICES=""`, same fallback the Jetson rig uses) -- still fast enough for a
+one-off detection, no real slowdown concern for this kind of test.
+
+### GPU was full from another user's process -- not touched
+
+`GroundedSAM()` init hit `CUDA_AcceleratorError: out of memory` -- `nvidia-smi` showed
+PID (unrelated to this session) holding ~10.8GB/12GB: a `serve_policy.py` (pi05 LoRA
+checkpoint) process belonging to another lab member, running since the day before. Did
+**not** kill another user's process on a shared machine without checking first; worked
+around by running detection on CPU instead (see above).
+
+### Approach-only hover attempt: real motion incident, then unresolved IK convergence
+
+Brought up `stub_base_server.py` + `bulldog_bypass.py` (motion unlocked), `set_speed("low")`.
+
+First hover-target math needed two rounds of correction from the user before commanding
+anything (good catches, no motion sent during either): the repo's own pre-grasp offset
+convention (`handle_transform @ [0,0,-0.12]`, from `perception_interface.py`) produced a
+target *further* from the arm base than the handle itself, along an axis that -- once
+sanity-checked against "arm base ~ origin, handle mostly out along +x" -- didn't hold up
+as an obviously-safe direction to trust blindly for a first real move on this rig. Revised
+to the simplest defensible version: back off 12cm along **world -x only**, holding y/z
+(height) fixed at the handle's values. Final target: `(0.596, -0.123, 0.459)`, same
+orientation as the detected handle `(0.5, -0.5, -0.5, 0.5)` xyzw.
+
+Commanded via `arm.set_ee_pose()` (Kortex cartesian). **This did not behave like the
+documented "aborts, no motion" failure mode** -- `set_ee_pose()` returned `False` and a
+same-second `get_state()` read looked unchanged, but the user observed real, jerky
+motion, and the `arm_server.py` log confirmed it: a `JOINT_ACCELERATION_LIMIT_REACHED`
+trajectory-info notification mid-move, i.e. a real, partially-executed, aborted
+trajectory -- not a clean instant no-op. User moved the arm back by hand.
+**`LOCAL_DEPLOYMENT.md`'s "aborts... no motion" note is not reliable enough on its own
+to trust for a real move of this size on this rig** -- needs updating / more caution
+next time, not just cited as fact.
+
+`get_arm_state()` afterward read `ARMSTATE_SERVOING_READY` (no fault latched) with
+`velocity` all zero -- arm was fine, just displaced from where the software last thought
+it was.
+
+Switched to the Jetson-proven seeded-IK + joint-space pattern (`solve_ik_seeded`/
+`move_and_check` from `scripts/real_gen3_detect_grasp_microwave.py`, reimplemented
+standalone as `scripts/scratch/approach_hover_seeded_ik.py`, compute-only / no auto-command).
+Two things checked, in order:
+1. **Frame composition sanity check** (new, not in the Jetson original): FK the sim from
+   the arm's *actual current* joints and compare to the real `ee_pos`, with and without
+   composing `sd.robot_base_pose`. Confirmed consistent: `sim_ee_world == real_ee_pos +
+   robot_base_pose.position` (that offset, `(1.0, 3.0, 0.54)`, is just this `vention.yaml`
+   scene's fixed placement for a full mobile-base/kitchen sim, not a bug) -- so the
+   frame math itself is trustworthy.
+2. **IK solve itself did not converge**: 18.5cm `ik_err` for the hover target from the
+   current seed, with one joint solution component (~-5.95 rad) clearly outside that
+   joint's real hardware range -- a genuine solver/reachability failure from this specific
+   starting posture, not a frame bug. Correctly aborted (no motion commanded) per the
+   `ik_err > 2cm` guard.
+
+Session stopped here at the user's call (one real incident already; software-only IK
+debugging can safely continue without the arm powered/unlocked). Bulldog bypass killed
+cleanly (`SIGINT`, confirmed heartbeat-loss message + arm still `ARMSTATE_SERVOING_READY`,
+no fault) to relock motion before ending the session.
+
+### Not done / next session
+
+- **IK convergence for the hover target is still unresolved.** Try a different current
+  arm seed posture (small manual reposition before attempting the big jump), explicit
+  joint-limit arrays passed to `calculateInverseKinematics`, or a rest-pose bias --
+  all software-only, no hardware risk to iterate on.
+- The approach-only hover test itself (no grasp) is still not done -- blocked on the above.
+- Treat `arm.set_ee_pose()` as **not** a safe default for large moves on this rig until
+  proven otherwise -- prefer seeded-IK + `set_joint_position` (once IK converges), same
+  as the Jetson rig's proven pattern.
+- GPU contention with other users' long-running jobs on this shared machine is now a
+  known recurring risk for anything needing `torch`/CUDA here -- check `nvidia-smi` before
+  assuming GPU detection will just work, and don't kill others' processes without asking.
 
 ---
 
