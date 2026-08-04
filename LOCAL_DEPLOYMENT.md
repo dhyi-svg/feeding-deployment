@@ -8,6 +8,10 @@ been verified to work on this box, the exact commands, and what's broken/blocked
 > file is the *deviations* for the single-machine rig. Contains machine-specific
 > values (IPs, user-site paths) — not intended for `upstream`.
 
+> **Just want the commands?** `JETSON_SETUP.md` is the ordered bring-up
+> (cold box → arm servers → ROS 2 → autonomous open) plus next steps. This file
+> is the reference behind it: what works, what's broken, and why.
+
 Last updated: 2026-07-21.
 
 ---

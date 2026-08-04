@@ -6,7 +6,8 @@ Every rung is either **READ-ONLY** (safe) or **MOTION** (hand on the physical
 e-stop). Do not skip ahead: each rung exists because a previous session lost time
 to exactly the thing it checks.
 
-Companions: `LOCAL_DEPLOYMENT.md` (env/what-works), `TESTING_LOG.md` (history),
+Companions: `JETSON_SETUP.md` (the ordered bring-up commands this checklist
+assumes), `LOCAL_DEPLOYMENT.md` (env/what-works), `TESTING_LOG.md` (history),
 `CLAUDE.md` (current state).
 
 ---
