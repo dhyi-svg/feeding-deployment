@@ -29,7 +29,8 @@ lsusb | grep -i intel                      # want: an Intel device
 the arm) and no Intel device was on USB. Nothing below can run until both pass.
 
 Also confirm no other project holds the Kortex session (only one process can —
-see the bottle-picking stack): `ps aux | grep -iE "home_launch|arm_driver"`.
+see the bottle-picking stack): `ps aux | grep -E "[h]ome_launch|[a]rm_driver"`
+(the brackets stop grep from matching its own command line and looking like a hit).
 
 ---
 

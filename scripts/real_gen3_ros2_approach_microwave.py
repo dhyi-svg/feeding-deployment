@@ -38,17 +38,38 @@ MIN_Z, MAX_Z = 0.25, 0.75   # keep clear of the base and of the rig above
 MAX_IK_ERR_M = 0.02         # reject an IK solution that misses the target
 MAX_JOINT_JUMP_RAD = 1.4    # ~80 deg on any one joint => likely a wrist flip
 MIN_STANDOFF_M = 0.08       # never command closer than this to the handle
+MAX_STEP_TRACK_M = 0.03     # with --steps: abort if a sub-step lands >3 cm off plan
 
 ap_arg = argparse.ArgumentParser(description=__doc__)
 ap_arg.add_argument("--execute", action="store_true", help="actually command the arm")
+ap_arg.add_argument(
+    "--steps", type=int, default=1,
+    help="split the move into N interpolated sub-steps (default 1 = single jump, "
+         "the historical behaviour). 12-16 is the proven range. See --max-step-deg.")
+ap_arg.add_argument(
+    "--max-step-deg", type=float, default=20.0,
+    help="with --steps, abort if any ONE sub-step moves a joint more than this (default 20)")
+ap_arg.add_argument(
+    "--interp", choices=("joint", "cartesian"), default="joint",
+    help="how --steps splits the move. joint (default): interpolate the joint vector "
+         "to the gated solution -- per-step motion bounded by construction, ends in "
+         "the validated posture. cartesian: straight-line gripper path, but drifts "
+         "through the null space and can end in a very different posture.")
 args = ap_arg.parse_args()
+if args.steps < 1:
+    sys.exit("--steps must be >= 1")
 
 ai = ArmInterfaceClient()
 state = ai.get_state()
 start_joints = np.asarray(state["position"], dtype=float)
 start_ee = np.asarray(list(state["ee_pos"])[:3], dtype=float)
+start_quat = np.asarray(list(state["ee_pos"])[3:7], dtype=float)  # for Slerp when chaining
 gripper = float(state.get("gripper_pos"))
 print(f"start EE      : [{start_ee[0]:.4f}, {start_ee[1]:.4f}, {start_ee[2]:.4f}]")
+# Record the pose we are LEAVING, not just the one we are going to. Without this the
+# only way back to a good viewing pose after a run is to reconstruct it from
+# arm_commands_log.txt (doable, but that file is wiped on every arm_server restart).
+print(f"start joints  : {[round(float(v), 6) for v in start_joints]}")
 print(f"gripper       : {gripper:.4f}  ({'open' if gripper < 0.2 else 'CLOSED'})")
 if gripper > 0.2:
     sys.exit("Gripper is not open -- refusing to approach while it may be holding something.")
@@ -58,7 +79,22 @@ rs = RealSenseROS2Interface()
 if not rs.wait_for_frames(30.0):
     sys.exit("No RGB-D frames")
 gs = GroundedSAM()
-apc = AppliancePerception(gs)
+# Detection diagnostics. AppliancePerception already builds every overlay (plane fit,
+# candidate cluster, final handle/hinge pixels) and already writes a JSON sidecar with
+# the intrinsics and the 4x4 base<-camera matrix -- but both hooks no-op when
+# data_logger is None, so all of it is discarded at exit. Set DETECTION_LOG_DIR and it
+# lands on disk, which is also what makes scripts/session/replay_detection.py possible.
+_log_dir = os.environ.get("DETECTION_LOG_DIR")
+_data_logger = None
+if _log_dir:
+    from pathlib import Path
+
+    from feeding_deployment.integration.data_logger import DataLogger
+
+    _data_logger = DataLogger(Path(_log_dir), day=1)
+    _data_logger.begin_hla("approach_microwave")
+    print(f"detection logging -> {_log_dir}")
+apc = AppliancePerception(gs, data_logger=_data_logger)
 print(f"corrections   : depth={apc.handle_depth_corr} lat={apc.handle_lat_corr}")
 if apc.handle_depth_corr == 0.0:
     sys.exit("Corrections are OFF -- set HANDLE_DEPTH_CORR before approaching.")
@@ -162,21 +198,134 @@ if jump > MAX_JOINT_JUMP_RAD:
     sys.exit(f"Joint jump {np.degrees(jump):.0f} deg too large -- likely a wrist flip. Refusing.")
 print("IK gates      : PASS")
 
+# ---- optional chaining ------------------------------------------------------
+# A single command to `q` is one big move: the controller interpolates in JOINT
+# space, so the EE traces an unchecked curve and nothing here collision-checks it.
+# --steps splits it so each increment is small and abortable. Two ways to split:
+#
+#   joint (default) -- interpolate the JOINT vector from start to `q`, the exact
+#     solution the gates above validated. Per-step joint motion is bounded by
+#     construction (total/N), and the arm ENDS in the gated posture. The EE follows
+#     the same curve the unchained move would have taken -- no new path, just cut
+#     into abortable pieces.
+#
+#   cartesian -- interpolate the EE along a straight line (Slerp for orientation)
+#     and re-solve IK per sub-step. The gripper path is predictable, but each solve
+#     drifts through the 7-DOF null space: measured 2026-08-05, a 12-step chain hit
+#     the target pose to 0.001 cm while ending 83.8 deg away from `q` in JOINT space
+#     (J1 -4.5 -> -88.2). Same gripper pose, very different arm posture, and the
+#     downstream grasp/arc scripts seed their IK from wherever this leaves the arm.
+#     Use it only when the straight-line gripper path itself matters.
+#
+# Sub-stepping alone does NOT bound per-step joint motion in cartesian mode -- the
+# explicit --max-step-deg check below does, applied to every step in sim BEFORE
+# anything is commanded, failing closed on the whole move.
+plan = [("pre-grasp", tgt, q)]  # --steps 1: the single jump, unchanged
+
+
+def _fk(joints):
+    """EE position in arm_base_link for a joint vector."""
+    for i, jj in enumerate([1, 2, 3, 4, 5, 6, 7]):
+        p.resetJointState(rb.robot_id, jj, float(joints[i]),
+                          physicsClientId=rb.physics_client_id)
+    link = p.getLinkState(rb.robot_id, rb.end_effector_id,
+                          physicsClientId=rb.physics_client_id)
+    return np.asarray(link[4]) - np.asarray(scene.robot_base_pose.position)
+
+
+if args.steps > 1:
+    plan, seed, worst = [], start_joints, 0.0
+    print(f"\nchaining into {args.steps} {args.interp} sub-steps "
+          f"(guard {args.max_step_deg} deg/step):")
+
+    if args.interp == "cartesian":
+        from scipy.spatial.transform import Slerp
+        slerp = Slerp([0.0, 1.0],
+                      R.from_quat([start_quat, np.asarray(pre_grasp.orientation)]))
+    else:
+        # Shortest path per joint: a raw difference can read ~350 deg for what is
+        # physically a few degrees the other way round.
+        total_delta = (q - start_joints + np.pi) % (2 * np.pi) - np.pi
+
+    for step in range(1, args.steps + 1):
+        frac = step / args.steps
+
+        if args.interp == "cartesian":
+            want_pos = start_ee + (tgt - start_ee) * frac
+            way = Pose(tuple(want_pos), tuple(slerp([frac]).as_quat()[0]))
+            for i, jj in enumerate([1, 2, 3, 4, 5, 6, 7]):
+                p.resetJointState(rb.robot_id, jj, float(seed[i]),
+                                  physicsClientId=rb.physics_client_id)
+            wp = multiply_poses(scene.robot_base_pose, way)
+            sol = p.calculateInverseKinematics(
+                rb.robot_id, rb.end_effector_id, list(wp.position), list(wp.orientation),
+                maxNumIterations=400, residualThreshold=1e-5,
+                physicsClientId=rb.physics_client_id)
+            qs = np.asarray(sol[:7], dtype=float)
+            err_s = float(np.linalg.norm(_fk(qs) - want_pos))
+        else:
+            qs = start_joints + total_delta * frac
+            want_pos = _fk(qs)   # where the EE actually goes; not a straight line
+            err_s = None         # no IK solve here, so there is no residual to report
+
+        delta = float(np.degrees(np.max(np.abs(qs - seed))))
+        worst = max(worst, delta)
+        bad = []
+        if err_s is not None and err_s > MAX_IK_ERR_M:
+            bad.append(f"ik {err_s*100:.1f}cm")
+        if delta > args.max_step_deg:
+            bad.append(f"step {delta:.0f}deg")
+        # "n/a" rather than 0.00: in joint mode no IK is solved per step, and a
+        # printed 0.00 reads like a suspiciously perfect measurement.
+        ik_col = "  n/a  " if err_s is None else f"{err_s*100:5.2f} cm"
+        print(f"  step {step:02d}/{args.steps}  EE {np.round(want_pos,3)}  "
+              f"ik {ik_col}  step {delta:5.1f} deg  "
+              f"{'FAIL: ' + '; '.join(bad) if bad else 'OK'}")
+        # Fail closed: a partially-executed chain leaves the arm somewhere unplanned.
+        if bad:
+            sys.exit(f"Sub-step {step} failed its guard -- refusing the whole move. "
+                     f"Try more --steps, or reposition closer first.")
+        plan.append((f"step {step:02d}", want_pos, qs))
+        seed = qs
+
+    # Whichever mode ran, confirm the chain actually ends at the pose the gates
+    # above validated. Catches null-space drift, a wrapped joint, a bad branch.
+    end_err = float(np.linalg.norm(_fk(plan[-1][2]) - tgt))
+    posture = float(np.degrees(np.max(np.abs(
+        (plan[-1][2] - q + np.pi) % (2 * np.pi) - np.pi))))
+    print(f"chain OK      : worst single step {worst:.1f} deg "
+          f"(vs {np.degrees(jump):.1f} deg unchained)")
+    print(f"endpoint      : {end_err*100:.3f} cm from the gated target, "
+          f"posture {posture:.1f} deg from the gated joint solution")
+    if end_err > MAX_IK_ERR_M:
+        sys.exit(f"Chain ends {end_err*100:.1f} cm off target -- refusing.")
+elif np.degrees(jump) > 30.0:
+    print(f"\nNOTE: {np.degrees(jump):.0f} deg in one move. Consider --steps 12 to split it "
+          f"(see scripts/session/check_joint_path.py to inspect the unchained EE path).")
+
 if not args.execute:
     print("\nDRY RUN -- nothing commanded. Re-run with --execute to move.")
     sys.exit(0)
 
 # ---- execute ----------------------------------------------------------------
-print(f"\nspeed: {ai.get_speed()}  -- commanding ONE joint move to pre-grasp ...")
-ai.execute_command(JointCommand(pos=q.tolist()))
+print(f"\nspeed: {ai.get_speed()}  -- commanding {len(plan)} move(s) to pre-grasp ...")
+for name, want, qq in plan:
+    ai.execute_command(JointCommand(pos=qq.tolist()))
 
-# A move can return before it settles -- wait for velocity ~0, then re-check.
-for _ in range(100):
-    time.sleep(0.2)
-    st = ai.get_state()
-    if float(np.max(np.abs(np.asarray(st["velocity"], dtype=float)))) < 1e-3:
-        break
-time.sleep(0.5)
+    # A move can return before it settles -- wait for velocity ~0, then re-check.
+    for _ in range(100):
+        time.sleep(0.2)
+        st = ai.get_state()
+        if float(np.max(np.abs(np.asarray(st["velocity"], dtype=float)))) < 1e-3:
+            break
+    time.sleep(0.5)
+
+    if len(plan) > 1:
+        here = np.asarray(list(ai.get_state()["ee_pos"])[:3], dtype=float)
+        track = float(np.linalg.norm(here - np.asarray(want)))
+        print(f"  {name}: EE {np.round(here,4)}  tracking {track*100:4.1f} cm")
+        if track > MAX_STEP_TRACK_M:
+            sys.exit(f"Tracking {track*100:.1f} cm at {name} -- ABORT, holding here.")
 
 st = ai.get_state()
 final_ee = np.asarray(list(st["ee_pos"])[:3], dtype=float)

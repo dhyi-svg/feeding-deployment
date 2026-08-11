@@ -50,7 +50,10 @@ class GroundedSAM:
         self.SAM_CHECKPOINT_PATH = PATH_TO_GROUNDED_SAM + "/sam_vit_h_4b8939.pth"
         self._sam_predictor = None
 
-        print("Shared GroundedSAM models loaded successfully")
+        # Deliberately does NOT say "GroundedSAM models loaded": only GroundingDINO
+        # is loaded at this point. SAM stays unloaded until sam_predictor is touched,
+        # which the appliance/handle path never does.
+        print("GroundingDINO ready (SAM not loaded -- lazy, see sam_predictor)")
 
     @property
     def sam_predictor(self):

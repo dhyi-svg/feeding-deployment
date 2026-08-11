@@ -4,7 +4,7 @@ Nothing is re-detected once the arm is close: at ~2 cm the wrist camera cannot
 see the microwave and the plane fit returns a handle ~7 cm off (2026-07-29).
 Does NOT run the opening arc -- the perceived hinge is wrong-side.
 """
-import argparse, sys, time
+import argparse, os, sys, time
 from pathlib import Path
 import numpy as np, pybullet as p
 from scipy.spatial.transform import Rotation as R
@@ -49,8 +49,19 @@ MAX_IK_ERR, MAX_JUMP_DEG = 0.02, 90.0
 TRACK_ABORT = 0.03
 ARM = [1,2,3,4,5,6,7]
 
-a = argparse.ArgumentParser(); a.add_argument("--execute", action="store_true")
+a = argparse.ArgumentParser()
+a.add_argument("--execute", action="store_true")
+a.add_argument(
+    "--steps", type=int, default=1,
+    help="split EACH of the two moves (pre-grasp, grasp) into N interpolated joint "
+         "sub-steps. Default 1 = single command per move, the historical behaviour. "
+         "12 is the proven value on the approach script.")
+a.add_argument(
+    "--max-step-deg", type=float, default=20.0,
+    help="with --steps, abort if any ONE sub-step moves a joint more than this")
 args = a.parse_args()
+if args.steps < 1:
+    sys.exit("--steps must be >= 1")
 
 ai = ArmInterfaceClient(); st = ai.get_state()
 ee0 = np.asarray(list(st["ee_pos"])[:3], dtype=float); g0 = float(st.get("gripper_pos"))
@@ -59,7 +70,21 @@ if g0 > 0.2: sys.exit("Gripper not open -- refusing.")
 
 rs = RealSenseROS2Interface()
 if not rs.wait_for_frames(30.0): sys.exit("No RGB-D frames")
-apc = AppliancePerception(GroundedSAM())
+# Detection diagnostics. AppliancePerception already builds every overlay and already
+# writes a JSON sidecar with the intrinsics + the 4x4 base<-camera matrix, but both
+# hooks no-op when data_logger is None. Set DETECTION_LOG_DIR to keep them, which is
+# also what makes scripts/session/replay_detection.py possible. This script detects
+# TWICE, so both looks are captured -- that is exactly what you want when the two
+# disagree and you need to see which one drifted.
+_log_dir = os.environ.get("DETECTION_LOG_DIR")
+_data_logger = None
+if _log_dir:
+    from feeding_deployment.integration.data_logger import DataLogger
+
+    _data_logger = DataLogger(Path(_log_dir), day=1)
+    _data_logger.begin_hla("grasp_microwave")
+    print(f"detection logging -> {_log_dir}")
+apc = AppliancePerception(GroundedSAM(), data_logger=_data_logger)
 if apc.handle_depth_corr == 0.0: sys.exit("HANDLE_DEPTH_CORR not set -- refusing.")
 def detect_once(tag):
     d = rs.get_camera_data()
@@ -133,11 +158,48 @@ for name, pose in (("pre-grasp", pre), ("grasp", grasp)):
     if bad: sys.exit(f"GATE FAILED at {name}")
     plan.append((name, t, q)); cur = q
 
+def fk(joints):
+    """EE position in arm_base_link for a joint vector."""
+    for i, jj in enumerate(ARM):
+        p.resetJointState(rb.robot_id, jj, float(joints[i]), physicsClientId=rb.physics_client_id)
+    ls = p.getLinkState(rb.robot_id, rb.end_effector_id, physicsClientId=rb.physics_client_id)
+    return np.asarray(ls[4]) - np.asarray(scene.robot_base_pose.position)
+
+# Split each move into small increments. JOINT-space interpolation (same choice as the
+# approach script's default): it ends at exactly the IK solution the gates above passed,
+# per-step motion is bounded by construction at total/N, and no null-space drift is
+# possible. The EE follows the same curve the unchained move would have taken -- just
+# cut into pieces that can be checked and aborted between.
+if args.steps > 1:
+    chained, prev = [], np.asarray(st["position"], dtype=float)
+    print(f"\nchaining each move into {args.steps} joint sub-steps "
+          f"(guard {args.max_step_deg} deg/step):")
+    for name, t, q in plan:
+        # Shortest path per joint: a raw difference can read ~350 deg for what is
+        # physically a few degrees the other way round.
+        total = (q - prev + np.pi) % (2 * np.pi) - np.pi
+        base_q, worst = prev.copy(), 0.0
+        for s in range(1, args.steps + 1):
+            qs = base_q + total * (s / args.steps)
+            delta = float(np.degrees(np.max(np.abs(qs - prev))))
+            worst = max(worst, delta)
+            if delta > args.max_step_deg:
+                sys.exit(f"Sub-step {s} of '{name}' moves {delta:.0f} deg "
+                         f"(> {args.max_step_deg}) -- refusing the whole move.")
+            chained.append((f"{name} {s:02d}/{args.steps}", fk(qs), qs))
+            prev = qs
+        end_err = float(np.linalg.norm(fk(prev) - t))
+        print(f"  {name:10s} {args.steps} steps, worst {worst:5.1f} deg  "
+              f"endpoint {end_err*100:.3f} cm from the gated target")
+        if end_err > MAX_IK_ERR:
+            sys.exit(f"Chain for '{name}' ends {end_err*100:.1f} cm off target -- refusing.")
+    plan = chained
+
 if not args.execute:
     sys.exit("\nDRY RUN -- nothing commanded.")
 
+print(f"\nspeed: {ai.get_speed()}  -- commanding {len(plan)} move(s) ...")
 for name, t, q in plan:
-    print(f"\n-> {name} ...")
     ai.execute_command(JointCommand(pos=q.tolist()))
     for _ in range(120):
         time.sleep(0.2)
@@ -146,7 +208,7 @@ for name, t, q in plan:
     time.sleep(0.4)
     fin = np.asarray(list(ai.get_state()["ee_pos"])[:3], dtype=float)
     e = float(np.linalg.norm(fin - t))
-    print(f"   EE {np.round(fin,4)}  tracking {e*100:.1f} cm")
+    print(f"  {name:18s} EE {np.round(fin,4)}  tracking {e*100:4.1f} cm")
     if e > TRACK_ABORT:
         sys.exit(f"Tracking {e*100:.1f} cm at {name} -- ABORT, gripper untouched.")
 
