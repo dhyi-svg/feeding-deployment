@@ -13,10 +13,7 @@ from pybullet_helpers.geometry import Pose, multiply_poses
 from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceClient
 from feeding_deployment.control.robot_controller.command_interface import (
     CloseGripperCommand, JointCommand)
-from feeding_deployment.interfaces.perception_interface import PerceptionInterface
-from feeding_deployment.perception.grounded_sam import GroundedSAM
-from feeding_deployment.perception.appliance_perception.appliance_perception import AppliancePerception
-from feeding_deployment.ros2.realsense_ros2_interface import RealSenseROS2Interface
+from feeding_deployment.perception.detection_service import connect as connect_detector
 from feeding_deployment.simulation.scene_description import create_scene_description_from_config
 from feeding_deployment.simulation.simulator import FeedingDeploymentPyBulletSimulator
 
@@ -59,6 +56,10 @@ a.add_argument(
 a.add_argument(
     "--max-step-deg", type=float, default=20.0,
     help="with --steps, abort if any ONE sub-step moves a joint more than this")
+a.add_argument(
+    "--max-detects", type=int, default=5,
+    help="keep detecting until two agree within 3 cm, up to this many looks (default 5). "
+         "Each look costs ~85 s.")
 args = a.parse_args()
 if args.steps < 1:
     sys.exit("--steps must be >= 1")
@@ -68,46 +69,83 @@ ee0 = np.asarray(list(st["ee_pos"])[:3], dtype=float); g0 = float(st.get("grippe
 print(f"start EE {np.round(ee0,4)}  gripper {g0:.4f}")
 if g0 > 0.2: sys.exit("Gripper not open -- refusing.")
 
-rs = RealSenseROS2Interface()
-if not rs.wait_for_frames(30.0): sys.exit("No RGB-D frames")
+# Prefer a resident detector: it skips ~6 min of imports, model load and cold-disk
+# paging. Falls back to loading in-process when no server is running.
+svc = connect_detector()
+rs = apc = None
+if svc is not None:
+    depth_corr, lat_corr = svc.corrections()
+    print(f"using detection server (no local model load); corrections "
+          f"depth={depth_corr} lat={lat_corr}")
+else:
+    print("no detection server -- loading the model in-process (~6 min cold).\n"
+          "  For ~73 s runs instead, start it once in its own terminal:\n"
+          "    $PY -u scripts/session/detection_server.py")
+    from feeding_deployment.perception.appliance_perception.appliance_perception import AppliancePerception
+    from feeding_deployment.perception.grounded_sam import GroundedSAM
+    from feeding_deployment.ros2.realsense_ros2_interface import RealSenseROS2Interface
+    rs = RealSenseROS2Interface()
+    if not rs.wait_for_frames(30.0): sys.exit("No RGB-D frames")
 # Detection diagnostics. AppliancePerception already builds every overlay and already
 # writes a JSON sidecar with the intrinsics + the 4x4 base<-camera matrix, but both
 # hooks no-op when data_logger is None. Set DETECTION_LOG_DIR to keep them, which is
 # also what makes scripts/session/replay_detection.py possible. This script detects
 # TWICE, so both looks are captured -- that is exactly what you want when the two
 # disagree and you need to see which one drifted.
-_log_dir = os.environ.get("DETECTION_LOG_DIR")
-_data_logger = None
-if _log_dir:
-    from feeding_deployment.integration.data_logger import DataLogger
-
-    _data_logger = DataLogger(Path(_log_dir), day=1)
-    _data_logger.begin_hla("grasp_microwave")
-    print(f"detection logging -> {_log_dir}")
-apc = AppliancePerception(GroundedSAM(), data_logger=_data_logger)
-if apc.handle_depth_corr == 0.0: sys.exit("HANDLE_DEPTH_CORR not set -- refusing.")
+    _log_dir = os.environ.get("DETECTION_LOG_DIR")
+    _data_logger = None
+    if _log_dir:
+        from feeding_deployment.integration.data_logger import DataLogger
+        _data_logger = DataLogger(Path(_log_dir), day=1)
+        _data_logger.begin_hla("grasp_microwave")
+        print(f"detection logging -> {_log_dir}")
+    apc = AppliancePerception(GroundedSAM(), data_logger=_data_logger)
+    depth_corr, lat_corr = apc.handle_depth_corr, apc.handle_lat_corr
+if depth_corr == 0.0: sys.exit("HANDLE_DEPTH_CORR not set -- refusing.")
 def detect_once(tag):
-    d = rs.get_camera_data()
-    hh, _, _, top = apc.detect_handle_and_placement(
-        "microwave handle", d["rgb_image"], d["camera_info"], d["depth_image"])
-    if hh is None:
-        sys.exit(f"NO DETECTION ({tag})")
+    if svc is not None:
+        r = svc.detect("microwave handle")
+        if r is None:
+            sys.exit(f"NO DETECTION ({tag})")
+        hh = Pose(tuple(r["position"]), tuple(r["orientation"]))
+        top_z_val = r["top_z"]
+    else:
+        d = rs.get_camera_data()
+        hh, _, _, top = apc.detect_handle_and_placement(
+            "microwave handle", d["rgb_image"], d["camera_info"], d["depth_image"])
+        if hh is None:
+            sys.exit(f"NO DETECTION ({tag})")
+        top_z_val = float(np.asarray(top.position)[2]) if top is not None else float("nan")
     v = np.asarray(hh.position)
     # top_of_appliance drives the repo's post_release_pose (lift to top + 5 cm),
     # which is how open_microwave() exits -- straight up, not backwards.
-    tz = float(np.asarray(top.position)[2]) if top is not None else float("nan")
+    tz = top_z_val
     print(f"  detect {tag}: {np.round(v,4)}   top_of_appliance z {tz:.4f}")
     return hh, v, tz
 
-h1o, h1, tz1 = detect_once("1")
-h2o, h2, tz2 = detect_once("2")
-spread = float(np.linalg.norm(h1 - h2))
-print(f"detections agree to {spread*100:.1f} cm (limit {DETECT_AGREE*100:.0f})")
-if spread > DETECT_AGREE:
-    sys.exit(f"Detections disagree by {spread*100:.1f} cm -- unstable, refusing.")
-h = (h1 + h2) / 2.0
-handle = h2o
-top_z = float(np.nanmean([tz1, tz2]))
+# Keep looking until two agree, rather than aborting on one bad pair. Background
+# clutter can out-vote the handle cluster intermittently, so a lone outlier is common.
+dets, pair = [], None
+for i in range(1, args.max_detects + 1):
+    dets.append(detect_once(str(i)))
+    for j in range(len(dets) - 1):
+        spread = float(np.linalg.norm(dets[j][1] - dets[-1][1]))
+        if spread <= DETECT_AGREE:
+            pair = (dets[j], dets[-1], spread)
+            break
+    if pair:
+        break
+    if i > 1:
+        print(f"  no pair within {DETECT_AGREE*100:.0f} cm yet after {i} looks; re-detecting")
+if pair is None:
+    sys.exit(f"No two of {len(dets)} detections agreed within {DETECT_AGREE*100:.0f} cm "
+             f"-- refusing. Check the overlays in $DETECTION_LOG_DIR.")
+(_, ha, tza), (hbo, hb, tzb), spread = pair
+print(f"detections agree to {spread*100:.1f} cm (limit {DETECT_AGREE*100:.0f}), "
+      f"used {len(dets)} look(s)")
+h = (ha + hb) / 2.0
+handle = hbo
+top_z = float(np.nanmean([tza, tzb]))
 print(f"top_of_appliance z {top_z:.4f} -> post-release lift target {top_z+0.05:.4f}")
 Path("/tmp/microwave_top_z.txt").write_text(str(top_z))
 for nm, v, lo_hi in (("x", h[0], PLAUSIBLE_X), ("y", h[1], PLAUSIBLE_Y), ("z", h[2], PLAUSIBLE_Z)):
@@ -118,10 +156,14 @@ print(f"camera->handle {np.linalg.norm(h-ee0)*100:.0f} cm (viewing distance)")
 
 quat = (R.from_quat(np.asarray(handle.orientation)) * R.from_euler("y", np.pi)).as_quat()
 hp = Pose(tuple(h), tuple(quat))
-helper = PerceptionInterface.__new__(PerceptionInterface)
+def _pose_to_matrix(pose):
+    m = np.zeros((4,4)); m[:3,3] = pose[0]
+    m[:3,:3] = R.from_quat(pose[1]).as_matrix(); m[3,3] = 1
+    return m
 def off(v):
     m = np.eye(4); m[:3,3] = v
-    return helper.matrix_to_pose(helper.pose_to_matrix(hp) @ m)
+    out = _pose_to_matrix(hp) @ m
+    return Pose(out[:3,3], R.from_matrix(out[:3,:3]).as_quat())
 pre   = off([0.0, 0.0, -PRE_STANDOFF])
 grasp = off([LATERAL, 0.0, -GRIP_EXT])
 print(f"pre-grasp {np.round(pre.position,4)}  range {np.linalg.norm(pre.position):.3f}")

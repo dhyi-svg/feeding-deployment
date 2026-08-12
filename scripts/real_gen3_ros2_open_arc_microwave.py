@@ -9,7 +9,6 @@ import numpy as np, pybullet as p
 from pybullet_helpers.geometry import Pose, multiply_poses
 from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceClient
 from feeding_deployment.control.robot_controller.command_interface import JointCommand
-from feeding_deployment.interfaces.perception_interface import PerceptionInterface
 from feeding_deployment.simulation.scene_description import create_scene_description_from_config
 from feeding_deployment.simulation.simulator import FeedingDeploymentPyBulletSimulator
 
@@ -31,6 +30,10 @@ if g < 0.2:
     sys.exit("Gripper is OPEN -- nothing grasped. Refusing to run the arc.")
 
 hinge = (start.position[0], start.position[1] + DOOR_W, start.position[2])
+# Imported lazily: perception_interface costs 27.8 s and this script needs one
+# geometry helper from it, no detection.
+from feeding_deployment.interfaces.perception_interface import PerceptionInterface
+
 wps = PerceptionInterface._generate_door_arc_waypoints(
     None, start_pose=start, hinge_position=hinge, arc_length_m=ARC_LEN,
     waypoint_spacing_m=SPACING, direction=DIRECTION, rotate_orientation=True)

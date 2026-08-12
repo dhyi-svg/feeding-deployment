@@ -33,6 +33,7 @@ class ArmInterface:
         self.in_compliant_mode = False
 
         self.emergency_stop_active = False
+        self.halted = False  # soft-stop latch; see halt()/clear_halt()
         self.controller = None
         self.bulldog_ready = False
         self.last_bulldog_heartbeat = None
@@ -119,6 +120,7 @@ class ArmInterface:
 
     def set_tool(self, tool: str):
         self._require_bulldog()
+        assert not self.halted, "Arm is HALTED -- call clear_halt() to re-enable motion"
         print(f"Setting tool to {tool}")
         try:
             self.arm.set_tool(tool)
@@ -132,6 +134,7 @@ class ArmInterface:
         self._require_bulldog()
         assert speed in ["low", "medium", "high"], "Invalid speed"
         assert not self.emergency_stop_active, "Emergency stop is active"
+        assert not self.halted, "Arm is HALTED -- call clear_halt() to re-enable motion"
         assert not self.in_compliant_mode, "Cannot set speed while in compliant mode"
         
         self._log_command(f"set_speed: {speed}")
@@ -147,6 +150,7 @@ class ArmInterface:
     def get_speed(self):
         self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
+        assert not self.halted, "Arm is HALTED -- call clear_halt() to re-enable motion"
         assert not self.in_compliant_mode, "Cannot get speed while in compliant mode"
 
         try:
@@ -162,6 +166,7 @@ class ArmInterface:
     def switch_to_task_compliant_mode(self):
         self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
+        assert not self.halted, "Arm is HALTED -- call clear_halt() to re-enable motion"
         assert not self.in_compliant_mode, "Already in compliant mode"
 
         self._log_command("switch_to_task_compliant_mode")
@@ -185,6 +190,7 @@ class ArmInterface:
     def switch_to_joint_compliant_mode(self):
         self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
+        assert not self.halted, "Arm is HALTED -- call clear_halt() to re-enable motion"
         assert not self.in_compliant_mode, "Already in compliant mode"
 
         self._log_command("switch_to_joint_compliant_mode")
@@ -209,6 +215,7 @@ class ArmInterface:
     def switch_out_of_compliant_mode(self):
         self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
+        assert not self.halted, "Arm is HALTED -- call clear_halt() to re-enable motion"
         assert self.in_compliant_mode, "Not in compliant mode"
 
         self._log_command("switch_out_of_compliant_mode")
@@ -239,6 +246,7 @@ class ArmInterface:
     def compliant_set_joint_position(self, command_pos):
         self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
+        assert not self.halted, "Arm is HALTED -- call clear_halt() to re-enable motion"
         assert self.in_compliant_mode, "Not in compliant mode"
 
         self._log_command(f"compliant_set_joint_position: {np.asarray(command_pos).tolist()}")
@@ -252,6 +260,7 @@ class ArmInterface:
     def compliant_set_ee_pose(self, xyz, xyz_quat):
         self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
+        assert not self.halted, "Arm is HALTED -- call clear_halt() to re-enable motion"
         assert self.in_compliant_mode, "Not in compliant mode"
 
         self._log_command(f"compliant_set_ee_pose: {np.asarray(xyz).tolist()}, {np.asarray(xyz_quat).tolist()}")
@@ -269,6 +278,7 @@ class ArmInterface:
     def set_joint_position(self, command_pos):
         self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
+        assert not self.halted, "Arm is HALTED -- call clear_halt() to re-enable motion"
         assert not self.in_compliant_mode, "In compliant mode"
 
         self._log_command(f"set_joint_position: {np.asarray(command_pos).tolist()}")
@@ -287,6 +297,7 @@ class ArmInterface:
     def set_joint_trajectory(self, trajectory_command):
         self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
+        assert not self.halted, "Arm is HALTED -- call clear_halt() to re-enable motion"
         assert not self.in_compliant_mode, "In compliant mode"
 
         traj_str = "; ".join(str(np.asarray(w).tolist()) for w in trajectory_command)
@@ -307,6 +318,7 @@ class ArmInterface:
     def set_ee_pose(self, xyz, xyz_quat, soft_stop=False):
         self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
+        assert not self.halted, "Arm is HALTED -- call clear_halt() to re-enable motion"
         assert not self.in_compliant_mode, "In compliant mode"
 
         self._log_command(f"set_ee_pose: {np.asarray(xyz).tolist()}, {np.asarray(xyz_quat).tolist()}")
@@ -324,6 +336,7 @@ class ArmInterface:
     def set_cartesian_trajectory(self, trajectory_command):
         self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
+        assert not self.halted, "Arm is HALTED -- call clear_halt() to re-enable motion"
         assert not self.in_compliant_mode, "In compliant mode"
 
         traj_str = "; ".join(
@@ -347,6 +360,7 @@ class ArmInterface:
     def set_gripper(self, gripper_pos):
         self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
+        assert not self.halted, "Arm is HALTED -- call clear_halt() to re-enable motion"
         assert not self.in_compliant_mode, "In compliant mode"
 
         self._log_command(f"set_gripper: {gripper_pos}")
@@ -365,6 +379,7 @@ class ArmInterface:
     def open_gripper(self):
         self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
+        assert not self.halted, "Arm is HALTED -- call clear_halt() to re-enable motion"
         assert not self.in_compliant_mode, "In compliant mode"
 
         self._log_command("open_gripper")
@@ -383,6 +398,7 @@ class ArmInterface:
     def close_gripper(self):
         self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
+        assert not self.halted, "Arm is HALTED -- call clear_halt() to re-enable motion"
         assert not self.in_compliant_mode, "In compliant mode"
 
         self._log_command("close_gripper")
@@ -418,6 +434,7 @@ class ArmInterface:
     def retract(self):
         self._require_bulldog()
         assert not self.emergency_stop_active, "Emergency stop is active"
+        assert not self.halted, "Arm is HALTED -- call clear_halt() to re-enable motion"
         assert not self.in_compliant_mode, "In compliant mode"
 
         print("Received retract command")
@@ -446,6 +463,32 @@ class ArmInterface:
         except Exception as e:
             print(f"Error in stop_action: {e}")
             raise Exception(f"Error in stop_action: {str(e)}") from None
+
+    def halt(self):
+        """Stop motion now AND latch, so a client loop cannot send its next waypoint.
+
+        Base.Stop() is the call that actually stops this arm -- Base.StopAction() does
+        not (verified on hardware 2026-08-12). The latch is equally load-bearing: a stop
+        that only cancels the current motion is useless against a script in a loop.
+        Recoverable with clear_halt(), unlike emergency_stop() which needs a restart.
+        """
+        self._log_command("halt")
+        self.halted = True  # latch FIRST: a command racing us must lose
+        try:
+            self.arm.stop()
+        except Exception as e:
+            print(f"Error in halt: {e}")
+            raise Exception(f"Error in halt: {str(e)}") from None
+        print("HALTED. Motion stopped and latched; call clear_halt() to re-enable.")
+
+    def clear_halt(self):
+        """Release the halt latch. Does not clear a latched emergency stop."""
+        self._log_command("clear_halt")
+        self.halted = False
+        print("Halt cleared -- motion commands accepted again.")
+
+    def is_halted(self):
+        return self.halted
 
     def emergency_stop(self):
         assert not self.emergency_stop_active, "Emergency stop is already active"

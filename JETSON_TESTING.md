@@ -29,6 +29,7 @@ long-running processes and you cannot type in them.
 | 4 | `ros2 launch` | yes | **no** — system `python3`, sets its own |
 | 5 | **work terminal** — speed, checks, all task scripts | no | yes |
 | 6 | stop / panic | no | yes |
+| 7 | `detection_server.py` | yes | yes |
 
 **Env block — paste into terminals 1, 2, 3, 5 and 6 (NOT terminal 4):**
 ```bash
@@ -92,6 +93,18 @@ ps aux | grep -E "[h]ome_launch|[a]rm_driver"
 ---
 
 ## 2. Bring-up
+
+**Terminal 7 — START THIS FIRST.** It takes ~6 min to load (2.4 GB of libraries and
+weights off a 13.5 MB/s microSD) and needs nothing but the camera, so start it now and
+let it load while you do the rest of the bring-up. Without it every task script loads its
+own copy and each run costs ~8 min instead of ~73 s.
+
+```bash
+DETECTION_LOG_DIR=~/captures/session $PY -u scripts/session/detection_server.py
+```
+
+It only depends on the camera, so it survives `arm_server` restarts, e-stops, teleop and
+bulldog restarts — start it once when you sit down, not once per run.
 
 **Terminal 1** (wait for it to report connected):
 ```bash
@@ -200,7 +213,77 @@ Fine, and often easier. Two consequences:
 
 ---
 
-## 5. Run the task
+## 5. Stopping — read this before you run anything with execute
+
+Everything past this point moves the arm. Know how to stop it first.
+
+
+> **`arm_stop_action.py` IS NOT A STOP. Verified broken 2026-08-12.** It printed
+> success during a live arc and the arm kept moving for 11 more seconds — `Base.StopAction()`
+> did not abort the in-flight motion, and even if it had, the arc loop would have
+> commanded the next waypoint anyway. It is left in the tree as a diagnostic only.
+
+**Only two things are PROVEN to stop this arm.** A third is implemented but unverified.
+
+| | mechanism | status |
+|---|---|---|
+| 1 | **physical e-stop** | proven, no delay |
+| 2 | `pkill -f bulldog_bypass.py` | proven — stopped the 2026-08-12 incident, ~1 s delay |
+| 3 | `scripts/session/arm_halt.py` | **UNVERIFIED — do not rely on it yet** |
+
+**Escalate in this order:**
+
+**Terminal 6** — leave it idle with this pre-typed, one keystroke away:
+```bash
+# Kills the heartbeat -> emergency_stop within ~1 s. This LATCHES, which is what
+# actually halts a multi-waypoint script: every later command then asserts.
+pkill -f bulldog_bypass.py
+```
+
+**The physical e-stop beats it and has no delay.** Keep a hand on it during any motion —
+the bulldog path takes ~1 s, which was long enough on 2026-08-12 for the arc to keep
+pulling.
+
+Recovery after either: restart `arm_server.py`, then re-run `bulldog_bypass.py`.
+
+### `arm_halt.py` — implemented 2026-08-12, NOT yet verified on hardware
+
+```bash
+$PY scripts/session/arm_halt.py            # stop + latch
+$PY scripts/session/arm_halt.py --clear    # release
+$PY scripts/session/arm_halt.py --status   # read only
+```
+
+Calls `Base.Stop()` (what `emergency_stop` uses) **and** latches server-side, so all 15
+motion methods assert and a client loop dies rather than sending its next waypoint.
+Recoverable without restarting `arm_server`. **Requires an `arm_server` restart to load.**
+
+Until it has been seen to fire correctly, treat it as untrusted and use 1 or 2. The test:
+restart the server, `--status` → False, `halt`, command the arm to its *current* joint
+values (no motion even if the latch fails) → must raise, `--clear`, same command →
+accepted. Then live in free space at low speed, nothing grasped, and confirm no
+`set_joint_position` lines follow `halt` in `arm_commands_log.txt`.
+
+**Why the latch matters:** a stop that only cancels the current motion is useless against
+a script in a loop — it just sends the next waypoint. Anything proposed as a soft stop
+must both halt motion *and* make subsequent commands refuse.
+
+**Ctrl-C on a motion script is not a stop.** The scripts install no signal handler, and
+`execute_command` is a blocking RPC into a *separate* process — killing the client does
+not recall a command the controller already holds. Ctrl-C prevents the *next* waypoint,
+not the one in flight.
+
+`bulldog_bypass.py` has **no software e-stop** — it replaces the real bulldog, which
+subscribes to `/experimentor_estop`, with nothing. The one retained safety property is
+fail-closed on process death: if the bypass dies, the arm e-stops within ~1 s. That is
+what makes option 2 work.
+
+**Recovery after option 2, an e-stop, or Xbox teleop:** the Kortex session faults. Restart
+`arm_server.py`, then **re-run `bulldog_bypass.py`** — a fresh server re-locks motion.
+
+---
+
+## 6. Run the task
 
 Two rules that apply to **every** command in this section:
 
@@ -212,7 +295,7 @@ Two rules that apply to **every** command in this section:
 - **Always `tee`.** Detection images never reach disk (§7), so a run's stdout is the only
   surviving record of what the detector saw. Log the dry runs too.
 
-### 5a. First, understand `--steps`
+### 6a. First, understand `--steps`
 
 Read this before running anything below — the commands in 5b use it.
 
@@ -265,12 +348,11 @@ motion, and a sub-step's IK can still land on a distant branch. `--max-step-deg`
 script confirms the chain ends at the gated target and prints the posture difference, so
 null-space drift cannot pass silently.
 
-### 5b. The run sequence
+### 6b. The run sequence
 
 **Terminal 5** — everything below runs here.
 
 ```bash
-mkdir -p ~/runs/$(date +%F)
 ```
 
 **Step 1 — pick ONE path: (a) approach only, or (b) full grasp. They are alternatives,
@@ -286,14 +368,18 @@ touches the door. Choose split or unsplit:
 
 ```bash
 # split into 12 gated increments -- RECOMMENDED (see 5a)
+mkdir -p ~/runs/$(date +%F) && \
 DETECTION_LOG_DIR=~/captures/approach_dry \
   $PY -u scripts/real_gen3_ros2_approach_microwave.py --steps 12           2>&1 | tee ~/runs/$(date +%F)/01a_approach_dry.log
+mkdir -p ~/runs/$(date +%F) && \
 DETECTION_LOG_DIR=~/captures/approach_exec \
   $PY -u scripts/real_gen3_ros2_approach_microwave.py --steps 12 --execute 2>&1 | tee ~/runs/$(date +%F)/02a_approach.log
 
 # ...or unsplit: one single command. This is what you get if you omit --steps.
+mkdir -p ~/runs/$(date +%F) && \
 DETECTION_LOG_DIR=~/captures/approach_dry \
   $PY -u scripts/real_gen3_ros2_approach_microwave.py                      2>&1 | tee ~/runs/$(date +%F)/01a_approach_dry.log
+mkdir -p ~/runs/$(date +%F) && \
 DETECTION_LOG_DIR=~/captures/approach_exec \
   $PY -u scripts/real_gen3_ros2_approach_microwave.py --execute            2>&1 | tee ~/runs/$(date +%F)/02a_approach.log
 ```
@@ -302,8 +388,10 @@ DETECTION_LOG_DIR=~/captures/approach_exec \
 so do not run (a) first. `--steps` splits **both** of its moves, each guarded separately:
 
 ```bash
+mkdir -p ~/runs/$(date +%F) && \
 DETECTION_LOG_DIR=~/captures/grasp_dry \
   $PY -u scripts/real_gen3_ros2_grasp_microwave.py --steps 12           2>&1 | tee ~/runs/$(date +%F)/01b_grasp_dry.log
+mkdir -p ~/runs/$(date +%F) && \
 DETECTION_LOG_DIR=~/captures/grasp_exec \
   $PY -u scripts/real_gen3_ros2_grasp_microwave.py --steps 12 --execute 2>&1 | tee ~/runs/$(date +%F)/02b_grasp.log
 ```
@@ -383,36 +471,6 @@ Never withdraw while gripping. Still done by hand.
 
 ---
 
-## 6. Stopping
-
-**Escalate in this order:**
-
-**Terminal 6** — leave it idle with these pre-typed, so they are one keystroke away:
-```bash
-# 1. Abort the in-flight motion. Arm stays commandable -- no restart needed.
-$PY scripts/session/arm_stop_action.py
-
-# 2. Hard stop, ~1 s. Latches e-stop; kills terminal 3.
-pkill -f bulldog_bypass.py
-```
-
-**3. The physical e-stop always beats both.** Keep a hand on it during any motion.
-
-**Ctrl-C on a motion script is not a stop.** The scripts install no signal handler, and
-`execute_command` is a blocking RPC into a *separate* process — killing the client does
-not recall a command the controller already holds. Ctrl-C prevents the *next* waypoint,
-not the one in flight.
-
-`bulldog_bypass.py` has **no software e-stop** — it replaces the real bulldog, which
-subscribes to `/experimentor_estop`, with nothing. The one retained safety property is
-fail-closed on process death: if the bypass dies, the arm e-stops within ~1 s. That is
-what makes option 2 work.
-
-**Recovery after option 2, an e-stop, or Xbox teleop:** the Kortex session faults. Restart
-`arm_server.py`, then **re-run `bulldog_bypass.py`** — a fresh server re-locks motion.
-
----
-
 ## 7. Logging, and two gaps
 
 **What you get:**
@@ -432,7 +490,7 @@ and `_log_detection_inputs` write nothing unless a `data_logger` is attached, an
 scripts used to construct `AppliancePerception(GroundedSAM())` with the default
 `data_logger=None` — so every overlay was built, held in memory and discarded at exit.
 The approach and grasp scripts now attach one when **`DETECTION_LOG_DIR`** is set (see
-§5b "Detection logging"). **Set it on every run**: without it a bad detection still
+§6b "Detection logging"). **Set it on every run**: without it a bad detection still
 cannot be reviewed afterwards, and `replay_detection.py` has nothing to work from. The
 arc script does not detect, so it has no equivalent.
 

@@ -37,6 +37,144 @@ the bypass (fresh server re-locks motion). Verify with `get_state()` → expect
 
 ---
 
+---
+
+## 2026-08-12 (later) — Jetson: grasp succeeded, arc partially completed and pulled the microwave; `stop_action` FAILED TO STOP THE ARM
+
+**Grasp: success.** Re-ran `real_gen3_ros2_grasp_microwave.py --steps 12 --execute` after
+returning the arm to `MICROWAVE_HOME`. Gripper closed on the handle, visually confirmed.
+`gripper_pos` read **1.0000** this time (0.4693 on the earlier confirmed grasp — see
+above; the value does not distinguish a grasp).
+
+**Arc: mostly completed, then had to be stopped.** `real_gen3_ros2_open_arc_microwave.py`
+ran and swung the door most of the way, but **began pulling the microwave off the table**
+and was stopped before finishing. The appliance is not fixed to the table, so once the
+door reaches its limit the arc keeps pulling and the whole appliance moves. The arc's
+per-waypoint tracking abort (2.5 cm) did not catch this — the EE was tracking its
+commanded waypoints correctly; it was the *microwave* that moved, which nothing measures.
+
+### SAFETY INCIDENT: `arm_stop_action.py` reported success and did not stop the arm
+
+The documented "first response" abort did nothing. From `arm_commands_log.txt`:
+
+```
+12:45:11  stop_action              <- reached the server, client printed success
+12:45:12  set_joint_position       <- the arc sent the NEXT waypoint 1 s later
+12:45:15  set_joint_position
+12:45:18  set_joint_position
+12:45:21  set_joint_position
+12:45:22  emergency_stop           <- bulldog kill; the only thing that worked
+```
+
+Two independent failures:
+
+1. **`Base.StopAction()` did not stop the in-flight motion.** `move_angular()` commands
+   via `base.ExecuteAction()`; `StopAction()` did not abort it. `Base.Stop()` — what
+   `emergency_stop()` calls — is what actually stops this arm.
+2. **Even a working abort would not have helped.** `stop_action` cancels one motion; the
+   arc loop immediately commands the next waypoint. Nothing tells the *script* to stop.
+   The bulldog kill worked because it **latches** `emergency_stop_active`, after which
+   `set_joint_position`'s assert blocks every subsequent waypoint. **The latch is the
+   load-bearing part, not the stop.**
+
+`stop_action`'s own docstring says it was written to preempt a single long move from the
+teleop recovery screen — it was never a general stop, and was wrongly presented as one.
+
+**Standing rule until proven otherwise: the physical e-stop and killing
+`bulldog_bypass.py` are the only stops. `arm_stop_action.py` is NOT a safety mechanism.**
+
+### Follow-ups
+
+1. A real soft stop needs `arm.stop()` (i.e. `Base.Stop()`) **plus** a latch that makes
+   subsequent motion commands refuse — recoverable without restarting `arm_server`,
+   unlike `emergency_stop()`. Must be verified in free space at low speed with nothing
+   grasped before it is relied on.
+2. The arc needs an abort for *appliance* movement, not just EE tracking error. The
+   microwave is unsecured; a door that has hit its limit and an appliance being dragged
+   look identical to the current guard.
+3. Consider securing the microwave to the table for testing, and/or shortening
+   `ARC_LEN` so the swing stops short of the door's hard limit.
+
+---
+## 2026-08-12 — Jetson: successful chained approach + grasp on the real handle (no arc attempted)
+
+**Result: the first grasp using the new `--steps` chained-motion path completed.** Ran
+`real_gen3_ros2_grasp_microwave.py --steps 12 --execute`. The script ran to its final
+line (`CHECK VISUALLY before running the arc.`) with no aborts, so both gated moves
+(pre-grasp, then grasp) executed and the gripper closed.
+
+**No arc was run.** That is by design, not a failure — the grasp script's docstring says
+it "does NOT run the opening arc", and the arc is a separate script. It stops after
+closing so the grip can be checked first. The door was NOT swung this session.
+
+End state:
+
+```
+EE      : [0.5423, -0.3461, 0.5195]     ~0.5 cm from the detected handle
+gripper : 0.4693                        CLOSED, partially
+```
+
+### Grasp confirmed on the handle; `gripper_pos = 0.4693` at a successful grasp
+
+The grasp was **visually confirmed successful** — the gripper closed on the microwave
+handle.
+
+`gripper_pos` read **0.4693** at that grasp, and **1.0000** at a second confirmed grasp
+later the same day. Two successful grasps, two very different readings — so the inherited
+guidance holds on this rig too: **`gripper_pos` cannot confirm a grasp.** Keep the human
+check.
+
+### Detection
+
+Two detections captured to `~/captures/grasp_exec` (`1__*`, `1_1_*`, 12:22 and 12:23).
+The run passed the 3 cm agreement gate. Numbers themselves were lost — see below.
+
+### Lost the stdout log (process gap, now fixed)
+
+`tee ~/runs/$(date +%F)/02b_grasp.log` failed silently because `~/runs/2026-08-12/` did
+not exist — the date had rolled over and `mkdir -p ~/runs/$(date +%F)` was a separate
+step in `JETSON_TESTING.md`, easy to skip. The detection agreement figure and the 24
+per-step tracking values only ever existed in terminal scrollback.
+
+`DETECTION_LOG_DIR` was unaffected and captured both detections, so the perception side
+is still replayable via `scripts/session/replay_detection.py`.
+
+Fixed by chaining `mkdir -p ~/runs/$(date +%F) && ` into every logged command in
+`JETSON_TESTING.md` rather than relying on a preceding step.
+
+### Also this session
+
+- **Detection server built** (`scripts/session/detection_server.py`,
+  `perception/detection_service.py`). Startup was measured, not guessed: imports 43 s,
+  `GroundedSAM()` 42 s warm / ~110 s cold, and ~2.4 GB of libraries and weights paged off
+  a **13.5 MB/s** microSD — ~3 min of disk before any compute. That startup is
+  per-invocation and not per-detection, which is why a run took ~8 min. With the server
+  resident a run should be ~73 s. **Not yet exercised on hardware** — this session's run
+  used the in-process fallback.
+- Both task scripts now prefer the server and lazy-import the heavy modules; dropping
+  `perception_interface` (27.8 s, used only for two four-line matrix helpers, now
+  inlined) took the client import set from 11.9 s to 1.8 s. Pre-grasp geometry verified
+  unchanged to **0.000 mm** against a previous run.
+- `--max-detects` (default 5): keep detecting until two agree, instead of aborting the
+  whole run on one bad pair. Added after a run where two detections disagreed by 20 cm —
+  both at ~0.60 confidence, so **confidence did not distinguish the good detection from
+  the bad one**. The captured overlays showed the bad one had clustered onto the table
+  clutter below the microwave, which out-voted the handle because DBSCAN takes the
+  largest cluster.
+- `docs/position_locked_assumptions.md` written: 15 things that break when the appliance
+  moves or rotates, each traced to upstream or this branch. Nine are upstream. RANSAC's
+  `plane_model` is computed and discarded (upstream too) — using it would fix three of
+  them at once.
+
+### Next
+
+1. The arc — hand on the e-stop, `DOOR_W = 0.32` hinge and
+   `DIRECTION = -1` are confirmed correct-side for this layout (verified against the
+   saved camera→base transform: image-right is base −y, so the hinge is at +y of the
+   handle).
+2. Exercise the detection server on hardware — it has never run against the live camera.
+
+---
 ## 2026-07-31 — Pachirisu: real OpenDoorHLA ticked end-to-end (sim-only, duck-typed adapter) -- the 07-30 "thin adapter" plan actually attempted
 
 Followed directly on 07-30's stated next step ("actually attempt the thin-adapter

@@ -19,12 +19,7 @@ from pybullet_helpers.geometry import Pose, multiply_poses
 
 from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceClient
 from feeding_deployment.control.robot_controller.command_interface import JointCommand
-from feeding_deployment.interfaces.perception_interface import PerceptionInterface
-from feeding_deployment.perception.grounded_sam import GroundedSAM
-from feeding_deployment.perception.appliance_perception.appliance_perception import (
-    AppliancePerception,
-)
-from feeding_deployment.ros2.realsense_ros2_interface import RealSenseROS2Interface
+from feeding_deployment.perception.detection_service import connect as connect_detector
 from feeding_deployment.simulation.scene_description import (
     create_scene_description_from_config,
 )
@@ -75,36 +70,55 @@ if gripper > 0.2:
     sys.exit("Gripper is not open -- refusing to approach while it may be holding something.")
 
 # ---- live detection ---------------------------------------------------------
-rs = RealSenseROS2Interface()
-if not rs.wait_for_frames(30.0):
-    sys.exit("No RGB-D frames")
-gs = GroundedSAM()
-# Detection diagnostics. AppliancePerception already builds every overlay (plane fit,
-# candidate cluster, final handle/hinge pixels) and already writes a JSON sidecar with
-# the intrinsics and the 4x4 base<-camera matrix -- but both hooks no-op when
-# data_logger is None, so all of it is discarded at exit. Set DETECTION_LOG_DIR and it
-# lands on disk, which is also what makes scripts/session/replay_detection.py possible.
-_log_dir = os.environ.get("DETECTION_LOG_DIR")
-_data_logger = None
-if _log_dir:
-    from pathlib import Path
+# Prefer a resident detector (scripts/session/detection_server.py): it skips ~6 min of
+# imports, model load and cold-disk paging. Falls back to loading in-process.
+svc = connect_detector()
+if svc is not None:
+    depth_corr, lat_corr = svc.corrections()
+    print("using detection server (no local model load)")
+else:
+    print("no detection server -- loading the model in-process (~6 min cold).\n"
+          "  For ~73 s runs instead, start it once in its own terminal:\n"
+          "    $PY -u scripts/session/detection_server.py")
+    from feeding_deployment.perception.appliance_perception.appliance_perception import (
+        AppliancePerception,
+    )
+    from feeding_deployment.perception.grounded_sam import GroundedSAM
+    from feeding_deployment.ros2.realsense_ros2_interface import RealSenseROS2Interface
 
-    from feeding_deployment.integration.data_logger import DataLogger
+    rs = RealSenseROS2Interface()
+    if not rs.wait_for_frames(30.0):
+        sys.exit("No RGB-D frames")
+    # DETECTION_LOG_DIR keeps the overlays + replay sidecar; both no-op without it.
+    _log_dir = os.environ.get("DETECTION_LOG_DIR")
+    _data_logger = None
+    if _log_dir:
+        from pathlib import Path
 
-    _data_logger = DataLogger(Path(_log_dir), day=1)
-    _data_logger.begin_hla("approach_microwave")
-    print(f"detection logging -> {_log_dir}")
-apc = AppliancePerception(gs, data_logger=_data_logger)
-print(f"corrections   : depth={apc.handle_depth_corr} lat={apc.handle_lat_corr}")
-if apc.handle_depth_corr == 0.0:
+        from feeding_deployment.integration.data_logger import DataLogger
+
+        _data_logger = DataLogger(Path(_log_dir), day=1)
+        _data_logger.begin_hla("approach_microwave")
+        print(f"detection logging -> {_log_dir}")
+    apc = AppliancePerception(GroundedSAM(), data_logger=_data_logger)
+    depth_corr, lat_corr = apc.handle_depth_corr, apc.handle_lat_corr
+
+print(f"corrections   : depth={depth_corr} lat={lat_corr}")
+if depth_corr == 0.0:
     sys.exit("Corrections are OFF -- set HANDLE_DEPTH_CORR before approaching.")
 
-d = rs.get_camera_data()
-handle, hinge, placement, top = apc.detect_handle_and_placement(
-    "microwave handle", d["rgb_image"], d["camera_info"], d["depth_image"]
-)
-if handle is None:
-    sys.exit("NO DETECTION")
+if svc is not None:
+    r = svc.detect("microwave handle")
+    if r is None:
+        sys.exit("NO DETECTION")
+    handle = Pose(tuple(r["position"]), tuple(r["orientation"]))
+else:
+    d = rs.get_camera_data()
+    handle, _hinge, _placement, _top = apc.detect_handle_and_placement(
+        "microwave handle", d["rgb_image"], d["camera_info"], d["depth_image"]
+    )
+    if handle is None:
+        sys.exit("NO DETECTION")
 h = np.asarray(handle.position)
 print(f"handle        : [{h[0]:.4f}, {h[1]:.4f}, {h[2]:.4f}]  "
       f"(vs touched truth, {np.linalg.norm(h-TRUTH)*100:.1f} cm)")
@@ -130,10 +144,17 @@ handle_quat = (R.from_quat(np.asarray(handle.orientation)) * GRASP_QUAT_FIX).as_
 handle_fixed = Pose(tuple(h), tuple(handle_quat))
 print(f"gripper +z -> base {np.round(R.from_quat(handle_quat).as_matrix()[:, 2], 2)} (want +x)")
 
-helper = PerceptionInterface.__new__(PerceptionInterface)
+def _pose_to_matrix(pose):
+    m = np.zeros((4, 4))
+    m[:3, 3] = pose[0]
+    m[:3, :3] = R.from_quat(pose[1]).as_matrix()
+    m[3, 3] = 1
+    return m
+
 offset = np.eye(4)
 offset[:3, 3] = np.array([0.0, 0.0, -PRE_GRASP_STANDOFF_M])
-pre_grasp = helper.matrix_to_pose(helper.pose_to_matrix(handle_fixed) @ offset)
+_m = _pose_to_matrix(handle_fixed) @ offset
+pre_grasp = Pose(_m[:3, 3], R.from_matrix(_m[:3, :3]).as_quat())
 tgt = np.asarray(pre_grasp.position)
 standoff = float(np.linalg.norm(tgt - h))
 print(f"pre-grasp     : [{tgt[0]:.4f}, {tgt[1]:.4f}, {tgt[2]:.4f}]")
