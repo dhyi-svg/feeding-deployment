@@ -67,6 +67,17 @@ _OVERLAY_WHITE = (255, 255, 255)
 _OVERLAY_REF_W = 1280
 # Swing-out arrow: wide, shallow elliptical arc about the hinge sweeping to the
 # foreground (foreshortened projection of the door's out-of-plane swing).
+# A door is vertical, so its normal is horizontal. cos(60 deg): allows a badly
+# tilted appliance while still rejecting a horizontal surface.
+# How far in front of the door plane a handle can sit.
+HANDLE_PROTRUSION_MAX_M = 0.07
+# Clusters below this fraction of the biggest are noise, not candidates.
+HANDLE_MIN_CLUSTER_FRACTION = 0.25
+# Cap elongation so a very thin sliver cannot dominate the score.
+HANDLE_ELONGATION_CAP = 10.0
+
+MAX_DOOR_NORMAL_VERTICAL = 0.5
+
 _SWING_SWEEP_DEG = 43.0
 _SWING_KY = {
     "bottom textured fridge door": 0.37,  # up-left (unchanged)
@@ -691,16 +702,24 @@ class AppliancePerception(TFInterface):
         plane_depth = np.median(np.asarray(plane_cloud.points)[:, 2])
         print("Plane depth in m:", plane_depth)
 
-        # remove points from possible_handle_cloud which are behind the plane
+        # Protrusion is distance from the FITTED PLANE, not from a scalar median depth.
+        # The median test assumes the door is square to the camera; at a viewing angle a
+        # flat face spans ~12 cm in camera z (measured 2026-08-12), so bands of plain
+        # bodywork qualify as "protruding" and become competing clusters.
+        normal = np.asarray(plane_model[:3], dtype=float)
+        offset = float(plane_model[3])
+        norm = np.linalg.norm(normal)
+        if norm > 1e-9:
+            normal, offset = normal / norm, offset / norm
+        # Orient the normal toward the camera (origin) so "in front" is positive.
+        if np.dot(normal, np.asarray(plane_cloud.points).mean(axis=0)) > 0:
+            normal, offset = -normal, -offset
+
         possible_handle_points = np.asarray(possible_handle_cloud.points)
-        handle_points = []
-        handle_pixels = []
-        for i, p in enumerate(possible_handle_points):
-            if (
-                p[2] < plane_depth and p[2] > plane_depth - 0.07
-            ):  # within a reasonable distance infront of the door
-                handle_points.append(p)
-                handle_pixels.append(pixels[outliers[i]])
+        signed = possible_handle_points @ normal + offset
+        in_front = (signed > 0.0) & (signed < HANDLE_PROTRUSION_MAX_M)
+        handle_points = [possible_handle_points[i] for i in np.where(in_front)[0]]
+        handle_pixels = [pixels[outliers[i]] for i in np.where(in_front)[0]]
 
         # visualize handle_pixels on image
         vis = rgb_image.copy()
@@ -729,8 +748,34 @@ class AppliancePerception(TFInterface):
             # rospy.logwarn("DBSCAN found no clusters.")
             return None, None, None, None
 
+        # Largest-cluster wins picked a horizontal band of door face in 4/20 RANSAC
+        # draws (2026-08-12). Filter by size to drop noise, then choose by SHAPE: a
+        # handle is elongated and vertical. Both terms are scale-free -- no assumption
+        # about which side it is on, how thick it is, or how big.
         unique, counts = np.unique(labels[valid], return_counts=True)
-        main_label = unique[np.argmax(counts)]
+        up_cam = (
+            self.make_homogeneous_transform(transform)[2, :3]
+            if transform is not None
+            else None
+        )
+        if up_cam is None:
+            main_label = unique[np.argmax(counts)]
+        else:
+            handle_points_arr = np.asarray(handle_points)
+            keep = unique[counts >= HANDLE_MIN_CLUSTER_FRACTION * counts.max()]
+            best_label, best_score = None, -1.0
+            for label in keep:
+                cluster = handle_points_arr[labels == label]
+                centred = cluster - cluster.mean(axis=0)
+                _, sv, vt = np.linalg.svd(centred, full_matrices=False)
+                verticality = abs(float(np.dot(vt[0], up_cam)))
+                elongation = float(sv[0] / max(sv[1], 1e-9))
+                score = verticality * min(elongation, HANDLE_ELONGATION_CAP)
+                print(f"  cluster {label}: {len(cluster)} pts, vertical {verticality:.2f}, "
+                      f"elongation {elongation:.1f}, score {score:.2f}")
+                if score > best_score:
+                    best_label, best_score = label, score
+            main_label = best_label
 
         handle_pixels = np.array(handle_pixels)
         handle_points = np.array(handle_points)
@@ -766,22 +811,71 @@ class AppliancePerception(TFInterface):
         print("Handle centroid pixel:", handle_centroid_pixel)
         print("Top of plane pixel:", top_of_appliance_pixel)
 
-        if handle_type == "bottom textured fridge door":
-            print("Finding strip anchor point for fridge door handle")
-            strip_anchor_point = np.min(plane_cloud.points, axis=0)
-        else:
-            print("Finding strip anchor point for microwave handle")
-            strip_anchor_point = np.max(plane_cloud.points, axis=0)
+        # The hinge is the door edge farthest from the handle, measured along the door
+        # plane's OWN horizontal axis (normal x world-up). Upstream used camera-frame
+        # x with a per-appliance min/max, which assumes a fixed wrist-camera roll: at
+        # 180 deg it picks the handle's own edge, at 90 deg the door's top/bottom.
+        # Using the plane's axis is roll- and bearing-independent (verified against
+        # captures at 0/90/180 deg simulated roll, 2026-08-12).
+        plane_points = np.asarray(plane_cloud.points)
+        axis = None
+        if transform is not None:
+            up_cam = self.make_homogeneous_transform(transform)[2, :3]  # base +z in camera frame
+            # An appliance door is vertical, so its normal is horizontal: the normal's
+            # component along base up must be small. Rejects a fit that latched onto the
+            # table or floor instead. Assumes the appliance is upright (true for a
+            # microwave/fridge, not a chest freezer or a drawer). Sign-agnostic: RANSAC
+            # returns +/-n for the same plane.
+            vertical_component = abs(float(np.dot(plane_model[:3], up_cam)))
+            if vertical_component > MAX_DOOR_NORMAL_VERTICAL:
+                print(
+                    f"PLANE IS NOT A DOOR: normal is {vertical_component:.2f} along "
+                    f"vertical (limit {MAX_DOOR_NORMAL_VERTICAL}) -- RANSAC likely fitted "
+                    f"the table or floor. Refusing."
+                )
+                return None, None, None, None
+            axis = np.cross(np.asarray(plane_model[:3]), up_cam)
+            norm = np.linalg.norm(axis)
+            axis = axis / norm if norm > 1e-6 else None
+        if axis is None:
+            axis = np.array([1.0, 0.0, 0.0])  # no transform: fall back to camera x
+            print("Hinge axis: no transform, falling back to camera x")
 
-        hinge_strip_points = []
-        for p in plane_cloud.points:
-            if np.abs(p[0] - strip_anchor_point[0]) < 0.02:
-                hinge_strip_points.append(p)
+        # Percentiles, not min/max: RANSAC's inlier set drifts by a few thousand
+        # marginal points between runs, and a single stray one moves an extreme edge
+        # metres. Measured 2026-08-12: min/max std 0.3 cm, 1st/99th 0.1 cm, and the
+        # percentile radius (29.9 cm) matches a tape-independent face measurement
+        # (29.7 cm) that min/max overshoots.
+        proj = plane_points @ axis
+        handle_proj = float(handle_centroid_3d @ axis)
+        lo, hi = float(np.percentile(proj, 1)), float(np.percentile(proj, 99))
+        edge = lo if abs(handle_proj - lo) > abs(handle_proj - hi) else hi
+        strip_anchor_point = plane_points[int(np.argmin(np.abs(proj - edge)))]
+        strip_axis_value = edge
+        print(f"Hinge edge: {abs(handle_proj - edge)*100:.1f} cm from the handle "
+              f"along the door plane (span {(hi-lo)*100:.1f} cm)")
+
+        hinge_strip_points = plane_points[np.abs(proj - strip_axis_value) < 0.02]
         hinge_strip_points = np.array(hinge_strip_points)
         hinge_idx = np.argmin(
             np.linalg.norm(hinge_strip_points - handle_centroid_3d, axis=1)
         )
         hinge_3d = hinge_strip_points[hinge_idx]
+
+        # A hinged door has its hinge on the opposite edge from the handle. If the
+        # chosen edge is the handle's own, the plane fit has gone wrong (usually
+        # co-planar background pulled into the cloud). Refuse: a wrong-side hinge
+        # produces an arc that drags the appliance instead of swinging the door
+        # (2026-08-12 incident).
+        handle_to_hinge = abs(float(hinge_3d @ axis) - handle_proj)
+        handle_to_far = max(abs(handle_proj - lo), abs(handle_proj - hi))
+        if handle_to_hinge < 0.5 * handle_to_far:
+            print(
+                f"HINGE ON THE WRONG SIDE: it is {handle_to_hinge*100:.1f} cm from the "
+                f"handle but the far edge is {handle_to_far*100:.1f} cm away. "
+                f"The plane fit likely includes background. Refusing."
+            )
+            return None, None, None, None
 
         # Hack: hinge y is the same as handle_centroid y
         hinge_3d[1] = handle_centroid_3d[1]

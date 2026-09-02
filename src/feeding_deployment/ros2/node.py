@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import atexit
 import threading
+import time
 
 import rclpy
 from rclpy.executors import MultiThreadedExecutor
@@ -32,6 +33,25 @@ _THREAD: threading.Thread | None = None
 _LOCK = threading.Lock()
 
 DEFAULT_NODE_NAME = "feeding_deployment"
+
+
+
+def _spin_forever() -> None:
+    """Spin, restarting on error. A bare spin() that raises kills the daemon thread
+    silently, and every camera/tf callback with it -- frames then freeze forever."""
+    while rclpy.ok():
+        try:
+            _EXECUTOR.spin()
+            return
+        except Exception as e:  # noqa: BLE001 -- must not let the thread die
+            if _NODE is not None:
+                _NODE.get_logger().error(f"rclpy executor spin raised, restarting: {e}")
+            time.sleep(0.5)
+
+
+def executor_alive() -> bool:
+    """True if the executor thread is still running (callbacks can be delivered)."""
+    return _THREAD is not None and _THREAD.is_alive()
 
 
 def get_node(name: str = DEFAULT_NODE_NAME) -> Node:
@@ -55,7 +75,7 @@ def get_node(name: str = DEFAULT_NODE_NAME) -> Node:
         _EXECUTOR.add_node(_NODE)
 
         _THREAD = threading.Thread(
-            target=_EXECUTOR.spin, name="rclpy-executor", daemon=True
+            target=_spin_forever, name="rclpy-executor", daemon=True
         )
         _THREAD.start()
 

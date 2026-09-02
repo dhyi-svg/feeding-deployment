@@ -39,6 +39,112 @@ the bypass (fresh server re-locks motion). Verify with `get_state()` → expect
 
 ---
 
+## 2026-08-22 — Jetson: table height changed; ZERO grasp motion — blocked by a dead rclpy executor in the detection server
+
+**Nothing was grasped and the arc was never attempted.** The only motion all session was
+one reposition to a saved viewing pose. `arm_commands_log.txt` for the whole grasp phase
+contains only `set_speed` lines — every grasp attempt aborted in the detection stage,
+before any joint command. No fault latched, no collision, no e-stop from a moving arm.
+
+### The real blocker: the shared rclpy executor thread dies and nothing restarts it
+
+`ros2/node.py` ran `_EXECUTOR.spin` **bare in a daemon thread**. If spin raises, the thread
+dies silently and every callback on the shared node — camera *and* tf — stops forever. The
+process keeps running and looks healthy.
+
+Symptom chain, in the order it confused us:
+1. `detect 1` succeeds; `detect 2` refuses with "Camera frame is Ns old".
+2. `ros2 topic hz` shows the camera publishing fine the whole time (~10-15 Hz).
+3. Probing the service again minutes later returned **296.7 s** where it had said 59.8 s —
+   the stored frame was *frozen*, not merely stale. That is what proves the subscriber is
+   dead rather than the camera being slow.
+
+Two separate triggers were seen: a long (~60 s) GroundingDINO pass holding the GIL, and
+restarting the camera node underneath a live detection server (the subscription never
+re-matched to the new publisher).
+
+**Fixed** (`ros2/node.py`): spin now runs under `_spin_forever()`, which logs and restarts
+on exception, plus `executor_alive()`. `detection_service.py`'s stale-frame error now names
+which half broke ("the rclpy executor thread is DEAD" vs "the camera has stopped
+publishing"). **Patched but NOT yet proven on hardware** — the server was reloaded with the
+fix and the session ended before a two-detection run could confirm it. That confirmation is
+step one tomorrow.
+
+### Also fixed: detection server refused every second detection
+
+`DetectionService.detect()` sampled the frame once and refused if stale. Since a detection
+holds the GIL ~60 s, the stored frame is *always* stale immediately afterwards, so back-to-
+back detections could never both succeed. Now polls up to `max(limit, 10 s)` for a fresh
+frame before refusing. This one **is** proven — it took a run from "refused" to two looks
+agreeing to 0.4 cm.
+
+### DDS was pinned to the arm's ethernet
+
+`~/ros2_ws`'s setup.bash exports `CYCLONEDDS_URI` pointing at a config that pins DDS to
+`enP8p1s0` — the point-to-point arm link — so all local ROS traffic was forced over it
+(hundreds of `ddsi_udp_conn_write ... failed` lines). `config/cyclonedds_local.xml` (already
+in the tree, untracked, never exported) fixes it: export it and the failures go to **zero**.
+Not the cause of the frozen-frame bug, but it must be set. The arm RPC is TCP to
+192.168.1.10, unaffected by loopback-only DDS.
+
+### `goto_preset.py` was broken — called a method that does not exist
+
+It connects with a raw `ArmManager` proxy but called `arm.execute_command(JointCommand(...))`,
+which only exists on `ArmInterfaceClient`. Fixed to `arm.set_joint_position(target.tolist())`
+(what the client forwards to anyway). It then drove the arm to `microwave_approach_start_pos`
+with **0.01 deg** residual, EE matching the recorded capture to 0.1 mm.
+
+### Table height changed — two constants are now wrong
+
+The microwave's table was lowered ~15 cm and **cannot be put back**.
+- `PLAUSIBLE_Z` floor lowered 0.35 -> **0.25** (`real_gen3_ros2_grasp_microwave.py`), at the
+  user's direction, after it refused a *good* detection at z=0.320. Deliberate loosening of
+  a guard; the x/y bounds were untouched and still passed comfortably.
+- **`top_of_appliance` is now WRONG and must not be trusted**: it returns z≈0.216, *below*
+  the handle at z≈0.316. Cause is visible in the log — `Top of plane pixel: (463, 505)` in a
+  **480-row image**, i.e. off the bottom of the frame. The steep downward view from the
+  lowered table clips the door face. It gates nothing today and nothing reads
+  `/tmp/microwave_top_z.txt`, but it drives `post_release_pose` (lift to top + 5 cm) the
+  moment that is automated — it would send the gripper **down**.
+
+### Detection itself is healthy in the new configuration
+
+Worth stating plainly, because the framing looked bad by eye and was not:
+handle `[0.5565, -0.2953, 0.3159]`, two looks agreeing to **0.4-0.5 cm**, plane verticality
+**1.00**, elongation 6.0, 2768 pts, viewing distance **40 cm**, confidence 0.58-0.59. The
+full dry run passed every gate: IK error **0.00 cm** on both moves, `--steps 12` giving
+worst sub-steps of 5.4 deg (pre-grasp) and 1.6 deg (grasp), endpoints 0.001 cm from the
+gated target.
+
+### Other things found
+- **Bulldog heartbeat starves during the detector's model load** and latches an e-stop
+  (0.3 s beat vs 1.0 s timeout, ~2.4 GB paging off microSD). Order matters: bring the
+  detector up **before** `bulldog_bypass.py`, or take bulldog down during a reload.
+  JETSON_TESTING.md §2 says start the detector first — correct, but impossible as written,
+  because `DetectionService.__init__` waits for camera frames before loading the model, so
+  the `ros2 launch` has to precede it.
+- **Duplicate `robot_state_publisher` + `calibration_tf` survived a launch restart**, two
+  publishers on the same TF frames at once. Verify with `ps` after any launch restart.
+- `ros2 launch` needs the `~/ros2_ws` overlay: Humble's own `robotiq_description` (2023) is
+  too old for `kortex_description`'s xacro (`Invalid parameter "isaac_joint_commands"`).
+  Sourcing `/opt/ros/humble/setup.bash` *after* the overlays shadows the fix.
+- Arm ethernet (`enP8p1s0`) dropped twice — once before bring-up, once at session end.
+  `carrier` = 0 is the check.
+
+### State at end of session
+Everything shut down; nothing left running. Arm powered off (link down), so final pose
+could not be read — but it never left the viewing pose, and the gripper was open (0.0044)
+at the last successful read. Microwave sits on the lowered table, roughly square to the arm.
+
+### Next step
+1. Confirm the executor fix: restart the stack, run the grasp **dry run**, and check both
+   detections succeed. If a stale-frame error appears, it now says whether the executor
+   died — that distinction is the whole point.
+2. Then the grasp execute (dry run already passed every gate from this exact pose).
+3. Before any arc: `top_of_appliance` is wrong, and the arc's assumed `+0.32 m` hinge was
+   validated against the *old* table geometry — re-check both.
+
+
 ## 2026-08-12 (later) — Jetson: grasp succeeded, arc partially completed and pulled the microwave; `stop_action` FAILED TO STOP THE ARM
 
 **Grasp: success.** Re-ran `real_gen3_ros2_grasp_microwave.py --steps 12 --execute` after
@@ -123,6 +229,13 @@ handle.
 later the same day. Two successful grasps, two very different readings — so the inherited
 guidance holds on this rig too: **`gripper_pos` cannot confirm a grasp.** Keep the human
 check.
+
+### Grasp height ran high
+
+Observed across the successful grasps: the gripper closed on the handle but sat too high
+on the bar. Relevant to the 2026-08-12 detection changes, which moved the reported handle
+height down ~5 cm (`z` 0.517 -> 0.467) as a side effect of measuring protrusion from the
+fitted plane. That shift is in the correcting direction.
 
 ### Detection
 

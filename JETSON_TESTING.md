@@ -9,16 +9,16 @@ those commands and covers what a session actually feels like from the chair. Whe
 disagree on a command, **this file is newer** (see "Corrections to older docs" at the
 bottom).
 
-Last updated: 2026-08-11, written and revised during live bring-ups.
+Last updated: 2026-08-28. Bring-up order in §2 corrected after the 2026-08-22 session.
 
 ---
 
 ## 0. Terminal layout
 
-Six terminals, one job each. **1–4 block and stay open; you work in 5; 6 stays idle.**
+Seven terminals, one job each. **1, 2, 3, 4 and 7 block and stay open; you work in 5; 6 stays idle.** Start them in the order given in §2 — it is not 1-2-3-4.
 
 **Every command block below is labelled with the terminal it belongs in.** If a block
-says "Terminal 5", it runs in the work terminal — terminals 1–4 are occupied by
+says "Terminal 5", it runs in the work terminal — the others are occupied by
 long-running processes and you cannot type in them.
 
 | # | Job | Blocks? | Needs the env block? |
@@ -37,6 +37,9 @@ cd ~/feeding-deployment
 export PYTHONPATH="$HOME/.local/lib/python3.10/site-packages:$HOME/feeding-deployment/src:$PYTHONPATH"
 export ARM_RPC_HOST=127.0.0.1
 export CUDA_VISIBLE_DEVICES=""       # GroundingDINO: CPU only on this box
+# ~/ros2_ws's setup.bash pins DDS to enP8p1s0 (the arm link), which floods
+# ddsi_udp_conn_write failures. Loopback: everything here is single-machine.
+export CYCLONEDDS_URI=file://$HOME/feeding-deployment/config/cyclonedds_local.xml
 export HANDLE_DEPTH_CORR=0.094       # motion scripts refuse to run without this
 export HANDLE_LAT_CORR=0.0           # lateral error is detection VARIANCE, not bias
 PY=$HOME/feeding-deployment/.venv/bin/python
@@ -94,17 +97,18 @@ ps aux | grep -E "[h]ome_launch|[a]rm_driver"
 
 ## 2. Bring-up
 
-**Terminal 7 — START THIS FIRST.** It takes ~6 min to load (2.4 GB of libraries and
-weights off a 13.5 MB/s microSD) and needs nothing but the camera, so start it now and
-let it load while you do the rest of the bring-up. Without it every task script loads its
-own copy and each run costs ~8 min instead of ~73 s.
+**Order matters, and it is not the obvious one.** Two hard constraints, both found the
+hard way on 2026-08-22:
 
-```bash
-DETECTION_LOG_DIR=~/captures/session $PY -u scripts/session/detection_server.py
-```
+1. **`ros2 launch` must precede the detection server.** `DetectionService.__init__`
+   waits for camera frames before it loads the model, so it cannot be "started first" —
+   it will just sit there.
+2. **The detection server must precede `bulldog_bypass.py`.** Loading ~2.4 GB off a
+   13.5 MB/s microSD starves the bulldog heartbeat (0.3 s beat against a 1.0 s timeout)
+   and **latches an e-stop**. If you ever reload the detector later, take bulldog down
+   first.
 
-It only depends on the camera, so it survives `arm_server` restarts, e-stops, teleop and
-bulldog restarts — start it once when you sit down, not once per run.
+So: arm → base stub → ROS → detector → bulldog → speed.
 
 **Terminal 1** (wait for it to report connected):
 ```bash
@@ -116,16 +120,37 @@ $PY -u src/feeding_deployment/control/robot_controller/arm_server.py
 $PY scripts/stub_base_server.py
 ```
 
-**Terminal 3** — this unlocks motion:
-```bash
-$PY scripts/bulldog_bypass.py
-```
-
 **Terminal 4** — no env block; needs system `python3` for `lark`, and the launch file
-already defaults `arm_rpc_host=127.0.0.1` and sets its own `PYTHONPATH`:
+already defaults `arm_rpc_host=127.0.0.1` and sets its own `PYTHONPATH`. It needs the
+`~/ros2_ws` overlay: Humble's own `robotiq_description` (2023) is too old for
+`kortex_description`'s xacro (`Invalid parameter "isaac_joint_commands"`). Sourcing
+`/opt/ros/humble/setup.bash` *after* the overlays shadows the fix.
 ```bash
 cd ~/feeding-deployment
+export CYCLONEDDS_URI=file://$HOME/feeding-deployment/config/cyclonedds_local.xml
 ros2 launch launch/ros2/microwave_bringup.launch.py
+```
+
+After **any** launch restart, check you did not end up with two of everything —
+duplicate `robot_state_publisher` + `calibration_tf` publishing the same TF frames
+survived a restart on 2026-08-22:
+```bash
+ps aux | grep -E "[r]obot_state_publisher|[c]alibration_tf"
+```
+
+**Terminal 7 — the detection server.** ~6 min to load. Start it once when you sit down,
+not once per run: it depends only on the camera, so it survives `arm_server` restarts,
+e-stops, teleop and bulldog restarts. Without it every task script loads its own copy and
+each run costs ~8 min instead of ~73 s.
+```bash
+DETECTION_LOG_DIR=~/captures/session $PY -u scripts/session/detection_server.py
+```
+Wait for `detection server ready` before starting terminal 3.
+
+**Terminal 3** — this unlocks motion. **Start it only after the detector has finished
+loading** (see constraint 2 above):
+```bash
+$PY scripts/bulldog_bypass.py
 ```
 
 **Terminal 5 — set the speed. The task scripts never do this themselves.**
@@ -418,6 +443,56 @@ refuses above 3 cm.
 > appliance and the plane fit is meaningless. The two-detection agreement gate can pass
 > with both looks equally wrong. If you ran (a), back the arm off to ~40 cm before (b).
 
+### Detection geometry diverges from upstream (2026-08-12)
+
+The 3D pipeline in `appliance_perception.py` no longer matches `upstream/main`. Three
+upstream behaviours were replaced for robustness — plane-distance protrusion instead of a
+scalar median depth, shape-based cluster selection instead of largest-wins, and a
+plane-derived hinge edge instead of a per-appliance min/max — plus two new guards that
+refuse rather than return a bad pose.
+
+Full rationale, measurements and what each change assumes:
+`docs/position_locked_assumptions.md`, "Divergence from upstream".
+
+Practical consequences when running:
+
+- **New refusal paths.** Detection can now return "no detection" for reasons other than
+  GroundingDINO missing: the fitted plane is not vertical (`PLANE IS NOT A DOOR`), or the
+  hinge landed on the handle's own side (`HINGE ON THE WRONG SIDE`). Both print why.
+- **Per-cluster scores are printed** (`cluster N: ... vertical ... elongation ... score`).
+  If a detection looks wrong, that line says which candidates were considered.
+- **The reported handle height dropped ~5 cm** (`z` 0.517 → 0.467), from the protrusion
+  change admitting ~2× more points and shifting the `top_most_y - 0.04` offset. This is
+  the right direction: grasps had been landing too high.
+- Validated offline only, on 10 captures replayed 3×. Nothing has run on hardware.
+
+### Offline testing — check a change without the robot
+
+Two replay tools. Both run the **real repo code**, not a reimplementation, so they catch
+mistakes in an edit that an inline script would miss.
+
+| tool | replays | needs the model? | use it when |
+|---|---|---|---|
+| `replay_geometry.py` | the 3D pipeline (plane fit, hinge, corrections, transforms), with `detect_items` stubbed from the saved box | **no** — seconds | you changed geometry and want to know if it is right |
+| `replay_detection.py` | detection *including* GroundingDINO | yes, ~6 min | you want to know what the detector saw |
+
+```bash
+# after ANY change to geometry in appliance_perception.py
+$PY -u scripts/session/replay_geometry.py ~/captures/
+
+# is the result independent of wrist-camera orientation?
+$PY -u scripts/session/replay_geometry.py --roll 0 90 180 ~/captures/grasp_exec
+```
+
+`replay_geometry.py` prints the handle, hinge and hinge radius per capture, then the
+spread across all of them. Captures are world-fixed poses, so **they must agree** — the
+spread is the score. `--roll` re-runs each with a simulated camera roll and reports
+`ROLL-INDEPENDENT` or `DEPENDS ON CAMERA ROLL`.
+
+**Run it several times.** `segment_plane` is RANSAC and is *not* deterministic: on
+2026-08-12 the same ten captures gave a 0.8 cm hinge spread on one run and 45 cm on
+another. A single clean run does not prove a change is good.
+
 ### Detection logging and offline replay
 
 `AppliancePerception` already builds every diagnostic overlay (plane fit, candidate
@@ -509,4 +584,15 @@ Found live on 2026-08-05; the older files still carry the earlier version.
 | `JETSON_SETUP.md` §6b → §6c | approach `--execute`, then grasp `--execute` | Alternatives, not a sequence. Approach leaves the arm at 12 cm; the grasp script re-detects from there and detection needs ~40 cm. |
 | `JETSON_SETUP.md` §6, runbook rung 5 | `set_speed("low")` mentioned in passing | Nothing sets it. Run `scripts/session/arm_set_speed.py low` explicitly, after the bypass. |
 | all | (silent) | Pass `-u` to every task script, or `tee` hides all output until exit. |
-| all | (silent) | `stop_action()` exists and is the right first response — recoverable, unlike killing the bypass. |
+| ~~all~~ | ~~`stop_action()` is the right first response~~ | **WRONG — struck 2026-08-12.** `arm_stop_action.py` was verified broken: it printed success while the arm kept moving 11 s. See §5. This row contradicted §5 and is retired. |
+
+Found live on 2026-08-22:
+
+| File | Says | Actually |
+|---|---|---|
+| this file, §2 | start `detection_server.py` first (terminal 7) | **Impossible as written.** `DetectionService.__init__` waits for camera frames *before* loading the model, so `ros2 launch` must already be up. Working order: `arm_server` → `stub_base` → `ros2 launch` → `detection_server` → **`bulldog_bypass` last**. |
+| this file, §2 | (silent on bulldog vs the model load) | The detector paging ~2.4 GB off the microSD **starves bulldog's heartbeat** (0.3 s beat, 1.0 s timeout) and latches an e-stop needing an `arm_server` restart. Start bulldog *after* the detector is ready, or drop bulldog during any reload. |
+| this file, §0/§2 terminal 4 | no env block; system `python3` | Also needs the `~/ros2_ws` + `ros2_kortex_ws` overlays. Humble's own `robotiq_description` is too old for `kortex_description`'s xacro (`Invalid parameter "isaac_joint_commands"`). Do **not** source `/opt/ros/humble/setup.bash` after the overlays — it shadows them. |
+| this file, §4 | "There is no recorded viewing pose... only `home_pos` and `retract_pos`" | Stale. `config/local_arm_presets.yaml` has `microwave_view_pos` and `microwave_approach_start_pos`, and `scripts/session/goto_preset.py` drives to them — no Xbox controller, so no faulted Kortex session to recover from. |
+| this file, §6b | (silent) | After any `ros2 launch` restart, **check for duplicate `robot_state_publisher` / `calibration_tf`** — they survived a restart on 2026-08-22, two publishers on the same TF frames. |
+| this file, §7 | (silent) | **Never restart the camera node under a live `detection_server`** — the subscription does not re-match, and the server serves a frozen frame forever. Restart the detector too. |

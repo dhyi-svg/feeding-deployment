@@ -10,11 +10,22 @@ same multiprocessing-manager RPC the arm already uses. Detection maths is untouc
 this calls the real AppliancePerception.detect_handle_and_placement.
 """
 import os
+import time
 from multiprocessing.managers import BaseManager
 
 HOST = os.environ.get("DETECTION_RPC_HOST", "127.0.0.1")
 PORT = int(os.environ.get("DETECTION_RPC_PORT", "5055"))
 AUTHKEY = b"feeding_deployment_detection"
+
+
+def _frame_age_sec(data):
+    """Seconds since the frame's header stamp, or None when unstamped."""
+    stamp = getattr(data.get("header"), "stamp", None)
+    if stamp is None:
+        return None
+    sec = getattr(stamp, "sec", getattr(stamp, "secs", 0))
+    nsec = getattr(stamp, "nanosec", getattr(stamp, "nsecs", 0))
+    return time.time() - (sec + nsec * 1e-9)
 
 
 class DetectionService:
@@ -50,22 +61,27 @@ class DetectionService:
         Nothing positional is cached -- the frame and the tf lookup are both live, so
         moving the arm or the appliance is tracked. Only the model weights persist.
         """
-        data = self._rs.get_camera_data()
-        # get_camera_data returns the LAST frame forever if the camera stops. Harmless
-        # for a short-lived script; a resident server could serve a stale one for hours.
-        header = data.get("header")
-        stamp = getattr(header, "stamp", None)
-        if stamp is not None:
-            import time as _time
+        # get_camera_data returns the LAST frame forever if the camera stops. A
+        # detection also holds the GIL for ~60 s, so the rclpy executor thread cannot
+        # deliver frames while one runs and the stored frame is always stale straight
+        # afterwards. Poll for a fresh one before deciding the camera is really dead.
+        deadline = time.time() + max(max_frame_age_sec, 10.0)
+        while True:
+            data = self._rs.get_camera_data()
+            age = _frame_age_sec(data)
+            if age is None or age <= max_frame_age_sec:
+                break
+            if time.time() > deadline:
+                from feeding_deployment.ros2.node import executor_alive
 
-            sec = getattr(stamp, "sec", getattr(stamp, "secs", 0))
-            nsec = getattr(stamp, "nanosec", getattr(stamp, "nsecs", 0))
-            age = _time.time() - (sec + nsec * 1e-9)
-            if age > max_frame_age_sec:
+                why = ("the rclpy executor thread is DEAD -- restart the detection "
+                       "server" if not executor_alive() else
+                       "the camera has stopped publishing")
                 raise RuntimeError(
                     f"Camera frame is {age:.1f}s old (limit {max_frame_age_sec}s) -- "
-                    "the camera has stopped publishing. Refusing a stale detection."
+                    f"{why}. Refusing a stale detection."
                 )
+            time.sleep(0.1)
         handle, _hinge, _placement, top = self._apc.detect_handle_and_placement(
             handle_type, data["rgb_image"], data["camera_info"], data["depth_image"]
         )

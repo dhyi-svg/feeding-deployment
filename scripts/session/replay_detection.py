@@ -78,7 +78,10 @@ def find_capture(directory: Path):
         return None
     sidecar = js[0]
     stem = sidecar.name.replace("_detection_inputs.json", "")
-    rgb = next(iter(sorted(sidecar.parent.glob(f"{stem}_rgb.png"))), None)
+    # .jpg as well as .png: record_teleop_demo.py can trade a little fidelity for ~8x
+    # smaller recordings, and everything downstream reads it through cv2.imread anyway.
+    rgb = next(iter(sorted(sidecar.parent.glob(f"{stem}_rgb.png"))
+                    + sorted(sidecar.parent.glob(f"{stem}_rgb.jpg"))), None)
     depth = next(iter(sorted(sidecar.parent.glob(f"{stem}_depth.png"))), None)
     if rgb is None or depth is None:
         return None

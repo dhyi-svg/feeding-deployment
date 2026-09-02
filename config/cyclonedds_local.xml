@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- Single-machine DDS: loopback only. The default CYCLONEDDS_URI on this box comes
+     from ~/ros2_ws (another project) and pins DDS to enP8p1s0, the arm's ethernet --
+     so every rclpy node fails to create whenever that cable drops. Nothing here is
+     cross-machine, so loopback is both correct and immune to that. -->
+<CycloneDDS>
+  <Domain>
+    <General>
+      <Interfaces>
+        <NetworkInterface name="lo" priority="default" multicast="true"/>
+      </Interfaces>
+      <AllowMulticast>true</AllowMulticast>
+    </General>
+  </Domain>
+</CycloneDDS>

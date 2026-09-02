@@ -31,7 +31,9 @@ DETECT_AGREE = 0.03
 # (+x forward, +z up). Catches a wild fit without assuming a position.
 PLAUSIBLE_X = (0.45, 0.85)
 PLAUSIBLE_Y = (-0.40, 0.20)
-PLAUSIBLE_Z = (0.35, 0.65)
+# Floor lowered from 0.35 on 2026-08-22: the microwave's table was lowered, putting
+# the handle at z~0.32. Still catches a fit onto the floor or a shelf.
+PLAUSIBLE_Z = (0.25, 0.65)
 PRE_STANDOFF = 0.12
 GRIP_EXT = 0.0            # coupled with HANDLE_DEPTH_CORR -- see TESTING_LOG
 # No lateral correction. A third detection put the handle within 3 mm of the

@@ -59,6 +59,14 @@ def generate_launch_description():
         default_value="127.0.0.1",
         description="Host running arm_server.py (ARM_RPC_HOST).",
     )
+    use_joint_state_bridge_arg = DeclareLaunchArgument(
+        "use_joint_state_bridge",
+        default_value="true",
+        description="Start the arm-RPC joint-state bridge. Set false when arm_server.py "
+                    "is not running and something else publishes /joint_states -- e.g. "
+                    "scripts/session/record_teleop_demo.py during Xbox teleop, which "
+                    "faults arm_server's Kortex session.",
+    )
     # feeding_deployment is a pip/catkin package, not an ament one, so its ROS 2
     # helpers are run as plain modules out of the project venv rather than as
     # installed ROS 2 executables.
@@ -109,6 +117,7 @@ def generate_launch_description():
         ],
         name="joint_state_bridge",
         output="screen",
+        condition=IfCondition(LaunchConfiguration("use_joint_state_bridge")),
         additional_env={
             "ARM_RPC_HOST": LaunchConfiguration("arm_rpc_host"),
             "PYTHONPATH": pythonpath,
@@ -164,6 +173,7 @@ def generate_launch_description():
             calib_file_arg,
             launch_camera_arg,
             arm_rpc_host_arg,
+            use_joint_state_bridge_arg,
             python_arg,
             repo_src_arg,
             color_profile_arg,

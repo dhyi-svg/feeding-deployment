@@ -28,7 +28,6 @@ from feeding_deployment.control.robot_controller.arm_interface import (
     RPC_AUTHKEY,
     ArmManager,
 )
-from feeding_deployment.control.robot_controller.command_interface import JointCommand
 
 PRESETS = Path(__file__).resolve().parents[2] / "config" / "local_arm_presets.yaml"
 
@@ -75,7 +74,9 @@ if not args.execute:
     sys.exit("\nDRY RUN -- nothing commanded. Re-run with --execute to move.")
 
 print(f"\nspeed: {arm.get_speed()}  -- commanding joint move ...")
-arm.execute_command(JointCommand(pos=target.tolist()))
+# Raw ArmManager proxy exposes set_joint_position, not the client-level
+# execute_command; for a JointCommand the client just forwards to this.
+arm.set_joint_position(target.tolist())
 for _ in range(150):
     time.sleep(0.2)
     if float(np.max(np.abs(np.asarray(arm.get_state()["velocity"], dtype=float)))) < 1e-3:

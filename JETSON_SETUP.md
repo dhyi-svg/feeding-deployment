@@ -1,5 +1,6 @@
 # Jetson setup — every command, cold box → autonomous microwave open
 
+
 Single-machine rig: **Jetson Orin Nano + Kinova Gen3 plugged in directly**, no NUC,
 no base, no lab safety wiring. This is the *operational* file — the ordered list of
 commands to bring the rig up and run the microwave task.
@@ -72,7 +73,7 @@ The two most common blockers, both invisible from software until you look:
 
 ```bash
 cat /sys/class/net/enP8p1s0/carrier     # want 1
-ping -c1 192.168.1.10                   # want a reply
+ping 192.168.1.10                   # want a reply
 lsusb | grep -i intel                   # want an Intel device (the RealSense)
 ps aux | grep -E "[h]ome_launch|[a]rm_driver"   # want nothing: only one process may hold Kortex
                                                # (brackets stop grep matching itself)
