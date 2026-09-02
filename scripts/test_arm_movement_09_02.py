@@ -33,10 +33,8 @@ arm is on the "low" preset, since moving slowly is the whole point:
     $PY scripts/session/arm_set_speed.py low
 
 There is NO software e-stop on this rig -- keep a hand on the physical one for
-any --execute run. Run from the repo root (the sim scene path is relative).
-
-    E="PYTHONPATH=$HOME/.local/lib/python3.10/site-packages ARM_RPC_HOST=127.0.0.1"
-    PY=$HOME/feeding-deployment/.venv/bin/python
+any --execute run. Session env per JETSON_SETUP.md 2; run from the repo root,
+since the sim scene path is relative.
 
     $PY scripts/test_arm_movement_09_02.py                        # dry run, +5 cm
     $PY scripts/test_arm_movement_09_02.py --execute              # move +5 cm
