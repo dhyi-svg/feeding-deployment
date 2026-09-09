@@ -107,11 +107,17 @@ class AppliancePerception(TFInterface):
         # How to locate the microwave start button:
         #   "molmo"          remote Molmo VLM only (the lab's original behaviour)
         #   "grounding_dino" local GroundingDINO only -- no network needed
-        #   "auto"           try Molmo, fall back to GroundingDINO (default)
+        #   "hough_circles"  local cv2.HoughCircles only -- no network, no VLM
+        #   "auto"           try Molmo, then GroundingDINO, then HoughCircles (default)
         # "auto" is identical to "molmo" whenever the Molmo server is reachable,
         # and keeps the button skill working on rigs that cannot reach it.
         self.button_backend = os.environ.get("BUTTON_BACKEND", "auto").lower()
-        if self.button_backend not in ("molmo", "grounding_dino", "auto"):
+        if self.button_backend not in (
+            "molmo",
+            "grounding_dino",
+            "hough_circles",
+            "auto",
+        ):
             print(
                 f"Unknown BUTTON_BACKEND={self.button_backend!r}; falling back to 'auto'"
             )
@@ -416,6 +422,10 @@ class AppliancePerception(TFInterface):
                 print("Molmo unavailable; falling back to local GroundingDINO button detection.")
         if button_pixel is None and backend in ("grounding_dino", "auto"):
             button_pixel = self.detect_start_button_pixel_local(rgb_image)
+            if button_pixel is None and backend == "auto":
+                print("GroundingDINO found no button; falling back to local HoughCircles button detection.")
+        if button_pixel is None and backend in ("hough_circles", "auto"):
+            button_pixel = self.detect_start_button_pixel_hough(rgb_image)
 
         if button_pixel is None:
             print(f"No button pixel from the '{backend}' button backend")
@@ -515,6 +525,15 @@ class AppliancePerception(TFInterface):
     # image height of the lowest one count as the same "bottom row".
     BUTTON_ROW_TOL_FRAC = 0.06
 
+    # HoughCircles button detection: radius bounds are a rough estimate from a
+    # reference photo of this microwave's control panel (buttons ~30-54px
+    # across there) -- see scripts/scratch/detect_buttons_prototype.py, which
+    # validated the approach (found all 5 round buttons cleanly). These have
+    # NOT been recalibrated against the actual wrist-camera working distance.
+    BUTTON_HOUGH_MIN_RADIUS = 15
+    BUTTON_HOUGH_MAX_RADIUS = 27
+    BUTTON_HOUGH_MIN_DIST = 40
+
     def detect_start_button_pixel_local(self, rgb_image):
         """Locate the start button with GroundingDINO. Returns an (x, y) pixel in
         original-image coordinates, or None."""
@@ -562,6 +581,59 @@ class AppliancePerception(TFInterface):
             f"GroundingDINO button detection: {len(candidates)} candidate(s), "
             f"{len(bottom_row)} in the bottom row; picked the rightmost at "
             f"{chosen['center']} (confidence {chosen['confidence']:0.2f})"
+        )
+        return (int(round(chosen["center"][0])), int(round(chosen["center"][1])))
+
+    def detect_start_button_pixel_hough(self, rgb_image):
+        """Locate the start button with cv2.HoughCircles (no VLM, no network).
+
+        This microwave's control panel has 5 round chrome push-buttons, all a
+        similar size, so we reuse the same "bottom row, rightmost" spatial
+        rule as the GroundingDINO backend (Molmo's own prompt rule) rather
+        than trying to classify which circle is which. Returns an (x, y)
+        pixel in original-image coordinates, or None.
+        """
+        height, width = rgb_image.shape[:2]
+        gray = cv2.cvtColor(rgb_image, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.medianBlur(gray, 5)
+
+        circles = cv2.HoughCircles(
+            blurred,
+            cv2.HOUGH_GRADIENT,
+            dp=1.0,
+            minDist=self.BUTTON_HOUGH_MIN_DIST,
+            param1=100,
+            param2=30,
+            minRadius=self.BUTTON_HOUGH_MIN_RADIUS,
+            maxRadius=self.BUTTON_HOUGH_MAX_RADIUS,
+        )
+        if circles is None:
+            print("No button circles found via HoughCircles")
+            return None
+
+        circles = np.round(circles[0]).astype(int)
+        # Original -> visually-upright (the camera is mounted upside down).
+        candidates = [
+            {
+                "center": (float(x), float(y)),
+                "flipped_center": (width - x, height - y),
+            }
+            for x, y, _r in circles
+        ]
+
+        # Bottom row in the upright view = largest flipped y.
+        lowest_y = max(c["flipped_center"][1] for c in candidates)
+        row_tol = self.BUTTON_ROW_TOL_FRAC * height
+        bottom_row = [
+            c for c in candidates if lowest_y - c["flipped_center"][1] <= row_tol
+        ]
+        # Rightmost of that row in the upright view = largest flipped x.
+        chosen = max(bottom_row, key=lambda c: c["flipped_center"][0])
+
+        print(
+            f"HoughCircles button detection: {len(candidates)} candidate(s), "
+            f"{len(bottom_row)} in the bottom row; picked the rightmost at "
+            f"{chosen['center']}"
         )
         return (int(round(chosen["center"][0])), int(round(chosen["center"][1])))
 

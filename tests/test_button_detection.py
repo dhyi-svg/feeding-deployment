@@ -16,6 +16,7 @@ GroundingDINO is stubbed out; these tests load no models and need no camera.
 
 import types
 
+import cv2
 import numpy as np
 import pytest
 
@@ -118,6 +119,42 @@ def test_no_detections_returns_none(rgb_image):
     perception = _perception_with_boxes(np.zeros((0, 4)), np.zeros((0,)))
 
     assert perception.detect_start_button_pixel_local(rgb_image) is None
+
+
+def _draw_button(image, upright_center, radius=20, width=WIDTH, height=HEIGHT):
+    """Draw a filled circle (HoughCircles target) at an upright-view point,
+    converted to raw (upside-down) camera coordinates."""
+    ux, uy = upright_center
+    raw_center = (int(round(width - ux)), int(round(height - uy)))
+    # LINE_AA (soft edge) is needed for HoughCircles to pick this up at all --
+    # a hard-aliased fill has no usable gradient once median-blurred.
+    cv2.circle(image, raw_center, radius, (200, 200, 200), -1, lineType=cv2.LINE_AA)
+
+
+def test_hough_picks_bottom_row_rightmost_button(rgb_image):
+    """Same bottom-row/rightmost rule, driven by cv2.HoughCircles instead of
+    GroundingDINO -- no VLM, no network."""
+    perception = AppliancePerception.__new__(AppliancePerception)
+    image = rgb_image.copy()
+    upright_centers = {
+        "top_left": (110, 110),
+        "top_right": (400, 110),
+        "bottom_left": (110, 310),
+        "bottom_right_start": (400, 310),
+    }
+    for center in upright_centers.values():
+        _draw_button(image, center)
+
+    picked = perception.detect_start_button_pixel_hough(image)
+
+    start_x, start_y = upright_centers["bottom_right_start"]
+    assert picked == (WIDTH - start_x, HEIGHT - start_y)
+
+
+def test_hough_no_circles_returns_none(rgb_image):
+    perception = AppliancePerception.__new__(AppliancePerception)
+
+    assert perception.detect_start_button_pixel_hough(rgb_image) is None
 
 
 def test_slightly_uneven_row_still_groups_together(rgb_image):
