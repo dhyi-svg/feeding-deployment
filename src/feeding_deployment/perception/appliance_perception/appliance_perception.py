@@ -7,6 +7,7 @@ import sys
 import time
 from collections import deque
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
@@ -42,7 +43,12 @@ from feeding_deployment.control.robot_controller.command_interface import (
     JointCommand,
     OpenGripperCommand,
 )
-from feeding_deployment.perception.grounded_sam import GroundedSAM
+# Deferred: only used as a type hint below (__init__ duck-types whatever it's
+# given -- see the comment there -- and grounded_sam.py's own `groundingdino`
+# import is a heavy, optional detector dependency other callers (e.g. a YOLO
+# stand-in) should not be forced to install just to satisfy this annotation).
+if TYPE_CHECKING:
+    from feeding_deployment.perception.grounded_sam import GroundedSAM
 from feeding_deployment.perception.tf_interface import TFInterface
 
 # --- Handle detection-confirmation overlay styling (presentation only) ---
@@ -89,7 +95,7 @@ _SWING_DASH_ON, _SWING_DASH_OFF, _SWING_NSEG = 7, 6, 60
 
 class AppliancePerception(TFInterface):
     def __init__(
-        self, grounded_sam: GroundedSAM, num_perception_samples=25, data_logger=None
+        self, grounded_sam: "GroundedSAM", num_perception_samples=25, data_logger=None
     ):
         super().__init__()
 
@@ -116,6 +122,14 @@ class AppliancePerception(TFInterface):
                 f"Unknown BUTTON_BACKEND={self.button_backend!r}; falling back to 'auto'"
             )
             self.button_backend = "auto"
+
+        # Rig-specific camera mount orientation. Every rig this code was written
+        # against has the camera wrist-mounted upside down, so that is the
+        # default (unchanged behaviour); set CAMERA_UPSIDE_DOWN=false on a rig
+        # where the camera is right-side up (e.g. not yet wrist-mounted).
+        self.camera_upside_down = os.environ.get(
+            "CAMERA_UPSIDE_DOWN", "true"
+        ).lower() not in ("0", "false", "no")
 
         self.handle_type = None
         self.num_perception_samples = num_perception_samples
@@ -1109,8 +1123,9 @@ class AppliancePerception(TFInterface):
 
     def detect_items(self, input_image, classes_being_detected, log_path=None, return_all=False):
 
-        # flip image because camera is mounted upside down
-        image = cv2.flip(input_image.copy(), -1)
+        # flip image because camera is mounted upside down (self.camera_upside_down;
+        # CAMERA_UPSIDE_DOWN=false on a rig where it is not -- see __init__)
+        image = cv2.flip(input_image.copy(), -1) if self.camera_upside_down else input_image.copy()
 
         # detect objects
         detections = self.grounding_dino_model.predict_with_classes(
@@ -1161,16 +1176,18 @@ class AppliancePerception(TFInterface):
             print(f"  {classes_being_detected[int(class_id)]}: {float(confidence):0.2f}")
         print(detections.xyxy)
 
-        # flip back the image and detections to original orientation
-        image = cv2.flip(image, -1)
-        for i in range(len(detections.xyxy)):
-            x1, y1, x2, y2 = detections.xyxy[i]
-            detections.xyxy[i] = [
-                image.shape[1] - x2,
-                image.shape[0] - y2,
-                image.shape[1] - x1,
-                image.shape[0] - y1,
-            ]
+        # flip back the image and detections to original orientation -- no-op
+        # when the camera isn't mounted upside down (nothing was flipped above).
+        if self.camera_upside_down:
+            image = cv2.flip(image, -1)
+            for i in range(len(detections.xyxy)):
+                x1, y1, x2, y2 = detections.xyxy[i]
+                detections.xyxy[i] = [
+                    image.shape[1] - x2,
+                    image.shape[0] - y2,
+                    image.shape[1] - x1,
+                    image.shape[0] - y1,
+                ]
 
         annotated_frame = box_annotator.annotate(
             scene=image.copy(), detections=detections, labels=labels

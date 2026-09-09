@@ -88,6 +88,50 @@ class ArmInterface:
         name = next((n for n in dir(Base_pb2) if n.startswith("ARMSTATE") and getattr(Base_pb2, n) == val), str(val))
         return {"active_state": val, "name": name}
 
+    def get_servoing_mode(self):
+        """Diagnostic, read-only: raw Kortex servoing mode (int + name)."""
+        from kortex_api.autogen.messages import Base_pb2
+        val = self.arm.base.GetServoingMode().servoing_mode
+        name = next((n for n in dir(Base_pb2) if n.endswith("SERVOING") and getattr(Base_pb2, n) == val), str(val))
+        return {"servoing_mode": val, "name": name}
+
+    def get_diagnostics(self):
+        """Diagnostic, read-only: firmware version + per-actuator control/command mode."""
+        from kortex_api.autogen.messages import ActuatorConfig_pb2
+        fw = self.arm.device_config.GetFirmwareVersion()
+        result = {"firmware": str(fw).strip()}
+        modes = []
+        for device_id in self.arm.actuator_device_ids:
+            cm = self.arm.actuator_config.GetControlMode(device_id)
+            cmd_mode = self.arm.actuator_config.GetCommandMode(device_id)
+            control_mode_name = next(
+                (n for n in dir(ActuatorConfig_pb2.ControlMode) if not n.startswith("_") and getattr(ActuatorConfig_pb2.ControlMode, n) == cm.control_mode),
+                str(cm.control_mode),
+            )
+            modes.append({
+                "device_id": device_id,
+                "control_mode": cm.control_mode,
+                "control_mode_name": control_mode_name,
+                "command_mode": cmd_mode.command_mode,
+            })
+        result["actuator_modes"] = modes
+        return result
+
+    def validate_joint_move(self, command_pos, duration=1.0):
+        """Diagnostic, read-only: ValidateWaypointList for a single waypoint -- no motion."""
+        import math
+        from kortex_api.autogen.messages import Base_pb2
+        waypoints = Base_pb2.WaypointList()
+        waypoints.duration = 0.0
+        waypoints.use_optimal_blending = False
+        waypoint = waypoints.waypoints.add()
+        waypoint.name = "diagnostic_waypoint"
+        waypoint.angular_waypoint.angles.extend(math.degrees(a) for a in command_pos)
+        waypoint.angular_waypoint.duration = duration
+        result = self.arm.base.ValidateWaypointList(waypoints)
+        errors = [str(e) for e in result.trajectory_error_report.trajectory_error_elements]
+        return {"num_errors": len(errors), "errors": errors}
+
     def get_state(self):
         try:
             current_state = self.arm.get_state()
