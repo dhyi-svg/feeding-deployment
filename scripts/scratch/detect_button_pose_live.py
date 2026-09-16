@@ -17,31 +17,37 @@ is COPIED (not imported) from:
     matrix_to_pose
 No feeding_deployment modules are imported for the math itself, per the
 "copy-paste, don't touch repo code" rule for this scratch work. Camera and
-ROS plumbing (RealSenseInterface, rospy, tf2_ros) IS imported -- that's
-hardware/framework access, not detection logic, and reimplementing a camera
-driver would be pointless.
+ROS plumbing IS imported -- that's hardware/framework access, not detection
+logic, and reimplementing a camera driver would be pointless.
 
-Requires the real rig's ROS environment (RoboStack ros_env on Pachirisu, or
-the ROS 2 bring-up on the Jetson) with roscore + the RealSense camera
-already running -- see PACHIRISU_SETUP.md / JETSON_SETUP.md. Will not run
-on a plain machine like this Mac; there's no camera, no calibration, no
-arm_base_link tf tree here.
+Runs on either ROS distro this repo targets, same dual-mode detection
+tf_interface.py uses elsewhere: RoboStack ros_env (ROS 1 Noetic, rospy +
+RealSenseInterface) on Pachirisu, or the ROS 2 Humble bring-up (rclpy +
+RealSenseROS2Interface) on the Jetson. Only node/camera/tf setup differs
+between the two branches below; the detection and pixel->3D math is
+identical either way.
 
-Usage (inside the ROS env, camera + tf tree already up):
+Requires the real rig's ROS environment with roscore/the ROS 2 bring-up +
+the RealSense camera already running -- see PACHIRISU_SETUP.md /
+JETSON_SETUP.md. Will not run on a plain dev machine; there's no camera, no
+calibration, no arm_base_link tf tree there.
+
+Usage:
+  ROS 1 (Pachirisu, roscore + camera already up):
     python scripts/scratch/detect_button_pose_live.py
+  ROS 2 (Jetson, bring-up per JETSON_SETUP.md already running -- joint-state
+  bridge, calibration_tf, realsense2_camera_node with align_depth):
+    python3 scripts/scratch/detect_button_pose_live.py
 
 Ctrl-C to stop.
 """
 import math
 import sys
 import time
-from collections import deque
 from pathlib import Path
 
 import cv2
 import numpy as np
-import rospy
-import tf2_ros
 from scipy.spatial.transform import Rotation
 
 # Reuse our own detection algorithm rather than re-copying it a third time.
@@ -52,7 +58,25 @@ from render_button_detection_overlay import (  # noqa: E402
     pick_start_button,
 )
 
-from feeding_deployment.interfaces.realsense_interface import RealSenseInterface  # noqa: E402
+# Same ROS-version probe tf_interface.py uses: try ROS 1 first, then ROS 2.
+try:
+    import rospy
+    import tf2_ros
+
+    from feeding_deployment.interfaces.realsense_interface import RealSenseInterface  # noqa: E402
+
+    ROS_VERSION = 1
+except ModuleNotFoundError:
+    import rclpy
+    import tf2_ros
+    from rclpy.time import Time as RclpyTime
+
+    from feeding_deployment.ros2.node import get_node  # noqa: E402
+    from feeding_deployment.ros2.realsense_ros2_interface import (  # noqa: E402
+        RealSenseROS2Interface,
+    )
+
+    ROS_VERSION = 2
 
 
 # -- copied from appliance_perception.py: pixel2World -----------------------
@@ -124,16 +148,53 @@ def flip_pixel(x, y, width, height):
     return (width - x, height - y)
 
 
-def main():
-    rospy.init_node("detect_button_pose_live")
+def _is_shutdown():
+    """True once the process should stop: rospy.is_shutdown() on ROS 1,
+    `not rclpy.ok()` on ROS 2."""
+    if ROS_VERSION == 1:
+        return rospy.is_shutdown()
+    return not rclpy.ok()
 
-    tf_buffer = tf2_ros.Buffer()
-    tf2_ros.TransformListener(tf_buffer)
+
+def _lookup_arm_to_camera(tf_buffer):
+    """Latest arm_base_link <- camera_color_optical_frame transform, or None.
+    Uses "latest available" (not the frame's own stamp) on both distros --
+    this is a live polling loop, not stamp-synced detection, so the newest
+    transform is what we want."""
+    try:
+        if ROS_VERSION == 1:
+            return tf_buffer.lookup_transform(
+                "arm_base_link", "camera_color_optical_frame", rospy.Time(0)
+            )
+        return tf_buffer.lookup_transform(
+            "arm_base_link", "camera_color_optical_frame", RclpyTime()
+        )
+    except Exception as e:  # noqa: BLE001 -- read-only diagnostic script
+        print(f"tf lookup failed ({e}); is the calibration/tf tree up?")
+        return None
+
+
+def main():
+    if ROS_VERSION == 1:
+        rospy.init_node("detect_button_pose_live")
+        tf_buffer = tf2_ros.Buffer()
+        tf2_ros.TransformListener(tf_buffer)
+        realsense = RealSenseInterface()
+    else:
+        # ROS 2: every tf2 object needs an explicit node, and something must
+        # spin it -- get_node() owns that shared node and its executor thread
+        # (same pattern as TFInterface.__init__).
+        node = get_node("detect_button_pose_live")
+        tf_buffer = tf2_ros.Buffer()
+        tf2_ros.TransformListener(tf_buffer, node)
+        # Give the listener a moment to accumulate the tree before first
+        # lookup -- an immediate lookup can otherwise miss the latched
+        # /tf_static calibration.
+        time.sleep(1.0)
+        realsense = RealSenseROS2Interface()
 
     print("Waiting for camera data...")
-    realsense = RealSenseInterface()
-    camera_data = None
-    while not rospy.is_shutdown():
+    while not _is_shutdown():
         camera_data = realsense.get_camera_data()
         if camera_data["rgb_image"] is not None:
             break
@@ -142,7 +203,7 @@ def main():
     print("Got camera data. Detecting + computing pose (Ctrl-C to stop, READ-ONLY, no motion) ...")
     tracker = StabilityTracker()
 
-    while not rospy.is_shutdown():
+    while not _is_shutdown():
         camera_data = realsense.get_camera_data()
         rgb_image = camera_data["rgb_image"]
         depth_image = camera_data["depth_image"]
@@ -188,12 +249,8 @@ def main():
             time.sleep(0.5)
             continue
 
-        try:
-            transform = tf_buffer.lookup_transform(
-                "arm_base_link", "camera_color_optical_frame", rospy.Time(0)
-            )
-        except Exception as e:  # noqa: BLE001 -- read-only diagnostic script
-            print(f"tf lookup failed ({e}); is the calibration/tf tree up?")
+        transform = _lookup_arm_to_camera(tf_buffer)
+        if transform is None:
             time.sleep(1.0)
             continue
 

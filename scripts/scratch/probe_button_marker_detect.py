@@ -93,18 +93,32 @@ def detect_buttons(hsv, height):
     return mask, candidates, chosen
 
 
-def detect_marker(hsv, target_pixel=None):
+# Empirically sampled against the teal foam pad this session (see module
+# docstring) -- narrower than the trackbar defaults below, which are just a
+# starting point for interactive tuning.
+MARKER_HUE_MIN, MARKER_HUE_MAX = 73, 84
+MARKER_SAT_MIN, MARKER_VAL_MIN, MARKER_VAL_MAX = 65, 97, 198
+
+
+def detect_marker_hsv(
+    hsv,
+    hue_min=MARKER_HUE_MIN,
+    hue_max=MARKER_HUE_MAX,
+    sat_min=MARKER_SAT_MIN,
+    val_min=MARKER_VAL_MIN,
+    val_max=255,
+    min_area=MARKER_MIN_AREA,
+    target_pixel=None,
+):
     """Find the claw marker blob, then report its EDGE point facing the target --
     i.e. the point on the pad's boundary that actually reaches toward the button --
     rather than the blob's centroid. The centroid of a bulky foam pad sits well
     behind the pad's leading tip; aligning on it would leave the true contact point
     short of the target by roughly the pad's own radius.
-    """
-    hue_min = cv2.getTrackbarPos("MarkerHueMin", WINDOW)
-    hue_max = cv2.getTrackbarPos("MarkerHueMax", WINDOW)
-    sat_min = cv2.getTrackbarPos("MarkerSatMin", WINDOW)
-    val_min = cv2.getTrackbarPos("MarkerValMin", WINDOW)
-    mask = cv2.inRange(hsv, (hue_min, sat_min, val_min), (hue_max, 255, 255))
+
+    Trackbar-free core of detect_marker(), so callers without a live-tuning
+    window (e.g. detect_button_overlay_live.py) can reuse it directly."""
+    mask = cv2.inRange(hsv, (hue_min, sat_min, val_min), (hue_max, 255, val_max))
     mask = _clean_mask(mask)
 
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -112,7 +126,7 @@ def detect_marker(hsv, target_pixel=None):
     best_area = 0.0
     for c in contours:
         area = cv2.contourArea(c)
-        if area < MARKER_MIN_AREA:
+        if area < min_area:
             continue
         if area > best_area:
             best_contour = c
@@ -142,6 +156,19 @@ def detect_marker(hsv, target_pixel=None):
         edge_point = tuple(pts[int(np.argmin(pts[:, 1]))])
 
     return mask, {"center": edge_point, "centroid": centroid, "area": best_area}
+
+
+def detect_marker(hsv, target_pixel=None):
+    """Trackbar-driven wrapper around detect_marker_hsv, for this script's
+    own live-tuning window."""
+    return detect_marker_hsv(
+        hsv,
+        hue_min=cv2.getTrackbarPos("MarkerHueMin", WINDOW),
+        hue_max=cv2.getTrackbarPos("MarkerHueMax", WINDOW),
+        sat_min=cv2.getTrackbarPos("MarkerSatMin", WINDOW),
+        val_min=cv2.getTrackbarPos("MarkerValMin", WINDOW),
+        target_pixel=target_pixel,
+    )
 
 
 def main():

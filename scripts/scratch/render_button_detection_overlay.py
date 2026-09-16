@@ -43,24 +43,50 @@ the input. Requires H.264 support in the local OpenCV/ffmpeg build (avc1
 fourcc) for the output to be playable in QuickTime/Preview -- the mp4v
 fourcc writes a container many mac video players refuse to open.
 """
+import os
 import statistics
 import sys
+import time
 from collections import deque
 from pathlib import Path
 
 import cv2
 import numpy as np
 
+# Set BUTTON_DEBUG_TIMING=1 to print a per-stage breakdown from
+# detect_circles_multiscale (which estimator/band was tried, how long each
+# HoughCircles call took) -- diagnosing why detection glitches under motion.
+_DEBUG_TIMING = os.environ.get("BUTTON_DEBUG_TIMING") == "1"
+
+# The body-scale/depth dynamic-radius estimators (see
+# estimate_expected_radius_px_from_body / estimate_expected_radius_px) need
+# a real, stable target to lock onto. Against the cluttered photo-on-a-
+# monitor test rig they instead lock onto whichever background rectangle
+# won that frame, jumping between ~12-19px estimates frame to frame and
+# making the drawn overlay flicker between different noise each frame.
+# Off by default until validated against the real physical microwave; set
+# BUTTON_DYNAMIC_RADIUS=1 to re-enable.
+_DYNAMIC_RADIUS_ENABLED = os.environ.get("BUTTON_DYNAMIC_RADIUS") == "1"
+
 # Progressively smaller radius bands -- tried in order, first band whose
 # candidates pass the plausibility checks wins. (15,27) alone is what the
 # real detect_start_button_pixel_hough uses today (tuned for a close-up
-# photo); the smaller bands are what recovers far-away frames.
-RADIUS_BANDS = [(15, 27), (8, 20), (5, 12)]
+# photo); the smaller bands are what recovers far-away frames. (40,100) is
+# for a working distance closer still than that close-up photo -- observed
+# via a live diagnostic against the wrist camera pointed at the panel from
+# ~arm's-length, where the real buttons measured 46-97px radius and every
+# smaller band found nothing.
+RADIUS_BANDS = [(15, 27), (8, 20), (5, 12), (40, 100)]
 
-# Accept a partial panel (occlusion / edge-of-frame) instead of requiring
-# all 5 buttons, but not so few that "candidates" stops meaning "a button
-# panel".
-MIN_CANDIDATES = 3
+# Require the full panel. A partial catch (e.g. only the top row) used to
+# be accepted for genuine occlusion/edge-of-frame cases, but pick_start_button
+# has no way to know it's only seeing part of the panel -- it confidently
+# labels "closest to the bottom-right corner of whatever WAS detected" as
+# START, which silently mislabels a real button whenever Hough misses one
+# (observed: catching only the top 3 of 5 got the top-right button labeled
+# START instead of the real bottom-right START button). Rejecting anything
+# short of all 5 trades some "no candidates" frames for never mislabeling.
+MIN_CANDIDATES = 5
 MAX_CANDIDATES = 5
 
 # A circle whose radius differs from the group median by more than this
@@ -156,33 +182,155 @@ def pick_start_button(candidates):
     return min(candidates, key=dist_to_corner)
 
 
-def detect_circles_multiscale(gray):
-    """Try each radius band in turn; keep the first whose circle count (3-5),
-    radius consistency, and row layout all look like a real button panel.
-    Returns (candidates, band_used) or (None, None)."""
-    blurred = cv2.medianBlur(gray, 5)
-    for min_r, max_r in RADIUS_BANDS:
-        circles = cv2.HoughCircles(
-            blurred,
-            cv2.HOUGH_GRADIENT,
-            dp=1.0,
-            minDist=int(min_r * 2.5),
-            param1=100,
-            param2=30,
-            minRadius=min_r,
-            maxRadius=max_r,
-        )
-        if circles is None:
-            continue
+# Real microwave buttons are roughly this size -- used to convert a depth
+# reading into an expected pixel radius (r_px = fx * REAL_BUTTON_RADIUS_M /
+# depth_m) instead of guessing a fixed pixel-radius band. Not precisely
+# measured against this rig's actual buttons; if the dynamic band keeps
+# missing high or low, adjust this first.
+REAL_BUTTON_RADIUS_M = 0.01
 
-        circ = np.round(circles[0]).astype(int)
-        candidates = [{"center": (int(x), int(y)), "r": int(r)} for x, y, r in circ]
-        candidates = _filter_radius_outliers(candidates)
-        if not (MIN_CANDIDATES <= len(candidates) <= MAX_CANDIDATES):
+# Approximate width of a compact countertop microwave (the long side of its
+# front face) -- used as an in-frame scale reference instead of an absolute
+# depth reading. Not measured against this rig's actual unit; verify if the
+# body-scale estimate is consistently off.
+REAL_MICROWAVE_WIDTH_M = 0.45
+
+
+def detect_microwave_body_width_px(gray, frame_area_frac_min=0.15, aspect_range=(1.0, 3.0)):
+    """Largest appliance-shaped rectangle in frame, by contour area --
+    the long side of its minAreaRect, in pixels.
+
+    Unlike a depth reading, this doesn't assume the camera is looking at a
+    real 3D object at some distance -- it derives scale from the ratio of
+    two things both visible in the same 2D frame (the appliance's known
+    real width vs. its apparent width here), so it holds up whether the
+    "microwave" is the real 3D unit or a photo of one on a screen, and
+    re-derives itself every frame rather than trusting one absolute number.
+
+    Caveat: this picks the *largest* appliance-shaped rectangle in frame.
+    If something else large and similarly-shaped is also in view (e.g. a
+    monitor bezel showing a photo of the microwave), it can lock onto that
+    instead -- there's no semantic check that the rectangle found is
+    actually the microwave."""
+    edges = cv2.Canny(gray, 50, 150)
+    edges = cv2.dilate(edges, np.ones((5, 5), np.uint8))
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+
+    frame_area = gray.shape[0] * gray.shape[1]
+    best_width, best_area = None, 0.0
+    for c in contours:
+        area = cv2.contourArea(c)
+        if area < frame_area_frac_min * frame_area or area <= best_area:
             continue
-        if not _plausible_layout(candidates):
+        (rw, rh) = cv2.minAreaRect(c)[1]
+        if rw <= 0 or rh <= 0:
             continue
-        return candidates, (min_r, max_r)
+        aspect = max(rw, rh) / min(rw, rh)
+        if not (aspect_range[0] <= aspect <= aspect_range[1]):
+            continue
+        best_area = area
+        best_width = max(rw, rh)
+    return best_width
+
+
+def estimate_expected_radius_px_from_body(gray, real_radius_m=REAL_BUTTON_RADIUS_M):
+    """Body-scale version of estimate_expected_radius_px -- tried first
+    (see detect_circles_multiscale) since it doesn't need depth at all."""
+    body_px = detect_microwave_body_width_px(gray)
+    if body_px is None:
+        return None
+    pixels_per_meter = body_px / REAL_MICROWAVE_WIDTH_M
+    return pixels_per_meter * real_radius_m
+
+
+def estimate_expected_radius_px(depth_image, camera_info, real_radius_m=REAL_BUTTON_RADIUS_M, roi_frac=0.2):
+    """Median depth over a small central ROI -> expected on-screen button
+    radius via pinhole projection. Returns None if the ROI has no valid
+    depth (out of range / a hole), so callers can fall back to the static
+    RADIUS_BANDS -- this is the same 0.05-2.0m sanity window
+    detect_button_pose_live.py's pixel2world uses.
+
+    Assumes the button panel is roughly centered and depth-visible, which
+    holds once the arm is approaching it (not for arbitrary framing)."""
+    h, w = depth_image.shape[:2]
+    cy, cx = h // 2, w // 2
+    half_h, half_w = int(h * roi_frac / 2), int(w * roi_frac / 2)
+    roi = depth_image[cy - half_h : cy + half_h, cx - half_w : cx + half_w]
+    valid = roi[(roi > 50) & (roi < 2000)]  # mm
+    if valid.size == 0:
+        return None
+
+    depth_m = float(np.median(valid)) / 1000.0
+    fx = camera_info.K[0]
+    return fx * real_radius_m / depth_m
+
+
+def _try_radius_band(blurred, min_r, max_r):
+    """One HoughCircles pass + the same plausibility checks every band goes
+    through. Returns candidates or None."""
+    circles = cv2.HoughCircles(
+        blurred,
+        cv2.HOUGH_GRADIENT,
+        dp=1.0,
+        minDist=int(min_r * 2.5),
+        param1=100,
+        param2=30,
+        minRadius=min_r,
+        maxRadius=max_r,
+    )
+    if circles is None:
+        return None
+
+    circ = np.round(circles[0]).astype(int)
+    candidates = [{"center": (int(x), int(y)), "r": int(r)} for x, y, r in circ]
+    candidates = _filter_radius_outliers(candidates)
+    if not (MIN_CANDIDATES <= len(candidates) <= MAX_CANDIDATES):
+        return None
+    if not _plausible_layout(candidates):
+        return None
+    return candidates
+
+
+def detect_circles_multiscale(gray, depth_image=None, camera_info=None):
+    """Try, in order: (1) the microwave-body-scale estimate (no depth
+    needed, re-derived every frame from the appliance's own known real
+    width -- see estimate_expected_radius_px_from_body), (2) a depth-derived
+    radius band (if depth_image/camera_info are given and depth is valid
+    where the panel should be), (3) the static RADIUS_BANDS. (1) and (2)
+    are what actually scale through a continuous approach; the static
+    bands exist for the no-depth (phone video) case and as a last-resort
+    fallback when neither dynamic estimate works out.
+    Returns (candidates, band_used) or (None, None)."""
+    _t0 = time.monotonic()
+    blurred = cv2.medianBlur(gray, 5)
+    if _DEBUG_TIMING:
+        print(f"[detect_circles_multiscale] medianBlur: {(time.monotonic()-_t0)*1000:.1f}ms")
+
+    if _DYNAMIC_RADIUS_ENABLED:
+        _t0 = time.monotonic()
+        r_px = estimate_expected_radius_px_from_body(gray)
+        if _DEBUG_TIMING:
+            print(f"[detect_circles_multiscale] body-scale estimate: {(time.monotonic()-_t0)*1000:.1f}ms -> r_px={r_px}")
+        if r_px is None and depth_image is not None and camera_info is not None:
+            r_px = estimate_expected_radius_px(depth_image, camera_info)
+        if r_px is not None:
+            min_r, max_r = int(r_px * 0.6), int(r_px * 1.4)
+            _t0 = time.monotonic()
+            candidates = _try_radius_band(blurred, min_r, max_r)
+            if _DEBUG_TIMING:
+                print(f"[detect_circles_multiscale] dynamic band ({min_r},{max_r}): {(time.monotonic()-_t0)*1000:.1f}ms -> {None if candidates is None else len(candidates)} candidates")
+            if candidates is not None:
+                return candidates, (min_r, max_r)
+
+    for min_r, max_r in RADIUS_BANDS:
+        _t0 = time.monotonic()
+        candidates = _try_radius_band(blurred, min_r, max_r)
+        if _DEBUG_TIMING:
+            print(f"[detect_circles_multiscale] static band ({min_r},{max_r}): {(time.monotonic()-_t0)*1000:.1f}ms -> {None if candidates is None else len(candidates)} candidates")
+        if candidates is not None:
+            return candidates, (min_r, max_r)
     return None, None
 
 
