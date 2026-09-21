@@ -36,7 +36,7 @@ from render_button_detection_overlay import (  # noqa: E402
 # The claw-tip pixel, located by hand (see the CLAW_PIXEL assignment below)
 # rather than live-detected -- the camera's static right now, so this
 # doesn't need to be re-derived every frame.
-CLAW_PIXEL = (413, 348)
+CLAW_PIXEL = (385, 404)
 
 try:
     import rospy

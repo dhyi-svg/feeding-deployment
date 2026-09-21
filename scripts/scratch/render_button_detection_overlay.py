@@ -68,15 +68,41 @@ _DEBUG_TIMING = os.environ.get("BUTTON_DEBUG_TIMING") == "1"
 # BUTTON_DYNAMIC_RADIUS=1 to re-enable.
 _DYNAMIC_RADIUS_ENABLED = os.environ.get("BUTTON_DYNAMIC_RADIUS") == "1"
 
-# Progressively smaller radius bands -- tried in order, first band whose
-# candidates pass the plausibility checks wins. (15,27) alone is what the
-# real detect_start_button_pixel_hough uses today (tuned for a close-up
-# photo); the smaller bands are what recovers far-away frames. (40,100) is
-# for a working distance closer still than that close-up photo -- observed
-# via a live diagnostic against the wrist camera pointed at the panel from
-# ~arm's-length, where the real buttons measured 46-97px radius and every
-# smaller band found nothing.
-RADIUS_BANDS = [(15, 27), (8, 20), (5, 12), (40, 100)]
+# Scale-invariant detection: rather than guessing which of a few hand-picked
+# pixel-radius buckets the buttons will fall into (the old RADIUS_BANDS list
+# -- (15,27) tuned for a close-up photo, (40,100) for arm's-length against
+# the real wrist camera, etc., each missing whatever size fell between/
+# outside them), generate a geometric sequence of overlapping bands that
+# covers the whole plausible range continuously (see _generate_radius_bands)
+# and try each in turn.
+#
+# A single HoughCircles call across that *whole* range at once was tried
+# first and rejected: with minRadius/maxRadius spanning 3-240px on a 640x480
+# frame it returned 300+ raw hits (dial rim, text/reflection edges, screws,
+# ...) at every scale simultaneously, and no per-candidate filter could
+# reliably separate the 5 real buttons' cluster from that soup. Narrow bands
+# keep each HoughCircles call's own tuned minDist working near its intended
+# scale, so the relative filters below (radius-outlier-vs-median,
+# exact-candidate-count, row-layout) only ever have to disambiguate within
+# one scale at a time -- same as the old fixed-band approach, just with
+# bands generated to cover any size instead of a few preset ones.
+MIN_RADIUS_PX = 3
+# A button can't be bigger than the frame; bounding the top of the band
+# sequence by the image itself (see detect_circles_multiscale) keeps it from
+# being unbounded while still not baking in any particular working distance.
+MAX_RADIUS_FRAC_OF_FRAME = 0.5
+# Each band's upper bound is this many times its lower bound...
+RADIUS_BAND_GROWTH = 1.6
+# ...and each next band starts this fraction of the way back into the
+# previous one, so a real button size sitting near a band boundary still
+# falls solidly inside at least one band instead of being split across two.
+RADIUS_BAND_OVERLAP_FRAC = 0.3
+# A single physical button can produce more than one HoughCircles hit at
+# slightly different centers/radii within the same band (the same edge fits
+# a couple of nearby radii almost as well). Two hits whose centers are
+# closer than this fraction of their combined radius are treated as the
+# same button, not two -- see _dedupe_by_overlap.
+DEDUPE_OVERLAP_FRAC = 0.6
 
 # Require the full panel. A partial catch (e.g. only the top row) used to
 # be accepted for genuine occlusion/edge-of-frame cases, but pick_start_button
@@ -267,16 +293,62 @@ def estimate_expected_radius_px(depth_image, camera_info, real_radius_m=REAL_BUT
     return fx * real_radius_m / depth_m
 
 
+def _dedupe_by_overlap(candidates, overlap_frac=DEDUPE_OVERLAP_FRAC):
+    """Collapse multiple Hough hits on the same physical button (found at
+    several nearby radii) into one. cv2.HoughCircles returns candidates
+    strongest-first, so keep the first hit in each cluster and drop later
+    ones whose center falls within overlap_frac of the pair's combined
+    radius -- real, distinct buttons don't sit that close together."""
+    kept = []
+    for c in candidates:
+        cx, cy = c["center"]
+        if any(
+            ((cx - k["center"][0]) ** 2 + (cy - k["center"][1]) ** 2) ** 0.5
+            < overlap_frac * (c["r"] + k["r"])
+            for k in kept
+        ):
+            continue
+        kept.append(c)
+    return kept
+
+
+def _generate_radius_bands(min_r, max_r, growth=RADIUS_BAND_GROWTH, overlap_frac=RADIUS_BAND_OVERLAP_FRAC):
+    """Geometric sequence of overlapping (lo, hi) radius bands covering
+    [min_r, max_r] continuously, so any real button size falls solidly
+    inside at least one band -- see the module-level comment above
+    MIN_RADIUS_PX for why this replaces both a single wide-range Hough call
+    and a short hand-picked band list."""
+    bands = []
+    lo = min_r
+    while lo < max_r:
+        hi = min(int(lo * growth) + 2, max_r)
+        bands.append((lo, hi))
+        if hi >= max_r:
+            break
+        lo = max(min_r, int(hi * (1 - overlap_frac)))
+    return bands
+
+
+# HoughCircles' own edge-strength threshold. Lower than a typical single-band
+# default (was 30) because within a *narrow* band that's tuned to the right
+# scale, a stricter threshold was found (on real glare-prone/scratched-finish
+# footage) to miss real buttons that are just slightly softer-edged than the
+# others in the same frame -- see the conversation this constant came from.
+# The exact-candidate-count + outlier + layout checks below are what keep
+# this leniency from letting non-button circles through.
+HOUGH_PARAM2 = 20
+
+
 def _try_radius_band(blurred, min_r, max_r):
-    """One HoughCircles pass + the same plausibility checks every band goes
-    through. Returns candidates or None."""
+    """One HoughCircles pass + de-dup + the same plausibility checks every
+    band goes through. Returns candidates or None."""
     circles = cv2.HoughCircles(
         blurred,
         cv2.HOUGH_GRADIENT,
         dp=1.0,
-        minDist=int(min_r * 2.5),
+        minDist=max(int(min_r * 2.0), 8),
         param1=100,
-        param2=30,
+        param2=HOUGH_PARAM2,
         minRadius=min_r,
         maxRadius=max_r,
     )
@@ -285,6 +357,7 @@ def _try_radius_band(blurred, min_r, max_r):
 
     circ = np.round(circles[0]).astype(int)
     candidates = [{"center": (int(x), int(y)), "r": int(r)} for x, y, r in circ]
+    candidates = _dedupe_by_overlap(candidates)
     candidates = _filter_radius_outliers(candidates)
     if not (MIN_CANDIDATES <= len(candidates) <= MAX_CANDIDATES):
         return None
@@ -298,10 +371,12 @@ def detect_circles_multiscale(gray, depth_image=None, camera_info=None):
     needed, re-derived every frame from the appliance's own known real
     width -- see estimate_expected_radius_px_from_body), (2) a depth-derived
     radius band (if depth_image/camera_info are given and depth is valid
-    where the panel should be), (3) the static RADIUS_BANDS. (1) and (2)
-    are what actually scale through a continuous approach; the static
-    bands exist for the no-depth (phone video) case and as a last-resort
-    fallback when neither dynamic estimate works out.
+    where the panel should be), (3) a geometric sequence of bands covering
+    the whole plausible radius range (see _generate_radius_bands). (1) and
+    (2) are a fast path when depth/body-scale is available and trustworthy;
+    (3) is what actually holds at any distance/zoom otherwise -- replaces
+    the old fixed-bucket RADIUS_BANDS list, which only found buttons whose
+    apparent size happened to fall inside one of a few preset ranges.
     Returns (candidates, band_used) or (None, None)."""
     _t0 = time.monotonic()
     blurred = cv2.medianBlur(gray, 5)
@@ -324,13 +399,14 @@ def detect_circles_multiscale(gray, depth_image=None, camera_info=None):
             if candidates is not None:
                 return candidates, (min_r, max_r)
 
-    for min_r, max_r in RADIUS_BANDS:
+    max_r = max(MIN_RADIUS_PX + 1, int(min(gray.shape[:2]) * MAX_RADIUS_FRAC_OF_FRAME))
+    for min_r, band_max_r in _generate_radius_bands(MIN_RADIUS_PX, max_r):
         _t0 = time.monotonic()
-        candidates = _try_radius_band(blurred, min_r, max_r)
+        candidates = _try_radius_band(blurred, min_r, band_max_r)
         if _DEBUG_TIMING:
-            print(f"[detect_circles_multiscale] static band ({min_r},{max_r}): {(time.monotonic()-_t0)*1000:.1f}ms -> {None if candidates is None else len(candidates)} candidates")
+            print(f"[detect_circles_multiscale] band ({min_r},{band_max_r}): {(time.monotonic()-_t0)*1000:.1f}ms -> {None if candidates is None else len(candidates)} candidates")
         if candidates is not None:
-            return candidates, (min_r, max_r)
+            return candidates, (min_r, band_max_r)
     return None, None
 
 
