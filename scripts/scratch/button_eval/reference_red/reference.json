@@ -1,0 +1,33 @@
+{
+  "_comment": [
+    "Reference for the RED microwave (Comfee, red finish). A DIFFERENT appliance",
+    "from the cream Comfee: different panel colour and different button labelling",
+    "-- this one reads 'START +30s' where the cream reads 'START +30SEC.'.",
+    "Source: frame 27 of IMG_3824.MP4, the sharpest frame in that clip with the",
+    "whole 5-button panel in view.",
+    "",
+    "button_xy was placed by fitting a circle to the button on the source frame,",
+    "not by eye. Every prediction is this one point carried through the fitted",
+    "transform, so an error here appears in every frame; on the cream reference an",
+    "eyeballed mark was ~3px off and the bias was invisible to every automated",
+    "score because the eval labels shared it.",
+    "",
+    "NOT VALIDATED. The cream reference was measured on 29 labeled frames; this",
+    "one has no eval behind it at all. It is built from PHONE video, so it may or",
+    "may not match a live camera -- run check_reference_match.py before trusting",
+    "it, and rebuild from a camera frame with make_reference.py if it does not."
+  ],
+  "image": "red_ref_3824_f27.png",
+  "crop": [
+    150,
+    250,
+    360,
+    665
+  ],
+  "button_xy": [
+    285.0,
+    591.0
+  ],
+  "button_radius": 15,
+  "appliance": "comfee-red"
+}
