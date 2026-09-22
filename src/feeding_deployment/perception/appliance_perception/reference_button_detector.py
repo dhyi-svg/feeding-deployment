@@ -136,19 +136,47 @@ MAX_ASPECT = 6.0
 MIN_PROJECTED_BUTTON_RADIUS_PX = 3.5
 
 
-class _View:
-    """One reference image of the panel, with the button marked on it."""
+# Name given to the legacy single ``button_xy`` mark when a reference has no
+# ``buttons`` table. It is the START/+30SEC button on every reference so far.
+LEGACY_BUTTON_NAME = "start_30s"
 
-    def __init__(self, ref_dir, meta, sift):
+
+def _marked_buttons(meta):
+    """``{name: [x, y]}`` in reference-IMAGE coordinates.
+
+    Two forms are accepted per view: the original single ``button_xy`` (one
+    hand-placed mark, always START/+30SEC), and a ``buttons`` table naming
+    several marks on the same image. When both are present ``button_xy`` is
+    folded in under LEGACY_BUTTON_NAME so old references keep working and a
+    new table only has to add the extra buttons.
+    """
+    buttons = dict(meta.get("buttons") or {})
+    if "button_xy" in meta:
+        buttons.setdefault(LEGACY_BUTTON_NAME, meta["button_xy"])
+    if not buttons:
+        raise SystemExit(f"reference view {meta.get('image')} marks no button "
+                         "(needs 'button_xy' or a 'buttons' table)")
+    return buttons
+
+
+class _View:
+    """One reference image of the panel, with the button(s) marked on it."""
+
+    def __init__(self, ref_dir, meta, sift, target):
         img = cv2.imread(str(Path(ref_dir) / meta["image"]))
         if img is None:
             raise SystemExit(f"cannot read reference image {meta['image']}")
         x0, y0, x1, y1 = meta["crop"]
         self.meta = meta
         self.ref = img[y0:y1, x0:x1]
-        # Marked button, expressed in reference-CROP coordinates.
-        self.ref_pt = np.float32([[meta["button_xy"][0] - x0,
-                                   meta["button_xy"][1] - y0]]).reshape(-1, 1, 2)
+        buttons = _marked_buttons(meta)
+        if target not in buttons:
+            raise SystemExit(
+                f"reference view {meta['image']} has no mark for button {target!r}; "
+                f"it marks {sorted(buttons)}. Every view must mark the target.")
+        # Marked target button, expressed in reference-CROP coordinates.
+        self.ref_pt = np.float32([[buttons[target][0] - x0,
+                                   buttons[target][1] - y0]]).reshape(-1, 1, 2)
         self.kp_ref, self.des_ref = sift.detectAndCompute(
             cv2.cvtColor(self.ref, cv2.COLOR_BGR2GRAY), None)
         h, w = self.ref.shape[:2]
@@ -175,7 +203,11 @@ class ReferenceButtonDetector:
     """
 
     def __init__(self, ref_dir, min_inliers=MIN_INLIERS, ratio=None,
-                 upscale=1.0):
+                 upscale=1.0, target=None):
+        """``target`` names which marked button to report (a key of each view's
+        ``buttons`` table). None takes the reference's ``default_button``, else
+        the legacy single mark (START/+30SEC). The panel fit is identical for
+        every target -- only the projected point changes."""
         self.min_inliers = min_inliers
         self.ratio = ratio
         # When a caller pins a ratio (the parameter sweep does) the cascade is
@@ -189,7 +221,8 @@ class ReferenceButtonDetector:
         # "views" is the multi-reference form; a bare image/crop/button_xy at
         # the top level is still accepted as a single view.
         view_metas = meta.get("views") or [meta]
-        self.views = [_View(ref_dir, vm, self.sift) for vm in view_metas]
+        self.target = target or meta.get("default_button") or LEGACY_BUTTON_NAME
+        self.views = [_View(ref_dir, vm, self.sift, self.target) for vm in view_metas]
         self.matcher = cv2.BFMatcher()
 
     @staticmethod

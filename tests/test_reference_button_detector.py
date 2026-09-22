@@ -31,6 +31,9 @@ from feeding_deployment.perception.appliance_perception.reference_button_detecto
 
 PANEL_W, PANEL_H = 200, 300
 BUTTON_XY = (120, 200)
+# A second marked button (the top-right one of the synthetic panel's five) for
+# the named-target tests.
+TOP_RIGHT_XY = (180, 140)
 
 
 def _make_panel(seed=0):
@@ -76,6 +79,38 @@ def _scene_with_panel(H, size=(640, 480)):
 def _expected(H, pt=(200 + BUTTON_XY[0], 80 + BUTTON_XY[1])):
     p = cv2.perspectiveTransform(np.float32([[pt]]), H).reshape(2)
     return float(p[0]), float(p[1])
+
+
+@pytest.fixture
+def multi_button_ref_dir(ref_dir):
+    """Same reference, with a named 'buttons' table alongside the legacy mark."""
+    meta = json.loads((ref_dir / "reference.json").read_text())
+    meta["buttons"] = {
+        "top_right": [200 + TOP_RIGHT_XY[0], 80 + TOP_RIGHT_XY[1]],
+    }
+    (ref_dir / "reference.json").write_text(json.dumps(meta))
+    return ref_dir
+
+
+def test_named_target_projects_that_button(multi_button_ref_dir):
+    H = np.float32([[0.9, 0, 40], [0, 0.9, 30], [0, 0, 1]])
+    scene = _scene_with_panel(H)
+    det = ReferenceButtonDetector(multi_button_ref_dir, target="top_right")
+    res = det.detect(scene)
+    assert res["center"] is not None, res.get("reason")
+    ex, ey = _expected(H, (200 + TOP_RIGHT_XY[0], 80 + TOP_RIGHT_XY[1]))
+    assert abs(res["center"][0] - ex) < 6
+    assert abs(res["center"][1] - ey) < 6
+    # And the legacy mark is still the default when no target is named.
+    res = ReferenceButtonDetector(multi_button_ref_dir).detect(scene)
+    ex, ey = _expected(H)
+    assert abs(res["center"][0] - ex) < 6
+    assert abs(res["center"][1] - ey) < 6
+
+
+def test_unknown_target_is_refused(multi_button_ref_dir):
+    with pytest.raises(SystemExit):
+        ReferenceButtonDetector(multi_button_ref_dir, target="no_such_button")
 
 
 def test_finds_button_in_untransformed_scene(ref_dir):
