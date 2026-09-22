@@ -1,0 +1,42 @@
+{
+  "_comment": [
+    "Hand-built reference for the cream Comfee microwave. 'button_xy' is the",
+    "START/+30SEC button center read off the grid overlay by eye, in the",
+    "coordinates of 'image' (960x540 work frame). 'crop' bounds the control",
+    "panel and is chosen to include the dial, the WGT./TIME/MENU text and the",
+    "printed button labels -- the cream finish is nearly textureless, so the",
+    "printed text is carrying most of the SIFT features.",
+    "Source: frame 207 of 2C3103B0-...MP4, the sharpest frame in the clip",
+    "(Laplacian variance 878). Held out of the eval set by extract_frames.py.",
+    "",
+    "10 to 13. The original was read off a 50px grid at work resolution and sat 3px",
+    "left and 7px high of the chrome dome's centre. Because EVERY prediction is this",
+    "mark carried through the fitted transform, that offset appeared in every frame",
+    "of the output -- it was spotted by eye on the overlay video, not by any score.",
+    "",
+    "2026-09-21: button_xy re-measured from (460,386) to (467.5,389.5). The original",
+    "was read off a 50px grid at work resolution and sat up and to the left of the",
+    "button; the offset showed in EVERY frame of the overlay video, because every",
+    "prediction is this one mark carried through the fitted transform.",
+    "",
+    "It was measured by fitting a circle (HoughCircles, narrow radius band) to the",
+    "button on the 4K source, not by eye. Two successive by-eye readings of this",
+    "same mark disagreed with each other and both disagreed with the fit -- one of",
+    "them overcorrected past the centre. This is the single most leveraged number in",
+    "the whole detector, so it should not be eyeballed. The fit also independently",
+    "located the STOP/ECO button 32px to its left, which is the expected spacing."
+  ],
+  "image": "comfee_ref_f207.png",
+  "crop": [
+    385,
+    185,
+    525,
+    445
+  ],
+  "button_xy": [
+    467.5,
+    389.5
+  ],
+  "button_radius": 10,
+  "appliance": "comfee-cream"
+}

@@ -108,14 +108,27 @@ class AppliancePerception(TFInterface):
         #   "molmo"          remote Molmo VLM only (the lab's original behaviour)
         #   "grounding_dino" local GroundingDINO only -- no network needed
         #   "hough_circles"  local cv2.HoughCircles only -- no network, no VLM
-        #   "auto"           try Molmo, then GroundingDINO, then HoughCircles (default)
+        #   "reference"      local reference-homography only -- needs a reference
+        #                    directory for THIS appliance (see BUTTON_REFERENCE_DIR)
+        #   "auto"           reference (only if configured), then Molmo, then
+        #                    GroundingDINO, then HoughCircles (default)
         # "auto" is identical to "molmo" whenever the Molmo server is reachable,
         # and keeps the button skill working on rigs that cannot reach it.
+        #
+        # BUTTON_REFERENCE_DIR points at a directory holding reference.json plus
+        # its image: a frame of this specific appliance's panel with the
+        # START/+30SEC button marked by hand. There is one per appliance model --
+        # a reference built on one microwave will not work on another. When it is
+        # unset the "reference" backend is unavailable and "auto" behaves exactly
+        # as it did before, so lab behaviour is unchanged by default.
+        self.button_reference_dir = os.environ.get("BUTTON_REFERENCE_DIR") or None
+        self._button_reference_detector = None
         self.button_backend = os.environ.get("BUTTON_BACKEND", "auto").lower()
         if self.button_backend not in (
             "molmo",
             "grounding_dino",
             "hough_circles",
+            "reference",
             "auto",
         ):
             print(
@@ -416,7 +429,11 @@ class AppliancePerception(TFInterface):
 
         button_pixel = None
         backend = self.button_backend
-        if backend in ("molmo", "auto"):
+        if backend in ("reference", "auto"):
+            button_pixel = self.detect_start_button_pixel_reference(rgb_image)
+            if button_pixel is None and backend == "auto" and self.button_reference_dir:
+                print("Reference-homography backend abstained; falling back to Molmo.")
+        if button_pixel is None and backend in ("molmo", "auto"):
             button_pixel = self._detect_start_button_pixel_molmo(rgb_image)
             if button_pixel is None and backend == "auto":
                 print("Molmo unavailable; falling back to local GroundingDINO button detection.")
@@ -533,6 +550,57 @@ class AppliancePerception(TFInterface):
     BUTTON_HOUGH_MIN_RADIUS = 15
     BUTTON_HOUGH_MAX_RADIUS = 27
     BUTTON_HOUGH_MIN_DIST = 40
+
+    def detect_start_button_pixel_reference(self, rgb_image):
+        """Locate the START/+30SEC button by matching this appliance's reference
+        panel and carrying a hand-placed mark through the fitted homography.
+
+        Returns an (x, y) pixel in original-image coordinates, or None. Returns
+        None rather than guessing whenever the fit fails its geometric checks --
+        on the eval footage this detector has never returned a wrong button, and
+        that property depends on callers treating None as "do not press".
+
+        No upside-down-camera flip is applied or needed: the button's identity
+        comes from the mark on the reference, not from a spatial rule that
+        assumes an upright frame.
+        """
+        if not self.button_reference_dir:
+            if self.button_backend == "reference":
+                print(
+                    "BUTTON_BACKEND=reference but BUTTON_REFERENCE_DIR is unset; "
+                    "no reference panel to match against"
+                )
+            return None
+
+        if self._button_reference_detector is None:
+            try:
+                # Imported lazily so rigs not using this backend never pay for it.
+                from feeding_deployment.perception.appliance_perception.reference_button_detector import (
+                    ReferenceButtonDetector,
+                )
+
+                self._button_reference_detector = ReferenceButtonDetector(
+                    self.button_reference_dir
+                )
+            except Exception as exc:  # noqa: BLE001 - never block the fallback chain
+                print(f"Could not load button reference from {self.button_reference_dir}: {exc}")
+                self.button_reference_dir = None
+                return None
+
+        result = self._button_reference_detector.detect(rgb_image)
+        center = result.get("center")
+        if center is None:
+            print(
+                "Reference-homography button detection abstained "
+                f"({result.get('reason', 'no fit')}, inliers={result.get('inliers', 0)})"
+            )
+            return None
+
+        print(
+            f"Reference-homography button detection: {center[0]:.1f}, {center[1]:.1f} "
+            f"(inliers={result.get('inliers')}, ratio={result.get('ratio')})"
+        )
+        return (int(round(center[0])), int(round(center[1])))
 
     def detect_start_button_pixel_local(self, rgb_image):
         """Locate the start button with GroundingDINO. Returns an (x, y) pixel in

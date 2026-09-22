@@ -1,0 +1,31 @@
+# --- add to setup.py of rammp_button_detect ---
+# entry_points must expose the node, and data_files must ship the launch dir.
+
+import os
+from glob import glob
+from setuptools import setup
+
+package_name = 'rammp_button_detect'
+
+setup(
+    name=package_name,
+    version='0.0.1',
+    packages=[package_name],
+    data_files=[
+        ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
+        ('share/' + package_name, ['package.xml']),
+        (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
+    ],
+    install_requires=['setuptools'],
+    zip_safe=True,
+    maintainer='TODO',
+    maintainer_email='TODO',
+    description='Reference-homography START/+30SEC microwave button detector',
+    license='TODO',
+    entry_points={
+        'console_scripts': [
+            'button_detector_node = rammp_button_detect.button_detector_node:main',
+            'mock_button_detector = rammp_button_detect.mock_button_detector:main',
+        ],
+    },
+)

@@ -188,3 +188,11 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+
+# Button-detection working data. Code and the reference (small) are tracked;
+# source footage and derived frames are not -- button_photos alone is 220MB+.
+# Regenerate frames from the source video with button_eval/extract_frames.py.
+scripts/scratch/button_photos/
+scripts/scratch/button_eval/frames/
+scripts/scratch/button_eval/labeling/
+scripts/scratch/button_eval/__pycache__/

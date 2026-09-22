@@ -1,0 +1,512 @@
+[
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0000",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 0,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "tune"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0080",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 80,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "tune"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0160",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 160,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "tune"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0240",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 240,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "tune"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0320",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 320,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "tune"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0400",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 400,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "tune"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0480",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 480,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "tune"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0560",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 560,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "tune"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0640",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 640,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "tune"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0700",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 700,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "tune"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0760",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 760,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "tune"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0820",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 820,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "tune"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0874",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 874,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "tune"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0040",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 40,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "holdout"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0120",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 120,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "holdout"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0280",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 280,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "holdout"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0360",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 360,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "holdout"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0440",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 440,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "holdout"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0520",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 520,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "holdout"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0600",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 600,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "holdout"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0660",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 660,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "holdout"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0730",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 730,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "holdout"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0790",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 790,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "holdout"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0850",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 850,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "holdout"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0020",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 20,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "fresh"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0100",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 100,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "fresh"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0140",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 140,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "fresh"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0260",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 260,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "fresh"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0340",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 340,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "fresh"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0420",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 420,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "fresh"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0500",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 500,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "fresh"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0580",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 580,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "fresh"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0680",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 680,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "fresh"
+  },
+  {
+    "id": "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0805",
+    "clip": "2C3103B0-5173-4F73-BFE2-3E059285BFF7.MP4",
+    "frame": 805,
+    "src_size": [
+      3840,
+      2160
+    ],
+    "work_size": [
+      960,
+      540
+    ],
+    "scale": 0.25,
+    "split": "fresh"
+  }
+]

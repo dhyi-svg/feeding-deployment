@@ -1,0 +1,41 @@
+# Add under `nodes:` in your LOCAL sheppy profile while developing.
+# Per the hybrid workflow, keep local machine/profile definitions UNCOMMITTED;
+# only the containerized alternative goes in rammp-deployments when publishing.
+
+machines:
+  - name: dev
+    host: localhost
+    user: <your user>
+    ros_setup: ~/<your_ws>/install/setup.bash
+
+nodes:
+  - name: button_detector
+    description: "Locates the microwave START/+30SEC button"
+    select: single
+    alternatives:
+      # native, for the hybrid dev loop
+      - id: native
+        kind: launch_file
+        package: rammp_button_detect
+        launch_file: button_detect.launch.py
+        machine: dev
+        params:
+          reference_dir: /home/<you>/wrist_ref
+        subscribes:
+          - /camera/color/image_raw
+          - /camera/aligned_depth_to_color/image_raw
+          - /camera/color/camera_info
+        publishes:
+          - /button_detector/button_pixel
+          - /button_detector/button_pose
+          - /button_detector/debug_image
+
+      # required by the pre-PR checklist; also useful with no camera attached
+      - id: mock
+        kind: executable
+        package: rammp_button_detect
+        executable: mock_button_detector
+        machine: dev
+        publishes:
+          - /button_detector/button_pixel
+          - /button_detector/button_pose

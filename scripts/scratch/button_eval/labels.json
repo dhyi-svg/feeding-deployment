@@ -1,0 +1,477 @@
+{
+  "_README": [
+    "Ground-truth locations of the START/+30SEC button (bottom-right of the 5-button",
+    "panel) in the eval frames produced by extract_frames.py.",
+    "",
+    "COORDINATES are in WORK-FRAME pixels (the downscaled frames/ images, long edge",
+    "960), NOT source-video pixels. manifest.json carries each frame's scale factor.",
+    "",
+    "status is one of: 'labeled' (center is trustworthy, score against it), 'abstain_expected' (the button is genuinely absent from the image, e.g. cropped off the frame edge -- ANY pick is a wrong-pick), or 'unverifiable' (no trustworthy center could be placed; EXCLUDED from scoring entirely). Do not conflate the last two: 'I cannot label this' is a statement about the labeler, not a claim that a detector should abstain. Conflating them initially mis-scored the homography detector as wrong on a frame where it was accurate to 3px.",
+    "localize by eye. These are NOT throwaway frames -- they are the negative test:",
+    "the correct detector behaviour is to ABSTAIN, and any confident pick on them",
+    "counts as a wrong-pick, not a miss. center on those rows is a rough locator",
+    "only and must never be used to score a hit.",
+    "",
+    "PROVENANCE: labeled by Claude by eye from grid/zoom overlays in labeling/.",
+    "NOT verified by a human. review_labels.py renders them for spot-checking.",
+    "A mislabel here silently corrupts every score downstream, so treat a",
+    "surprising eval result as possible label error before believing it.",
+    "",
+    "Frames present in manifest.json but absent here are NOT YET LABELED and are skipped by the eval (not scored as misses). f0400/f0480 are pending: the panel is rotated/small enough that a confident center could not be read off by eye, and a guessed label is worse than no label.",
+    "",
+    "neighbor_xy is the STOP/ECO button center (the bottom row's other button). It lets the eval separate 'landed on the wrong button' -- which would press the wrong thing on a real microwave -- from 'landed near the right button but outside it', which is a precision problem. Both are failures; only the first is a safety one. Frames without neighbor_xy fall back to the stricter radius-only rule.",
+    "",
+    "LABEL ERROR RATE IS THE MAIN RISK IN THIS HARNESS. Seven bad labels found so far across ~29: f0280 (one button left), f0560 (in the gap), f0790 (32px off, blank panel), f0520 (~7px), f0260 (in the gap), f0340 (on the counter), f0580 (in the gap). That is roughly a quarter of first-pass labels. TWO of them were reported as detector failures before being caught -- the detector was closer to the truth than the label. The errors come from reading coordinates off a grid by eye. TOOLS: source_zoom.py to label (4K source, high magnification), then label_check.py to render the label back ONTO the frame, which is what actually catches these. Never trust a first-pass label, and never report a failure without checking the label first.",
+    "",
+    "DE-BIASING (2026-09-21): hand-placed centers were found to carry a SYSTEMATIC offset of about (+2.7, +2.6)px -- consistently up and left of the button's true center, in 16 of 21 frames. The same bias was present in the reference mark, so the eval was scoring a biased reference against biased labels and could not see it; it was spotted by eye on the overlay video. Centers are now refined by fitting a circle to the button on the 4K source where that fit agrees with the hand label to within half a button radius; 'center_handplaced' keeps the original and 'center_source' says which was used."
+  ],
+  "frame_size": [
+    960,
+    540
+  ],
+  "labels": {
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0000": {
+      "center": [
+        586.5,
+        361.0
+      ],
+      "radius": 9,
+      "status": "labeled",
+      "center_handplaced": [
+        584,
+        359
+      ],
+      "center_source": "circle-fit refined"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0080": {
+      "center": [
+        538,
+        302
+      ],
+      "radius": 15,
+      "status": "labeled",
+      "neighbor_xy": [
+        489,
+        300
+      ],
+      "center_source": "hand-placed (circle fit disagreed too much to trust)"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0240": {
+      "center": [
+        614.5,
+        406.0
+      ],
+      "radius": 6,
+      "status": "labeled",
+      "neighbor_xy": [
+        590,
+        404
+      ],
+      "center_handplaced": [
+        613,
+        404
+      ],
+      "center_source": "circle-fit refined"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0700": {
+      "center": [
+        229.2,
+        324.8
+      ],
+      "radius": 33,
+      "status": "labeled",
+      "neighbor_xy": [
+        143,
+        313
+      ],
+      "center_handplaced": [
+        228,
+        322
+      ],
+      "center_source": "circle-fit refined"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0874": {
+      "center": [
+        515,
+        261
+      ],
+      "radius": 4,
+      "status": "labeled",
+      "note": "labeled from the 4K source (panel ~100px there vs ~25px at work res); an earlier by-eye guess from the work frame was 5px off and was rightly excluded",
+      "neighbor_xy": [
+        506,
+        261
+      ],
+      "center_source": "hand-placed (circle fit disagreed too much to trust)"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0160": {
+      "center": [
+        410,
+        537
+      ],
+      "radius": 11,
+      "note": "bottom button row falls off the bottom frame edge; only the top row is in shot",
+      "status": "abstain_expected"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0320": {
+      "center": [
+        763.5,
+        322.0
+      ],
+      "radius": 8,
+      "status": "labeled",
+      "center_handplaced": [
+        761,
+        323
+      ],
+      "center_source": "circle-fit refined"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0820": {
+      "center": [
+        517,
+        321
+      ],
+      "radius": 5,
+      "status": "labeled",
+      "note": "labeled from 4K source",
+      "neighbor_xy": [
+        505,
+        321
+      ],
+      "center_source": "hand-placed (circle fit disagreed too much to trust)"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0560": {
+      "center": [
+        643.0,
+        387.5
+      ],
+      "radius": 10,
+      "status": "labeled",
+      "neighbor_xy": [
+        613,
+        386
+      ],
+      "note": "CORRECTED from (625,386), which sat in the gap BETWEEN STOP/ECO and START/+30SEC. The detector's pick was 5.2px from the true center and had been scored IMPRECISE against my bad label.",
+      "center_handplaced": [
+        642,
+        383
+      ],
+      "center_source": "circle-fit refined"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0760": {
+      "center": [
+        617.0,
+        478.5
+      ],
+      "radius": 15,
+      "status": "labeled",
+      "note": "labeled from 4K source",
+      "neighbor_xy": [
+        572,
+        478
+      ],
+      "center_handplaced": [
+        610,
+        478
+      ],
+      "center_source": "circle-fit refined"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0480": {
+      "center": [
+        606,
+        306
+      ],
+      "radius": 9,
+      "status": "unverifiable",
+      "note": "heavy motion blur + ~20deg panel rotation; two candidate blobs for the bottom-right button and no way to choose between them by eye"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0040": {
+      "center": [
+        578,
+        447
+      ],
+      "radius": 12,
+      "status": "labeled",
+      "neighbor_xy": [
+        547,
+        442
+      ],
+      "note": "HOLDOUT frame; labeled from the 4K source before any detector was run on it",
+      "center_source": "hand-placed (circle fit disagreed too much to trust)"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0120": {
+      "center": [
+        498.0,
+        246.0
+      ],
+      "radius": 24,
+      "status": "labeled",
+      "neighbor_xy": [
+        450,
+        246
+      ],
+      "note": "HOLDOUT frame; labeled from the 4K source before any detector was run on it",
+      "center_handplaced": [
+        487,
+        244
+      ],
+      "center_source": "circle-fit refined"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0280": {
+      "center": [
+        788,
+        403
+      ],
+      "radius": 11,
+      "status": "labeled",
+      "neighbor_xy": [
+        760,
+        405
+      ],
+      "note": "CORRECTED. Originally labeled (766,406) -- that was the STOP/ECO button, one button to the left. The detector's pick was right and my label was wrong; found by overlaying both on the frame.",
+      "center_source": "hand-placed (circle fit disagreed too much to trust)"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0360": {
+      "center": [
+        742,
+        289
+      ],
+      "radius": 7,
+      "status": "labeled",
+      "neighbor_xy": [
+        729,
+        293
+      ],
+      "note": "HOLDOUT frame; labeled from the 4K source before any detector was run on it"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0440": {
+      "center": [
+        663,
+        289
+      ],
+      "radius": 13,
+      "status": "labeled",
+      "neighbor_xy": [
+        637,
+        296
+      ],
+      "note": "HOLDOUT frame; labeled from the 4K source before any detector was run on it"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0520": {
+      "center": [
+        730,
+        370
+      ],
+      "radius": 10,
+      "status": "labeled",
+      "neighbor_xy": [
+        710,
+        372
+      ],
+      "note": "CORRECTED from (734,364) after a high-magnification source check; the original was ~7px off, read from too wide a zoom."
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0600": {
+      "center": [
+        776,
+        353
+      ],
+      "radius": 20,
+      "status": "labeled",
+      "neighbor_xy": [
+        731,
+        355
+      ],
+      "note": "HOLDOUT; labeled from the 4K source at high magnification",
+      "center_source": "hand-placed (circle fit disagreed too much to trust)"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0790": {
+      "center": [
+        582.0,
+        379.0
+      ],
+      "radius": 10,
+      "status": "labeled",
+      "neighbor_xy": [
+        561,
+        381
+      ],
+      "note": "CORRECTED from (600,409), which was on blank panel below/right of the button cluster entirely -- caught by audit_labels.py, not by any score.",
+      "center_handplaced": [
+        582,
+        380
+      ],
+      "center_source": "circle-fit refined"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0850": {
+      "center": [
+        505,
+        289
+      ],
+      "radius": 6,
+      "status": "labeled",
+      "neighbor_xy": [
+        494,
+        290
+      ],
+      "note": "HOLDOUT; labeled from the 4K source at high magnification",
+      "center_source": "hand-placed (circle fit disagreed too much to trust)"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0660": {
+      "center": [
+        585.8,
+        451.8
+      ],
+      "radius": 28,
+      "status": "labeled",
+      "neighbor_xy": [
+        533,
+        453
+      ],
+      "note": "HOLDOUT; 4K source, high magnification",
+      "center_handplaced": [
+        588,
+        452
+      ],
+      "center_source": "circle-fit refined"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0730": {
+      "center": [
+        127.5,
+        404.5
+      ],
+      "radius": 40,
+      "status": "labeled",
+      "neighbor_xy": [
+        32,
+        393
+      ],
+      "note": "HOLDOUT; heavy motion blur, but the button is unambiguous (START text directly below it) and large, so a +/-8px center is well inside tolerance",
+      "center_handplaced": [
+        137,
+        388
+      ],
+      "center_source": "circle-fit refined"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0020": {
+      "center": [
+        594,
+        397
+      ],
+      "radius": 13,
+      "status": "labeled",
+      "neighbor_xy": [
+        567,
+        397
+      ],
+      "note": "FRESH holdout; 4K source, high magnification",
+      "center_source": "hand-placed (circle fit disagreed too much to trust)"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0100": {
+      "center": [
+        550.0,
+        190.5
+      ],
+      "radius": 35,
+      "status": "labeled",
+      "neighbor_xy": [
+        492,
+        192
+      ],
+      "note": "FRESH holdout; 4K source, high magnification",
+      "center_handplaced": [
+        558,
+        188
+      ],
+      "center_source": "circle-fit refined"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0260": {
+      "center": [
+        647.5,
+        387.5
+      ],
+      "radius": 10,
+      "status": "labeled",
+      "neighbor_xy": [
+        623,
+        387
+      ],
+      "note": "FRESH holdout; CORRECTED before scoring -- was (633,383), in the gap between the two bottom buttons",
+      "center_handplaced": [
+        645,
+        386
+      ],
+      "center_source": "circle-fit refined"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0340": {
+      "center": [
+        772,
+        286
+      ],
+      "radius": 9,
+      "status": "labeled",
+      "neighbor_xy": [
+        750,
+        287
+      ],
+      "note": "FRESH holdout; CORRECTED before scoring -- was (787,332), on the counter below the panel entirely"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0420": {
+      "center": [
+        757,
+        296
+      ],
+      "radius": 9,
+      "status": "labeled",
+      "neighbor_xy": [
+        738,
+        301
+      ],
+      "note": "FRESH holdout; 4K source, high magnification"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0805": {
+      "center": [
+        516,
+        327
+      ],
+      "radius": 7,
+      "status": "labeled",
+      "neighbor_xy": [
+        504,
+        328
+      ],
+      "note": "FRESH holdout; 4K source, high magnification",
+      "center_source": "hand-placed (circle fit disagreed too much to trust)"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0500": {
+      "center": [
+        670,
+        397
+      ],
+      "radius": 9,
+      "status": "labeled",
+      "neighbor_xy": [
+        653,
+        400
+      ],
+      "note": "FRESH holdout; 4K source, high magnification"
+    },
+    "2C3103B0-5173-4F73-BFE2-3E059285BFF7_f0580": {
+      "center": [
+        711.5,
+        321.5
+      ],
+      "radius": 12,
+      "status": "labeled",
+      "neighbor_xy": [
+        673,
+        322
+      ],
+      "note": "FRESH holdout; CORRECTED before scoring -- was (694,322), in the gap, ~14px left of the button",
+      "center_handplaced": [
+        708,
+        320
+      ],
+      "center_source": "circle-fit refined"
+    }
+  }
+}
