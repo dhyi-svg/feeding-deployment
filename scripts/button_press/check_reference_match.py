@@ -35,7 +35,7 @@ import numpy as np
 
 def load_detector(ref_dir):
     here = Path(__file__).resolve()
-    for cand in (here.parents[3] / "src", here.parents[2] / "src"):
+    for cand in (here.parents[2] / "src",):  # scripts/button_press/<this> -> <repo>/src
         if (cand / "feeding_deployment").exists():
             sys.path.insert(0, str(cand))
             break

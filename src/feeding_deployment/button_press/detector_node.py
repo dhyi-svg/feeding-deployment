@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """ROS 2 node wrapping the reference-homography START/+30SEC button detector.
 
+Run (or via launch/ros2/button_press_bringup.launch.py)::
+
+    python3 -u -m feeding_deployment.button_press.detector_node --ros-args \
+        -p reference_dir:=$HOME/wrist_ref_red -p target_button:=timer_clock
+
 Publishes
     ~/button_pixel   geometry_msgs/PointStamped   pixel (x, y, 0) in the image frame
     ~/claw_pixel     geometry_msgs/PointStamped   pixel of the LEFT gripper finger tip
@@ -17,10 +22,10 @@ Publishes
 Subscribes (optional, overlay only -- nothing here depends on them)
     /press_detector/force_dev   geometry_msgs/Vector3Stamped   baseline-subtracted tool
                                                                force dF from
-                                                               detect_button_press_force.py
+                                                               press_detector.py
     /press_detector/pressed     std_msgs/Bool                  its press/release state
-    These come from ``scripts/scratch/detect_button_press_force.py --publish`` (a separate,
-    read-only Kortex session). The overlay shows |dF| and a CONTACT banner while pressed,
+    These come from ``python3 -u -m feeding_deployment.button_press.press_detector --publish``
+    (a separate, read-only Kortex session). The overlay shows |dF| and a CONTACT banner while pressed,
     holds the last press's peak for a moment after release, and falls back to "no data"
     once the feed goes quiet -- so a dead press detector never looks like "not pressed".
 
@@ -178,7 +183,7 @@ class ButtonDetectorNode(Node):
         """(text, colour_bgr, is_contact) for the bottom banner."""
         now = time.monotonic()
         if self.force_rx_t is None:
-            return "FORCE: no data (start detect_button_press_force.py --publish)", (160, 160, 160), False
+            return "FORCE: no data (start button_press.press_detector --publish)", (160, 160, 160), False
         if now - self.force_rx_t > FORCE_STALE_S:
             return f"FORCE: STALE {now - self.force_rx_t:.1f}s -- press detector stopped?", (160, 160, 160), False
         mag = float(np.linalg.norm(self.force_dev))

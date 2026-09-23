@@ -1,5 +1,11 @@
 # Handoff — autonomous microwave button press (rchi-cpu-5, 2026-09-21)
 
+> **Historical note (2026-09-22):** the scripts named below have moved and are committed.
+> `scripts/scratch/button_live/press_button_autonomous.py` → `feeding_deployment.button_press.autonomous_press`,
+> `button_detector_node.py` → `feeding_deployment.button_press.detector_node`,
+> `scripts/scratch/detect_button_press_force.py` → `feeding_deployment.button_press.press_detector`,
+> reference tools → `scripts/button_press/`. Current procedure: `docs/button_press_runbook.md`.
+
 Branch `button-task-tree`, worktree `~/feeding-deployment-button-task`. **Nothing is committed** —
 everything below is in the working tree (`git status` to see it). Companion docs:
 `TONIGHT_RUNBOOK.md` §M0–M5 (bring-up, copy-pasteable), the module docstrings of the two

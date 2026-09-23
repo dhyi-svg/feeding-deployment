@@ -33,12 +33,12 @@ What it does, in order (nothing here can move the arm):
   5. only then installs: copies the image as reference_frame<k>.png, backs up
      reference.json, appends the view, writes reference_check<k>.png.
 
-The running button_detector_node loads the reference at startup -- restart it
+The running detector_node loads the reference at startup -- restart it
 afterwards.
 
 Usage (camera up; NEVER `PYTHONPATH=src` under ROS 2 -- prepend, or rclpy is
 lost):
-    PYTHONPATH=$PWD/src:$PYTHONPATH python3 scripts/scratch/button_live/add_reference_view.py \
+    PYTHONPATH=$PWD/src:$PYTHONPATH python3 scripts/button_press/add_reference_view.py \
         --ref ~/wrist_ref_red --near 575 266 --panel 486 168 640 322 \
         --note "camera moved closer, panel ~x486-640"
 
@@ -74,7 +74,7 @@ import numpy as np
 
 def load_detector_class():
     here = Path(__file__).resolve()
-    for cand in (here.parents[3] / "src", here.parents[2] / "src"):
+    for cand in (here.parents[2] / "src",):  # scripts/button_press/<this> -> <repo>/src
         if (cand / "feeding_deployment").exists():
             sys.path.insert(0, str(cand))
             break
@@ -325,7 +325,7 @@ def main():
     shutil.rmtree(tmp, ignore_errors=True)
     print(f"\ninstalled view {k} -> {ref_json}  (backup: {backup.name})")
     print(f"LOOK AT {check}: red marker on START/+30SEC, green box around the panel + labels.")
-    print("Restart button_detector_node.py -- it only reads the reference at startup.")
+    print("Restart the detector node (feeding_deployment.button_press.detector_node) -- it only reads the reference at startup.")
 
 
 if __name__ == "__main__":

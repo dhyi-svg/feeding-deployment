@@ -17,12 +17,16 @@ The arm RPC cannot be used for this: ``KinovaArm.get_state()`` reads the wrench 
 drops it from the returned dict (``kinova.py``), and ``ArmInterfaceClient`` only relays
 that dict. Add ``ee_force`` there before wiring this into ``press_microwave_button.py``.
 
+Run it as a module (``$PY`` = the interpreter with the repo + rclpy importable)::
+
+    $PY -u -m feeding_deployment.button_press.press_detector [...]
+
 Typical use, in three steps:
 
 1. Characterise the signal first (arm parked, nothing running that holds the arm --
    this opens its own Kortex session, same caveat as ``arm_probe_state.py``)::
 
-       $PY -u scripts/scratch/detect_button_press_force.py --log /tmp/press.jsonl
+       $PY -u -m feeding_deployment.button_press.press_detector --log /tmp/press.jsonl
 
    Baseline for 2 s, then push the (closed) gripper by hand: watch the ``|dF|`` column
    and per-axis deviations. Press the actual button with the fingertip the way the arm
@@ -31,7 +35,7 @@ Typical use, in three steps:
 
 2. Tune offline against that recording, no arm needed::
 
-       $PY scripts/scratch/detect_button_press_force.py --replay /tmp/press.jsonl --threshold 3
+       $PY -m feeding_deployment.button_press.press_detector --replay /tmp/press.jsonl --threshold 3
 
    ``--replay`` also accepts ``state.jsonl`` from ``record_teleop_demo.py``.
 
@@ -42,11 +46,14 @@ Typical use, in three steps:
 4. Show it on the button-detector overlay: add ``--publish`` and the script also puts
    every sample on ROS 2 topics ``/press_detector/force_dev`` (geometry_msgs/Vector3Stamped,
    the baseline-subtracted force ``dF``) and ``/press_detector/pressed`` (std_msgs/Bool).
-   ``button_detector_node.py`` subscribes to both and draws a CONTACT banner on its
+   ``detector_node.py`` subscribes to both and draws a CONTACT banner on its
    ``debug_image``. Needs ``rclpy``, so on rchi-cpu-5 launch with the *prepend* form --
    ``PYTHONPATH=$PWD/src:$PYTHONPATH`` -- never ``PYTHONPATH=src``, which drops ``rclpy``.
 
-Re-baseline without restarting: ``kill -USR1 <pid>`` (arm parked, hands off for 2 s). The
+Re-baseline without restarting: ``kill -USR1 <pid>`` (arm parked, hands off for 2 s). While
+live, the pid is written to ``PIDFILE`` (``$PRESS_DETECTOR_PIDFILE``, default
+``/tmp/press_detector.pid``); ``autonomous_press`` finds it there via
+:func:`find_running_press_detector` to re-baseline between phases. The
 compensated wrench is pose-dependent, so the baseline goes stale after any move; restarting
 the script instead opens fresh Kortex sessions, and on 2026-09-21 every such restart killed
 ``arm_server.py``'s session (INVALID_USER_SESSION_ACCESS) -- the arm seems to evict the
@@ -66,10 +73,13 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import signal
+import subprocess
 import sys
 import time
 from collections import deque
+from pathlib import Path
 
 import numpy as np
 
@@ -87,6 +97,41 @@ DEFAULT_RATE_HZ = 50.0
 DEFAULT_EMA_S = 0.04  # low-pass on the wrench; ~2 samples at 50 Hz
 # Arm counts as moving above this on any joint (same number record_teleop_demo.py uses).
 STILL_JOINT_VEL_RAD_S = 0.02
+# Where a live detector advertises its pid, so the press driver can SIGUSR1 it.
+PIDFILE = Path(os.environ.get("PRESS_DETECTOR_PIDFILE", "/tmp/press_detector.pid"))
+# Command-line fragments that identify a running detector (new module path, and the
+# pre-2026-09-22 scratch script) -- the fallback when there is no pidfile.
+_PROCESS_PATTERNS = (
+    "-m feeding_deployment.button_press.press_detector",
+    "scripts/scratch/detect_button_press_force",
+)
+
+
+def _cmdline(pid: int) -> str:
+    out = subprocess.run(["ps", "-p", str(pid), "-o", "args="], capture_output=True, text=True)
+    return out.stdout.strip()
+
+
+def find_running_press_detector() -> list[int]:
+    """PIDs of live press detectors: the pidfile's, else a process-table match.
+
+    The pidfile's pid is only trusted if that process is alive AND still looks like the
+    detector (pids get reused). Never matches the caller itself: sending SIGUSR1 to a
+    process without a handler kills it, and the press driver's own command line contains
+    ``/press_detector`` (its ``--press-ns`` default).
+    """
+    me = os.getpid()
+    try:
+        pid = int(PIDFILE.read_text().strip())
+        if pid != me and any(pat in _cmdline(pid) for pat in _PROCESS_PATTERNS):
+            return [pid]
+    except (OSError, ValueError):
+        pass
+    pids: list[int] = []
+    for pat in _PROCESS_PATTERNS:
+        out = subprocess.run(["pgrep", "-f", "--", pat], capture_output=True, text=True).stdout
+        pids += [int(x) for x in out.split() if int(x) != me]
+    return sorted(set(pids))
 
 
 class PressDetector:
@@ -320,6 +365,10 @@ def main() -> int:
     rebaseline = {"asked": False}
     signal.signal(signal.SIGUSR1, lambda *_: rebaseline.__setitem__("asked", True))
     samples = _replay_samples(args.replay) if args.replay else _live_samples(args.ip, args.rate_hz)
+    if not args.replay:
+        PIDFILE.write_text(f"{os.getpid()}\n")
+    if args.log:
+        Path(args.log).expanduser().parent.mkdir(parents=True, exist_ok=True)
     log_f = open(args.log, "a") if args.log else None  # noqa: SIM115 -- closed in finally
     ros = _RosPublisher(args.topic_ns) if args.publish else None
 
@@ -445,6 +494,12 @@ def main() -> int:
             log_f.close()
         if ros is not None:
             ros.close()
+        if not args.replay:
+            try:
+                if PIDFILE.read_text().strip() == str(os.getpid()):
+                    PIDFILE.unlink()
+            except OSError:
+                pass
 
     print(f"\n{len(presses)} press(es) seen")
     for i, pr in enumerate(presses, 1):
