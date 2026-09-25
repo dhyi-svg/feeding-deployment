@@ -29,7 +29,7 @@ The old path also returned a "top of appliance" z from the YOLO box, used only
 to write /tmp/fridge_top_z.txt for a post-release lift. No fridge arc script
 exists to consume it, so it is gone with the box.
 
-GRIP_EXT is +0.015 (walked back from -0.020 in four 1 cm steps against real grasps;
+GRIP_EXT is +0.030 (walked back from -0.020 against real grasps;
 comment). VERTICAL_CORR stays at 0 -- not yet calibrated for this fridge; the
 microwave's +0.025 was tuned on that appliance's own detection bias and does
 not transfer.
@@ -53,17 +53,17 @@ from pybullet_helpers.geometry import Pose, multiply_poses
 import detect_handle_sam3
 from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceClient
 from feeding_deployment.control.robot_controller.command_interface import (
-    CloseGripperCommand, JointCommand)
+    CartesianTrajectoryCommand, CloseGripperCommand, JointCommand)
 from feeding_deployment.simulation.scene_description import create_scene_description_from_config
 from feeding_deployment.simulation.simulator import FeedingDeploymentPyBulletSimulator
 
 # Arm START POSE for the fridge task -- captured from the real arm 2026-09-20
-# with the arm parked by hand where the user wants every run to begin. Joint
+# recaptured 2026-09-25 with the arm parked where the user wants every run to begin. Joint
 # angles, not an EE pose: replaying joints reproduces this exact configuration
 # with no IK solve, so there is no alternate-branch wrist-flip risk.
-#   joints_deg  [62.78, 11.48, -151.29, -85.14, 87.29, 93.26, 5.79]
-#   ee_xyz      [0.3232, -0.3757, 0.6544]   gripper open (0.0087)
-START_JOINTS_RAD = np.array([1.0957, 0.2004, -2.6405, -1.4859, 1.5234, 1.6277, 0.1011])
+#   joints_deg  [135.76, -0.75, 134.98, -99.85, -93.25, -100.58, -165.85]
+#   ee_xyz      [0.2907, -0.2553, 0.6696]   gripper open (0.0044)
+START_JOINTS_RAD = np.array([2.3695, -0.0131, 2.3558, -1.7427, -1.6275, -1.7554, -2.8947])
 
 PRE_STANDOFF = 0.12
 # GRIP_EXT: how far PAST the detected point to drive before closing. Detection
@@ -89,7 +89,19 @@ PRE_STANDOFF = 0.12
 #   vs the 7.1 cm the hand-placed touch test gave -- a 3.5 cm gap between
 #   where a hand put the gripper and where real grasps want it. Tuned against
 #   real grasps, not an estimate; do not "fix" it back toward -0.020.
-GRIP_EXT = +0.015
+#   2026-09-25: +0.025 (another 1 cm shorter) -- with the grasp running as one
+#   blended Cartesian trajectory (--smooth) rather than stop-and-go steps, the
+#   arm no longer settles short at each sub-step, so it arrives ~1 cm deeper
+#   than the stepped path did at the same constant.
+#   2026-09-25, later: +0.030 -- half a centimetre shorter again, judged on a
+#   real smooth grasp. Fine trim, not a new theory.
+#   2026-09-25, later still: +0.040, then nudged 3 mm forward to +0.037.
+#   NOTE the trend -- this constant has now been
+#   walked 6 cm (-0.020 -> +0.040) and each trim helps but the next run overshoots
+#   again. A fixed offset should have converged by now, so suspect something that
+#   VARIES per run (the door being nudged by the fingers on contact, or the fridge
+#   drifting) rather than keeping to walk this number.
+GRIP_EXT = +0.037
 VERTICAL_CORR = 0.0   # 0 validated 2026-09-20 -- no height bias observed
 LATERAL = 0.0
 # 0.91: the arm demonstrably reached 0.858 under teleop, and the Gen3 spec is
@@ -173,6 +185,12 @@ SWING_DIRECTION = -1
 # fixed the moment the door is grasped closed and persisted here, along with
 # the cumulative swing so far; later swings reuse it. A new grasp resets it.
 HINGE_STATE = Path("/tmp/fridge_door_hinge.json")
+# Every Cartesian point actually commanded this run, in order, so the arm can be
+# driven back out along the SAME path (scripts/return_to_start.py). Replaying a
+# path the arm already traversed is the safe way home: a fresh joint-space
+# interpolation between two clear endpoints can still sweep a link through the
+# open door (see the joint-space-interp-hits-door note).
+PATH_LOG = Path("/tmp/fridge_path.json")
 SWING_WAYPOINT_SPACING_M = 0.02
 SWING_MAX_JUMP_DEG = 25.0
 SWING_TRACK_ABORT = 0.02
@@ -182,6 +200,76 @@ SWING_MAX_REACH = MAX_REACH
 # well before it: past ~115 deg the IK/tracking error grows every step.
 J6_LIMIT_DEG = 119.7
 J6_GUARD_DEG = 115.0
+# --smooth pre-check uses a deliberately modest 200-iteration IK as a singularity
+# probe: where sim IK cannot get within 1 cm, Kortex's own Cartesian trajectory
+# aborted with SINGULARITY_REGION on the microwave (09-23). Ported from
+# microwave/real_gen3_ros2_grasp_and_swing_microwave.py.
+SMOOTH_SINGULARITY_PROBE_M = 0.01
+# Spacing of the interpolated points fed to Kortex for a smooth GRASP. Needs to be
+# fine enough that the blended path stays on the straight line into the handle --
+# a single far waypoint lets Kortex round the pre-grasp corner and cut the approach.
+SMOOTH_SPACING_M = 0.03
+
+
+_SIM = None
+
+
+def _get_sim():
+    """One PyBullet sim per process; grasp and swing share it.
+
+    Building the scene + simulator takes seconds, and it was previously done once
+    per phase -- dead time sitting between the gripper closing and the door
+    starting to move. Ported from the microwave script.
+    """
+    global _SIM
+    if _SIM is None:
+        scene = create_scene_description_from_config(
+            "src/feeding_deployment/simulation/configs/vention.yaml", "skewer")
+        _SIM = (scene, FeedingDeploymentPyBulletSimulator(scene, use_gui=False))
+    return _SIM
+
+
+def _log_path(points, phase, start_joints=None):
+    """Append commanded Cartesian points to PATH_LOG. Overwrites on a new grasp."""
+    doc = {"phases": []}
+    if phase == "grasp" or not PATH_LOG.exists():
+        doc = {"start_joints_rad": list(start_joints) if start_joints is not None else None,
+               "phases": []}
+    else:
+        doc = json.loads(PATH_LOG.read_text())
+    doc["phases"].append({"phase": phase,
+                          "points": [[list(np.asarray(a)), list(np.asarray(b))] for a, b in points]})
+    PATH_LOG.write_text(json.dumps(doc))
+
+
+def _wait_still(ai, timeout_s=8.0, settle_reads=4, tol_m=5e-4):
+    """Block until the EE position has genuinely stopped changing, then return it.
+
+    kinova.move_cartesian_trajectory blocks on end_or_abort_event -- which fires on
+    ACTION_END *or* ACTION_ABORT -- and then reads get_state() immediately, with no
+    settle wait. So the call can return while the arm is still travelling, and its
+    own 1 cm "did it arrive" check (and any check we do right after) reports a miss
+    on a grasp that physically landed correctly (seen 2026-09-25, arm measured later
+    at 0.0 cm from the commanded endpoint).
+
+    Watching VELOCITY is not enough on its own: if the notification fires before the
+    arm has accelerated, velocity is still ~0 and a naive wait exits instantly,
+    measuring the pose before the motion rather than after it. So this requires the
+    POSITION to hold steady across several consecutive reads.
+    """
+    deadline = time.time() + timeout_s
+    prev, steady = None, 0
+    while time.time() < deadline:
+        cur = np.asarray(ai.get_state()["ee_pos"][:3], dtype=float)
+        if prev is not None and float(np.linalg.norm(cur - prev)) < tol_m:
+            steady += 1
+            if steady >= settle_reads:
+                return cur
+        else:
+            steady = 0
+        prev = cur
+        time.sleep(0.1)
+    return np.asarray(ai.get_state()["ee_pos"][:3], dtype=float)
 
 
 def _wait_converged(ai, q_cmd, tol_deg=1.0, timeout_s=6.0):
@@ -260,9 +348,7 @@ def run_grasp(ai, args):
     print(f"pre-grasp {np.round(pre.position,4)}  range {np.linalg.norm(pre.position):.3f}")
     print(f"grasp     {np.round(grasp.position,4)}  range {np.linalg.norm(grasp.position):.3f}")
 
-    scene = create_scene_description_from_config(
-        "src/feeding_deployment/simulation/configs/vention.yaml", "skewer")
-    sim = FeedingDeploymentPyBulletSimulator(scene, use_gui=False); rb = sim.robot
+    scene, sim = _get_sim(); rb = sim.robot
 
     def solve(pose, seed):
         for i,jj in enumerate(ARM):
@@ -337,6 +423,56 @@ def run_grasp(ai, args):
         print("\nDRY RUN (grasp) -- nothing commanded.")
         return grasp   # planned grasp pose, so a dry-run swing can plan from it
 
+    # ---- --smooth: pre-grasp and grasp as ONE blended Cartesian trajectory -------
+    # Same targets and the same gates as the joint path above; what goes away is the
+    # full stop between them (and between --steps sub-steps). Kortex runs its own IK
+    # here, so the sim solve above is a reachability proxy -- the singularity probe
+    # below is the same one --smooth uses for the swing. Interpolating the straight
+    # line to each target gives Kortex intermediate poses to blend through, so it
+    # does not plan one long move and overshoot the corner at pre-grasp.
+    if args.smooth:
+        traj, prev_pt, ok_smooth = [], np.asarray(ee0, dtype=float), True
+        for name, t, q in plan:
+            pose = pre if name == "pre-grasp" else grasp
+            n_seg = max(1, int(np.ceil(np.linalg.norm(np.asarray(t) - prev_pt) / SMOOTH_SPACING_M)))
+            for k in range(1, n_seg + 1):
+                traj.append((prev_pt + (np.asarray(t) - prev_pt) * (k / n_seg),
+                             np.asarray(pose.orientation)))
+            prev_pt = np.asarray(t)
+        qs = np.asarray(st["position"], dtype=float)
+        for i, (pos, quat) in enumerate(traj):
+            for j, jj in enumerate(ARM):
+                p.resetJointState(rb.robot_id, jj, float(qs[j]), physicsClientId=rb.physics_client_id)
+            wp_ = multiply_poses(scene.robot_base_pose, Pose(tuple(pos), tuple(quat)))
+            sol = p.calculateInverseKinematics(rb.robot_id, rb.end_effector_id,
+                list(wp_.position), list(wp_.orientation),
+                physicsClientId=rb.physics_client_id, maxNumIterations=200)
+            nq = np.array([sol[k] for k in range(7)])
+            for j, jj in enumerate(ARM):
+                p.resetJointState(rb.robot_id, jj, float(nq[j]), physicsClientId=rb.physics_client_id)
+            ik_ = np.linalg.norm(np.asarray(rb.get_end_effector_pose().position) - np.asarray(wp_.position))
+            if ik_ > SMOOTH_SINGULARITY_PROBE_M or np.linalg.norm(pos) > MAX_REACH:
+                print(f"smooth grasp pre-check FAILED at point {i + 1}/{len(traj)} "
+                      f"(ik_err {ik_*100:.2f}cm) -- falling back to the stop-and-go grasp.")
+                ok_smooth = False
+                break
+            qs = nq
+        if ok_smooth:
+            print(f"smooth grasp pre-check OK over {len(traj)} interpolated points; "
+                  "sending ONE blended Cartesian trajectory (start -> pre-grasp -> grasp) ...")
+            _log_path(traj, "grasp", start_joints=np.asarray(st["position"], dtype=float))
+            okc = ai.execute_command(CartesianTrajectoryCommand(traj))
+            fin = _wait_still(ai)
+            e = float(np.linalg.norm(fin - np.asarray(plan[-1][1])))
+            print(f"  smooth grasp {'DONE' if okc else 'RETURNED FALSE'}  EE {np.round(fin,4)}  "
+                  f"{e*100:.1f} cm from the grasp target")
+            if e > TRACK_ABORT:
+                sys.exit(f"Ended {e*100:.1f} cm off the grasp target -- ABORT, gripper untouched.")
+            plan = []          # already executed; skip the joint loop below
+
+    if plan:
+        _log_path([(t, (pre if nm == "pre-grasp" else grasp).orientation) for nm, t, _ in plan],
+                  "grasp", start_joints=np.asarray(st["position"], dtype=float))
     print(f"\nspeed: {ai.get_speed()}  -- commanding {len(plan)} move(s) ...")
     for name, t, q in plan:
         _move_joints_checked(ai, q, name)
@@ -352,7 +488,16 @@ def run_grasp(ai, args):
         return None
 
     print("\nclosing gripper ...")
-    ai.execute_command(CloseGripperCommand()); time.sleep(3.5)
+    ai.execute_command(CloseGripperCommand())
+    # Poll instead of a blind 3.5 s wait: stop as soon as the fingers stop moving
+    # (they settle in well under a second on a handle), with 3.5 s as the cap.
+    _t0, _prev = time.time(), None
+    while time.time() - _t0 < 3.5:
+        time.sleep(0.1)
+        _g = float(ai.get_state()["gripper_pos"])
+        if _prev is not None and abs(_g - _prev) < 1e-3:
+            break
+        _prev = _g
     gf = float(ai.get_state().get("gripper_pos"))
     print(f"gripper after close: {gf:.4f}")
     # This grasp is on the CLOSED door: fix the hinge from it (see HINGE_STATE).
@@ -413,15 +558,63 @@ def run_swing(ai, args, start_override=None):
     wps = [list(w.position) + list(w.orientation) for w in wps_pose]
     print(f"{len(wps)} waypoints planned")
 
-    scene = create_scene_description_from_config(
-        "src/feeding_deployment/simulation/configs/vention.yaml", "skewer")
-    sim = FeedingDeploymentPyBulletSimulator(scene, use_gui=False)
+    scene, sim = _get_sim()
     rb = sim.robot
+
+    # ---- --smooth: one blended Cartesian trajectory instead of N stop-and-go moves
+    # The waypoints and the gates are unchanged; what goes away is the full stop
+    # between them. Kortex runs its OWN IK for a Cartesian trajectory, so the sim
+    # chain below is a reachability/singularity proxy, not a guarantee -- hence the
+    # pre-check and the fallback. Once the trajectory starts there is no
+    # per-waypoint tracking abort, so everything is gated before it is sent.
+    smooth_ok = False
+    if args.smooth and args.execute:
+        q = np.array(st["position"], dtype=float)
+        for i, w in enumerate(wps):
+            pos, quat = w[:3], w[3:]
+            for j, jj in enumerate(ARM):
+                p.resetJointState(rb.robot_id, jj, float(q[j]), physicsClientId=rb.physics_client_id)
+            wpose = multiply_poses(scene.robot_base_pose, Pose(tuple(pos), tuple(quat)))
+            sol = p.calculateInverseKinematics(rb.robot_id, rb.end_effector_id,
+                list(wpose.position), list(wpose.orientation),
+                physicsClientId=rb.physics_client_id, maxNumIterations=200)
+            nq = np.array([sol[k] for k in range(7)])
+            for j, jj in enumerate(ARM):
+                p.resetJointState(rb.robot_id, jj, float(nq[j]), physicsClientId=rb.physics_client_id)
+            ikerr = np.linalg.norm(np.array(rb.get_end_effector_pose().position) - np.array(wpose.position))
+            jump = float(np.max(np.degrees(np.abs(nq - q))))
+            j6 = float(np.degrees(nq[5]))
+            if (ikerr > SMOOTH_SINGULARITY_PROBE_M or np.linalg.norm(pos) > SWING_MAX_REACH
+                    or jump > SWING_MAX_JUMP_DEG or abs(j6) > J6_GUARD_DEG):
+                print(f"smooth pre-check FAILED at waypoint {i + 1}: ik_err {ikerr * 100:.2f}cm, "
+                      f"jump {jump:.1f}deg, J6 {j6:.1f}deg -- likely near a wrist singularity, where "
+                      "Kortex's own Cartesian IK aborts. Falling back to the stop-and-go swing.")
+                break
+            q = nq
+        else:
+            smooth_ok = True
+    if args.smooth and args.execute and smooth_ok:
+        print(f"smooth pre-check OK over all {len(wps)} waypoints (final J6 "
+              f"{np.degrees(q[5]):.1f}deg); sending ONE blended Cartesian trajectory ...")
+        _log_path([(w[:3], w[3:]) for w in wps], "swing")
+        ok = ai.execute_command(CartesianTrajectoryCommand([(w[:3], w[3:]) for w in wps]))
+        fe = _wait_still(ai)
+        final = ai.get_state()
+        err = float(np.linalg.norm(fe - np.array(wps[-1][:3])))
+        v0, v1 = (np.asarray(ee[:3]) - hinge)[:2], (fe - hinge)[:2]
+        swept = float(np.degrees(np.arccos(np.clip(
+            np.dot(v0, v1) / (np.linalg.norm(v0) * np.linalg.norm(v1)), -1, 1))))
+        HINGE_STATE.write_text(json.dumps({"hinge": hinge.tolist(), "cum_deg": cum + swept}))
+        print(f"\nSMOOTH SWING {'DONE' if ok else 'RETURNED FALSE'}. swept {swept:.1f}deg, "
+              f"door now ~{cum + swept:.0f}deg open. final EE {np.round(fe, 4)} "
+              f"({err * 100:.1f} cm from the last waypoint), gripper {final.get('gripper_pos'):.4f}")
+        return
 
     # Dry run: walk the whole chain in sim, seeding each IK from the previous
     # solution, so every gate is reported BEFORE anything moves (the microwave
     # version only printed the waypoint count here).
     if not args.execute:
+        smooth_would_fail = None
         prev = np.array(st["position"], dtype=float)
         if start_override is not None:
             # seed from the grasp pose's own IK solution, seeded in turn from the real joints
@@ -447,6 +640,8 @@ def run_swing(ai, args, start_override=None):
             max_delta = float(np.max(np.degrees(np.abs(joints - prev))))
             d = float(np.linalg.norm(pos)); j6 = float(np.degrees(joints[5]))
             flags = []
+            if args.smooth and ikerr > SMOOTH_SINGULARITY_PROBE_M:
+                smooth_would_fail = smooth_would_fail or (i + 1, ikerr)
             if ikerr > SWING_MAX_IK_ERR: flags.append(f"ik_err>{SWING_MAX_IK_ERR*100:.0f}cm")
             if d > SWING_MAX_REACH: flags.append(f"reach>{SWING_MAX_REACH}")
             if max_delta > SWING_MAX_JUMP_DEG: flags.append(f"jump>{SWING_MAX_JUMP_DEG:.0f}deg")
@@ -457,6 +652,16 @@ def run_swing(ai, args, start_override=None):
                 print(f"  (execution would stop cleanly at wp {i + 1}; {len(wps) - i - 1} not reached)")
                 break
             prev = joints
+        if args.smooth:
+            if smooth_would_fail:
+                i_, e_ = smooth_would_fail
+                print(f"--smooth: waypoint {i_} probes {e_*100:.2f}cm > "
+                      f"{SMOOTH_SINGULARITY_PROBE_M*100:.0f}cm -- near-singular, so the real run "
+                      "would FALL BACK to the stop-and-go swing.")
+            else:
+                print(f"--smooth: all {len(wps)} waypoints clear the "
+                      f"{SMOOTH_SINGULARITY_PROBE_M*100:.0f}cm singularity probe -- the real run "
+                      "would send ONE blended Cartesian trajectory.")
         print("\nDRY RUN (swing) -- nothing commanded.")
         return
 
@@ -489,6 +694,7 @@ def run_swing(ai, args, start_override=None):
                   f"+-{J6_LIMIT_DEG}deg hard limit -- stopping cleanly rather than pushing further.")
             break
 
+        _log_path([(pos, quat)], "swing")
         _move_joints_checked(ai, joints, f"swing wp {i + 1}")
         got = np.array(ai.get_state()["ee_pos"][:3])
         err = float(np.linalg.norm(got - np.array(pos)))
@@ -517,6 +723,22 @@ def main():
                         "swing: sweep the ALREADY-grasped handle about the hinge (no detection). "
                         "both: grasp then swing (default, same as the microwave script).")
     a.add_argument("--approach-only", action="store_true", help="alias for --phase approach")
+    a.add_argument("--pause", type=float, default=0.5,
+                   help="seconds to pause between the grasp and the swing so a bad grasp "
+                        "can be aborted (default 0.5; 0 for none).")
+    a.add_argument("--confirm", action="store_true",
+                   help="in --phase both, stop after the grasp and wait for you to type "
+                        "'swing'. Off by default: the run goes grasp -> swing unattended.")
+    a.add_argument("--speed", choices=["low", "medium", "high"], default=None,
+                   help="arm speed preset for the whole run (low 30 deg/s + 0.15 m/s, "
+                        "medium 40 + 0.20, high 50 + 0.25). Leaves the arm's current "
+                        "setting alone if not given.")
+    a.add_argument("--smooth", action="store_true",
+                   help="grasp AND swing: send each phase as ONE blended Cartesian trajectory "
+                        "(continuous motion) instead of stop-and-go joint moves. Same path "
+                        "and same gates, but all gating happens BEFORE the motion -- there "
+                        "is no per-waypoint tracking abort once it starts. Falls back to "
+                        "stop-and-go if the sim pre-check finds a near-singular waypoint.")
     a.add_argument("--reset-hinge", action="store_true",
                    help="swing: forget the persisted hinge and re-derive from the current pose "
                         "(only correct if the door is closed). Grasping resets it automatically.")
@@ -544,14 +766,25 @@ def main():
         args.phase = "approach"
 
     ai = ArmInterfaceClient()
+    if args.speed:
+        print(f"speed: {ai.get_speed()} -> {args.speed}")
+        ai.set_speed(args.speed)
     planned_grasp = None
     if args.phase in ("approach", "grasp", "both"):
         planned_grasp = run_grasp(ai, args)
     if args.phase in ("swing", "both"):
-        if args.phase == "both" and args.execute:
+        if args.phase == "both" and args.execute and args.confirm:
             print("\n--- grasp phase done. CHECK the gripper actually has the handle. ---")
             if input("Type 'swing' to start the door swing, anything else to stop: ").strip() != "swing":
                 sys.exit("Stopped before the swing.")
+        elif args.phase == "both" and args.execute:
+            # No human check by default (--confirm restores it). gripper_pos cannot
+            # tell a caught handle from a closed-on-air miss on this rig, so nothing
+            # here verifies the grasp -- a miss will swing through empty air.
+            gpos = float(ai.get_state()["gripper_pos"])
+            print(f"\ngrasp done (gripper {gpos:.4f}); continuing straight into the swing "
+                  f"-- no grip check, {args.pause:.1f}s to abort. Ctrl-C or e-stop if it missed.")
+            time.sleep(args.pause)
         # dry-run of "both": plan the swing from the grasp we just planned
         run_swing(ai, args, start_override=None if args.execute else planned_grasp)
 
