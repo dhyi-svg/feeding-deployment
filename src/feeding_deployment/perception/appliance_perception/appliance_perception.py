@@ -629,6 +629,11 @@ class AppliancePerception(TFInterface):
     def detect_handle_and_placement(
         self, handle_type, rgb_image, camera_info_msg, depth_image
     ):
+        # Horizontal door-face normal in the base frame, pointing out of the door toward
+        # the camera; set on a successful detection with a transform, else None. The
+        # returned poses carry a fixed orientation, so a caller that wants to approach
+        # square to the face reads this instead.
+        self.last_door_normal_base = None
         if rgb_image is None:
             print("No camera data provided")
             return None, None, None, None
@@ -934,6 +939,11 @@ class AppliancePerception(TFInterface):
 
         if transform is not None:
             base_to_camera = self.make_homogeneous_transform(transform)
+
+            n_base = base_to_camera[:3, :3] @ normal
+            n_base[2] = 0.0
+            if np.linalg.norm(n_base) > 1e-6:
+                self.last_door_normal_base = n_base / np.linalg.norm(n_base)
 
             camera_to_handle = np.eye(4)
             camera_to_handle[:3, 3] = handle_centroid_3d

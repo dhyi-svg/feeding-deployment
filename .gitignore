@@ -189,5 +189,4 @@ cython_debug/
 #.idea/
 
 
-# model weights -- ultralytics/HF download these on demand; never commit them
 *.pt
