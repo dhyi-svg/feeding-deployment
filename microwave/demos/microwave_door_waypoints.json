@@ -1,0 +1,30 @@
+{
+  "description": "Manually-demonstrated points around the microwave door's real swing path, captured 2026-09-09 on rchi-cpu-5 (Pachirisu assembly) after the door was opened to ~100deg via the corrected 35cm-radius arc. The simple single-hinge circular-arc model doesn't capture the door's true motion (confirmed non-trivial by hand); these points are for fitting/interpolating the real path instead of the naive arc formula, following the same approach noted for the Pachirisu rig's door mechanism.",
+  "gripper_pos_at_capture": 0.004385974407196045,
+  "order": ["original", "down", "straighten", "right", "up"],
+  "points": {
+    "original": {
+      "note": "where the arc waypoint sequence left off (last commanded/reached arc step before gripper release)",
+      "position": [0.361, 0.103, 0.566],
+      "source": "arc100_step_10 reached position"
+    },
+    "down": {
+      "position": [0.3611, 0.1027, 0.4279],
+      "orientation_xyzw": [0.70256303, 0.0419047, 0.0377251, 0.70938424]
+    },
+    "straighten": {
+      "position": [0.3609, 0.1021, 0.4284],
+      "orientation_xyzw": [0.61954641, 0.3822324, 0.37323663, 0.57511308],
+      "note": "position barely moved from 'down' -- this step is mostly an ORIENTATION change (gripper re-leveled), not a translation"
+    },
+    "right": {
+      "position": [0.4621, -0.2703, 0.3383],
+      "orientation_xyzw": [0.60519938, 0.4098304, 0.39662917, 0.55539]
+    },
+    "up": {
+      "position": [0.4228, -0.1922, 0.5811],
+      "orientation_xyzw": [0.60546685, 0.40926781, 0.39626838, 0.55577075],
+      "note": "z ends higher than 'original' (0.581 vs 0.566)"
+    }
+  }
+}

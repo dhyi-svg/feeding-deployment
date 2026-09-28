@@ -7,6 +7,9 @@
   (radius spiralling in to 26 cm, clear of the handle) until 3 cm short of the model's closed
   door, then a torque-watched push in 5 mm steps that stops when the door hits its frame
   (`_push_until_shut`), then back out.
+* `retreat_over` (open task, sim-only so far): after the pull, release, back off the handle, go up
+  over the door's top, across to the microwave's middle, turn to face in, and come down -- the
+  user's 09-28 hand demo, with every number from the detection (door_z / door_mid in DOOR_FILE).
 * `push_open` (open task, sim-only so far): after the pull (still holding the handle,
   ~50 deg), release, back off, go round the door's free edge to its INNER face, and push it on
   to ~85 deg -- the pull can't get there itself (J6 limit at ~55-80 deg). Here the hand is held
@@ -31,12 +34,12 @@ import pybullet as p
 from scipy.spatial.transform import Rotation as R
 
 from feeding_deployment.control.robot_controller.command_interface import (
-    CartesianTrajectoryCommand, JointCommand, OpenGripperCommand)
+    CartesianTrajectoryCommand, CloseGripperCommand, JointCommand, OpenGripperCommand)
 
 from microwave_common import (
-    BIG_MOVE_TIMEOUT_S, DOOR_FILE, DOOR_PAST_HANDLE, DOOR_T, FINGERTIP_PAST_TOOL, J6_GUARD_DEG, MAX_IK_ERR,
+    BIG_MOVE_TIMEOUT_S, DOOR_FILE, J4_GUARD_DEG, DOOR_PAST_HANDLE, DOOR_T, FINGERTIP_PAST_TOOL, J6_GUARD_DEG, MAX_IK_ERR,
     MAX_STEP_JUMP_DEG, MIN_CLEAR, PARK_FILE, add_door_model, check_joint_path, clearance,
-    continuous_ok, execute_joint_plan, load_park, make_sim, plan_cartesian, plan_straight_line,
+    continuous_ok, execute_joint_plan, run_cartesian_trajectory, load_park, make_sim, plan_cartesian, plan_straight_line,
     save_door_geometry, solve_ik, wait_for_joints, wrap_joints)
 
 ARC_STEP_M = 0.02          # tool travel per sweep waypoint
@@ -142,12 +145,14 @@ def plan_to_park(scene, rb, p_start, quat, q_start, bodies):
     return leg, (q_park if ok else None)
 
 
-def _chain(scene, rb, points, q, bodies, label):
-    """plan_cartesian through a list of (pos, quat) points; returns (legs, q_end) or (None, q)."""
+def _chain(scene, rb, points, q, bodies, label, min_clear=None, closed=False):
+    """plan_cartesian through a list of (pos, quat) points; returns (legs, q_end) or (None, q).
+    `min_clear`: optional per-leg clearance, {leg index (0-based): metres}, default MIN_CLEAR."""
     legs = []
     for i in range(len(points) - 1):
         (p0, q0), (p1, q1) = points[i], points[i + 1]
-        leg = plan_cartesian(scene, rb, p0, q0, p1, q1, q, f"{label} {i + 1}", bodies)
+        leg = plan_cartesian(scene, rb, p0, q0, p1, q1, q, f"{label} {i + 1}", bodies,
+                             min_clear=(min_clear or {}).get(i), closed=closed)
         if leg is None:
             return None, q
         legs.append((f"{label} {i + 1}", leg))
@@ -175,6 +180,7 @@ def _plan_arc(scene, rb, pts, quat, q, body, label):
         c_body = clearance(rb, nq, body)
         j6 = float(np.degrees(nq[5]))
         bad = (err > MAX_IK_ERR or jump > MAX_STEP_JUMP_DEG or abs(j6) > J6_GUARD_DEG
+               or abs(np.degrees(nq[3])) > J4_GUARD_DEG
                or not continuous_ok(q, nq) or c_body[0] < MIN_CLEAR)
         if bad or k in (1, len(pts)) or k % 4 == 0:
             print(f"  {label} {k}/{len(pts)} -> {np.round(pt, 3)}  IK err {err * 100:.2f}cm  jump {jump:.1f}deg  "
@@ -190,8 +196,8 @@ def _plan_arc(scene, rb, pts, quat, q, body, label):
 
 def _plan_open(scene, rb, df, st, args, deg0, roll):
     """The user's teleop demo (09-25), in door-frame coordinates about the hinge:
-    back straight out -> turn the wrist to face into the microwave -> right, past the open
-    door's free edge -> forward into the gap between the door and the microwave front -> left
+    back straight out -> right, past the open door's free edge -> forward into the gap between
+    the door and the microwave front, turning the wrist to face into the microwave on the way -> left
     to the door's inner face -> arc about the hinge (hand fixed, radius spiralling in) pushing
     the door on -> right, off the door -> back -> park."""
     fwd = np.r_[-df.n, 0.0]                        # into the microwave
@@ -210,7 +216,7 @@ def _plan_open(scene, rb, df, st, args, deg0, roll):
     drop(rb, free[0])
     edge = np.r_[free[1]["free_edge"], z]
     p_back = ee[:3] - fwd * args.push_back
-    a_right = a(edge) - OPEN_RIGHT_MARGIN
+    a_right = a(edge) - args.push_right_margin
     b_in = args.push_in
     r0 = args.push_radius
     if r0 <= abs(b_in):
@@ -219,7 +225,7 @@ def _plan_open(scene, rb, df, st, args, deg0, roll):
     phi0 = float(np.degrees(np.arcsin(-b_in / r0)))
     phi1 = args.push_target_deg
     print(f"door ~{deg0:.0f} deg; free edge {np.round(edge[:2], 3)} (a {a(edge) * 100:+.0f} / b {b(edge) * 100:+.0f} cm)")
-    print(f"plan: back {args.push_back * 100:.0f} cm, turn the wrist, right to a {a_right * 100:+.0f} cm, forward to "
+    print(f"plan: back {args.push_back * 100:.0f} cm, right to a {a_right * 100:+.0f} cm, forward (turning the wrist) to "
           f"b {b_in * 100:+.0f} cm, left to the inner face ({phi0:.0f} deg round the hinge, r {r0 * 100:.0f} cm), push "
           f"to {phi1:.0f} deg (r -> {args.push_radius_end * 100:.0f} cm), right, back, park")
     if phi0 >= deg0 - 5:
@@ -228,8 +234,10 @@ def _plan_open(scene, rb, df, st, args, deg0, roll):
 
     bodies = df.bodies(scene, rb, deg0)
     try:
-        pts = [(ee[:3], g_quat), (p_back, g_quat), (p_back, quat),
-               (pos(a_right, b(p_back)), quat), (pos(a_right, b_in), quat), (at(phi0, r0), quat)]
+        # the wrist turns to face in DURING the forward leg, not in place after the back-off:
+        # close to the base and low (09-28, handle z ~0.26) facing in there needs J6 ~119 deg
+        pts = [(ee[:3], g_quat), (p_back, g_quat), (pos(a_right, b(p_back)), g_quat),
+               (pos(a_right, b_in), quat), (at(phi0, r0), quat)]
         legs, q = _chain(scene, rb, pts, q0, bodies, "approach")
     finally:
         drop(rb, bodies)
@@ -263,7 +271,199 @@ def _plan_open(scene, rb, df, st, args, deg0, roll):
             "q_park": q_park, "deg1": deg1}
 
 
-def push_open(ai, args):
+PUSH_Y_STEP_M = 0.01        # push-open (axes): step of the +y push leg in the sim check
+OFF_DOOR_M = 0.06           # push-open (axes): after the push, this far -y off the door before backing out
+
+
+def _wrapped_jump_deg(q_from, q_to):
+    return float(np.degrees(np.max(np.abs((np.asarray(q_to) - q_from + np.pi) % (2 * np.pi) - np.pi))))
+
+
+def _plan_open_axes(scene, rb, df, st, args, deg0):
+    """Push-open with straight moves (the user's 09-28 sequence): release -> slightly out along the
+    gripper's own approach axis (off the handle) -> back (-x) -> straighten the hand to face into the
+    microwave (-closed normal; kept from here on -- a hand still turned with the door leaves the wrist
+    over the door at the end of the push) -> right (-y) past the open door's free edge -> forward (+x)
+    behind the door -> left (+y) pushing the door's inner face until the hand reaches the door as
+    modeled at --push-target-deg -> off the door (-y) -> back (-x). The approach and way-out legs
+    are clearance-checked against the door model; the push leg only against the microwave body
+    (it is the leg that touches the door). Returns the corner points plus the checked joints."""
+    ee, q0 = np.array(st["ee_pos"], float), np.array(st["position"], float)
+    g_quat, z = tuple(ee[3:7]), float(ee[2])
+    quat = tuple(_facing_forward(g_quat, np.r_[-df.n, 0.0]))     # straightened: facing into the microwave
+    free = add_door_model(scene, rb, df.door, df.bodies_point(deg0))
+    drop(rb, free[0])
+    edge = free[1]["free_edge"]
+    appr = R.from_quat(g_quat).as_matrix()[:, 2]
+    appr = np.r_[appr[:2] / np.linalg.norm(appr[:2]), 0.0]
+    p_rel = ee[:3] - appr * args.push_release_out                  # slightly out, off the handle
+    p_back = p_rel + np.array([-args.push_back, 0.0, 0.0])
+    y_right = min(float(edge[1]) - args.push_right_margin, float(p_back[1]))
+    x_push = float(df.hinge[0]) - args.push_depth
+    p_right = np.array([p_back[0], y_right, z])
+    p_fwd = np.array([x_push, y_right, z])
+    deg1 = args.push_target_deg
+    print(f"door ~{deg0:.0f} deg; free edge {np.round(edge, 3)}; hinge {np.round(df.hinge[:2], 3)}")
+    print(f"plan: out {args.push_release_out * 100:.0f} cm along the approach {np.round(-appr[:2], 2)}, "
+          f"back -x to x {p_back[0]:.3f}, right -y to y {y_right:.3f} "
+          f"({args.push_right_margin * 100:.0f} cm past the edge), forward +x (straightening on the way) to x {x_push:.3f}, "
+          f"left +y until the door is at ~{deg1:.0f} deg, off -y {OFF_DOOR_M * 100:.0f} cm, back -x {args.push_back * 100:.0f} cm")
+    if x_push <= p_back[0] + 0.02:
+        print("forward target is not in front of the back-off point -- refusing.")
+        return None
+
+    bodies = df.bodies(scene, rb, deg0)
+    try:
+        # straightening happens DURING the forward leg: in place at the back-off point (close to the
+        # base, low) the facing-in pose is at the edge of the workspace (09-28 sim: IK err > 2 cm),
+        # and during the right leg the wrist spins across +-180
+        legs, q = _chain(scene, rb, [(ee[:3], g_quat), (p_rel, g_quat), (p_back, g_quat),
+                                     (p_right, g_quat), (p_fwd, quat)], q0, bodies, "approach")
+    finally:
+        drop(rb, bodies)
+    if legs is None:
+        return None
+
+    door0, door1 = df.bodies(scene, rb, deg0), df.bodies(scene, rb, deg1)
+    try:
+        push, pts, y, first = [], [], y_right, None
+        while True:
+            y += PUSH_Y_STEP_M
+            if y - y_right > 0.60:
+                print("push: 60 cm of +y without reaching the modeled door -- refusing.")
+                return None
+            pt = np.array([x_push, y, z])
+            nq, err = solve_ik(scene, rb, pt, quat, q)
+            jump = _wrapped_jump_deg(q, nq)
+            c_body = clearance(rb, nq, [door1[1]])
+            c0, c1 = clearance(rb, nq, [door0[0]]), clearance(rb, nq, [door1[0]])
+            j6 = float(np.degrees(nq[5]))
+            if first is None and c0[0] <= 0.0:
+                first = (y, c0[1])
+            bad = (err > MAX_IK_ERR or jump > MAX_STEP_JUMP_DEG or abs(j6) > J6_GUARD_DEG
+               or abs(np.degrees(nq[3])) > J4_GUARD_DEG
+                   or abs(np.degrees(nq[3])) > J4_GUARD_DEG
+                   or not continuous_ok(q, nq) or c_body[0] < MIN_CLEAR)
+            if bad:
+                print(f"  push -> {np.round(pt, 3)}  IK err {err * 100:.2f}cm  jump {jump:.1f}deg  J6 {j6:.1f}  "
+                      f"body {c_body[0] * 100:.1f}cm ({c_body[1]}) -- fails a gate.")
+                return None
+            push.append(nq)
+            pts.append(pt)
+            q = nq
+            if c1[0] <= 0.0:
+                break
+    finally:
+        drop(rb, door0 + door1)
+    if first is None:
+        print("push: the hand never meets the door at its current angle -- forward target too shallow? Refusing.")
+        return None
+    print(f"  push: first touch at y {first[0]:.3f} with the {first[1]} (door ~{deg0:.0f} deg); "
+          f"ends at y {pts[-1][1]:.3f} (door ~{deg1:.0f} deg); J6 {np.degrees(q[5]):.1f}; {len(push)} checked steps")
+
+    p_end = pts[-1]
+    # off the door (-y) first, then back out (-x): with the hand straightened, -y moves straight
+    # away from the pushed face; backing out first slides the fingers along it (09-28 sim: 2.1 cm)
+    p_off = p_end + np.array([0.0, -OFF_DOOR_M, 0.0])
+    p_out = p_off + np.array([-args.push_back, 0.0, 0.0])
+    bodies1 = df.bodies(scene, rb, deg1 + OPEN_PUSH_LAG)
+    try:
+        out, q = _chain(scene, rb, [(p_end, quat), (p_off, quat), (p_out, quat)], push[-1], bodies1, "out")
+    finally:
+        drop(rb, bodies1)
+    if out is None:
+        return None
+    corners = ([(p_rel, g_quat), (p_back, g_quat)]
+               + [(p_right, g_quat)] + [(c, quat) for c in (p_fwd, p_end, p_off, p_out)])
+    return {"corners": [(np.asarray(c).tolist(), list(qq)) for c, qq in corners], "deg1": deg1}
+
+
+# The user's hand demo of the push-open (09-28, microwave/demos/microwave_manual_push_open_2026-09-28.csv), from the
+# end of a 45-deg pull, after releasing: corner points as (fwd, left, yaw) OFFSETS FROM THE RELEASE POSE
+# in the CLOSED door's frame -- fwd = into the microwave (-closed normal), left = 90 deg left of that,
+# yaw = hand turn about vertical (deg) -- so it follows the microwave when it moves or turns.
+# out (off the handle) -> back -> right past the free edge -> turn the hand in place -> forward behind
+# the door -> push left along the door's arc (the door just stays where it is pushed to).
+# "back" is at the demo's t=23.9 s, not its end (t=25), and "right" goes there diagonally instead of
+# along the demo's x ~0.41 slide: the hand-guided demo held J4 at -146..-147.8 there, which a commanded
+# move can't (soft limit -147.8, guard 144). The push is cut where J4/J6 would pass their guards.
+DEMO_OPEN_POINTS = [(-0.005, +0.035, 0.0, "out"),
+                    (-0.086, +0.021, 0.0, "back"),
+                    (+0.066, -0.250, 0.0, "right"),
+                    (+0.066, -0.250, 36.5, "turn"),
+                    (+0.111, -0.218, 36.5, "forward")]
+DEMO_PUSH_POINTS = [(+0.104, -0.158, 36.5, "push 1"),
+                    (+0.080, -0.082, 36.5, "push 2"),
+                    (+0.038, +0.005, 36.5, "push 3"),
+                    (-0.007, +0.085, 36.5, "push end")]
+DEMO_MIN_PUSH_POINTS = 2             # refuse unless at least this many push points pass the gates
+# The leg to "right" passes the open door's free edge with the elbow near its J4 limit: backing off
+# more runs J4 into its guard, less passes the edge closer. No route clears both at MIN_CLEAR (09-28
+# sim sweep), so this one leg is allowed 2 cm (user's call, 09-28: the door edge model is an estimate
+# and a graze won't damage the door or arm).
+DEMO_RIGHT_MIN_CLEAR = 0.02
+
+
+def _plan_open_demo(scene, rb, df, st, args, deg0):
+    """Replay the demo from the end of the pull (after releasing). The legs up to "forward" are
+    clearance-checked against the door model at its current angle and must all pass; the push only
+    against the microwave body (it is the leg that touches the door) and is cut short at the first
+    point that fails a gate (J4 / J6 / IK / jump / wrap), keeping at least DEMO_MIN_PUSH_POINTS."""
+    ee, q0 = np.array(st["ee_pos"], float), np.array(st["position"], float)
+    fwd = -df.n / np.linalg.norm(df.n)
+    left = np.array([-fwd[1], fwd[0]])
+    if abs(deg0 - 45.0) > 10.0:
+        print(f"door ~{deg0:.0f} deg, but the demo was recorded from a 45-deg pull -- refusing.")
+        return None
+    q_rel = R.from_quat(ee[3:7])
+
+    def pose(dfwd, dleft, dyaw):
+        return (ee[:3] + np.r_[fwd * dfwd + left * dleft, 0.0],
+                tuple((R.from_euler("z", dyaw, degrees=True) * q_rel).as_quat()))
+
+    pts = [(ee[:3], tuple(ee[3:7]))] + [pose(*pt[:3]) for pt in DEMO_OPEN_POINTS]
+    print(f"door ~{deg0:.0f} deg; demo from {np.round(ee[:3], 3)}: "
+          + "; ".join(f"{pt[3]} {np.round(pp, 3)}" for pt, (pp, _) in zip(DEMO_OPEN_POINTS, pts[1:])))
+    # open hand (just released) for "out" and "back"; the gripper closes there and the rest -- round
+    # the free edge and the push -- is done with a fist, which is much narrower (09-28: with the hand
+    # open, every route round the edge put a finger pad inside the door model)
+    i_back = next(i for i, pt in enumerate(DEMO_OPEN_POINTS) if pt[3] == "back") + 1   # index into pts
+    i_right = next(i for i, pt in enumerate(DEMO_OPEN_POINTS) if pt[3] == "right") + 1
+    door_now = df.bodies(scene, rb, deg0)
+    try:
+        legs, q = _chain(scene, rb, pts[:i_back + 1], q0, door_now, "demo (open hand)")
+        if legs is not None:
+            more, q = _chain(scene, rb, pts[i_back:], q, door_now, "demo (closed hand)", closed=True,
+                             min_clear={i_right - i_back - 1: DEMO_RIGHT_MIN_CLEAR})
+            legs = None if more is None else legs + more
+    finally:
+        drop(rb, door_now)
+    if legs is None:
+        return None
+    body = df.bodies(scene, rb, deg0)
+    drop(rb, [body[0]])                      # the push touches the door: check it against the body only
+    kept = []
+    try:
+        prev = pts[-1]
+        for pt in DEMO_PUSH_POINTS:
+            nxt = pose(*pt[:3])
+            leg, q2 = _chain(scene, rb, [prev, nxt], q, [body[1]], pt[3], closed=True)
+            if leg is None:
+                print(f"  push cut before '{pt[3]}' ({len(kept)}/{len(DEMO_PUSH_POINTS)} push points kept)")
+                break
+            kept.append(nxt)
+            prev, q = nxt, q2
+    finally:
+        drop(rb, [body[1]])
+    if len(kept) < DEMO_MIN_PUSH_POINTS:
+        print(f"only {len(kept)} push point(s) pass the gates (need {DEMO_MIN_PUSH_POINTS}) -- refusing.")
+        return None
+    print(f"  push ends at {np.round(kept[-1][0], 3)} ({len(kept)}/{len(DEMO_PUSH_POINTS)} of the demo's push points)")
+    corners = [(np.asarray(pp).tolist(), list(qq)) for pp, qq in pts[1:] + kept]
+    return {"corners": corners, "deg1": None, "close_after": i_back}   # close the gripper after corner i_back
+
+
+def push_open(ai, args, sim=None):
     """From the end of the pull (holding the handle): release, go round to the door's inner face
     and push it open further, then park. Tries the hand as it is and rolled 180 deg (the gripper
     is symmetric) and keeps the first plan that passes every gate."""
@@ -283,7 +483,40 @@ def push_open(ai, args):
     if not 20.0 <= deg0 <= 80.0:
         print("that doesn't look like the end of a pull -- refusing.")
         return False
-    scene, rb = make_sim()
+    scene, rb = sim if sim is not None else make_sim()   # sim: reuse a caller's (scene, robot)
+    style = getattr(args, "push_style", "arc")
+    if style in ("axes", "demo"):
+        plan = (_plan_open_axes if style == "axes" else _plan_open_demo)(scene, rb, df, st, args, deg0)
+        if plan is None:
+            print("\nthe axis push-open fails a gate -- NOT releasing, arm untouched.")
+            return False
+        if not args.execute:
+            print(f"\nDRY RUN (push-open {deg0:.0f} -> ~{plan['deg1']:.0f} deg) -- nothing commanded.")
+            return True
+        print("Releasing ...")
+        ai.execute_command(OpenGripperCommand())
+        time.sleep(1.0)
+        k = plan.get("close_after")
+        if k:
+            # demo: out + back with the hand open, close the gripper, then the rest with a fist
+            print(f"push-open: {k} corner(s) with the hand open ...")
+            ok, err, _ = run_cartesian_trajectory(ai, plan["corners"][:k])
+            if not ok:
+                print(f"  stopped {err * 100:.1f} cm short of the back-off point -- stopping here.")
+                return False
+            ai.execute_command(CloseGripperCommand())
+            time.sleep(1.5)
+            print(f"push-open: gripper closed; {len(plan['corners']) - k} corner(s) round the edge and the push ...")
+            ok, err, _ = run_cartesian_trajectory(ai, plan["corners"][k:])
+        else:
+            # all the straight legs as one blended Cartesian trajectory (<= 1 cm corner blends)
+            print(f"push-open: one blended trajectory through {len(plan['corners'])} corners ...")
+            ok, err, _ = run_cartesian_trajectory(ai, plan["corners"])
+        if plan["deg1"] is not None:
+            save_door_geometry(door_open_deg=plan["deg1"], open_sign=df.sign)
+        print(f"\nPUSH-OPEN {'DONE' if ok else 'STOPPED SHORT'}: {err * 100:.1f} cm from the last corner"
+              + (f"; door ~{plan['deg1']:.0f} deg (model)" if plan["deg1"] is not None else ""))
+        return bool(ok)
     plan = None
     for roll in (0.0, 180.0):
         print(f"\n--- hand roll +{roll:.0f} deg ---")
@@ -313,6 +546,83 @@ def push_open(ai, args):
         wait_for_joints(ai, plan["q_park"], timeout_s=BIG_MOVE_TIMEOUT_S)
     print(f"\nPUSH-OPEN DONE: door pushed to ~{plan['deg1']:.0f} deg. final EE {np.round(ai.get_state()['ee_pos'][:3], 4)}")
     return True
+
+
+# ---------------------------------------------------------------------------
+# Retreat over the top of the open door (user's hand demo, 09-28)
+# ---------------------------------------------------------------------------
+RETREAT_OUT_MIN_CLEAR = 0.005   # the "out" leg starts with the fingertips ~0.5 cm off the door face (the model
+                                # puts the face there at grasp time) and moves straight away from it
+
+
+def _plan_retreat_over(scene, rb, door, st, args):
+    """From the end of the pull (holding the handle): out along -approach first (the bar is fixed to
+    the door at its top, so the fingers must clear it before going up), up to the detected door top
+    + `retreat_above`, across to the door's middle (y of `door_mid`), straighten (approach along the
+    closed door's inward normal), down to the grasp height. Every leg is IK/jump/J4/J6/wrap-gated and
+    clearance-checked, open hand, against the door model at its current angle + the microwave body.
+    Returns {"corners": [(pos, quat)], "deg": opening} or None."""
+    if not door.get("door_z") or door.get("door_mid") is None:
+        print("door file has no door_z/door_mid (a grasp with the updated detector writes them) -- refusing.")
+        return None
+    ee, q0 = np.array(st["ee_pos"], float), np.array(st["position"], float)
+    a = DoorFrame(door, 1.0).angle_of(ee)
+    df = DoorFrame(door, np.sign(a) or 1.0)
+    deg = abs(a)
+    quat0 = tuple(ee[3:7])
+    approach = R.from_quat(quat0).as_matrix()[:, 2]
+    z_over = float(door["door_z"][1]) + args.retreat_above
+    z_down = float(door["closed_grasp_pos"][2])
+    p_out = ee[:3] - approach * args.retreat_out
+    if z_over <= p_out[2]:
+        print(f"door top + {args.retreat_above * 100:.0f} cm (z {z_over:.3f}) is not above the hand (z {p_out[2]:.3f}) "
+              "-- door_z looks wrong, refusing.")
+        return None
+    p_up = np.array([p_out[0], p_out[1], z_over])
+    p_across = np.array([p_out[0], float(door["door_mid"][1]), z_over])
+    q_face = tuple(_facing_forward(quat0, np.r_[-df.n, 0.0]))
+    p_down = np.array([p_out[0], p_across[1], z_down])
+    pts = [(ee[:3], quat0), (p_out, quat0), (p_up, quat0), (p_across, quat0), (p_across, q_face), (p_down, q_face)]
+    print(f"door ~{deg:.0f} deg, top z {door['door_z'][1]:.3f}, mid y {door['door_mid'][1]:.3f}; retreat-over: "
+          + "; ".join(f"{nm} {np.round(pp, 3)}" for nm, (pp, _) in
+                      zip(("out", "up", "across", "straighten", "down"), pts[1:])))
+    bodies = df.bodies(scene, rb, deg)
+    try:
+        legs, _ = _chain(scene, rb, pts, q0, bodies, "retreat-over", min_clear={0: RETREAT_OUT_MIN_CLEAR})
+    finally:
+        drop(rb, bodies)
+    if legs is None:
+        return None
+    return {"corners": [(np.asarray(pp).tolist(), list(qq)) for pp, qq in pts[1:]], "deg": deg}
+
+
+def retreat_over(ai, args, sim=None):
+    """After the pull (still holding the handle): plan the retreat from the real state, and only if
+    every leg passes, release and run it as one blended Cartesian trajectory."""
+    if not DOOR_FILE.exists():
+        print(f"need {DOOR_FILE} (grasp + swing write it) -- refusing.")
+        return False
+    door = json.loads(DOOR_FILE.read_text())
+    st = ai.get_state()
+    if float(st["gripper_pos"]) < 0.2:
+        print("gripper is open -- retreat-over starts from the end of the pull, still holding the handle. Refusing.")
+        return False
+    scene, rb = sim if sim is not None else make_sim()
+    plan = _plan_retreat_over(scene, rb, door, st, args)
+    if plan is None:
+        print("\nretreat-over fails a gate -- NOT releasing, arm untouched.")
+        return False
+    if not args.execute:
+        print(f"\nDRY RUN (retreat-over from ~{plan['deg']:.0f} deg) -- nothing commanded.")
+        return True
+    print("Releasing ...")
+    ai.execute_command(OpenGripperCommand())
+    time.sleep(1.0)
+    print(f"retreat-over: one blended trajectory through {len(plan['corners'])} corners ...")
+    ok, err, rpc_ok = run_cartesian_trajectory(ai, plan["corners"])
+    print(f"\nRETREAT-OVER {'DONE' if ok else 'STOPPED SHORT'} (RPC returned {rpc_ok}): {err * 100:.1f} cm from the "
+          f"last corner. final EE {np.round(ai.get_state()['ee_pos'][:3], 4)}")
+    return bool(ok)
 
 
 def _plan_close(scene, rb, df, st, args, deg0):
@@ -418,6 +728,8 @@ def _plan_close(scene, rb, df, st, args, deg0):
             j6 = float(np.degrees(nq[5]))
             last = c_door <= stop + 1e-4
             bad = (err > MAX_IK_ERR or jump > MAX_STEP_JUMP_DEG or abs(j6) > J6_GUARD_DEG
+               or abs(np.degrees(nq[3])) > J4_GUARD_DEG
+                   or abs(np.degrees(nq[3])) > J4_GUARD_DEG
                    or not continuous_ok(qq, nq) or c_body[0] < MIN_CLEAR)
             k = len(plan) + 1
             if bad or last or k == 1 or k % 4 == 0:
@@ -579,6 +891,22 @@ def add_push_args(a, close=False):
         a.add_argument("--push-z", type=float, default=None,
                        help="push-close: height (m); default: where the hand is now")
         return
+    a.add_argument("--retreat-out", type=float, default=0.05,
+                   help="retreat-over: after releasing, first move this far back along the approach axis, "
+                        "off the handle, before going up (m)")
+    a.add_argument("--retreat-above", type=float, default=0.08,
+                   help="retreat-over: go up to this far above the detected door top (m)")
+    a.add_argument("--push-style", choices=["arc", "axes", "demo"], default="arc",
+                   help="push-open: 'arc' = the 09-25 demo (wrist turned to face in, push along an arc); "
+                        "'axes' = straight back / right / forward / left legs; 'demo' = replay the 09-28 hand "
+                        "demo (back, push forward-left while turning in, reposition right)")
+    a.add_argument("--push-right-margin", type=float, default=OPEN_RIGHT_MARGIN,
+                   help="push-open: go this far right (-y) of the open door's free edge before going forward (m)")
+    a.add_argument("--push-release-out", type=float, default=0.05,
+                   help="push-open (axes): after releasing, first move this far back along the gripper's approach "
+                        "axis, off the handle (m)")
+    a.add_argument("--push-depth", type=float, default=0.25,
+                   help="push-open (axes): the forward (+x) leg ends this far in front of the hinge, in x (m)")
     a.add_argument("--push-back", type=float, default=0.21,
                    help="push-open: after releasing, back straight out this far (m)")
     a.add_argument("--push-in", type=float, default=-0.17,

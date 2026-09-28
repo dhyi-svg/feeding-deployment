@@ -1,0 +1,12 @@
+{
+  "note": "2026-09-19 rchi-cpu-5: manual step-by-step positions after the pull-arc hit J6's ~119.7deg limit (~140deg cumulative swing). User moved the arm back by hand and then pushed the door open further by hand; positions logged via read-only get_state() calls, no motion commanded by the assistant. Position 7 marked final by the user.",
+  "positions": [
+    {"idx": 1, "ee_pos": [0.4568, -0.0129, 0.5204], "ee_quat": [0.6703, 0.2268, 0.2196, 0.6716], "gripper": 0.9130, "joints_deg": [-174.2, -17.1, -50.0, -111.5, -81.9, 101.6, 147.6]},
+    {"idx": 2, "ee_pos": [0.4507, -0.0188, 0.3840], "ee_quat": [0.6845, 0.2274, 0.2119, 0.6594], "gripper": 0.0087, "joints_deg": [179.6, -33.1, -46.0, -122.9, -82.5, 109.6, 123.0]},
+    {"idx": 3, "ee_pos": [0.2408, -0.0761, 0.5917], "ee_quat": [0.5307, 0.4932, 0.4820, 0.4928], "gripper": 0.0087, "joints_deg": [-170.7, 52.5, 21.9, -128.1, -42.6, -28.0, 147.1]},
+    {"idx": 4, "ee_pos": [0.2589, -0.1730, 0.5686], "ee_quat": [0.5314, 0.4924, 0.4822, 0.4925], "gripper": 0.0087, "joints_deg": [170.2, 50.5, 42.6, -126.0, -39.3, -22.2, 159.3]},
+    {"idx": 5, "ee_pos": [0.5212, -0.1611, 0.5673], "ee_quat": [0.5325, 0.4924, 0.4821, 0.4914], "gripper": 0.0087, "joints_deg": [103.4, 36.3, 71.4, -112.8, -37.6, 18.1, 158.9]},
+    {"idx": 6, "ee_pos": [0.5945, -0.0947, 0.5670], "ee_quat": [0.5326, 0.4927, 0.4821, 0.4911], "gripper": 0.0087, "joints_deg": [80.8, 30.7, 84.7, -107.0, -39.1, 26.7, 155.3]},
+    {"idx": 7, "ee_pos": [0.5569, 0.0742, 0.5675], "ee_quat": [0.5318, 0.4932, 0.4825, 0.4911], "gripper": 0.0087, "joints_deg": [65.5, 13.2, 85.6, -111.8, -53.7, 39.6, 148.0], "final": true}
+  ]
+}

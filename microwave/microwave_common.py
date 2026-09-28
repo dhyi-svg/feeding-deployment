@@ -24,7 +24,7 @@ from scipy.spatial.transform import Rotation as R
 from pybullet_helpers.geometry import Pose, multiply_poses
 
 from feeding_deployment.control.robot_controller.command_interface import (
-    CloseGripperCommand, JointCommand, OpenGripperCommand)
+    CartesianTrajectoryCommand, CloseGripperCommand, JointCommand, OpenGripperCommand)
 from feeding_deployment.simulation.scene_description import create_scene_description_from_config
 from feeding_deployment.simulation.simulator import FeedingDeploymentPyBulletSimulator
 
@@ -34,6 +34,10 @@ STEP_M = 0.02
 MAX_IK_ERR = 0.02
 MAX_STEP_JUMP_DEG = 20.0
 J6_GUARD_DEG = 115.0
+# J4's configured soft limit is +-147.8 deg (09-07: a command past it fails METHOD_FAILED; 09-28: a
+# Cartesian grasp path drove J4 from -145 into it and Kortex aborted). PyBullet only knows the URDF's
+# wider limit, so every sim check gates J4 with a margin.
+J4_GUARD_DEG = 144.0
 # J1/J3/J5/J7 spin freely. Whether Kortex goes the short way across +-180 is unverified,
 # so every commanded angle is wrapped to [-180, 180) and a move is refused if any of these
 # joints would change by more than 180 deg -- the only case where "straight from old to new
@@ -87,6 +91,34 @@ def wait_for_joints(ai, q, tol_deg=1.0, timeout_s=6.0):
     return False
 
 
+def run_cartesian_trajectory(ai, traj, tol_m=0.01, settle_s=2.0, timeout_s=60.0):
+    """Send a CartesianTrajectoryCommand and judge it by where the arm ACTUALLY ends up, not
+    the RPC return: the server's wait can be tripped by a stale END/ABORT notification and
+    return False at once while Kortex runs the whole trajectory anyway (09-28: returned False
+    with the arm still at the start, then reached every waypoint). Waits until the EE is within
+    `tol_m` of the last waypoint, or has not moved for `settle_s` (after at least `settle_s`
+    had passed, so a not-yet-started motion isn't mistaken for a stop). Returns (reached, err_m, rpc_ok)."""
+    rpc_ok = ai.execute_command(CartesianTrajectoryCommand([(list(pp), list(qq)) for pp, qq in traj]))
+    goal = np.asarray(traj[-1][0], dtype=float)
+    t0 = time.time()
+    last = np.asarray(ai.get_state()["ee_pos"][:3], dtype=float)
+    last_move = t0
+    while time.time() - t0 < timeout_s:
+        cur = np.asarray(ai.get_state()["ee_pos"][:3], dtype=float)
+        err = float(np.linalg.norm(cur - goal))
+        if err < tol_m:
+            time.sleep(0.3)   # let the final taper finish
+            cur = np.asarray(ai.get_state()["ee_pos"][:3], dtype=float)
+            return True, float(np.linalg.norm(cur - goal)), rpc_ok
+        if np.linalg.norm(cur - last) > 0.002:
+            last, last_move = cur, time.time()
+        elif time.time() - last_move > settle_s and time.time() - t0 > settle_s:
+            return False, err, rpc_ok
+        time.sleep(0.1)
+    cur = np.asarray(ai.get_state()["ee_pos"][:3], dtype=float)
+    return False, float(np.linalg.norm(cur - goal)), rpc_ok
+
+
 def plan_straight_line(scene, rb, start_pos, quat, direction, dist, seed_joints, label):
     """Joint solutions for a straight Cartesian line, ~2 cm per step, fixed orientation.
     Returns the list of joint vectors, or None if any step fails a gate."""
@@ -100,6 +132,7 @@ def plan_straight_line(scene, rb, start_pos, quat, direction, dist, seed_joints,
         print(f"  {label} {k}/{n} -> {np.round(tgt, 3)}  IK err {err * 100:.2f}cm  jump {jump:.1f}deg  "
               f"J6 {j6:.1f}deg  J7 {j7:.1f}deg")
         if (err > MAX_IK_ERR or jump > MAX_STEP_JUMP_DEG or abs(j6) > J6_GUARD_DEG
+                or abs(np.degrees(nq[3])) > J4_GUARD_DEG
                 or not continuous_ok(q, nq)):
             print(f"  {label}: step {k} fails the IK/jump/J6/wrap gate.")
             return None
@@ -111,7 +144,8 @@ def plan_straight_line(scene, rb, start_pos, quat, direction, dist, seed_joints,
 BIG_MOVE_TIMEOUT_S = 40.0
 
 
-def plan_cartesian(scene, rb, p0, q0_quat, p1, q1_quat, seed_joints, label, bodies=None):
+def plan_cartesian(scene, rb, p0, q0_quat, p1, q1_quat, seed_joints, label, bodies=None, min_clear=None,
+                   closed=False):
     """Straight line p0 -> p1 with the orientation slerped q0 -> q1, ~2 cm / <= 5 deg per step,
     each step IK-solved from the previous one. Gates: IK, per-step jump, J6, wrap and (if
     `bodies`) >= MIN_CLEAR from the door model, checked along each step too."""
@@ -125,15 +159,24 @@ def plan_cartesian(scene, rb, p0, q0_quat, p1, q1_quat, seed_joints, label, bodi
         f = k / n
         tgt = np.asarray(p0) + (np.asarray(p1) - p0) * f
         nq, err = solve_ik(scene, rb, tgt, slerp([f]).as_quat()[0], q)
-        jump = float(np.degrees(np.max(np.abs(nq - q))))
+        # one PyBullet IK pass sometimes stalls (joints barely move, ~2.3 cm error), mostly on
+        # rotate-in-place steps; re-solving from its own result converges (09-28 sim check)
+        for _ in range(3):
+            if err <= MAX_IK_ERR:
+                break
+            nq, err = solve_ik(scene, rb, tgt, slerp([f]).as_quat()[0], nq)
+        # wrapped: a free joint going 179.8 -> -179.8 moved 0.4 deg, not 359.6 (continuous_ok gates real wraps)
+        jump = float(np.degrees(np.max(np.abs((nq - q + np.pi) % (2 * np.pi) - np.pi))))
         if bodies is not None:
-            worst = min([worst] + [clearance(rb, q + (nq - q) * s_ / 3, bodies) for s_ in (1, 2, 3)],
+            worst = min([worst] + [clearance(rb, q + (nq - q) * s_ / 3, bodies, closed) for s_ in (1, 2, 3)],
                         key=lambda w: w[0])
         bad = (err > MAX_IK_ERR or jump > MAX_STEP_JUMP_DEG or abs(np.degrees(nq[5])) > J6_GUARD_DEG
-               or not continuous_ok(q, nq) or (bodies is not None and worst[0] < MIN_CLEAR))
+               or abs(np.degrees(nq[3])) > J4_GUARD_DEG
+               or not continuous_ok(q, nq) or (bodies is not None and worst[0] < (min_clear or MIN_CLEAR)))
         if bad or k in (1, n) or k % 5 == 0:
             print(f"  {label} {k}/{n} -> {np.round(tgt, 3)}  IK err {err * 100:.2f}cm  jump {jump:.1f}deg  "
-                  f"J6 {np.degrees(nq[5]):.1f}  clear {worst[0] * 100:.1f}cm ({worst[1]})")
+                  f"J4 {np.degrees(nq[3]):.1f}  J6 {np.degrees(nq[5]):.1f}  clear {worst[0] * 100:.1f}cm ({worst[1]})"
+                  f"{'' if continuous_ok(q, nq) else '  WRAP'}")
         if bad:
             print(f"  {label}: step {k} fails a gate.")
             return None
@@ -270,7 +313,10 @@ DOOR_T = 0.04                     # door thickness
 DOOR_PAST_HANDLE = 0.06           # free edge beyond the handle. Was 0.122 (detector span 47.2 - 35.0 cm), but that
                                   # span includes the control panel: on 09-25 the hand passed the 90-deg door's edge
                                   # at x ~0.27, which only fits a door ending <= ~6 cm past the handle.
-DOOR_Z = (0.25, 0.80)             # unmeasured -> deliberately generous
+DOOR_Z = (0.25, 0.80)             # unmeasured -> deliberately generous (fallback: no closed_handle in the door file)
+DOOR_Z_HANDLE_Z = 0.537           # closed-handle z when DOOR_Z was set (09-23); the model keeps DOOR_Z's extent
+                                  # relative to the handle, so a lower/higher microwave (09-28: handle ~0.26) is covered
+DOOR_Z_MARGIN = 0.02              # padding on the detected door_z range (door file), when the grasp saved one
 BODY_DEPTH = 0.40
 MIN_CLEAR = 0.03                  # every arm/gripper link must stay >= 3 cm from door/body
 FINGER_JOINTS = [12, 14, 16, 17, 19, 21]
@@ -305,7 +351,13 @@ def add_door_model(scene, rb, door, open_grasp_pos):
     ang = (np.arctan2(*(np.asarray(open_grasp_pos[:2]) - hinge[:2])[::-1])
            - np.arctan2(*(g0[:2] - hinge[:2])[::-1]))
     ang = (ang + np.pi) % (2 * np.pi) - np.pi
-    zc, zh = (DOOR_Z[0] + DOOR_Z[1]) / 2, (DOOR_Z[1] - DOOR_Z[0]) / 2
+    if door.get("door_z"):
+        # the detector's door-face height range (1st/99th pct of the plane fit), saved by the grasp
+        z_lo, z_hi = door["door_z"][0] - DOOR_Z_MARGIN, door["door_z"][1] + DOOR_Z_MARGIN
+    else:
+        dz = float(door["closed_handle"][2]) - DOOR_Z_HANDLE_Z if "closed_handle" in door else 0.0
+        z_lo, z_hi = DOOR_Z[0] + dz, DOOR_Z[1] + dz
+    zc, zh = (z_lo + z_hi) / 2, (z_hi - z_lo) / 2
     base = np.asarray(scene.robot_base_pose.position)                                # identity rotation
     yaw_closed = np.arctan2(n[1], n[0])
 
@@ -324,13 +376,20 @@ def add_door_model(scene, rb, door, open_grasp_pos):
         "open_deg": float(np.degrees(ang)), "free_edge": free_edge}
 
 
-def clearance(rb, q, bodies):
-    """Smallest distance from any robot link (gripper OPEN) to the door/body at joints q."""
+# Robotiq 2F-85 linkage in the sim URDF: one closing angle, mirrored on the inner-finger joints.
+FINGER_CLOSE_SIGN = {12: 1.0, 14: -1.0, 16: 1.0, 17: 1.0, 19: -1.0, 21: 1.0}
+FINGER_CLOSED_RAD = 0.7           # a little short of the 0.8 full close -> slightly wide, i.e. conservative
+
+
+def clearance(rb, q, bodies, closed=False):
+    """Smallest distance from any robot link to the door/body at joints q, with the gripper
+    OPEN (default, the widest hand) or `closed`."""
     c = rb.physics_client_id
     for j, jj in enumerate(ARM):
         p.resetJointState(rb.robot_id, jj, float(q[j]), physicsClientId=c)
     for jj in FINGER_JOINTS:
-        p.resetJointState(rb.robot_id, jj, 0.0, physicsClientId=c)
+        p.resetJointState(rb.robot_id, jj, FINGER_CLOSE_SIGN[jj] * FINGER_CLOSED_RAD if closed else 0.0,
+                          physicsClientId=c)
     best = (9.0, "")
     for bid, name in bodies:
         for pt in p.getClosestPoints(rb.robot_id, bid, 0.5, physicsClientId=c):

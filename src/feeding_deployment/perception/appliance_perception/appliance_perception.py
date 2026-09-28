@@ -634,6 +634,13 @@ class AppliancePerception(TFInterface):
         # returned poses carry a fixed orientation, so a caller that wants to approach
         # square to the face reads this instead.
         self.last_door_normal_base = None
+        # Door-face extent in the base frame, set alongside last_door_normal_base:
+        # (z_low, z_high) as the plane's 1st/99th percentile height, and the plane
+        # point at the middle of the door's horizontal span. Use these, not
+        # top_of_appliance, for "above the door": that one is the image-down max,
+        # i.e. the door BOTTOM on a non-inverted camera.
+        self.last_door_z_range_base = None
+        self.last_door_mid_base = None
         if rgb_image is None:
             print("No camera data provided")
             return None, None, None, None
@@ -944,6 +951,15 @@ class AppliancePerception(TFInterface):
             n_base[2] = 0.0
             if np.linalg.norm(n_base) > 1e-6:
                 self.last_door_normal_base = n_base / np.linalg.norm(n_base)
+
+            plane_base = plane_points @ base_to_camera[:3, :3].T + base_to_camera[:3, 3]
+            self.last_door_z_range_base = (
+                float(np.percentile(plane_base[:, 2], 1)),
+                float(np.percentile(plane_base[:, 2], 99)),
+            )
+            self.last_door_mid_base = plane_base[
+                int(np.argmin(np.abs(proj - 0.5 * (lo + hi))))
+            ].copy()
 
             camera_to_handle = np.eye(4)
             camera_to_handle[:3, 3] = handle_centroid_3d

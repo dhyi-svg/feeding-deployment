@@ -2,6 +2,146 @@
 
 Working notes for the scripts in this folder. Newest learnings first within each section.
 
+## 2026-09-28 — one-take grasp + swing, door opened fully (80°)
+
+Microwave on a lower surface this week (handle z ~0.21-0.26 instead of ~0.54) and moved/turned between
+runs (handle y from -0.07 to -0.40, door normal from -6° to +11°). Everything below ran from the
+`microwave-wip` worktree (`~/feeding-deployment-microwave`), with `PYTHONPATH=$PWD/src` prepended.
+
+### What works now
+
+```bash
+export ARM_RPC_HOST=127.0.0.1 HANDLE_DEPTH_CORR=0.001 CAMERA_UPSIDE_DOWN=false
+export FASTRTPS_DEFAULT_PROFILES_FILE=~/.ros/fastdds_large_images.xml PYTHONPATH=$PWD/src:$PYTHONPATH
+python3 -u microwave/real_gen3_ros2_grasp_and_swing_microwave.py --phase both --one-take --swing-max --execute
+```
+- **`--one-take`**: plans and sim-checks everything BEFORE the first motion (grasp path, hinge, the whole
+  swing from the *planned* grasp), then runs with no pauses: one motion into the grasp, close, one smooth
+  swing. Opens the gripper first if it was left closed.
+- **Direct grasp (default in one-take)**: the grasp pose is the ONLY waypoint -- a straight line from the
+  view pose, hand rotating on the way (12-15° off the approach axis from the view poses used; no clipping
+  seen). `--via-pregrasp` = old route (one brief stop at pre-grasp).
+- **`--swing-max`**: tries 90° down to 45° in 5° steps and uses the largest whose whole arc passes the sim
+  gates. Capped at 90° (`SWING_MAX_TRY_DEG`) because the smooth swing has no mid-trajectory abort.
+  **Result: 80° (85/90 fail on J6 115.3-117.3°), 24 waypoints, 0.0 cm off, final J6 112°. The door opened
+  fully -- user confirmed.**
+- **Hinge carried over in the door's frame** (`_transfer_hinge`: last hinge's depth along the normal +
+  distance along the face from the handle), so a turned microwave is handled; radius came out 34.3 cm
+  every run and matched the detector's hinge edge (34.4-34.9 cm).
+
+### Bugs / limits found and fixed
+
+- **J4 soft limit ±147.8° is invisible to the sim.** A blended Cartesian grasp from a start with J4 -145°
+  drove J4 into it and Kortex aborted (`JOINT_POSITION_LIMIT_REACHED`). Every sim check now gates
+  `J4_GUARD_DEG = 144` (`microwave_common.py`), like J6. **Start from a view pose with J4 around -130° to
+  -135°** (open the elbow up when placing it by hand; J4 barely changes if you only move the hand).
+- **The Cartesian-trajectory RPC return is not the truth.** `kinova.py`'s wait was tripped by a stale
+  END/ABORT notification: returned False instantly (arm still at the start), then Kortex ran the whole
+  trajectory. `run_cartesian_trajectory()` (`microwave_common.py`) now judges by the arm's actual
+  arrival (within 1 cm of the last waypoint, or still for 2 s). Used by grasp, swing and push-open.
+- **Kortex slows/stops at every Cartesian waypoint**: the first waypoint gets zero blend (full stop), the
+  rest at most 1 cm (`kinova.py:684-691`), and the last few taper to 4 cm/s. The 45° swing ran at a constant
+  2.5 cm/s (0.79 s per 2 cm waypoint). Not fixed -- the blend cap lives in the arm driver (shared checkout);
+  fix = run `arm_server.py` from the worktree with bigger blends / optimal blending.
+- Door collision model height now follows the detected handle (`DOOR_Z_HANDLE_Z`), same extent as before.
+- `MIN_Z` 0.25 -> 0.15 (user-approved), `PLAUSIBLE_Z` floor 0.25 -> 0.15, `PLAUSIBLE_Y` floor -0.40 -> -0.50.
+- The arm driver + joint-state bridge wedge after ~1 day (dead Kortex session, `INVALID_USER_SESSION_ACCESS`,
+  99% CPU, log grows to 100s of MB). Restart `arm_server.py`, `bulldog_bypass.py` AND `joint_state_bridge`
+  (the bridge stays stuck too -> no tf -> detection waits 10 s per retry).
+- Slow startup (1-2 min before `start EE`) = a loaded machine, not the script: 17 stuck `anydesk`
+  processes (gdm, ~95% CPU each, need sudo) + other users' GPU jobs.
+
+### Push-open (release, go round the door, push it further) -- NOT solved, not run on hardware
+
+- Hand demo recorded (`microwave/demos/microwave_manual_push_open_2026-09-28.csv`, 10 Hz, `tools/record_demo.py`):
+  out +y 3.6 cm off the handle -> back -x 11 cm -> right -y 26 cm -> turn hand in place +36.5° -> forward
+  +x 5 cm -> push +y 31 cm along the door's arc. Encoded as `--push-style demo` (`DEMO_OPEN_POINTS`).
+- **Blocked on this elbow configuration**: going round the free edge at the demo's width needs J4 at
+  -146..-148° (the hand demo rode the soft limit); any tighter route puts a finger pad into the door model
+  (0.1-1.6 cm, open or closed hand, back-offs 6-13 cm, even with the 2 cm clearance the user allowed for
+  that leg). Options left: flip the elbow (J4 room near the base), or a route that goes OVER -- see below.
+- Also written: `--push-style axes` (straight legs, straightening on the forward leg) -- fails the same way.
+- Moot for now: the 80° pull opens the door fully on its own.
+
+### New route (user's hand demo, 09-28, after the 80° open)
+
+**Up, right, straighten (turn the hand to face in), down, left a little.** Going over the top avoids the
+free-edge / J4 squeeze. User: "for this current setup should work well."
+
+User's spec (09-28): numbers from the detection -- up to 5-10 cm above the detected microwave height,
+right to about the middle of the microwave, straighten, then down.
+
+### NEXT -- `--retreat-over` (steps 1-3 WRITTEN 09-28, not run on hardware; sim smoke-test only)
+Code: detector attrs in `appliance_perception.py`; `door_push._plan_retreat_over` / `retreat_over`; flags
+`--retreat-over` (with `--one-take`), `--phase retreat-over`, `--retreat-out` (0.05), `--retreat-above` (0.08).
+Also: `plan_cartesian` re-solves a stalled IK step up to 3x (a single PyBullet pass stalled at ~2.3 cm on
+the rotate-in-place "straighten" leg; re-solving converged). Synthetic sim poses: out/up/across/straighten
+pass; failures seen were geometric (50 deg door: the "down" lands on the door; one odd 80 deg config: the
+bracelet clipped the door top on "across") -- the real preflight from the real post-swing joints decides.
+1. Detector (`appliance_perception.py`, add attributes only): in `detect_handle_and_placement`, next to
+   `last_door_normal_base` (init ~l.636, set ~l.946 inside `if transform is not None`), transform
+   `plane_points` to base and set `last_door_z_range_base` = (1st, 99th pct z) and `last_door_mid_base` =
+   plane point whose `proj` is closest to (lo+hi)/2. Why: `top_of_appliance` is the image-down max, i.e.
+   the door BOTTOM on this non-inverted camera (z 0.13-0.15, below the handle) -- don't use it.
+2. Grasp script: average both looks, `save_door_geometry(door_z=, door_mid=)`; `add_door_model` uses
+   `door["door_z"]` (+-2 cm) when present.
+3. `--retreat-over` (after the one-take swing): release -> out ~5 cm along -approach FIRST (bar is fixed to
+   the door at its top) -> up to door top + 0.08 -> right to door_mid y -> straighten (face -normal) ->
+   down to handle height. Preflight from the predicted post-swing state like push-open (door model at the
+   swing angle, 3 cm, IK/J4/J6/wrap); re-plan after the swing; run with `run_cartesian_trajectory`.
+4. Test: door closed, view pose J4 ~-130, `--phase both --one-take --swing-max --retreat-over`, dry run first.
+
+### Manual retreat-over demo, 09-28 ~18:10 (`demos/microwave_manual_retreat_over_2026-09-28.csv`, 10 Hz)
+From the end of an executed `--one-take --swing-max` (90 deg, 27 wps, 0.0 cm off, J6 113.4; door file now
+has door_z 0.124-0.379, door_mid y -0.314). User's rule: an immediate back-and-forth = an error, ignore it.
+Clean corners (heading = approach direction in the xy plane, deg):
+| # | leg | end pos (x, y, z) | heading | notes |
+|---|-----|-------------------|---------|-------|
+| 0 | release | 0.544, 0.048, 0.239 | -99.7 | gripper 0.814 -> 0.004 |
+| 1 | up | 0.544, 0.048, 0.464 | -99.7 | **no "out" leg** -- straight up; z = door top + 8.5 cm |
+| 2 | across | 0.414, -0.429, 0.464 | -99.7 | y to the closed-handle y (-0.42), NOT door_mid (-0.314); x pulled back 13 cm toward the base on the way (a y reversal -0.148 -> -0.091 at t 34 s = error) |
+| 3 | straighten | ~0.414, -0.45, 0.464 | -99.7 -> -11.8 | 88 deg turn in place; **J1 crossed +-180 (176 -> -125)**, J7 147 -> 33 |
+| 4 | down | 0.461, -0.357, 0.299 | -11.8 | diagonal: +4.7 cm x, +7 cm y while descending; stops 6 cm above grasp height |
+| 5 | final | 0.434, -0.356, 0.284 | +4.4 | small back-and-forth adjustments (errors); rest joints -126 -43 26 -114 75 93 59 |
+Differences from the planner (`_plan_retreat_over`): no out leg (the planner's out leg is what hit J6), across
+ends at the handle y and further back in x, the straighten crosses the J1 wrap the planners refuse, down stops
+~5 cm higher and drifts toward the middle.
+
+### Evening 09-28 -- what ran and what changed
+- **Executed** `--phase both --one-take --swing-max --execute` from a fresh view pose: 2 looks agreed, grasp 0.0 cm,
+  gripper 0.814, swing-max picked **90 deg** (27 wps, 0.0 cm off, J6 113.4), door file got door_z/door_mid.
+- `--retreat-over` dry runs all refused before motion; the causes, in order:
+  1. The out leg from a 90-deg end drives J6 116+ (backing off the handle always raises J6 there; sim probe
+     `tools/probe_j6_backoff.py`: up or a -10 deg hand turn LOWER it). The user's demo has no out leg.
+  2. Bug fixed: `plan_cartesian`'s per-step jump wasn't wrapped (a free joint 179.8 -> -179.8 read as 359.6 deg).
+  3. At door top + 8 cm the wrist (bracelet_link) passes 2.2-2.9 cm over the door model -> `--retreat-above 0.12` clears.
+  4. Straighten then fails the +-180 WRAP gate at every swing angle 45-85 -- and the user's demo crossed J1's wrap
+     on this leg too. Blocked until the wrap is tested on hardware or the start posture avoids it.
+- `--swing-max` with `--retreat-over` now picks the largest angle from whose end the retreat ALSO passes.
+- `plan_cartesian` step log now shows J4 and a WRAP flag.
+- A latched "Emergency stop activated by user" (`CONTROL_MANUAL_STOP`) blocks every command: restart arm_server,
+  re-run bulldog_bypass, AND restart joint_state_bridge (it stays stuck on the dead session -> tf incomplete ->
+  detection waits 10 s per look).
+- Files moved into this folder: `demos/` (all hand-demo CSV/JSON recordings, formerly `~/microwave_*`;
+  `demos/camera_frames_2026-09-09/` is gitignored, 34 MB), `state_2026-09-28/` (door + last-grasp file snapshots;
+  the live ones stay at `~/.microwave_door.json` / `~/.microwave_last_grasp.json`, the code reads those).
+
+### Next
+- Rewrite `_plan_retreat_over` to the demo's shape: no out leg; up; across to ~the handle's closed y while
+  pulling back ~13 cm in x; straighten; down to ~6 cm above grasp height. Then deal with the J1 wrap on the
+  straighten (hardware wrap test with `tools/wrap_test.py`, or a start posture that avoids it).
+
+### State at end of 09-28 (afternoon -- superseded, see "Shutdown" below)
+- Arm holding the handle, door ~80° open (J6 112 -- no scripted straight back-off from here).
+- Running: arm_server, bulldog_bypass, joint_state_bridge (logs /tmp/microwave_logs/), camera, rsp,
+  calibration_tf, stub_base, rqt_image_view. Button detector stopped. 17 stuck anydesk procs (need sudo).
+- Nothing from 09-28 committed: all in worktree ~/feeding-deployment-microwave (branch microwave-wip,
+  base bed37773)
+
+### Shutdown, 09-28 evening
+- Door open ~90 deg, arm at the demo's final pose, gripper open. Everything shut down (see commit message).
+- Committed on `microwave-wip`.
+
 ## 2026-09-25 — gripper turned around 180°, push-close validated
 
 Same Robotiq gripper, remounted rotated 180° about the wrist. Finger length unchanged, so
@@ -113,8 +253,8 @@ depending on how the same arm posture is written (J1 162 / J3 −1 ≡ J1 8 / J3
 - The pull and push-open now write `door_open_deg` + `open_sign` to `~/.microwave_door.json`
   (`record_door_angle`), which push-close reads when `--door-deg` isn't given.
 - Recording hand demos: `record.py`-style 10 Hz logger of joints/EE/gripper/arm state (kept in
-  the session scratchpad; CSVs in `~/microwave_manual_*_2026-09-25.csv`, push-close orientation in
-  `~/microwave_push_close_orientation_2026-09-25.json`).
+  the session scratchpad; CSVs in `demos/microwave_manual_*_2026-09-25.csv`, push-close orientation in
+  `demos/microwave_push_close_orientation_2026-09-25.json`).
 
 ### push-open — written, sim-only
 
