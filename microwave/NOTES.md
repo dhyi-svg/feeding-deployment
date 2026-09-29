@@ -142,6 +142,75 @@ ends at the handle y and further back in x, the straighten crosses the J1 wrap t
 - Door open ~90 deg, arm at the demo's final pose, gripper open. Everything shut down (see commit message).
 - Committed on `microwave-wip`.
 
+## 2026-09-28 (evening) — push-close while holding a container (not yet run)
+
+- New `--hold-offset-x` on push-close (default 0 = the validated 09-25 behaviour). The container
+  sticks out ~6 in (15.2 cm) past the fingertips, so plan with **`--hold-offset-x -0.152`**: the door
+  model (hinge, closed grasp/handle, door_mid) is shifted that far in arm-base x for planning only
+  (door file untouched), so every leg, the swing and the push stop short by the container length.
+  ```bash
+  python3 -u microwave/real_gen3_ros2_close_microwave.py --phase push-close --door-deg 90 --hold-offset-x -0.152        # dry run
+  python3 -u microwave/real_gen3_ros2_close_microwave.py --phase push-close --door-deg 90 --hold-offset-x -0.152 --execute
+  ```
+- **J4 blocks the left-at-hand-height approach** (dry runs 09-28, start J `[68.7, 34.4, -155.8, -127.9, 86.6,
+  94.1, -9.3]`): every route failed ~8 cm into the move left, J4 -128 -> past the -144 guard. New
+  **`--route-over`** (user's idea): up to door top + `--over-above` (8 cm), left to `--over-past` (5 cm) beyond the
+  swing start, down to mid door height (mean of `door_z`; the swing and push then run there), then right + forward
+  into the swing start. Swing/push unchanged. Not yet run on hardware.
+- Caveats: the container itself is not in the collision model (neither was it before) — with the
+  hand 15 cm back, it's the container, not the side of the hand, that will be nearest the door on the
+  swing and push, so watch the swing's end and the torque-watched push. The shift is along x only; the
+  closed-door normal is ~10° off x, so the offset along the push direction is ~15 cm with ~2.6 cm
+  sideways. Check the dry run's printed radius/route before `--execute`.
+
+### How to run it next time (container close)
+
+1. Bring-up as usual (arm_server, stub_base, bulldog_bypass, joint_state_bridge, camera with the fastdds
+   profile; logs in `/tmp/microwave_logs/`). Env for every microwave script, from the worktree root:
+   ```bash
+   source /opt/ros/humble/setup.bash
+   export PYTHONPATH=$PWD/src:$PYTHONPATH ARM_RPC_HOST=127.0.0.1 HANDLE_DEPTH_CORR=0.001 CAMERA_UPSIDE_DOWN=false \
+          FASTRTPS_DEFAULT_PROFILES_FILE=~/.ros/fastdds_large_images.xml
+   ```
+   **`PYTHONPATH=$PWD/src` is required**: the pip-installed `feeding_deployment` points at `~/feeding-deployment`
+   (the fridge branch), whose `AppliancePerception` has no `last_door_normal_base` -> the grasp script crashes.
+   Keep the ROS entries (`PYTHONPATH=src` alone kills rclpy).
+2. **Re-derive the hinge whenever the base or microwave moved** (door CLOSED, camera looking at it, gripper
+   open or closed, no motion):
+   ```bash
+   python3 -u microwave/real_gen3_ros2_grasp_and_swing_microwave.py --phase both --one-take   # dry run
+   ```
+   It prints the two looks, `door normal`, the carried-over `hinge (...)` and radius (want ~34-35 cm, matching
+   the detector's `Hinge edge`). The dry run does NOT write the door file -- write it by hand with
+   `microwave_common.save_door_geometry(hinge=, closed_grasp_pos=, closed_normal=, closed_handle=, door_z=, door_mid=)`.
+   If the handle is out of grasp reach the script exits at `GATE FAILED at grasp` BEFORE the hinge line; then
+   compute it with `_transfer_hinge(prev_door_file, handle_vertical_corrected, door_normal)` (done that way on
+   09-28 after the base moved: hinge `[0.9143, -0.1629, 0.2476]`, 96 cm from the base -- only reachable with
+   the container offset). Back up `~/.microwave_door.json` first.
+3. Open the door ~90 deg, arm in the container-hold pose, then dry run -> check -> execute:
+   ```bash
+   python3 -u microwave/real_gen3_ros2_close_microwave.py --phase push-close --door-deg 90 --hold-offset-x -0.152 --route-over
+   python3 -u microwave/real_gen3_ros2_close_microwave.py --phase push-close --door-deg 90 --hold-offset-x -0.152 --route-over --execute
+   ```
+   The only `--route-over` dry run so far refused at step 1 (bracelet 0.3 cm from the door model) because the
+   user was moving the setup and the hinge was stale -- **the route has never passed a dry run yet**. If the
+   container hangs low, raise `--over-above`.
+
+### Other 09-28 evening findings
+
+- **Kinova faulted twice** in the evening: first `INVALID_USER_SESSION_ACCESS` on every `get_state` (dead Kortex
+  session), later `REACH_JOINT_ANGLES` feedback `JOINT_POSITION_LIMIT_REACHED` then `ACTION_ABORT` /
+  `ROBOT_IN_FAULT` from another client's joint moves (not the push-close dry runs -- they never command).
+  Recovery both times: restart arm_server + bulldog_bypass + joint_state_bridge (camera can stay up).
+- **Don't `pkill -f <name>` from a Bash tool call whose own command line contains `<name>`** -- it kills the
+  calling shell (exit 144) partway through. Kill by PID.
+- `ArmInterfaceClient` has no `get_arm_state` (only the server-side `ArmInterface` does); check the
+  arm_server log for `ROBOT_IN_FAULT` / `ACTION_ABORT` instead.
+- `demos/microwave_manual_container_close_2026-09-28.csv`: 36 s recorded while the user started a hand demo
+  of the container close and then stopped ("I see the problem") -- partial, NOT a full close demo.
+- Door file at end of session: the 09-28 post-base-move geometry above (`door_open_deg` 90, `open_sign` -1).
+  The user then moved the setup again, so **re-derive before the next run**.
+
 ## 2026-09-25 — gripper turned around 180°, push-close validated
 
 Same Robotiq gripper, remounted rotated 180° about the wrist. Finger length unchanged, so

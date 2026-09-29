@@ -638,6 +638,14 @@ def _plan_close(scene, rb, df, st, args, deg0):
     p_now = np.array(st["ee_pos"][:3])
     quat = _facing_forward(st["ee_pos"][3:7], fwd) if args.face_door else tuple(st["ee_pos"][3:7])
     z = args.push_z if args.push_z is not None else p_now[2]
+    if args.route_over:
+        # --route-over: the swing/push run at mid door height (unless --push-z)
+        if not df.door.get("door_z"):
+            print("--route-over needs door_z in the door file (the grasp/detection writes it) -- refusing.")
+            return None
+        z_top = float(df.door["door_z"][1])
+        if args.push_z is None:
+            z = float(np.mean(df.door["door_z"]))
     h = np.r_[df.hinge[:2], z]
     a = lambda pt: float(np.dot(pt - h, side))     # + toward/past the hinge
     b = lambda pt: float(np.dot(pt - h, fwd))      # + into the microwave (hinge at 0)
@@ -681,6 +689,19 @@ def _plan_close(scene, rb, df, st, args, deg0):
                    (f"round the free edge's corner via {np.round(corner[:2], 3)}", [start, (corner, quat), goal]),
                    (f"back to b {b_safe * 100:+.0f} cm, left, then forward",
                     [start, (pos(a(p_now), b_safe), quat), (pos(a_side, b_safe), quat), goal])]
+        if args.route_over:
+            # 09-28 (user): going left at hand height drives J4 into its limit, so instead go UP over
+            # the open door, LEFT past the swing start, DOWN to mid microwave height, then RIGHT and
+            # FORWARD into the swing start -- the swing and push after that are unchanged
+            z_over = z_top + args.over_above
+            up = np.r_[p_now[:2], z_over]
+            left_hi = pos(a_side + args.over_past, b(p_now))
+            left_hi[2] = z_over
+            down = pos(a_side + args.over_past, b(p_now))
+            print(f"route-over: up to z {z_over:.3f} (door top {z_top:.3f} + {args.over_above * 100:.0f} cm), left to "
+                  f"a {(a_side + args.over_past) * 100:+.0f} cm, down to z {z:.3f} (mid door), right + forward to the swing start")
+            routes = [("over the door: up, left, down, right + forward",
+                       [start, (up, quat), (left_hi, quat), (down, quat), goal])]
         route = None
         for name, pts in routes:
             print(f" route: {name}")
@@ -796,6 +817,15 @@ def push_close(ai, args):
     if deg0 is None or "open_sign" not in door:
         print("door file has no door_open_deg/open_sign (the pull and push-open write them) -- refusing.")
         return False
+    if args.hold_offset_x:
+        # holding a container that sticks out past the fingertips: plan against the door/microwave
+        # shifted by this much in x (planning copy only, the door file is not changed), so the hand
+        # stays that far back and the container fills the gap
+        for k in ("hinge", "closed_grasp_pos", "closed_handle", "door_mid"):
+            if k in door:
+                door[k] = [door[k][0] + args.hold_offset_x, *door[k][1:]]
+        print(f"hold offset: planning with the door shifted {args.hold_offset_x * 100:+.1f} cm in x "
+              f"(container); hinge for the plan {np.round(door['hinge'][:2], 3)}")
     df = DoorFrame(door, door["open_sign"])
     st = ai.get_state()
     print(f"door open ~{deg0:.1f} deg ({'--door-deg' if args.door_deg is not None else 'door file'}); "
@@ -890,6 +920,17 @@ def add_push_args(a, close=False):
                        help="push-close: joint-torque change (J1-J4 norm, Nm) that, rising twice, means the door is shut")
         a.add_argument("--push-z", type=float, default=None,
                        help="push-close: height (m); default: where the hand is now")
+        a.add_argument("--route-over", action="store_true",
+                       help="push-close: approach the swing start over the top of the open door (up, left, down to "
+                            "mid door height, right + forward) instead of left at hand height -- avoids J4's limit")
+        a.add_argument("--over-above", type=float, default=0.08,
+                       help="push-close --route-over: go this far above the detected door top (m)")
+        a.add_argument("--over-past", type=float, default=0.05,
+                       help="push-close --route-over: go this far further left than the swing start before coming "
+                            "down, then right + forward into it (m)")
+        a.add_argument("--hold-offset-x", type=float, default=0.0,
+                       help="push-close: shift the door model this far in arm-base x for planning (m); "
+                            "-0.152 (6 in) when holding a container, so the hand stays back by its length")
         return
     a.add_argument("--retreat-out", type=float, default=0.05,
                    help="retreat-over: after releasing, first move this far back along the approach axis, "
