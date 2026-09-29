@@ -2,6 +2,36 @@
 
 Working notes for the scripts in this folder. Newest learnings first within each section.
 
+## 2026-09-29 (late) — open script cleaned up: current commands
+
+**The open script's flags are gone.** `--phase`, `--one-take`, `--swing-max`, `--fast`, `--smooth`, `--hinge`,
+`--target-angle-deg`, `--steps`, `--via-pregrasp`, `--swing-send-every`, `--push-open-after`, `--retreat-over`
+(and the push-open args) no longer exist; commands with them in the dated sections below are history. The
+default run is what `--phase both --one-take --swing-max` used to do:
+
+```bash
+source /opt/ros/humble/setup.bash
+export ARM_RPC_HOST=127.0.0.1 CAMERA_UPSIDE_DOWN=false FASTRTPS_DEFAULT_PROFILES_FILE=~/.ros/fastdds_large_images.xml
+# from the repo root (the sim config path is relative)
+python3 -u microwave/real_gen3_ros2_grasp_and_swing_microwave.py                      # dry run: detect + plan, no motion
+python3 -u microwave/real_gen3_ros2_grasp_and_swing_microwave.py --execute            # grasp + swing
+python3 -u microwave/real_gen3_ros2_grasp_and_swing_microwave.py --release --execute  # open gripper, back off 20 cm, park
+```
+- Detect (2 looks within 3 cm) → plan everything before motion (straight-line grasp squared to the door face,
+  hinge carried over from `~/.microwave_door.json`, largest swing 75 → 45 deg passing the sim gates) → one
+  blended grasp → close → re-check the arc from the real joints → one blended swing (every 4th waypoint sent).
+- **Behaviour changes:** if the post-grasp re-check fails it now stops holding the handle (no stop-and-go
+  fallback); no `--hinge` override -- edit the door file (`save_door_geometry(hinge=...)`) when the hinge is stale;
+  `HANDLE_DEPTH_CORR` no longer needs exporting.
+- **Detection is now `handle_detect.py`**, not `AppliancePerception` + the fake-GroundingDINO YOLO adapter: the
+  handle half of `detect_handle_and_placement` copied as-is (YOLO box → depth points → RANSAC door plane →
+  protruding DBSCAN cluster scored by verticality × elongation → tf2), returning handle, door normal, door_z,
+  door_mid. Offline check on 19 of `demos/camera_frames_2026-09-09`: new vs old ≤ 0.85 cm handle / 0.20° normal,
+  within the old detector's own run-to-run spread (≤ 1.04 cm, RANSAC). Not yet run live.
+- **`PYTHONPATH=$PWD/src` is no longer needed for the open script** -- `appliance_perception.py` was the only
+  `src/` difference between this branch and `detect-fridge-handle`, and the open script no longer imports it.
+- Close (`real_gen3_ros2_close_microwave.py`, push-close) and `door_push.py` are unchanged.
+
 ## 2026-09-29 — container close demonstrated by hand (the reference close for this setup)
 
 **±180 WRAP SETTLED ON HARDWARE (09-29): Kortex takes the SHORT way** for a `JointCommand` across ±180, on
@@ -251,16 +281,15 @@ ends at the handle y and further back in x, the straighten crosses the J1 wrap t
    profile; logs in `/tmp/microwave_logs/`). Env for every microwave script, from the worktree root:
    ```bash
    source /opt/ros/humble/setup.bash
-   export PYTHONPATH=$PWD/src:$PYTHONPATH ARM_RPC_HOST=127.0.0.1 HANDLE_DEPTH_CORR=0.001 CAMERA_UPSIDE_DOWN=false \
+   export ARM_RPC_HOST=127.0.0.1 CAMERA_UPSIDE_DOWN=false \
           FASTRTPS_DEFAULT_PROFILES_FILE=~/.ros/fastdds_large_images.xml
    ```
-   **`PYTHONPATH=$PWD/src` is required**: the pip-installed `feeding_deployment` points at `~/feeding-deployment`
-   (the fridge branch), whose `AppliancePerception` has no `last_door_normal_base` -> the grasp script crashes.
-   Keep the ROS entries (`PYTHONPATH=src` alone kills rclpy).
+   (09-29 late: the old `PYTHONPATH=$PWD/src` requirement is gone -- the open script uses `handle_detect.py`,
+   not `AppliancePerception`. If you do set PYTHONPATH, keep the ROS entries: `PYTHONPATH=src` alone kills rclpy.)
 2. **Re-derive the hinge whenever the base or microwave moved** (door CLOSED, camera looking at it, gripper
    open or closed, no motion):
    ```bash
-   python3 -u microwave/real_gen3_ros2_grasp_and_swing_microwave.py --phase both --one-take   # dry run
+   python3 -u microwave/real_gen3_ros2_grasp_and_swing_microwave.py   # dry run (was --phase both --one-take)
    ```
    It prints the two looks, `door normal`, the carried-over `hinge (...)` and radius (want ~34-35 cm, matching
    the detector's `Hinge edge`). The dry run does NOT write the door file -- write it by hand with
@@ -419,9 +448,10 @@ momentum); the scripted version is a slow contact arc instead.
 
 | File | What it is |
 |---|---|
-| `real_gen3_ros2_grasp_and_swing_microwave.py` | Open task: `--phase grasp` (detect + face-square grasp), `--phase swing` (door arc; `--smooth` = one blended Cartesian trajectory), `--phase release` (release, back off, park). |
+| `real_gen3_ros2_grasp_and_swing_microwave.py` | Open task (09-29 late): no flags = detect, plan, grasp, swing (dry run unless `--execute`); `--release` = release, back off, park. |
+| `handle_detect.py` | Handle + door-face detection (YOLO box → depth plane → protruding cluster → tf2), copied from `AppliancePerception.detect_handle_and_placement`. |
 | `real_gen3_ros2_close_microwave.py` | Close task: `--phase view` / `regrasp` / `swing` / `push` / `release` / **`push-close`** (no grasp, 09-25). |
-| `door_push.py` | push-close (validated 09-25) and push-open (sim only): side-of-gripper door pushes, torque-watched final push. |
+| `door_push.py` | push-close (validated 09-25) and push-open / retreat-over (sim only, no longer reachable from the open script): side-of-gripper door pushes, torque-watched final push. |
 | `tools/wrap_test.py` | MOVES THE ARM: supervised ±180 wrap test for J7/J1 with a wrong-way watchdog (now keeps watching after the RPC returns). 09-25 attempts inconclusive, see "wrap_test.py attempts". |
 | `microwave_common.py` | Shared: IK, straight-line and slerped Cartesian planning, door collision model, release + back-off + park, re-grasp, open-door view. |
 | `park_pose.json` | Hand-placed end ("park") pose for both tasks. The only thing meant to stay hand-set. |
@@ -434,10 +464,13 @@ momentum); the scripted version is a slow contact arc instead.
 
 Shared, non-microwave code changed on 09-23 (lives outside this folder):
 `src/feeding_deployment/perception/appliance_perception/appliance_perception.py` now sets
-`last_door_normal_base` on each detection (10 added lines, nothing else changed). Deleted:
+`last_door_normal_base` on each detection (10 added lines, nothing else changed; 09-29 late: no longer used by
+the open script, which has its own `handle_detect.py`). Deleted:
 `scripts/real_gen3_ros2_yolo_grasp_microwave.py` (fully contained in the grasp-and-swing script).
 
 ## Commands that worked today
+
+(09-23. The open script's flags below no longer exist -- see the 09-29 (late) section at the top.)
 
 ```bash
 export ARM_RPC_HOST=127.0.0.1 HANDLE_DEPTH_CORR=0.001 CAMERA_UPSIDE_DOWN=false
