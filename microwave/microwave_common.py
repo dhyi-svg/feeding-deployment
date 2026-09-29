@@ -38,10 +38,10 @@ J6_GUARD_DEG = 115.0
 # Cartesian grasp path drove J4 from -145 into it and Kortex aborted). PyBullet only knows the URDF's
 # wider limit, so every sim check gates J4 with a margin.
 J4_GUARD_DEG = 144.0
-# J1/J3/J5/J7 spin freely. Whether Kortex goes the short way across +-180 is unverified,
-# so every commanded angle is wrapped to [-180, 180) and a move is refused if any of these
-# joints would change by more than 180 deg -- the only case where "straight from old to new
-# value" and "the short way round" are different paths. Near-180 values are fine otherwise.
+# J1/J3/J5/J7 spin freely; every commanded angle is wrapped to [-180, 180). 09-29 hardware
+# test (tools/wrap_test.py, J7 and J3): a JointCommand across +-180 takes the SHORT way, so a
+# step is judged (and interpolated for clearance checks) by its short-way change -- 179 -> -179
+# is 2 deg. Only a short-way change near 180 (direction ambiguous) is refused.
 CONTINUOUS = [0, 2, 4, 6]
 MAX_CONTINUOUS_DELTA_DEG = 170.0
 PARK_FILE = Path(__file__).resolve().parent / "park_pose.json"
@@ -53,8 +53,15 @@ def wrap_joints(q):
     return q
 
 
+def short_delta(q_from, q_to):
+    """q_to - q_from with the free-spinning joints taken the short way round (what Kortex does)."""
+    d = np.asarray(q_to, dtype=float) - np.asarray(q_from, dtype=float)
+    d[CONTINUOUS] = (d[CONTINUOUS] + np.pi) % (2 * np.pi) - np.pi
+    return d
+
+
 def continuous_ok(q_from, q_to):
-    d = np.degrees(np.abs(wrap_joints(q_to)[CONTINUOUS] - wrap_joints(q_from)[CONTINUOUS]))
+    d = np.degrees(np.abs(short_delta(q_from, q_to)[CONTINUOUS]))
     return bool(np.all(d <= MAX_CONTINUOUS_DELTA_DEG))
 
 
@@ -127,7 +134,7 @@ def plan_straight_line(scene, rb, start_pos, quat, direction, dist, seed_joints,
     for k in range(1, n + 1):
         tgt = np.asarray(start_pos) + np.asarray(direction) * dist * k / n
         nq, err = solve_ik(scene, rb, tgt, quat, q)
-        jump = float(np.degrees(np.max(np.abs(nq - q))))
+        jump = float(np.degrees(np.max(np.abs(short_delta(q, nq)))))
         j6, j7 = float(np.degrees(nq[5])), float(np.degrees(nq[6]))
         print(f"  {label} {k}/{n} -> {np.round(tgt, 3)}  IK err {err * 100:.2f}cm  jump {jump:.1f}deg  "
               f"J6 {j6:.1f}deg  J7 {j7:.1f}deg")
@@ -165,10 +172,10 @@ def plan_cartesian(scene, rb, p0, q0_quat, p1, q1_quat, seed_joints, label, bodi
             if err <= MAX_IK_ERR:
                 break
             nq, err = solve_ik(scene, rb, tgt, slerp([f]).as_quat()[0], nq)
-        # wrapped: a free joint going 179.8 -> -179.8 moved 0.4 deg, not 359.6 (continuous_ok gates real wraps)
+        # wrapped: a free joint going 179.8 -> -179.8 moved 0.4 deg, not 359.6 (Kortex takes the short way)
         jump = float(np.degrees(np.max(np.abs((nq - q + np.pi) % (2 * np.pi) - np.pi))))
         if bodies is not None:
-            worst = min([worst] + [clearance(rb, q + (nq - q) * s_ / 3, bodies, closed) for s_ in (1, 2, 3)],
+            worst = min([worst] + [clearance(rb, q + short_delta(q, nq) * s_ / 3, bodies, closed) for s_ in (1, 2, 3)],
                         key=lambda w: w[0])
         bad = (err > MAX_IK_ERR or jump > MAX_STEP_JUMP_DEG or abs(np.degrees(nq[5])) > J6_GUARD_DEG
                or abs(np.degrees(nq[3])) > J4_GUARD_DEG
@@ -401,7 +408,8 @@ def clearance(rb, q, bodies, closed=False):
 
 def check_joint_path(rb, q_from, q_to, bodies, label):
     """Joint-linear path q_from -> q_to, sampled every <= 1 deg; returns worst clearance."""
-    q_from, q_to = wrap_joints(q_from), wrap_joints(q_to)
+    q_from = wrap_joints(q_from)
+    q_to = q_from + short_delta(q_from, q_to)          # the path Kortex takes (short way round)
     n = max(2, int(np.ceil(np.degrees(np.max(np.abs(q_to - q_from))))))
     worst = min((clearance(rb, q_from + (q_to - q_from) * k / n, bodies) for k in range(n + 1)),
                 key=lambda w: w[0])

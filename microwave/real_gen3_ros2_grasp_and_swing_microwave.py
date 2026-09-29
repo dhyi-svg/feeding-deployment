@@ -192,8 +192,9 @@ J6_GUARD_DEG = 115.0
 # can't get within 1 cm, Kortex's Cartesian trajectory aborted with SINGULARITY_REGION (09-23).
 SMOOTH_SINGULARITY_PROBE_M = 0.01
 # --swing-max never asks for more than this: the door's own stop is somewhere around 100-110 deg
-# (09-25 notes) and the smooth swing has no tracking abort mid-trajectory, so don't pull into it
-SWING_MAX_TRY_DEG = 90.0
+# (09-25 notes) and the smooth swing has no tracking abort mid-trajectory, so don't pull into it.
+# 09-29: 75 (user) -- the 80-deg swing dragged the microwave along, so ask for less
+SWING_MAX_TRY_DEG = 75.0
 
 
 def _pose_to_matrix(pose):
@@ -698,9 +699,17 @@ def run_swing(ai, args):
         else:
             smooth_ok = True
     if args.smooth and smooth_ok:
+        # Kortex slows at every Cartesian waypoint (blend <= 1 cm, kinova.py), so the dense 2 cm
+        # arc crawled at ~2.5 cm/s (09-28). The sim check above stays at 2 cm; Kortex gets every
+        # `--swing-send-every`-th point (+ the last): 6 cm chords on a ~34 cm radius sit ~1.3 mm
+        # inside the arc.
+        k = max(1, int(getattr(args, "swing_send_every", 1)))
+        sent = wps[k - 1::k]
+        if sent[-1] is not wps[-1]:
+            sent.append(wps[-1])
         print(f"smooth pre-check OK over all {len(wps)} waypoints (final J6 {np.degrees(q[5]):.1f}deg); "
-              "sending one blended Cartesian trajectory ...")
-        ok, err, rpc_ok = run_cartesian_trajectory(ai, [(w[:3], w[3:]) for w in wps])
+              f"sending one blended Cartesian trajectory through {len(sent)} of them ...")
+        ok, err, rpc_ok = run_cartesian_trajectory(ai, [(w[:3], w[3:]) for w in sent])
         final = ai.get_state()
         print(f"\nSMOOTH SWING {'DONE' if ok else 'STOPPED SHORT'} (RPC returned {rpc_ok}). final EE: {np.round(final['ee_pos'][:3], 4)} "
               f"({err * 100:.1f} cm from the last waypoint), gripper: {final.get('gripper_pos')}")
@@ -795,6 +804,9 @@ def main():
     a.add_argument("--smooth", action="store_true",
                    help="swing: pre-check every waypoint in sim, then send the arc as ONE blended "
                         "Cartesian waypoint trajectory (continuous motion) instead of stop-and-go steps")
+    a.add_argument("--swing-send-every", type=int, default=4,
+                   help="smooth swing: send Kortex every Nth of the 2 cm sim-checked waypoints (+ the last). "
+                        "Kortex slows at each waypoint, so fewer = quicker; 1 = the old dense 2 cm (~2.5 cm/s)")
     a.add_argument("--hinge", type=float, nargs=3, metavar=("X", "Y", "Z"), default=None,
                    help="override FIXED_HINGE (arm_base_link, m) for this run -- use when the "
                         "microwave has moved since FIXED_HINGE was measured")

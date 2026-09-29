@@ -749,14 +749,13 @@ def _plan_close(scene, rb, df, st, args, deg0):
             j6 = float(np.degrees(nq[5]))
             last = c_door <= stop + 1e-4
             bad = (err > MAX_IK_ERR or jump > MAX_STEP_JUMP_DEG or abs(j6) > J6_GUARD_DEG
-               or abs(np.degrees(nq[3])) > J4_GUARD_DEG
                    or abs(np.degrees(nq[3])) > J4_GUARD_DEG
                    or not continuous_ok(qq, nq) or c_body[0] < MIN_CLEAR)
             k = len(plan) + 1
             if bad or last or k == 1 or k % 4 == 0:
                 print(f"  swing {k} ({d_next:5.1f} deg round the hinge) -> {np.round(at(d_next), 3)}  IK err "
-                      f"{err * 100:.2f}cm  jump {jump:.1f}deg  J6 {j6:.1f}  to closed door {c_door * 100:+.1f}cm  "
-                      f"body {c_body[0] * 100:.1f}cm ({c_body[1]})")
+                      f"{err * 100:.2f}cm  jump {jump:.1f}deg  J4 {np.degrees(nq[3]):.1f}  J6 {j6:.1f}  to closed door "
+                      f"{c_door * 100:+.1f}cm  body {c_body[0] * 100:.1f}cm ({c_body[1]})")
             if bad:
                 print(f"  swing: step {k} fails a gate.")
                 return None

@@ -8,6 +8,7 @@ Sends each target the way the planners do (wrapped to [-180, 180), all 7 joints,
 on one RPC connection, while a second connection polls the joint at 50 Hz and calls
 stop_action() if it turns the WRONG way by > 3 deg or more than 25 deg past the expected change.
 Gripper empty, nothing near the hand, e-stop in reach. Run J7 first; J1 only if J7 passes.
+J3 (arg 3): only from J3 within 10 deg of +-180, stays within 5 deg of it (J7 passed 09-29).
 
     ARM_RPC_HOST=127.0.0.1 python3 -u microwave/tools/wrap_test.py 7
 """
@@ -72,12 +73,22 @@ def move(j, target_deg, label):
 
 def main():
     joint = int(sys.argv[1]) - 1
-    if joint not in (0, 6):
-        sys.exit("test J7 (arg 7) or J1 (arg 1)")
+    if joint not in (0, 2, 6):
+        sys.exit("test J7 (arg 7), J3 (arg 3) or J1 (arg 1)")
     home = joints_deg()[joint]
-    if joint == 6:
-        seq = [(-160, "approach"), (-175, "approach"), (175, "CROSS"), (-175, "CROSS BACK"),
-               (-160, "return"), (home, "return")]
+    if joint == 2:
+        # J3 moves the whole forearm, so only small moves right at the wrap: start within 10 deg
+        # of +-180, go to 175 on that side, cross to the other side and back (10 deg each), home.
+        if abs(wrap(home)) < 170:
+            sys.exit(f"J3 is at {wrap(home):.1f} -- place it within 10 deg of +-180 first (the test stays near 180).")
+        s = 1.0 if wrap(home) >= 0 else -1.0
+        seq = [(175 * s, "approach"), (-175 * s, "CROSS"), (175 * s, "CROSS BACK"), (home, "return")]
+    elif joint == 6:
+        # approach on the side J7 is already on, so the only crossings are the labelled ones
+        # (09-25 run 2 started at +90 and its "approach" to -160 was itself a crossing)
+        s = 1.0 if home >= 0 else -1.0
+        seq = [(160 * s, "approach"), (175 * s, "approach"), (-175 * s, "CROSS"), (175 * s, "CROSS BACK"),
+               (160 * s, "return"), (home, "return")]
     else:
         seq = [(170, "approach"), (177, "approach"), (-178, "CROSS"), (177, "CROSS BACK"), (home, "return")]
     st = mon.get_state()

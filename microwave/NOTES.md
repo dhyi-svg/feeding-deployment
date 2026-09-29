@@ -2,6 +2,84 @@
 
 Working notes for the scripts in this folder. Newest learnings first within each section.
 
+## 2026-09-29 — container close demonstrated by hand (the reference close for this setup)
+
+**±180 WRAP SETTLED ON HARDWARE (09-29): Kortex takes the SHORT way** for a `JointCommand` across ±180, on
+both actuator sizes. `tools/wrap_test.py` (supervised, 50 Hz wrong-way watchdog, gripper empty):
+- **J7** (small actuator): +175 -> -175 moved **+10.0** (short way), back **-10.0**, 0.0 deg wrong-way.
+  (Sequence now approaches on the side J7 is already on -- 09-25's "approach" from +90 to -160 was itself a crossing.)
+- **J3** (large actuator): -175 -> +175 moved **-10.0**, back **+10.0**, 0.0 deg wrong-way. New `wrap_test.py 3`
+  mode: only from J3 within 10 deg of ±180, stays within 5 deg of it.
+- J1/J5 not tested (same actuator sizes as J3/J7). RPC returned False on one move that fully executed -- judge by joints.
+- Consequence: `continuous_ok`'s "refuse any wrapped change > 170" is no longer needed for small per-step moves;
+  this is what forced the J3 +165..178 start, the J1 park problem and the retreat-over block.
+
+**Swing open quicker (code, not yet run on hardware):** `--swing-send-every N` (default 3) -- the smooth swing
+is still sim-checked every 2 cm, but Kortex gets every 3rd waypoint (+ the last) = 6 cm chords (~1.3 mm inside the
+arc at r 34 cm). Kortex slows at every Cartesian waypoint (blend <= 1 cm), so 2 cm spacing crawled at ~2.5 cm/s.
+`1` = the old behaviour.
+- **Ran on hardware 09-29 15:51** (`--phase both --one-take --swing-max --execute`, default `--swing-send-every 3`):
+  2 looks 0.3 cm, handle conf 0.69-0.77, grasp 0.0 cm, gripper 0.843, swing-max **80 deg** (90/85 fail on J6), 24
+  sim-checked waypoints -> **8 sent**, 47.8 cm arc in **11.6 s (~4.1 cm/s)**, 0.0 cm off the last waypoint. The 09-28
+  dense swing ran ~2.5 cm/s (same arc would be ~19 s). Door/microwave had moved since the morning (handle +3 cm z,
+  4 cm left): hinge carried over `[0.9013, 0.0684, 0.3104]` r 34.3 (detector 35.0-35.2). Needed the view pose pulled
+  back to hand x ~0.40 (at x 0.46 the microwave filled the frame, left edge cut, 8/8 looks found nothing).
+- **The 80-deg swing PULLED THE MICROWAVE along (user, 09-29)** -- the commanded arc doesn't match the door's real
+  arc well enough (hinge carried over in the door frame after the microwave moved ~3-4 cm; the door may not be a
+  pure vertical pivot -- Pachirisu 07-28 saw it rise ~6 cm). Nothing measures this yet: the smooth swing has no
+  force/tracking check mid-trajectory. Ideas: watch joint torques during the swing (like push-close's contact rule)
+  and stop/re-centre the hinge; fit the hinge from the first few cm of a compliant/stepped pull; derive the hinge
+  from the detector's hinge edge directly instead of carrying it over.
+- Changed after that: `SWING_MAX_TRY_DEG` 90 -> **75** (`--swing-max` now tries 75 down to 45); `--swing-send-every`
+  default 3 -> **4** (8 cm chords, <= 2.3 mm inside the arc at r 34 cm).
+- **Ran 09-29 15:55 with those:** 2 looks 0.4 cm (conf 0.91), grasp 0.0 cm, gripper 0.847, **75 deg**, 23 checked
+  waypoints -> 6 sent, 44.9 cm in **9.9 s (~4.5 cm/s)**, 0.0 cm off the last waypoint. Fewer waypoints only helps a
+  little now -- the 1 cm blend cap in `kinova.py` is the next lever (arm_server restart; affects grasp/push too).
+- **STILL DRAGS THE MICROWAVE at 75 deg** (user): the whole microwave **turns clockwise about an axis** during the
+  swing, i.e. the handle is being pulled along a path that isn't the door's real arc, and the body rotates to follow.
+  Hinge was carried over after the previous run had already dragged it ~5 cm / ~1 deg. **Fix the swing geometry
+  before more speed:** hinge straight from the detector's hinge edge (35.1 cm there vs the carried 34.3), check
+  whether the true hinge is further from / closer to the arm than the model, and/or stop on a joint-torque rise.
+  Re-derive the hinge every run (the microwave moves after each swing).
+- **TODO (still open): coming back from the open.** After the swing the arm holds the handle at ~75-80 deg with J6
+  ~111 and there is no validated scripted release + retreat from there (`--retreat-over` blocked 09-28; the out leg
+  raises J6; the wrap no longer blocks it since 09-29). The user returns the arm by hand for now.
+
+Bring-up: same as 09-28, but the camera must be started with **`-p enable_infra1:=false -p enable_infra2:=false`**
+(without them the node opened Infra1/2 at 848x480@30 next to depth @15 and published NO frames at all).
+`ros2 topic hz` prints nothing on this box even when images flow -- check rate with a small rclpy subscriber
+(`qos_profile_sensor_data`): color 15.0 / depth 15.2 Hz.
+
+**Hinge re-derived (door closed):** `--phase both --one-take` dry run, 2 looks agree 0.4 cm, door normal
+`[-1, -0.027, 0]`, hinge `[0.8929, 0.028, 0.2773]` r 34.3 cm (detector hinge edge 35.1-35.2). Written to
+`~/.microwave_door.json` by hand (backup `~/.microwave_door.json.bak_2026-09-29`); door_z 0.143-0.415,
+door_mid `[0.76, -0.178, 0.301]`. The open plan (direct grasp + 50 deg swing) also passed that dry run.
+
+**`--route-over` push-close dry runs (container, `--hold-offset-x -0.152 --door-deg 90`) both refused, no motion:**
+1. start J `[60.1, 35.1, -160.1, -135.7, 84.5, 96.3, -7.7]`: left leg at door top + 8 cm, step 11/24 J4 -143.6 + WRAP.
+2. start J `[44.8, 34.6, -167.2, -134.3, 64.7, 87.5, -9.9]`: J4 fine (max -134.6), step 8/22 WRAP -- **J3**
+   crosses -180 moving left (at hand y ~ -0.04). The planner's up/left/down/right-forward shape was right; only the
+   J3 wrap blocks it, and a start with J3 +165..178 is not reachable from in front of this microwave without crossing.
+
+**Hand demo of the whole close (user, holding the container):** `demos/microwave_manual_container_close_2026-09-29.csv`
+(10 Hz, motion t 40.2-55.6 s, ~16 s, no back-and-forth errors). Hand orientation constant the whole time (container
+level, quat `[0.726, 0.083, 0.682, -0.034]`). Door ~90 deg open at start, closed at the end.
+| # | leg | end pos (x, y, z) | notes |
+|---|-----|-------------------|-------|
+| 0 | start | 0.548, -0.119, 0.286 | J `[28.4, 37.9, -174.4, -131.8, 42.8, 80.6, -6.0]` |
+| 1 | up | 0.548, -0.117, 0.583 | +30 cm straight up = door top (0.415) + **17 cm** (planner used +8) |
+| 2 | left | 0.548, 0.166, 0.582 | +28 cm in y, x/z constant. **J3 crossed the wrap here (-178.6 -> +177.4 at y ~ -0.06)** and ran on to +126; J5 went through 0 to -39 |
+| 3 | down (+ a little left) | 0.555, 0.214, 0.339 | down 24 cm to z 0.339 (~mid door, 6 cm above the planner's 0.279), drifting 5 cm further left |
+| 4 | right (sweep) | 0.528, -0.002, 0.340 | 22 cm right at constant z, pulled back ~3 cm in x -- the door-closing sweep |
+| 5 | right + forward | 0.646, -0.133, 0.338 | +12 cm x, -13 cm y: finishes the arc and pushes shut. End J `[54.9, 42.8, 138.6, -112.3, 37.4, 44.9, 7.2]` |
+- J4 stayed -107..-141 throughout (the -141 at the start of the sweep, y ~ 0.08) -- well inside the -144 guard.
+- Relative to the planning hinge (real hinge shifted -15.2 cm in x = `[0.741, 0.028]`), the hand spirals in
+  26 cm (sweep start) -> 21.5 cm (y 0) -> 19 cm (end); the planner's swing uses 28 -> 26 cm.
+- Differences from `--route-over`: higher over the door (+17 vs +8 cm), comes down at a higher z (0.339), and the
+  J3 wrap crossing on the left leg -- which the planner refuses -- is exactly what the demo did. Next: replay the
+  demo's corners as Cartesian legs (with the wrap gate relaxed for J3 on that leg, or after a supervised
+  `tools/wrap_test.py` run), or accept the hand-guided close for now.
+
 ## 2026-09-28 — one-take grasp + swing, door opened fully (80°)
 
 Microwave on a lower surface this week (handle z ~0.21-0.26 instead of ~0.54) and moved/turned between
