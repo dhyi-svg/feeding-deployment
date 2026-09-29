@@ -41,6 +41,10 @@ arc at r 34 cm). Kortex slows at every Cartesian waypoint (blend <= 1 cm), so 2 
   before more speed:** hinge straight from the detector's hinge edge (35.1 cm there vs the carried 34.3), check
   whether the true hinge is further from / closer to the arm than the model, and/or stop on a joint-torque rise.
   Re-derive the hinge every run (the microwave moves after each swing).
+- **Little pause just after the swing starts -- NOT intentional.** `kinova.py` gives the FIRST Cartesian waypoint
+  blending_radius 0 (full stop). With `--swing-send-every 4` the first waypoint sent is 8 cm into the arc, so the arm
+  starts, stops there, then continues. Fix (not done): prepend the arm's current EE pose as waypoint 0 in
+  `run_swing` (and the grasp / push trajectories), so the forced stop is where the arm already stands.
 - **TODO (still open): coming back from the open.** After the swing the arm holds the handle at ~75-80 deg with J6
   ~111 and there is no validated scripted release + retreat from there (`--retreat-over` blocked 09-28; the out leg
   raises J6; the wrap no longer blocks it since 09-29). The user returns the arm by hand for now.
