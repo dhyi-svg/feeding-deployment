@@ -2,6 +2,56 @@
 
 Working notes for the scripts in this folder. Newest learnings first within each section.
 
+## 2026-10-02 — container placement into the OPEN microwave (code + offline checks only, NOT run on hardware)
+
+`placement/real_gen3_ros2_place_container_microwave.py` (new; geometry in `placement/microwave_cavity.py`). Perceives the interior AFTER the door is open --
+nothing cached from the closed door.
+
+```bash
+# same bring-up/env as the open task; door open (the swing wrote door_open_deg), container held level,
+# wrist camera looking into the microwave
+python3 -u microwave/placement/real_gen3_ros2_place_container_microwave.py --container-drop <m>            # dry run
+python3 -u microwave/placement/real_gen3_ros2_place_container_microwave.py --container-drop <m> --execute  # insert + lower
+python3 -u microwave/placement/real_gen3_ros2_place_container_microwave.py --release                       # dry run
+python3 -u microwave/placement/real_gen3_ros2_place_container_microwave.py --release --execute             # open, back out, park
+```
+- **Look:** SAM 3 (`scripts/detect_handle_sam3.py`, prompt "inside of open microwave") -> mask eroded 5 px ->
+  every pixel with depth (`mask_to_camera_points`, new; `mask_to_camera_xyz` now calls it, output unchanged)
+  -> arm_base_link -> `placement/microwave_cavity.py` (percentile front/back/floor/top/sides, plausibility checks,
+  margins; refuses, never guesses). Two looks must agree within 3 cm. Overlays: `/tmp/microwave_place/<ts>/`.
+  Microwave axes from the door file's `closed_normal`. Depth correction 0 (as `handle_detect.py`), env
+  `PLACE_DEPTH_CORR` -- the SAM 3 fridge path uses +0.051.
+- **Motion:** hand orientation = the CURRENT one, fixed on every 2 cm `plan_cartesian` step (this is our
+  "EE Level/Fixed" -- no HOLD_LEVEL/HOLD_FIXED mode exists). current -> pre-insert (container's far end 10 cm
+  in front of the opening) -> insert 3 cm above the release height -> lower. Clearance to the door model
+  (+ microwave body until the opening; the body box is solid so it's dropped inside). Gates: approach
+  <= 30 deg off the microwave axis, tilt <= 10 deg, container fits front..back, tool 3 cm under the visible
+  top, reach <= 0.915. Release height = 1 cm above the estimated floor (no compliance yet).
+- **Release (`--release`):** open, straight back out along -approach to the recorded pre-insert
+  (`~/.microwave_place.json`), then park if the straight leg passes; else stops outside -- return by hand.
+  Own release, not `release_and_back_off` (its park rebuilds the door angle from the hand as if on the handle).
+- **Offline sim check (synthetic cavity, 09-29 container-hold start, door file as of 09-29):** cavity at the
+  door file's position needs 0.978 m reach -> refused (base must be ~10 cm closer); 10 cm closer: all legs
+  plan, 0 deg orientation change, >= 11 cm from the door, back-out OK, park leg fails J4 (hand return).
+- Tests: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_microwave_cavity.py` (12).
+
+**Still to do / validate on hardware:**
+1. **Impedance for the final lowering (BLOCKER, team decision).** Hook = `lower_container()`. Only mechanism
+   is the task compliant mode; `kinova.py:105` hardcodes `fix_joint_hack = True` (J6 frozen at -1.18 rad, 6-DOF
+   model; these poses run J6 ~ +30..90 deg), gains in `compliant_controller.py` tuned for bite transfer,
+   never run on rchi-cpu-5, transfer ran it with the collision sensor off. Needs Saisha/team: 7-DOF task
+   control, stiffness/damping, collision-sensor policy.
+2. Measure `--container-drop` (tool frame -> container bottom) and check `CONTAINER_LENGTH` 0.152 (from the
+   close task's hold offset; centre assumed at half of it).
+3. A look-inside pose while holding the container (none recorded yet), and whether SAM 3 segments the
+   interior with this prompt (try "microwave interior" / "open microwave cavity").
+4. Depth correction (0 vs the fridge's 0.051) -- compare a look's floor z against a touched floor.
+5. Base placement: ~10 cm closer to the microwave than the 09-29 door file for reach.
+6. Clearances: insert 3 cm, pre-insert standoff 10 cm, wall margins 10 cm, cavity limits, turntable = floor.
+
+The first (ROS1/main) draft is in the stash ("microwave-placement-main: ROS1 draft ...", `cf1425f5`) -- not
+needed any more except as reference.
+
 ## 2026-09-29 (late) — open script cleaned up: current commands
 
 **The open script's flags are gone.** `--phase`, `--one-take`, `--swing-max`, `--fast`, `--smooth`, `--hinge`,

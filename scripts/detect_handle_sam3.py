@@ -141,25 +141,34 @@ class Sam3HandleDetector:
         return m, scores[i], box
 
 
-def mask_to_camera_xyz(mask, depth_mm, camera_info):
-    """Median 3D point (camera frame, metres) over the mask's valid-depth pixels.
+def mask_to_camera_points(mask, depth_mm, camera_info):
+    """Every valid-depth mask pixel as a 3D point (camera frame, metres).
 
     Vectorised pinhole deprojection with the same K the old pixel2World used.
-    Returns (xyz, n_valid, n_mask). Raises RuntimeError if too little of the
-    mask has depth -- a glossy-surface dropout is a real failure, not a point.
+    Returns (points[N, 3], n_mask) -- no minimum; callers decide what's enough.
     """
     ys, xs = np.where(mask)
     d = depth_mm[ys, xs] / 1000.0
     ok = np.isfinite(d) & (d > 0.05) & (d < 2.0)
-    n_valid = int(ok.sum())
-    if n_valid == 0 or n_valid < MIN_VALID_DEPTH_FRAC * len(d):
-        raise RuntimeError(
-            f"only {n_valid}/{len(d)} handle pixels have valid depth -- refusing.")
     fx, fy, cx, cy = camera_info.K[0], camera_info.K[4], camera_info.K[2], camera_info.K[5]
     z = d[ok]
     x = (xs[ok] - cx) * z / fx
     y = (ys[ok] - cy) * z / fy
-    return np.median(np.stack([x, y, z], axis=1), axis=0), n_valid, len(d)
+    return np.stack([x, y, z], axis=1), len(d)
+
+
+def mask_to_camera_xyz(mask, depth_mm, camera_info):
+    """Median 3D point (camera frame, metres) over the mask's valid-depth pixels.
+
+    Returns (xyz, n_valid, n_mask). Raises RuntimeError if too little of the
+    mask has depth -- a glossy-surface dropout is a real failure, not a point.
+    """
+    points, n_mask = mask_to_camera_points(mask, depth_mm, camera_info)
+    n_valid = len(points)
+    if n_valid == 0 or n_valid < MIN_VALID_DEPTH_FRAC * n_mask:
+        raise RuntimeError(
+            f"only {n_valid}/{n_mask} handle pixels have valid depth -- refusing.")
+    return np.median(points, axis=0), n_valid, n_mask
 
 
 def build_detector(prompt=DEFAULT_PROMPT, repo=DEFAULT_REPO, dtype="bf16",
