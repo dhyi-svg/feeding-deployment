@@ -1,7 +1,6 @@
-"""Pure geometry for the button press: panel plane fit, pixel rays, servo corrections.
+"""Pure geometry for the button press: panel plane fit, pixel rays, joint-angle maths.
 
-No ROS, no arm, no pybullet -- only numpy -- so it is unit-testable off-robot. The
-ROS-facing wrappers live in ``autonomous_press.Perception``.
+No ROS, no arm, no pybullet -- only numpy -- so it is unit-testable off-robot.
 """
 
 from __future__ import annotations
@@ -71,26 +70,6 @@ def pixel_ray(px, fx, fy, cx, cy) -> np.ndarray:
     """Unit ray (camera optical frame) through pixel ``px``."""
     r = np.array([(px[0] - cx) / fx, (px[1] - cy) / fy, 1.0])
     return r / np.linalg.norm(r)
-
-
-def ray_plane_distance(n, d, ray) -> tuple[float, float]:
-    """``(s, n.r)``: distance along unit ``ray`` from the camera to plane ``n.X = d``."""
-    denom = float(np.dot(n, ray))
-    return (d / denom if denom != 0 else float("inf")), denom
-
-
-def lateral_correction_cam(e_px, z, fx, fy, cap) -> np.ndarray:
-    """Camera-frame in-plane translation that moves a pixel error ``e_px`` to zero.
-
-    Translating the camera +x makes a static point's u decrease, so the correction is
-    +e (button right of claw -> move right). Scaled by the button's depth ``z`` and
-    capped at ``cap`` metres.
-    """
-    d_cam = np.array([e_px[0] * z / fx, e_px[1] * z / fy, 0.0])
-    mag = float(np.linalg.norm(d_cam))
-    if mag > cap:
-        d_cam *= cap / mag
-    return d_cam
 
 
 def max_joint_delta_deg(q_a, q_b) -> float:

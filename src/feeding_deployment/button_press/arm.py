@@ -1,10 +1,9 @@
-"""Arm side of the button press: seeded PyBullet IK, gated joint steps, convergence checks.
+"""Arm side of the button press: seeded PyBullet IK pre-checks and smooth Cartesian moves.
 
-Every move is "translate the end effector by d" -- same orientation unless a world-frame
-rotation ``rot`` is also given (the one-command press turns the wrist to face the panel). It is
-planned in a
-headless PyBullet copy of the arm, refused if any gate fails (reach, height, IK error,
-joint jump), and only then sent to the real arm as a joint command over the arm RPC.
+Every move is a path of (xyz, R) tool poses. The whole path is planned point by point in a
+headless PyBullet copy of the arm and refused if any gate fails (reach, height, IK error,
+joint jump); only then is it sent to the real arm, over the arm RPC, as ONE blended Cartesian
+trajectory, and the final position is checked.
 """
 from __future__ import annotations
 
@@ -18,7 +17,7 @@ from scipy.spatial.transform import Rotation
 from feeding_deployment.button_press import Abort
 from feeding_deployment.button_press.geometry import max_joint_delta_deg
 from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceClient
-from feeding_deployment.control.robot_controller.command_interface import CartesianTrajectoryCommand, JointCommand
+from feeding_deployment.control.robot_controller.command_interface import CartesianTrajectoryCommand
 from feeding_deployment.simulation.scene_description import create_scene_description_from_config
 from feeding_deployment.simulation.simulator import FeedingDeploymentPyBulletSimulator
 
@@ -32,37 +31,12 @@ Z_RANGE_M = (0.12, 0.75)       # min 0.25 -> 0.15 (user-approved 2026-09-27, but
                                # 0.15 -> 0.12 (user-approved 2026-10-03): button now at 0.171, one-command
                                # pre-press tool point at 0.128, deepest press point ~0.125
 TRACK_ABORT_M = 0.01
-CONVERGE_TOL_DEG = 1.0
-# --smooth: straight lines are interpolated at this spacing, each point gated, then sent as ONE
-# blended Cartesian trajectory (the fridge --smooth pattern, 2026-09-25).
-SMOOTH_SPACING_M = 0.02
 # Press strokes use finer spacing so kinova's final-waypoint taper (last 4 points, down to
 # 0.04 m/s) applies: a 1.3 cm stroke at 2 cm spacing is ONE point and would arrive at cruise.
 SMOOTH_PRESS_SPACING_M = 0.003
 ARM = [1, 2, 3, 4, 5, 6, 7]
 # Resolved from the package, not the cwd, so this runs from anywhere.
 SCENE_CONFIG = str(Path(__file__).resolve().parents[1] / "simulation" / "configs" / "vention.yaml")
-
-
-def wait_converged(ai, q_cmd, tol_deg=CONVERGE_TOL_DEG, timeout_s=6.0):
-    """Block until the arm's joints are within tol_deg of q_cmd and at rest.
-
-    A plain "velocity ~ 0" wait is not enough: Kortex's blocking move returns on
-    ACTION_END *or* ACTION_ABORT, so the next command can land while the arm is still
-    moving and be rejected (ROBOT_MOVEMENT_IN_PROGRESS) -- that sub-step is silently
-    skipped. Seen 9 times in one evening's arm log on this rig (2026-09-20).
-    """
-    q_cmd = np.asarray(q_cmd, dtype=float)
-    deadline = time.time() + timeout_s
-    derr = float("inf")
-    while time.time() < deadline:
-        time.sleep(0.12)
-        st = ai.get_state()
-        derr = max_joint_delta_deg(st["position"], q_cmd)
-        vel = float(np.max(np.abs(np.asarray(st["velocity"], dtype=float))))
-        if derr < tol_deg and vel < 1e-3:
-            break
-    return derr
 
 
 def wait_still(ai, target=None, timeout_s=20.0, settle_reads=4, tol_m=5e-4, near_m=0.002):
@@ -139,7 +113,7 @@ class Arm:
         q_cur: the Gen3 is redundant, and re-seeding from the current pose every step let
         the solution slide along the self-motion manifold -- on 2026-09-21 J1/J3
         counter-rotated 7 -> 10.6 deg per identical 2 cm step (30 deg total in 6 cm), which
-        both tripped the joint-jump gate and shifted the wrench estimate by several N.
+        tripped the joint-jump gate.
         Seeding from a fixed posture keeps every solution near one configuration. The anchor
         is honoured outright while it solves to better than SEED_GOOD_M; beyond that (a stale
         anchor, i.e. the arm has travelled away from it) the q_cur seed is solved too and the
@@ -196,54 +170,6 @@ class Arm:
             bad.append(f"joint jump {jump:.1f} deg > {MAX_JOINT_STEP_DEG}")
         return q, err, target, jump, bad
 
-    # -- execution ----------------------------------------------------------------------------
-    def smooth_line(self, target, name, log, posture=None, spacing=SMOOTH_SPACING_M):
-        """EE straight line to `target` (base xyz, Kinova tool frame), orientation kept, as
-        ONE blended Cartesian trajectory -- no stop between points.
-
-        Every interpolated point is pre-checked in the sim with the same gates as step()
-        (reach, height band, IK error, per-point joint jump), chained from the current
-        joints. Nothing is sent if any point fails. Kortex runs its own IK for the
-        trajectory, so the sim chain is a reachability proxy; once sent there is no
-        per-point abort, only the final-position check. Returns the final EE xyz.
-        """
-        st = self.state()
-        ee0 = np.asarray(list(st["ee_pos"])[:3], dtype=float)
-        quat = np.asarray(list(st["ee_pos"])[3:7], dtype=float)
-        target = np.asarray(target, dtype=float)
-        dist = float(np.linalg.norm(target - ee0))
-        if dist < 1e-4:
-            return ee0
-        n = max(1, int(np.ceil(dist / spacing)))
-        pts = [ee0 + (target - ee0) * (k / n) for k in range(1, n + 1)]
-        q = np.asarray(st["position"], dtype=float)
-        prev = ee0
-        worst_err, worst_jump = 0.0, 0.0
-        for i, pt in enumerate(pts):
-            q, err, _, jump, bad = self.solve_translation(q, pt - prev, posture=posture)
-            worst_err, worst_jump = max(worst_err, err), max(worst_jump, jump)
-            if bad:
-                log({"step": name, "smooth": True, "precheck_failed_at": i + 1, "gates": bad})
-                raise Abort(f"{name}: smooth pre-check failed at point {i + 1}/{n}: {'; '.join(bad)}"
-                            " -- arm not commanded")
-            prev = pt
-        print(f"  {name:22s} {dist*100:5.1f} cm smooth ({n} pts pre-checked: IK <= {worst_err*1000:.1f} mm,"
-              f" joint step <= {worst_jump:.1f} deg)")
-        rec = {"step": name, "smooth": True, "target": target.tolist(), "ee_before": ee0.tolist(),
-               "n_points": n, "executed": False}
-        if not self.execute:
-            log(rec)
-            return ee0
-        ok = self.ai.execute_command(CartesianTrajectoryCommand([(pt, quat) for pt in pts]))
-        fin = wait_still(self.ai, target)
-        err = float(np.linalg.norm(fin - target))
-        rec.update(executed=True, returned=bool(ok), ee_after=fin.tolist(), final_err_m=err)
-        log(rec)
-        print(f"  {name:22s} reached {np.round(fin, 3)}  ({err*1000:.1f} mm from target)")
-        if err > TRACK_ABORT_M:
-            raise Abort(f"{name}: ended {err*100:.1f} cm from the target -- HOLDING HERE")
-        return fin
-
     def ee_pose(self):
         """(xyz, 3x3 rotation) of the Kinova tool frame in the base frame."""
         ee = list(self.state()["ee_pos"])
@@ -271,9 +197,14 @@ class Arm:
             prev_p, prev_R = pt, Rt
         return worst_err, worst_jump, (q, prev_p, prev_R)
 
+    # -- execution ----------------------------------------------------------------------------
+
     def smooth_poses(self, poses, name, log):
-        """Send an already pre-checked (xyz, R) path as ONE blended Cartesian trajectory, then
-        verify the final position. Same contract as smooth_line."""
+        """Send an already pre-checked (xyz, R) path as ONE blended Cartesian trajectory -- no
+        stop between points -- then verify the final position. Kortex runs its own IK for the
+        trajectory, so the sim pre-check is a reachability proxy; once sent there is no
+        per-point abort, only the final-position check. Dry run: logs and returns the
+        current xyz. Returns the final EE xyz."""
         target = np.asarray(poses[-1][0], dtype=float)
         rec = {"step": name, "smooth": True, "target": target.tolist(), "n_points": len(poses), "executed": False}
         if not self.execute:
@@ -289,37 +220,3 @@ class Arm:
         if err > TRACK_ABORT_M:
             raise Abort(f"{name}: ended {err*100:.1f} cm from the target -- HOLDING HERE")
         return fin
-
-    def step(self, d_base, name, log, posture=None, rot=None):
-        """Plan + gate + (if executing) move the EE by d_base (and turn it by the world-frame
-        rotation `rot`, if given). Returns the joint vector reached."""
-        q0 = self.joints()
-        ee0 = self.ee_pos()
-        q, err, target, jump, bad = self.solve_translation(q0, d_base, posture=posture, rot=rot)
-        rec = {"step": name, "d_base": list(map(float, d_base)), "ik_err_m": err, "jump_deg": jump,
-               "gates": bad, "q": q.tolist(), "ee_before": ee0.tolist(), "executed": False}
-        print(f"  {name:22s} d={np.round(d_base*100, 2)} cm  IK {err*100:.2f} cm  jump {jump:4.1f} deg"
-              f"  {'FAIL: ' + '; '.join(bad) if bad else 'ok'}")
-        if bad:
-            log(rec)
-            raise Abort(f"gate failed at {name}: {'; '.join(bad)} -- arm not commanded")
-        if not self.execute:
-            log(rec)
-            return q
-        self.ai.execute_command(JointCommand(pos=q.tolist()))
-        derr = wait_converged(self.ai, q)
-        if derr >= CONVERGE_TOL_DEG:
-            print(f"  {name}: settled {derr:.1f} deg short (Kortex likely dropped it) -- re-sending once")
-            time.sleep(0.5)
-            self.ai.execute_command(JointCommand(pos=q.tolist()))
-            derr = wait_converged(self.ai, q)
-        ee1 = self.ee_pos()
-        track = float(np.linalg.norm((ee1 - ee0) - np.asarray(d_base)))
-        rec.update(executed=True, converge_deg=derr, ee_after=ee1.tolist(), track_err_m=track)
-        log(rec)
-        print(f"  {name:22s} moved {np.round((ee1-ee0)*100, 2)} cm  converge {derr:.2f} deg  track {track*100:.2f} cm")
-        if derr >= CONVERGE_TOL_DEG:
-            raise Abort(f"{name}: still {derr:.1f} deg off after retry -- HOLDING HERE")
-        if track > TRACK_ABORT_M:
-            raise Abort(f"{name}: tracking error {track*100:.1f} cm > {TRACK_ABORT_M*100:.0f} -- HOLDING HERE")
-        return q

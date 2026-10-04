@@ -1,12 +1,10 @@
-"""Live detection viewer: the dome-layout detector (left) next to the SIFT detector's debug image
-(right). READ-ONLY -- never touches the arm. Esc / q / Ctrl-C to close.
+"""Live dome-layout detection viewer. READ-ONLY -- never touches the arm. Esc / q / Ctrl-C to close.
 
     python3 -u scripts/button_press/view_detection.py [--target timer_clock]
 
-Left panel: magenta = the 5 domes the layout fit found (target ringed in green), with the
-measured dome pitch (should read ~19 mm), mean fit error and range. "NO FIT" means
-dome_pattern.detect() abstained on that frame (no 5-dome layout, wrong metric size, or closer
-than MIN_RANGE_M -- SIFT's range). Right panel: /button_detector/debug_image as published.
+Magenta = the 5 domes the layout fit found (target ringed in green), with the measured dome
+pitch (should read ~19 mm), mean fit error and range. "NO FIT" means dome_pattern.detect()
+abstained on that frame (no 5-dome layout, wrong metric size, or closer than MIN_RANGE_M).
 """
 import argparse
 import threading
@@ -20,6 +18,7 @@ from cv_bridge import CvBridge
 from sensor_msgs.msg import CameraInfo, Image
 
 from feeding_deployment.button_press import dome_pattern as dp
+from feeding_deployment.button_press.perception import to_bgr_depth
 
 
 def draw_domes(bgr, fit, target, dt_ms):
@@ -52,34 +51,23 @@ def main():
     node.create_subscription(Image, "/camera/color/image_raw", lambda m: got.__setitem__("c", m), 2)
     node.create_subscription(Image, "/camera/aligned_depth_to_color/image_raw", lambda m: got.__setitem__("d", m), 2)
     node.create_subscription(CameraInfo, "/camera/color/camera_info", lambda m: got.__setitem__("i", m), 2)
-    node.create_subscription(Image, "/button_detector/debug_image", lambda m: got.__setitem__("sift", m), 2)
     executor = rclpy.executors.SingleThreadedExecutor()
     executor.add_node(node)
     spin = threading.Thread(target=executor.spin, daemon=True)
     spin.start()
 
-    win = "button detection (left: dome layout | right: SIFT reference)"
+    win = "button detection (dome layout)"
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(win, 1280, 480)
+    cv2.resizeWindow(win, 640, 480)
     last = None
     try:
         while True:
             if all(k in got for k in ("c", "d", "i")) and got["c"] is not last:
                 last = got["c"]
-                bgr = bridge.imgmsg_to_cv2(last, "bgr8")
-                depth = bridge.imgmsg_to_cv2(got["d"], "passthrough").astype(np.float32)
-                if got["d"].encoding in ("16UC1", "mono16"):
-                    depth /= 1000.0
+                bgr, depth = to_bgr_depth(bridge, last, got["d"])
                 t = time.perf_counter()
                 fit = dp.detect(bgr, depth, got["i"].k[0])
-                left = draw_domes(bgr, fit, a.target, (time.perf_counter() - t) * 1000)
-                if "sift" in got:
-                    right = cv2.resize(bridge.imgmsg_to_cv2(got["sift"], "bgr8"), (left.shape[1], left.shape[0]))
-                else:
-                    right = np.zeros_like(left)
-                    cv2.putText(right, "no /button_detector/debug_image", (10, 28),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                cv2.imshow(win, np.hstack([left, right]))
+                cv2.imshow(win, draw_domes(bgr, fit, a.target, (time.perf_counter() - t) * 1000))
             k = cv2.waitKey(15) & 0xFF
             # (no WND_PROP_VISIBLE check: this OpenCV 4.5.4/GTK3 build reports 0 for a shown window)
             if k in (27, ord("q")):

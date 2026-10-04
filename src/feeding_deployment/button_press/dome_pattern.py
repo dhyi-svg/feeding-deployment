@@ -1,10 +1,8 @@
-"""Far-range button finder for the Comfee panel: find the 5 chrome domes by their 3+2 layout.
+"""Button finder for the Comfee panel: find the 5 chrome domes by their 3+2 layout.
 
-Pure OpenCV/numpy, no ROS, no reference images. Complements the SIFT reference detector
-(``detector_node``), which is accurate at 17-22 cm but loses its lock further out -- on
-2026-10-03 at 39 cm it held only 6-8 inliers (preflight needs 8 for 2 s). This one is for the
-COARSE stage: find the panel from wherever the arm is, so press_button can stage at ~22 cm and
-hand over to SIFT for the fine measurement.
+Pure OpenCV/numpy, no ROS, no reference images. press_button uses it for every measurement:
+the first one from wherever the arm starts (~22-50+ cm) and the final one from the ~25 cm
+staging pose.
 
 How it works:
   1. candidates  connected blobs that are desaturated and clearly brighter than the panel's own
@@ -20,7 +18,7 @@ How it works:
 
 Tested 2026-10-03 on the 5 saved reference frames + 2 live ones: 5/5 domes named correctly from
 ~25 to ~50 cm, 3-4 px from the hand-marked centres far out. Up close (~17 cm) a dome is no longer
-one highlight blob and the fit locked onto label text -- hence MIN_RANGE_M; SIFT owns that range.
+one highlight blob and the fit locked onto label text -- hence MIN_RANGE_M.
 """
 from __future__ import annotations
 
@@ -37,7 +35,7 @@ NAMES = ("power_level", "wgt_time_defrost", "timer_clock", "stop_eco", "start_30
 # Dome centres in units of the top-row spacing, origin = top-middle dome, x right, y DOWN the panel.
 LAYOUT = np.array([[-1.0, 0.0], [0.0, 0.0], [1.0, 0.0], [-0.58, 0.92], [0.42, 0.92]])
 FIT_TOL = 0.2                 # max dome miss, fraction of s (true fits: <= 0.17 on the test frames)
-MIN_RANGE_M = 0.22            # closer than this, domes break into several highlights: use SIFT
+MIN_RANGE_M = 0.22            # closer than this, domes break into several highlights: abstain
 MAX_RANGE_M = 1.2
 # Region (layout units) whose red pixels the panel plane is fitted to: the button block and the
 # red panel around it, not the knob/display above or the microwave's bottom edge.

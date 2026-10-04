@@ -59,7 +59,7 @@ def test_wrong_metric_size_rejected():
     assert dp.detect(img, np.full((480, 640), 0.2, np.float32), FX) is None
 
 
-def test_too_close_defers_to_sift():
+def test_too_close_abstains():
     img, d, _ = panel(z=0.4)
     fit = dp.fit_layout(dp.candidates(img, d, FX), FX)
     assert fit is not None

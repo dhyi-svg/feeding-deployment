@@ -1,4 +1,4 @@
-"""Tests for the panel-relative teach/replay frame (pure numpy)."""
+"""Tests for the panel frame the pre-press spot is stored in (pure numpy)."""
 import numpy as np
 import pytest
 
@@ -8,7 +8,6 @@ from feeding_deployment.button_press.panel_frame import (
     from_panel,
     panel_frame,
     pose_path,
-    quat_angle_deg,
     rot_angle_deg,
     rot_from_panel,
     rot_to_panel,
@@ -44,12 +43,6 @@ def test_offset_follows_a_moved_panel():
 def test_vertical_normal_rejected():
     with pytest.raises(ValueError):
         panel_frame([0, 0, 0], [0, 0, 1])
-
-
-def test_quat_angle():
-    assert quat_angle_deg([0, 0, 0, 1], [0, 0, 0, -1]) == pytest.approx(0.0, abs=1e-6)
-    s = np.sin(np.radians(15))
-    assert quat_angle_deg([0, 0, 0, 1], [0, 0, s, np.cos(np.radians(15))]) == pytest.approx(30.0)
 
 
 def test_rotation_round_trip():

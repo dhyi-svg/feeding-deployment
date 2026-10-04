@@ -1,7 +1,7 @@
 """Pure geometry behind the autonomous button press (button_press.geometry).
 
-The panel plane sets the approach travel cap, so a wrong tilt or distance there is a
-wrong stopping point. The 2026-09-21 failure this guards: at a 20 cm standoff with
+The panel plane sets the panel normal the press runs along, so a wrong tilt there is a
+wrong press direction. The 2026-09-21 failure this guards: at a 20 cm standoff with
 depth noise larger than the depth signal, an SVD fit read the noise as a 61 deg tilt;
 the inverse-depth OLS fit recovers the true ~19 deg.
 """
@@ -12,10 +12,8 @@ import pytest
 from feeding_deployment.button_press.geometry import (
     PlaneFitError,
     fit_plane_inverse_depth,
-    lateral_correction_cam,
     max_joint_delta_deg,
     pixel_ray,
-    ray_plane_distance,
 )
 
 # D435i colour intrinsics at 640x480, roughly.
@@ -76,24 +74,10 @@ def test_plane_rejects_too_few_points_and_non_planar():
         fit_plane_inverse_depth(us, vs, z, FX, FY, CX, CY)
 
 
-def test_ray_plane_distance_matches_geometry():
-    n = np.array([0.0, 0.0, -1.0])
-    ray = pixel_ray((CX, CY), FX, FY, CX, CY)
-    np.testing.assert_allclose(ray, [0, 0, 1])
-    s, denom = ray_plane_distance(n, -0.2, ray)
-    assert s == pytest.approx(0.2) and denom == pytest.approx(-1.0)
+def test_pixel_ray():
+    np.testing.assert_allclose(pixel_ray((CX, CY), FX, FY, CX, CY), [0, 0, 1])
     off = pixel_ray((CX + FX, CY), FX, FY, CX, CY)  # 45 deg off-axis
-    s, _ = ray_plane_distance(n, -0.2, off)
-    assert s == pytest.approx(0.2 * np.sqrt(2))
-
-
-def test_lateral_correction_sign_scale_and_cap():
-    # Button 10 px right of the claw at 20 cm -> move the camera +x by 10*0.2/fx.
-    d = lateral_correction_cam(np.array([10.0, 0.0]), 0.2, FX, FY, cap=0.03)
-    np.testing.assert_allclose(d, [10 * 0.2 / FX, 0, 0])
-    d = lateral_correction_cam(np.array([-600.0, 800.0]), 0.3, FX, FY, cap=0.03)
-    assert np.linalg.norm(d) == pytest.approx(0.03)
-    assert d[0] < 0 < d[1] and d[2] == 0
+    np.testing.assert_allclose(off, [np.sqrt(0.5), 0, np.sqrt(0.5)])
 
 
 def test_max_joint_delta_wraps():

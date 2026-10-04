@@ -12,14 +12,11 @@
 #   bulldog_bypass (motion UNLOCKED from here) -> speed low -> robot_state_publisher (gen3, no
 #   gripper: robotiq_description is too old for the xacro) -> hand-eye calibration tf ->
 #   RealSense (IMU off -- it reset-loops otherwise; ns / so topics are /camera/...; big-image Fast
-#   DDS profile; colour AE priority off) -> SIFT button detector.
-# Not started: press_detector (force) -- press_button does not use it.
+#   DDS profile; colour AE priority off). press_button does the detection itself (dome_pattern).
 # PIDs and logs: ~/press_logs/bringup/<name>.{pid,log}
 set -u
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RUN="$HOME/press_logs/bringup"
-REF_DIR="${REF_DIR:-$HOME/wrist_ref_red}"
-TARGET="${TARGET:-timer_clock}"
 CALIB="${CALIB:-$HOME/.ros2/easy_handeye2/calibrations/wrist_camera_calib.calib}"
 mkdir -p "$RUN"
 
@@ -44,7 +41,7 @@ cd $REPO
 ENV
 
 # Order matters for stop (reverse) -- keep in sync with do_start.
-NAMES=(arm_server joint_state_bridge stub_base bulldog_bypass rsp calibration_tf camera detector_node)
+NAMES=(arm_server joint_state_bridge stub_base bulldog_bypass rsp calibration_tf camera)
 
 alive() { [[ -f "$RUN/$1.pid" ]] && kill -0 "$(cat "$RUN/$1.pid")" 2>/dev/null; }
 die() { echo "FAILED: $*"; echo "logs: $RUN"; exit 1; }
@@ -66,14 +63,12 @@ wait_log() {   # wait_log <name> <pattern> <timeout_s>
 }
 
 check() {
-    python3 - "$TARGET" <<'EOF'
+    python3 - <<'EOF'
 import sys, time
 import rclpy, tf2_ros
 from rclpy.duration import Duration
 from rclpy.time import Time
 from sensor_msgs.msg import Image, JointState
-from std_msgs.msg import String
-target = sys.argv[1]
 ok = True
 def report(good, msg):
     global ok
@@ -91,10 +86,8 @@ except Exception as e:  # noqa: BLE001
 rclpy.init()
 n = rclpy.create_node("bringup_check")
 counts = {"js": 0, "img": 0}
-status = []
 n.create_subscription(JointState, "/joint_states", lambda m: counts.__setitem__("js", counts["js"] + 1), 50)
 n.create_subscription(Image, "/camera/color/image_raw", lambda m: counts.__setitem__("img", counts["img"] + 1), 5)
-n.create_subscription(String, "/button_detector/status", lambda m: status.append(m.data), 10)
 buf = tf2_ros.Buffer(); tf2_ros.TransformListener(buf, n)
 t0 = time.time()
 while time.time() - t0 < 3.0:
@@ -107,10 +100,6 @@ try:
     report(True, "tf arm_base_link -> camera_color_optical_frame")
 except Exception as e:  # noqa: BLE001
     report(False, f"tf arm_base_link -> camera_color_optical_frame: {type(e).__name__}")
-last = status[-1] if status else "no status (detector not running?)"
-print(f"  {'ok  ' if last.startswith('locked') else 'note'} detector: {last}"
-      + ("" if last.startswith("locked") else "  <- fine if the panel is not in view yet"))
-ok &= bool(status)
 rclpy.shutdown()
 sys.exit(0 if ok else 1)
 EOF
@@ -142,18 +131,13 @@ do_start() {
         -p enable_gyro:=false -p enable_accel:=false -p enable_motion:=false \
         -p rgb_camera.auto_exposure_priority:=false
     wait_log camera "RealSense Node Is Up" 30
-
-    echo "== detector =="
-    start detector_node python3 -u -m feeding_deployment.button_press.detector_node --ros-args \
-        -p reference_dir:="$REF_DIR" -p target_button:="$TARGET"
-    wait_log detector_node "loaded reference" 30
     sleep 3
 
     echo "== check =="
     if check; then
         echo "READY. In your terminal:  source $RUN/env.sh   then dry run first:"
-        echo "  python3 -u -m feeding_deployment.button_press.press_button --target $TARGET"
-        echo "  (watch: ros2 run rqt_image_view rqt_image_view /button_detector/debug_image)"
+        echo "  python3 -u -m feeding_deployment.button_press.press_button --target timer_clock"
+        echo "  (watch: python3 -u scripts/button_press/view_detection.py --target timer_clock)"
     else
         die "health check (above)"
     fi

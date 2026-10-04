@@ -27,24 +27,21 @@ import rclpy
 from scipy.spatial.transform import Rotation
 
 from feeding_deployment.button_press import Abort
-from feeding_deployment.button_press.autonomous_press import Run, build_arg_parser
 from feeding_deployment.button_press.panel_frame import describe, rot_to_panel, to_panel
-from feeding_deployment.button_press.press_button import STANDOFF_M, measure_panel_frame_domes, set_detector_target
+from feeding_deployment.button_press.press_button import STANDOFF_M, Run, build_parser, measure_panel_frame_domes
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--target", required=True)
-    ap.add_argument("--ns", default="/button_detector")
     a = ap.parse_args()
-    run_args = build_arg_parser().parse_args(["--no-force", "--target", a.target, "--ns", a.ns])  # no --execute
+    run_args = build_parser().parse_args(["--target", a.target])  # no --execute
 
     rclpy.init()
     try:
         run = Run(run_args)
         try:
-            set_detector_target(run.per, a.ns, a.target)
-            run.preflight(require_lock=False, require_free=False, require_ready=False)
+            run.preflight(require_ready=False)
             print("\n== 1/2: panel frame from this view ==")
             origin, R = measure_panel_frame_domes(run, a.target)
         except Abort as e:

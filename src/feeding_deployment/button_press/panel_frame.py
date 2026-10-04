@@ -1,17 +1,16 @@
-"""Panel-relative poses: teach an EE position relative to the detected button, replay it.
+"""Panel-relative poses: the pre-press spot is stored relative to the detected button.
 
 Pure numpy (no ROS / arm) so it is unit-testable. The panel frame is built from what the
-detector + depth give us each time:
+dome detector + depth give us each time:
 
   origin  the button's xyz in the arm base frame (fingertip-independent)
   z       the panel plane normal, pointing OUT of the panel (toward the robot)
   y       world "up" (base +z) projected onto the panel plane
   x       y cross z
 
-Using gravity for y avoids needing the panel's in-plane rotation from the homography; a
-microwave sitting on a table does not roll. A taught EE position is stored in this frame,
-so replaying it after the microwave is nudged puts the EE in the same place relative to
-the button.
+Using gravity for y avoids needing the panel's in-plane rotation; a microwave sitting on a
+table does not roll. The pre-press EE pose is stored in this frame, so after the microwave is
+nudged it still lands in the same place relative to the button.
 """
 from __future__ import annotations
 
@@ -72,13 +71,6 @@ def rot_angle_deg(R0, R1) -> float:
     """Angle of the rotation taking R0 to R1, degrees."""
     c = (np.trace(np.asarray(R1, dtype=float) @ np.asarray(R0, dtype=float).T) - 1.0) / 2.0
     return float(np.degrees(np.arccos(np.clip(c, -1.0, 1.0))))
-
-
-def quat_angle_deg(q1, q2) -> float:
-    """Angle between two unit quaternions (same component order), degrees."""
-    q1 = np.asarray(q1, dtype=float) / np.linalg.norm(q1)
-    q2 = np.asarray(q2, dtype=float) / np.linalg.norm(q2)
-    return float(np.degrees(2 * np.arccos(min(1.0, abs(float(np.dot(q1, q2)))))))
 
 
 def describe(p_panel) -> str:

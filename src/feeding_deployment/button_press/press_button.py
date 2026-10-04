@@ -7,57 +7,55 @@ DRY RUN BY DEFAULT. Nothing moves without ``--execute``.
     python3 -u -m feeding_deployment.button_press.press_button --execute   # do it
     ... --target timer_clock                                               # the Timer/Clock button instead
 
-Start with the panel in view (the step before this one is "the arm is in front of the
-microwave"). Then, in one call:
+Start with the panel in view, the camera at least 22 cm from it (dome_pattern.MIN_RANGE_M).
+Then, in one call:
 
-  1. preflight      arm ready, speed low, gripper closed, detector locked on --target, tf up
-  2. detect         dome-layout detector (dome_pattern.py: the 5 chrome domes' 3+2 layout, any
-                    range ~22-50+ cm, no reference images) -> button pixel; depth plane fit ->
+  1. preflight      arm ready, speed low/medium, gripper closed, camera_info and tf up
+  2. detect         dome-layout detector (dome_pattern.py: the 5 chrome domes' 3+2 layout,
+                    ~22-50+ cm, no reference images) -> button pixel; depth plane fit ->
                     button xyz + panel normal; tf -> arm base frame. That fixes the PANEL FRAME:
                     origin = the button, z = out of the panel, y = gravity-up, x = y cross z.
-     2b. stage      camera further than CLOSE_VIEW_M: go to the pre-press pose + STAGE_OUT_M,
-                    and re-detect there with the dome layout again (SIFT as fallback) -- the far
-                    3D estimate is biased ~1.5 cm; the ~25 cm one matches how the offset was measured
+     2b. stage      camera further than CLOSE_VIEW_M: go to the pre-press pose + STAGE_OUT_M and
+                    re-detect there -- the far 3D estimate is biased ~1.5 cm; the ~25 cm one
+                    matches how the offset was measured
   3. plan           tool goal = PREPRESS_EE_OFFSET_M / PREPRESS_EE_QUAT_PANEL (constants below)
                     in that frame; the whole sequence (go, press in/out, come back) is planned
                     and gated in the sim BEFORE anything moves
   4. go             straight line to the pre-press spot, wrist turning to face the panel
-  5. refine         (--refine only) SIFT re-detect at the spot; correct once if > REFINE_MIN_M off
-  6. press          --press-in straight into the panel along its normal, hold, same distance out
-  7. return         straight line back to where it started
+  5. press          --press-in straight into the panel along its normal, hold, same distance out
+  6. return         straight line back to where it started
 
 Because the panel frame's origin is the target button itself, the one stored offset is right
-for every button the reference marks (start_30s, timer_clock).
+for every button the dome detector names (start_30s, timer_clock, ...).
 
-No force sensing (the wrench estimate is unusable with the current fingers): the press depth
-is pure geometry, capped at MAX_PRESS_IN_M. Someone stands at the e-stop for every --execute.
-Needs the stack from scripts/button_press/bringup.sh (no press_detector).
+The press depth is pure geometry, capped at MAX_PRESS_IN_M. Someone stands at the e-stop for
+every --execute. Needs the stack from scripts/button_press/bringup.sh.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
+from pathlib import Path
 
 import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseStamped
-from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
-from rcl_interfaces.srv import SetParameters
 from scipy.spatial.transform import Rotation
 
 from feeding_deployment.button_press import Abort, dome_pattern
-from feeding_deployment.button_press.autonomous_press import MAX_PANEL_NORMAL_Z, MAX_PRESS_IN_M, Run, build_arg_parser
+from feeding_deployment.button_press.arm import SMOOTH_PRESS_SPACING_M, Arm
 from feeding_deployment.button_press.geometry import PlaneFitError
-from feeding_deployment.button_press.perception import FRESH_S, LOCK_HOLD_S, MIN_INLIERS
 from feeding_deployment.button_press.panel_frame import (
     describe,
     from_panel,
     panel_frame,
+    pose_path,
     rot_angle_deg,
     rot_from_panel,
-    to_panel,
 )
+from feeding_deployment.button_press.perception import FRESH_S, Perception, to_bgr_depth
 
 # ---- the pre-press spot, in the panel frame (x right, y up, z out of the panel; origin = button)
 # Kinova tool-frame position and orientation with the LEFT fingertip STANDOFF_M in front of the
@@ -82,35 +80,131 @@ CLOSE_VIEW_M = 0.25           # camera -> button beyond this: stage first
 STAGE_OUT_M = 0.08            # staging pose = pre-press pose this much further out (camera ~25 cm,
                               # inside the dome detector's range: it abstains below MIN_RANGE_M 0.22)
 STAGE_SETTLE_S = 0.5          # after the smooth stop, before re-detecting
-STAGE_LOCK_HOLD_S = 1.0       # SIFT lock held this long at the staging pose (preflight uses 2 s)
 # ---- dome-layout detector (far/coarse; see dome_pattern.py)
 DOME_FRAMES = 7               # frames looked at per measurement
 DOME_MIN_FITS = 5             # ... of which this many must fit all 5 domes
 DOME_MAX_SPREAD_PX = 3.0      # and agree on the target pixel to within this
-SIFT_WAIT_S = 6.0             # at the staging pose, wait this long for a SIFT lock before using domes
-# ---- close-range refine
-REFINE_MIN_M = 0.003          # ignore smaller corrections (detector noise at ~17 cm is ~1-2 mm)
-REFINE_MAX_M = 0.01           # bigger than this up close means something is wrong: abort, don't chase it
-REFINE_WAIT_S = 3.0
+# ---- motion
+MAX_PRESS_IN_M = 0.03         # refuse deeper presses: nothing stops the arm but the plan
+PRESS_HOLD_S = 0.3
+# Panel front face is near-vertical; a fitted normal with |z| above this is a bad fit.
+MAX_PANEL_NORMAL_Z = 0.5
+# Paths are chunked so no point moves more than RAY_STEP_MAX_M or turns more than
+# ROT_STEP_MAX_DEG: how many joint degrees a centimetre costs depends on the posture (~5 deg/cm
+# at the 2026-09-21 close standoff), and a merely LONG move must not trip the 10 deg joint gate.
+# Press strokes use the finer arm.SMOOTH_PRESS_SPACING_M instead.
+RAY_STEP_MAX_M = 0.01
+ROT_STEP_MAX_DEG = 4.0
+ALLOWED_SPEEDS = ("low", "medium")
 
 
-def set_detector_target(node, ns: str, target: str, timeout_s: float = 5.0):
-    """Point the running detector at `target` (its target_button parameter)."""
-    cli = node.create_client(SetParameters, f"{ns}/set_parameters")
-    if not cli.wait_for_service(timeout_sec=timeout_s):
-        raise Abort(f"{ns}/set_parameters not available -- is the button detector running?")
-    req = SetParameters.Request()
-    req.parameters = [Parameter(name="target_button",
-                                value=ParameterValue(type=ParameterType.PARAMETER_STRING, string_value=target))]
-    fut = cli.call_async(req)
-    t0 = time.monotonic()
-    while not fut.done():
-        if time.monotonic() - t0 > timeout_s:
-            raise Abort(f"setting {ns} target_button timed out")
-        time.sleep(0.05)
-    res = fut.result().results[0]
-    if not res.successful:
-        raise Abort(f"detector refused target {target!r}: {res.reason}")
+class Run:
+    """Perception node + gated arm + JSONL run log, shared by press_button and
+    scripts/button_press/measure_prepress_offset.py."""
+
+    def __init__(self, args):
+        self.args = args
+        self.log_dir = Path(args.log_dir)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self._log_f = open(self.log_dir / f"press_{time.strftime('%Y%m%d_%H%M%S')}.jsonl", "a")  # noqa: SIM115
+        self.per = Perception(args.arm_frame, args.camera_frame)
+        self.arm = Arm(args.execute)
+        # The IK seed is anchored to a posture to stop the redundant arm sliding along its
+        # self-motion manifold (see Arm.solve_translation). Set by preflight, refreshed by
+        # reanchor_seed() after a big move.
+        self.seed_posture = None
+
+    def log(self, rec):
+        rec = dict(rec, t=time.time())
+        self._log_f.write(json.dumps(rec) + "\n")
+        self._log_f.flush()
+
+    def reanchor_seed(self, why):
+        """Re-anchor the IK seed to the current joints. A posture anchor is only a good IK seed
+        while the arm is near it: on 2026-09-21 a stale anchor 10.9 cm away gave 2-4 mm IK
+        errors on 1-4 mm corrections, so each move injected more error than it removed."""
+        print(f"  IK seed re-anchored to the current posture ({why})")
+        if not self.args.execute:
+            return   # nothing moved in a dry run, so the preflight anchor is still current
+        self.seed_posture = self.arm.joints()
+
+    def preflight(self, require_ready=True):
+        print("\n== preflight ==")
+        a = self.args
+        st = self.arm.state()
+        name = self.arm.arm_state_name()
+        grip = float(st.get("gripper_pos", -1))
+        speed = self.arm.ai.get_speed()
+        print(f"  arm state     : {name}")
+        print(f"  gripper_pos   : {grip:.3f}  ({'closed' if grip > 0.7 else 'NOT closed'})")
+        print(f"  speed preset  : {speed}")
+        problems = []
+        # Hand-guiding (MANUALLY_CONTROLLED) is fine for measure_prepress_offset, which never moves.
+        if require_ready and "SERVOING_READY" not in str(name) and not str(name).startswith("unknown"):
+            problems.append(f"arm state {name}")
+        if grip <= 0.7:
+            problems.append("gripper must be CLOSED (this presses with the closed fingertips)")
+        if str(speed).lower() not in ALLOWED_SPEEDS:
+            problems.append(f"speed preset is {speed!r}, want {' or '.join(ALLOWED_SPEEDS)} "
+                            "(scripts/session/arm_set_speed.py <preset>)")
+        print("  waiting for camera_info ...")
+        if self.per.wait("info", 5, None) is None:
+            problems.append("no camera_info")
+        try:
+            R_bc = self.per.cam_rotation_in_base()
+            print(f"  tf {a.arm_frame} <- {a.camera_frame}: ok (camera +z in base = {np.round(R_bc[:, 2], 3)})")
+        except Abort as e:
+            problems.append(str(e))
+
+        start_joints = self.arm.joints()
+        self.seed_posture = start_joints
+        (self.log_dir / "start_joints.json").write_text(json.dumps({
+            "joints": start_joints.tolist(), "ee_pos": list(map(float, st["ee_pos"])), "t": time.time()}))
+        print(f"  start joints saved -> {self.log_dir / 'start_joints.json'}")
+        self.log({"stage": "preflight", "arm_state": name, "gripper": grip, "speed": str(speed),
+                  "problems": problems})
+        if problems:
+            for pr in problems:
+                print(f"  PREFLIGHT FAIL: {pr}")
+            raise Abort("preflight failed -- nothing commanded")
+        print("  preflight OK")
+
+    def pose_path(self, p0, R0, p1, R1, spacing=RAY_STEP_MAX_M):
+        """Straight-line (xyz, R) points from one tool pose to another, chunked so that no
+        point moves more than `spacing` or turns more than ROT_STEP_MAX_DEG."""
+        return pose_path(p0, R0, p1, R1, spacing, ROT_STEP_MAX_DEG)
+
+    def move(self, path, name):
+        """Re-check `path` in the sim from the arm's actual pose, then send it as one smooth
+        trajectory. Dry run: nothing to do (the pre-check in press_button was the plan)."""
+        if not self.args.execute:
+            return
+        self.arm.precheck_poses(path, name, self.log, posture=self.seed_posture)
+        self.arm.smooth_poses(path, name, self.log)
+
+    def go_back(self, p0, R0, why):
+        """After an abort mid-move: straight back to (p0, R0), pre-checked. Holds if that fails."""
+        p_now, R_now = self.arm.ee_pose()
+        if not self.args.execute or (np.linalg.norm(p_now - p0) < 0.005 and rot_angle_deg(R_now, R0) < 2.0):
+            return
+        print(f"  {why} -- going back to the start first")
+        self.move(self.pose_path(p_now, R_now, p0, R0), "bail")
+
+    def press(self, stroke_in, stroke_out, p_spot, R_spot):
+        """From the pre-press spot: run the planned stroke in, hold, and the stroke back out,
+        --presses times. If a stroke aborts, back out to the spot and hold there."""
+        a = self.args
+        print(f"\n== press x{a.presses}: {a.press_in*100:.1f} cm straight into the panel and back ==")
+        for i in range(1, a.presses + 1):
+            try:
+                self.move(stroke_in, f"press {i} in")
+            except Abort as e:
+                self.go_back(p_spot, R_spot, f"press aborted ({e})")
+                raise
+            if a.execute:
+                time.sleep(PRESS_HOLD_S)
+            self.log({"stage": "press_normal", "press": i, "depth": a.press_in})
+            self.move(stroke_out, f"press {i} out")
 
 
 def publish_pose(pub, frame, p, Rm):
@@ -131,8 +225,7 @@ def prepress_pose(origin, R, out=0.0):
 def measure_panel_frame_domes(run: Run, target: str):
     """Panel frame from the dome-layout detector: median over DOME_FRAMES frames.
 
-    Same output as Run.measure_panel_frame (origin = button xyz, base frame), but needs no
-    reference images and works from ~25-50+ cm, where the SIFT lock fails.
+    Returns (origin = button xyz, R = panel axes), both in the arm base frame.
     """
     per = run.per
     if target not in dome_pattern.NAMES:
@@ -146,10 +239,7 @@ def measure_panel_frame_domes(run: Run, target: str):
             continue
         last = color
         seen += 1
-        bgr = per.bridge.imgmsg_to_cv2(color, "bgr8")
-        d = per.bridge.imgmsg_to_cv2(depth, "passthrough").astype(np.float32)
-        if depth.encoding in ("16UC1", "mono16"):
-            d = d / 1000.0
+        bgr, d = to_bgr_depth(per.bridge, color, depth)
         fit = dome_pattern.detect(bgr, d, fx)
         if fit is None:
             continue
@@ -167,7 +257,7 @@ def measure_panel_frame_domes(run: Run, target: str):
     run.log({"dome_frames": {"target_px": pxs.tolist(), "seen": seen, "agree": len(keep)}})
     if not fits:
         raise Abort(f"dome detector: no 5-dome layout in {seen} frames -- panel out of view, or the camera is "
-                    f"closer than {dome_pattern.MIN_RANGE_M*100:.0f} cm (SIFT's range)")
+                    f"closer than {dome_pattern.MIN_RANGE_M*100:.0f} cm")
     if len(keep) < DOME_MIN_FITS:
         raise Abort(f"dome detector: only {len(keep)}/{seen} frames agree on the {target} pixel (need {DOME_MIN_FITS}; "
                     f"pixels {np.round(pxs).astype(int).tolist()}) -- is the arm still moving?")
@@ -194,41 +284,6 @@ def measure_panel_frame_domes(run: Run, target: str):
     return origin, R
 
 
-def sift_locked(run: Run, target: str, wait_s: float, hold_s: float = LOCK_HOLD_S) -> bool:
-    """True once the SIFT detector has held a MIN_INLIERS lock on `target` for hold_s."""
-    t0, held = time.monotonic(), 0.0
-    while time.monotonic() - t0 < wait_s:
-        ok, _ = run.per.locked(MIN_INLIERS)
-        held = held + 0.1 if ok and run.per.lock_target() == target else 0.0
-        if held >= hold_s:
-            return True
-        time.sleep(0.1)
-    return False
-
-
-def locate(run: Run, target: str, prefer: str):
-    """(origin, R, method). `prefer` = "domes" (far/coarse) or "sift" (close/fine); falls back
-    to the other method if the preferred one cannot measure."""
-    order = ["domes", "sift"] if prefer == "domes" else ["sift", "domes"]
-    errors = []
-    for how in order:
-        try:
-            if how == "sift":
-                if not (sift_locked(run, target, SIFT_WAIT_S, STAGE_LOCK_HOLD_S) if prefer == "sift"
-                        else sift_locked(run, target, LOCK_HOLD_S + 0.5)):
-                    raise Abort(f"SIFT detector not locked on {target}: {run.per.locked(MIN_INLIERS)[1]}")
-                print("  [SIFT reference match]")
-                origin, R = run.measure_panel_frame()
-            else:
-                print("  [dome layout]")
-                origin, R = measure_panel_frame_domes(run, target)
-            return origin, R, how
-        except Abort as e:
-            print(f"  {how}: {e}")
-            errors.append(f"{how}: {e}")
-    raise Abort("could not locate the button -- " + " | ".join(errors))
-
-
 def check_move(p_from, R_from, p_to, R_to, what):
     dist, turn = float(np.linalg.norm(p_to - p_from)), rot_angle_deg(R_from, R_to)
     if dist > MAX_GOTO_M:
@@ -239,11 +294,11 @@ def check_move(p_from, R_from, p_to, R_to, what):
 
 def press_button(run: Run, a, pub) -> int:
     arm = run.arm
-    run.preflight(require_lock=False, require_free=False)   # either detector may find it
+    run.preflight()
     p0, R0 = arm.ee_pose()
 
     print(f"\n== detect: {a.target} ==")
-    origin, R, how = locate(run, a.target, prefer="domes")
+    origin, R = measure_panel_frame_domes(run, a.target)
     cam_d = float(np.linalg.norm(origin - run.per.cam_position_in_base()))
     if cam_d > CLOSE_VIEW_M:
         # Far: go to a staging pose in front of the (rough) button, re-detect from there, and
@@ -261,7 +316,7 @@ def press_button(run: Run, a, pub) -> int:
             return 0
         print("\n== go to the staging pose ==")
         try:
-            run.execute_path(stage, "to staging")
+            run.move(stage, "to staging")
         except Abort as e:
             run.go_back(p0, R0, f"move aborted ({e})")
             raise
@@ -269,7 +324,7 @@ def press_button(run: Run, a, pub) -> int:
         run.reanchor_seed("at the staging pose")
         print("\n== re-detect from the staging pose ==")
         far = origin
-        origin, R, how = locate(run, a.target, prefer="domes")
+        origin, R = measure_panel_frame_domes(run, a.target)
         print(f"  button moved {np.round((origin - far) * 100, 1)} cm vs the far estimate")
         run.log({"stage": "staging_redetect", "far_button_xyz": far.tolist(), "button_xyz": origin.tolist()})
     n_out = R[:, 2]
@@ -287,10 +342,12 @@ def press_button(run: Run, a, pub) -> int:
     # Plan every leg back to back in the sim before anything moves.
     print("\n== plan (sim pre-check of every leg) ==")
     go = run.pose_path(p_now, R_now, p_goal, R_goal)
+    p_in = p_goal - a.press_in * n_out
+    stroke_in = run.pose_path(p_goal, R_goal, p_in, R_goal, spacing=SMOOTH_PRESS_SPACING_M)
+    stroke_out = run.pose_path(p_in, R_goal, p_goal, R_goal, spacing=SMOOTH_PRESS_SPACING_M)
     legs = [("to pre-press", go)]
     for i in range(a.presses):
-        legs += [(f"press {i + 1} in", run.pose_path(p_goal, R_goal, p_goal - a.press_in * n_out, R_goal)),
-                 (f"press {i + 1} out", run.pose_path(p_goal - a.press_in * n_out, R_goal, p_goal, R_goal))]
+        legs += [(f"press {i + 1} in", stroke_in), (f"press {i + 1} out", stroke_out)]
     back = run.pose_path(p_goal, R_goal, p0, R0)
     if not a.no_return:
         legs.append(("back to start", back))
@@ -304,66 +361,35 @@ def press_button(run: Run, a, pub) -> int:
 
     print("\n== go to the pre-press spot ==")
     try:
-        run.execute_path(go, "to pre-press")
+        run.move(go, "to pre-press")
     except Abort as e:
         run.go_back(p0, R0, f"move aborted ({e})")
         raise
 
-    if a.refine:
-        print("\n== refine: re-detect up close ==")
-        time.sleep(REFINE_WAIT_S)   # let the detector see a few still frames
-        b = run.button_on_plane(origin, n_out)
-        if b is None:
-            print("  no fresh lock up close -- keeping the first estimate")
-        else:
-            d = b - origin
-            d_lat = d - np.dot(d, n_out) * n_out
-            print(f"  button re-detected {np.round(to_panel(b, origin, R) * 100, 1)} cm from the first estimate "
-                  f"(in-plane {np.linalg.norm(d_lat)*1000:.1f} mm)")
-            run.log({"stage": "refine", "button_xyz": b.tolist(), "lateral_m": float(np.linalg.norm(d_lat))})
-            if np.linalg.norm(d_lat) > REFINE_MAX_M:
-                raise Abort(f"button is {np.linalg.norm(d_lat)*100:.1f} cm from where the far view put it "
-                            f"(> {REFINE_MAX_M*100:.0f}) -- HOLDING HERE at the standoff (nothing pressed)")
-            if np.linalg.norm(d_lat) > REFINE_MIN_M:
-                p_new = p_goal + d_lat
-                fix = run.pose_path(p_goal, R_goal, p_new, R_goal)
-                arm.precheck_poses(fix, "refine", run.log, posture=run.seed_posture)
-                run.execute_path(fix, "refine")
-                p_goal = p_new
-
     if a.presses:
-        run.press_along_normal(n_out)   # backs itself out on abort
+        run.press(stroke_in, stroke_out, p_goal, R_goal)   # backs itself out on abort
 
     if a.no_return:
         print("\ndone (--no-return: holding at the pre-press spot).")
         return 0
     print("\n== back to start ==")
     p_now, R_now = arm.ee_pose()
-    back = run.pose_path(p_now, R_now, p0, R0)
-    arm.precheck_poses(back, "back to start", run.log, posture=run.seed_posture)
-    run.execute_path(back, "back to start")
+    run.move(run.pose_path(p_now, R_now, p0, R0), "back to start")
     print("\ndone.")
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--target", default="start_30s",
-                    help="which button: start_30s (default, START/+30SEC) or timer_clock. The stored pre-press "
-                         "spot is relative to the target button, so it is the same for both.")
+    ap.add_argument("--target", default="start_30s", choices=dome_pattern.NAMES,
+                    help="which button (default start_30s = START/+30SEC). The stored pre-press spot is "
+                         "relative to the target button, so it is the same for every one.")
     ap.add_argument("--execute", action="store_true", help="actually move the arm (default: dry run)")
     ap.add_argument("--presses", type=int, default=1, help="0 = go to the spot and come back without pressing")
     ap.add_argument("--press-in", type=float, default=PRESS_IN_M,
                     help=f"push this far (m) into the panel from the spot (default {PRESS_IN_M}, max {MAX_PRESS_IN_M})")
-    ap.add_argument("--refine", action="store_true",
-                    help="re-detect at the pre-press spot (SIFT only -- ~17 cm is too close for the dome "
-                         "detector) and correct once; off by default because mixing the two detectors adds "
-                         "their 1-2 mm disagreement as a fake correction")
     ap.add_argument("--no-return", action="store_true", help="stay at the pre-press spot at the end")
-    ap.add_argument("--steps", action="store_true",
-                    help="move in 1 cm / 4 deg stop-and-check joint steps instead of the default: each leg "
-                         "as ONE smooth blended Cartesian trajectory (every point pre-checked either way)")
-    ap.add_argument("--ns", default="/button_detector")
+    ap.add_argument("--log-dir", default=str(Path.home() / "press_logs"))
     ap.add_argument("--arm-frame", default="arm_base_link")
     ap.add_argument("--camera-frame", default="camera_color_optical_frame")
     return ap
@@ -377,19 +403,11 @@ def main(argv: list[str] | None = None) -> int:
     if not 0 < a.press_in <= MAX_PRESS_IN_M:
         print(f"--press-in {a.press_in} outside (0, {MAX_PRESS_IN_M}]")
         return 2
-    # Reuse the driver's Run (perception node, gated arm, press stroke) with force sensing off.
-    run_args = build_arg_parser().parse_args(["--no-force"])
-    for k in ("execute", "target", "presses", "press_in", "ns", "arm_frame", "camera_frame"):
-        setattr(run_args, k, getattr(a, k))
-    run_args.smooth = not a.steps
-
     rclpy.init()
     try:
-        run = Run(run_args)
-        run.allowed_speeds = ("low", "medium")
+        run = Run(a)
         pub = run.per.create_publisher(PoseStamped, "/button_press/target_pose", 1)
         try:
-            set_detector_target(run.per, a.ns, a.target)
             return press_button(run, a, pub)
         except Abort as e:
             print(f"\nABORT: {e}")
