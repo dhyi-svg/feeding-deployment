@@ -54,6 +54,9 @@ few degrees of error there just costs an extra correction.
 | File | Contents |
 |---|---|
 | `autonomous_press.py` | `Run`: the stages above, the utility modes (`--jog`, `--goto-start`, `--resume-travel`) and the CLI |
+| `press_button.py` | **One-command, vision-only press** (2026-10-03): detect the panel, go to the stored pre-press spot (panel-frame constant), push in and out, return. No force. See the runbook's "One-command press" section |
+| `dome_pattern.py` | Far-range button finder: the 5 chrome domes' 3+2 layout, plain OpenCV + depth, no reference images *(pure, unit-tested)* |
+| `panel_frame.py` | The panel frame (origin = button, z = out, y = up) and pose interpolation *(pure, unit-tested)* |
 | `perception.py` | `Perception`: the ROS 2 node the driver reads from (pixels, force, depth, tf) and the panel-plane measurement |
 | `arm.py` | `Arm`: seeded PyBullet IK, the motion gates, and sending and verifying joint moves |
 | `contact.py` | The contact rule and its measured thresholds *(pure Python, unit-tested)* |

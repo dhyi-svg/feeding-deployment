@@ -71,7 +71,7 @@ import numpy as np
 import rclpy
 
 from feeding_deployment.button_press import Abort
-from feeding_deployment.button_press.arm import CONVERGE_TOL_DEG, Arm, wait_converged
+from feeding_deployment.button_press.arm import CONVERGE_TOL_DEG, SMOOTH_PRESS_SPACING_M, Arm, wait_converged
 from feeding_deployment.button_press.contact import (
     COARSE_ABORT_N,
     CONFIRM_RISE_N,
@@ -86,6 +86,15 @@ from feeding_deployment.button_press.geometry import (
     lateral_correction_cam,
     max_joint_delta_deg,
     ray_plane_distance,
+)
+from feeding_deployment.button_press.panel_frame import (
+    describe,
+    from_panel,
+    panel_frame,
+    pose_path,
+    quat_angle_deg,
+    rot_angle_deg,
+    to_panel,
 )
 from feeding_deployment.button_press.perception import (
     FORCE_SETTLE_S,
@@ -147,6 +156,23 @@ PRESS_RETRACT_M = 0.02
 # the button had been pressed. Chunk every ray move to this size and the gate stops
 # being reachable by a move that is merely long rather than wrong.
 RAY_STEP_MAX_M = 0.01
+# Same idea for wrist turns (pose moves): at most this many degrees of EE rotation per step,
+# so a pure turn cannot ask for a big joint jump either.
+ROT_STEP_MAX_DEG = 4.0
+# ---- --no-force (open-loop) press ------------------------------------------------------
+# With --no-force the depth is NOT closed on force: the fingertip is driven to a computed
+# point, so --tip-dist error becomes press-depth error one-for-one. Measure it with --jog.
+NO_FORCE_STANDOFF_M = 0.01   # stop this far (along the ray) short of the button before pressing
+NO_FORCE_PRESS_DEPTH_M = 0.003
+NO_FORCE_MAX_PRESS_DEPTH_M = 0.006
+# --goto-taught press: from the taught spot, straight into the panel along its normal.
+# Panel front face is near-vertical; a fitted normal with |z| above this is a bad fit.
+MAX_PANEL_NORMAL_Z = 0.5
+# --goto-taught refuses if the detected button is further than this from where it was taught:
+# on 2026-09-27 each 3-press take pushed the unbraced microwave back ~5 mm (2.4 cm over 7 takes).
+MAX_PANEL_DRIFT_M = 0.03
+PRESS_IN_M = 0.013           # e.g. taught 1 cm in front + 3 mm of button travel
+MAX_PRESS_IN_M = 0.03   # refuse deeper presses: nothing stops the arm but the plan
 
 
 # =============================================================================================
@@ -160,6 +186,11 @@ class Run:
         self._log_f = open(self.log_dir / f"press_{time.strftime('%Y%m%d_%H%M%S')}.jsonl", "a")  # noqa: SIM115
         self.per = Perception(args.ns, args.press_ns, args.arm_frame, args.camera_frame)
         self.arm = Arm(args.execute)
+        # --no-force: the press detector is not used at all; force reads return 0.
+        self.use_force = not (getattr(args, "no_force", False) or getattr(args, "goto_button", False)
+                              or getattr(args, "goto_taught", False))
+        self.l_touch = None       # --no-force: computed travel to fingertip-on-button
+        self.approach_capped = False
         self.R_bc = None          # arm_base <- camera rotation
         self.ray_cam = None       # fingertip ray, camera frame, unit
         self.ray_base = None
@@ -174,6 +205,9 @@ class Run:
         # the printed retreat path need those to stay the run's true origin. The anchor is
         # re-set at each phase boundary by reanchor_seed() -- see that method for why.
         self.seed_posture = None
+        # Speed presets preflight accepts. The force-stopped press needs "low" (force settles
+        # between 1 mm steps); press_button, which has no force loop, also allows "medium".
+        self.allowed_speeds = ("low",)
 
     def step(self, d_base, name):
         """All EE moves go through here so every IK is seeded from the anchored posture."""
@@ -229,7 +263,7 @@ class Run:
         stops adapting above 4 N, so after any sizeable move the approach would otherwise
         start from a biased, frozen reading. Arm must be at rest; nothing here moves it.
         """
-        if not self.args.execute:
+        if not self.args.execute or not self.use_force:
             return
         pids = find_running_press_detector()
         if not pids:
@@ -246,13 +280,15 @@ class Run:
         self.log({"rebaseline": why, "force_after": f})
 
     def force_now(self):
+        if not self.use_force:
+            return 0.0   # --no-force: every force gate is inert
         f = self.per.force_at_rest()
         if math.isnan(f):
             raise Abort("press detector feed is stale/dead -- HOLDING HERE")
         return f
 
     # ---- stage 0 ------------------------------------------------------------------------------
-    def preflight(self, require_lock=True, require_free=True, min_inliers=MIN_INLIERS):
+    def preflight(self, require_lock=True, require_free=True, min_inliers=MIN_INLIERS, require_ready=True):
         print("\n== stage 0: preflight ==")
         a = self.args
         st = self.arm.state()
@@ -263,12 +299,14 @@ class Run:
         print(f"  gripper_pos   : {grip:.3f}  ({'closed' if grip > 0.7 else 'NOT closed'})")
         print(f"  speed preset  : {speed}")
         problems = []
-        if "SERVOING_READY" not in str(name) and not str(name).startswith("unknown"):
+        # Teach modes never command motion, so hand-guiding (MANUALLY_CONTROLLED) is fine there.
+        if require_ready and "SERVOING_READY" not in str(name) and not str(name).startswith("unknown"):
             problems.append(f"arm state {name}")
         if grip <= 0.7:
             problems.append("gripper must be CLOSED (this presses with the closed fingertips)")
-        if str(speed).lower() != "low":
-            problems.append(f"speed preset is {speed!r}, want 'low' (scripts/session/arm_set_speed.py low)")
+        if str(speed).lower() not in self.allowed_speeds:
+            problems.append(f"speed preset is {speed!r}, want {' or '.join(self.allowed_speeds)} "
+                            "(scripts/session/arm_set_speed.py <preset>)")
 
         print("  waiting for camera_info / status / pixels ...")
         if self.per.wait("info", 5, None) is None:
@@ -296,7 +334,9 @@ class Run:
         f = self.per.force_at_rest()
         pressed = self.per.get("pressed", FORCE_STALE_S)
         print(f"  press detector: age {fa if fa is None else round(fa, 2)} s  |dF| {f:.2f} N  pressed={pressed}")
-        if fa is None or fa > FORCE_STALE_S:
+        if not self.use_force:
+            print("  press detector: IGNORED (--no-force)")
+        elif fa is None or fa > FORCE_STALE_S:
             problems.append("press detector not publishing (python3 -u -m feeding_deployment.button_press.press_detector --publish)")
         elif require_free and f > FORCE_FREE_N:
             problems.append(f"tool force {f:.2f} N > {FORCE_FREE_N} -- arm touching something / bad baseline")
@@ -617,6 +657,461 @@ class Run:
                 # Back to contact depth: re-advance what we retracted, minus the press travel.
                 self.move_along(self.ray_base, PRESS_RETRACT_M - pt, f"press {i+1} re-approach")
 
+    # ---- stages 2/3 without force (--no-force) ------------------------------------------------
+    def approach_open_loop(self) -> str:
+        """Drive the fingertip to NO_FORCE_STANDOFF_M short of the button, by geometry only.
+
+        The button is on the fingertip ray after the servo, and the panel plane gives the
+        camera->button distance along that ray (s_panel). The fingertip sits tip_dist along
+        the same ray, so it touches after s_panel - tip_dist of travel.
+        """
+        a = self.args
+        print("\n== stage 2 (no force): move to the standoff in front of the button ==")
+        if a.tip_dist is None:
+            if a.execute:
+                raise Abort("--tip-dist is required with --no-force: it alone sets the press depth")
+            print("  (dry run without --tip-dist: shown for tip_dist = 0)")
+        tip = a.tip_dist or 0.0
+        l_touch = self.s_panel - tip
+        travel = l_touch - a.standoff
+        print(f"  camera->panel along the fingertip ray {self.s_panel*100:.1f} cm - tip {tip*100:.1f} cm"
+              f" = touch after {l_touch*100:.1f} cm; stopping {a.standoff*100:.1f} cm short -> travel {travel*100:.1f} cm")
+        # The same move written out in the arm base frame, so it can be checked by eye:
+        # button = camera + s_panel * ray; fingertip = camera + tip * ray; the EE is
+        # translated by `travel` along the ray (orientation unchanged).
+        cam = self.per.cam_position_in_base()
+        ee_now = self.arm.ee_pos()
+        button_xyz = cam + self.s_panel * self.ray_base
+        print(f"  button xyz (base)      {np.round(button_xyz, 3)}")
+        print(f"  fingertip xyz now      {np.round(cam + tip * self.ray_base, 3)}  (camera {np.round(cam, 3)})")
+        print(f"  EE xyz now             {np.round(ee_now, 3)}  (EE sits {np.dot(ee_now - cam, self.ray_base)*100:.1f} cm"
+              " along the ray; the pointed fingertips extend past it)")
+        print(f"  EE target at standoff  {np.round(ee_now + travel * self.ray_base, 3)}")
+        self.log({"stage": 2, "button_xyz": button_xyz.tolist(), "cam_xyz": cam.tolist(),
+                  "ee_now": ee_now.tolist(), "ee_target": (ee_now + travel * self.ray_base).tolist()})
+        if a.cap_override is not None and travel > a.cap_override:
+            print(f"  capped by --cap-override to {a.cap_override*100:.1f} cm (no press will follow)")
+            travel = a.cap_override
+            self.approach_capped = True
+        self.log({"stage": 2, "mode": "no_force", "s_panel": self.s_panel, "tip_dist": tip,
+                  "l_touch": l_touch, "travel": travel})
+        if travel <= 0:
+            raise Abort(f"fingertip is already within {a.standoff*100:.1f} cm of the button per these numbers")
+        self.l_touch = l_touch
+        self.move_along(self.ray_base, travel, "approach")
+        return "standoff"
+
+    def goto_button(self):
+        """--goto-button: translate the EE along the fingertip ray to the button's depth - ee_short.
+
+        The button xyz is camera + s_panel * ray (panel plane along the servoed fingertip
+        ray). The EE is moved along that same ray, so its sideways offset from the ray is
+        kept and the fingertip -- which is ON the ray -- stays on the button. ee_short = 0
+        puts the EE level with the button; anything that sticks out past the EE (the
+        pointed fingertips) is then pushed into the panel by its own length.
+        """
+        a = self.args
+        print(f"\n== goto-button: EE along the fingertip ray to {a.ee_short*100:.1f} cm short of the button ==")
+        cam = self.per.cam_position_in_base()
+        ee_now = self.arm.ee_pos()
+        button_xyz = cam + self.s_panel * self.ray_base
+        ee_along = float(np.dot(ee_now - cam, self.ray_base))
+        ee_off = float(np.linalg.norm((ee_now - cam) - ee_along * self.ray_base))
+        travel = self.s_panel - ee_along - a.ee_short
+        ee_target = ee_now + travel * self.ray_base
+        print(f"  button xyz (base)  {np.round(button_xyz, 3)}   ({self.s_panel*100:.1f} cm from the camera along the ray)")
+        print(f"  EE xyz now         {np.round(ee_now, 3)}   ({ee_along*100:.1f} cm along the ray, {ee_off*100:.1f} cm off it)")
+        print(f"  EE xyz target      {np.round(ee_target, 3)}   travel {travel*100:.1f} cm")
+        self.log({"stage": "goto_button", "button_xyz": button_xyz.tolist(), "cam_xyz": cam.tolist(),
+                  "ee_now": ee_now.tolist(), "ee_target": ee_target.tolist(), "ee_short": a.ee_short,
+                  "travel": travel})
+        if getattr(a, "ee_exact", False):
+            self._goto_exact(button_xyz - a.ee_short * self.ray_base, ee_now)
+            return
+        if travel <= 0:
+            raise Abort(f"EE is already within {a.ee_short*100:.1f} cm of the button depth -- nothing to do")
+        if travel > 0.12:
+            raise Abort(f"travel {travel*100:.1f} cm > 12 cm -- start closer (the far phase handles >23 cm)")
+        try:
+            self.move_along(self.ray_base, travel, "to button")
+        except Abort as e:
+            # Most likely the fingertips met the panel early and the arm could not reach the
+            # target. Holding would keep pushing, so back off what was done, then stop.
+            print(f"  goto-button aborted ({e}) -- backing off {self.travelled*100:.1f} cm first")
+            if self.travelled > 1e-4:
+                self.move_along(-self.ray_base, self.travelled, "bail")
+            raise
+        if a.execute:
+            print(f"  at target: EE {np.round(self.arm.ee_pos(), 3)}; holding {PRESS_HOLD_S:.1f} s")
+            time.sleep(PRESS_HOLD_S)
+
+    def _goto_exact(self, target, ee_now, max_dist=0.12, at_target=None):
+        """--ee-exact: put the EE itself at `target` (straight line, chunked), hold, and --
+        unless --stage < 4 -- come back the same way. Unlike the default goto-button move this
+        does not keep the EE's sideways offset from the fingertip ray, so the fingertip lands
+        wherever the EE's offset puts it."""
+        a = self.args
+        d = np.asarray(target, dtype=float) - ee_now
+        dist = float(np.linalg.norm(d))
+        print(f"  EE exact target    {np.round(target, 3)}   straight-line move {dist*100:.1f} cm")
+        self.log({"stage": "goto_button_exact", "ee_target": list(map(float, target)), "dist": dist})
+        if dist < 1e-4:
+            return
+        if dist > max_dist:
+            raise Abort(f"exact move {dist*100:.1f} cm > {max_dist*100:.0f} cm -- start closer")
+        if a.smooth:
+            self._goto_exact_smooth(np.asarray(target, dtype=float), ee_now, at_target)
+            return
+        u = d / dist
+        done, k = 0.0, 0
+        try:
+            while dist - done > 1e-4:
+                stp = min(RAY_STEP_MAX_M, dist - done)
+                k += 1
+                self.step(u * stp, f"to xyz {k} (+{stp*100:.1f})")
+                done += stp
+        except Abort as e:
+            print(f"  exact move aborted ({e}) -- backing off {done*100:.1f} cm first")
+            while done > 1e-4:
+                stp = min(RAY_STEP_MAX_M, done)
+                self.step(-u * stp, "bail")
+                done -= stp
+            raise
+        if a.execute:
+            print(f"  at target: EE {np.round(self.arm.ee_pos(), 3)}; holding {PRESS_HOLD_S:.1f} s")
+            time.sleep(PRESS_HOLD_S)
+        if at_target is not None:
+            at_target()   # e.g. the press; on Abort the arm holds at the spot (press backs itself out)
+        if a.stage >= 4:
+            print("\n== back out the same way ==")
+            k = 0
+            while done > 1e-4:
+                stp = min(RAY_STEP_MAX_M, done)
+                k += 1
+                self.step(-u * stp, f"back {k} (-{stp*100:.1f})")
+                done -= stp
+
+    def _goto_exact_smooth(self, target, start, at_target):
+        """--smooth version of _goto_exact: one continuous move there, press, one back."""
+        a = self.args
+        try:
+            self.arm.smooth_line(target, "to spot", self.log, posture=self.seed_posture)
+        except Abort as e:
+            if a.execute and np.linalg.norm(self.arm.ee_pos() - start) > 0.005:
+                print(f"  move aborted ({e}) -- going back to the start first")
+                self.arm.smooth_line(start, "bail", self.log, posture=self.seed_posture)
+            raise
+        if a.execute:
+            time.sleep(PRESS_HOLD_S)
+        if at_target is not None:
+            at_target()
+        if a.stage >= 4:
+            print("\n== back to the start ==")
+            self.arm.smooth_line(start, "back", self.log, posture=self.seed_posture)
+
+    # ---- straight-line pose moves (position + wrist rotation) -------------------------------
+    def pose_path(self, p0, R0, p1, R1):
+        """Straight-line (xyz, R) points from one tool pose to another, chunked so that no
+        step moves more than RAY_STEP_MAX_M or turns more than ROT_STEP_MAX_DEG."""
+        return pose_path(p0, R0, p1, R1, RAY_STEP_MAX_M, ROT_STEP_MAX_DEG)
+
+    def execute_path(self, path, name):
+        """Drive an already pre-checked path. Step mode re-targets every point from the
+        measured tool pose, so a millimetre short on one step is made up on the next.
+        Dry run: nothing to do (the pre-check was the plan)."""
+        if not self.args.execute:
+            return
+        if self.args.smooth:
+            self.arm.smooth_poses(path, name, self.log)
+            return
+        for k, (pt, Rt) in enumerate(path, 1):
+            p_now, R_now = self.arm.ee_pose()
+            self.arm.step(pt - p_now, f"{name} {k}/{len(path)}", self.log, posture=self.seed_posture,
+                          rot=Rt @ R_now.T)
+
+    def go_back(self, p0, R0, why):
+        """After an abort mid-move: straight back to (p0, R0), pre-checked. Holds if that fails."""
+        p_now, R_now = self.arm.ee_pose()
+        if not self.args.execute or (np.linalg.norm(p_now - p0) < 0.005 and rot_angle_deg(R_now, R0) < 2.0):
+            return
+        print(f"  {why} -- going back to the start first")
+        path = self.pose_path(p_now, R_now, p0, R0)
+        self.arm.precheck_poses(path, "bail", self.log, posture=self.seed_posture)
+        self.execute_path(path, "bail")
+
+    def button_on_plane(self, origin, n_out):
+        """Re-detect the button now and intersect its pixel ray with a KNOWN panel plane
+        (through `origin`, normal `n_out`, base frame). Used close to the panel, where the
+        fingers fill part of the view and a fresh plane fit is not trusted (2026-09-27: a
+        17.6 cm fit came out pointing up). Returns the button xyz, or None if not locked."""
+        ok, status = self.per.locked(MIN_INLIERS_TRACK)
+        if not ok or (self.args.target and self.per.lock_target() != self.args.target):
+            print(f"  re-detect: not locked ({status})")
+            return None
+        b_px = self.per.median_after("button_px", time.monotonic() - 0.2)
+        if b_px is None:
+            return None
+        cam = self.per.cam_position_in_base()
+        ray = self.per.cam_rotation_in_base() @ self.per.ray(b_px)
+        denom = float(np.dot(n_out, ray))
+        if abs(denom) < 0.3:
+            print(f"  re-detect: ray nearly parallel to the panel (n.r={denom:.2f})")
+            return None
+        s = float(np.dot(n_out, np.asarray(origin) - cam)) / denom
+        return cam + s * ray
+
+    # ---- teach / replay a pose relative to the panel ----------------------------------------
+    def taught_path(self) -> Path:
+        return self.log_dir / "taught_pose.json"
+
+    def measure_panel_frame(self):
+        """Detect the button now and build the panel frame (origin = button xyz, base frame).
+
+        No servo: the button pixel's ray is intersected with the depth-fitted panel plane.
+        """
+        self.R_bc = self.per.cam_rotation_in_base()
+        cam = self.per.cam_position_in_base()
+        n_cam, d, z_med, npts = self.per.panel_plane()
+        b_px = self.per.median_after("button_px", time.monotonic() - 0.2)
+        if b_px is None:
+            raise Abort("no button pixel from the detector -- is the panel in view and locked?")
+        ray_cam = self.per.ray(b_px)
+        s, denom = ray_plane_distance(n_cam, d, ray_cam)
+        if abs(denom) < 0.3:
+            raise Abort(f"button ray nearly parallel to the panel (n.r={denom:.2f})")
+        button = cam + s * (self.R_bc @ ray_cam)
+        # n_cam points back toward the camera, i.e. out of the panel.
+        n_base = self.R_bc @ n_cam
+        # The microwave's front face is near-vertical, so its normal is near-horizontal. On
+        # 2026-09-27 a teach-view from 17.6 cm (fingers in frame) fitted n = [-0.23 0.03 0.97]
+        # -- pointing UP -- and silently replaced a good frame. Reject that.
+        if abs(float(n_base[2])) > MAX_PANEL_NORMAL_Z:
+            raise Abort(f"panel normal {np.round(n_base, 3)} is not near-horizontal (|z| > "
+                        f"{MAX_PANEL_NORMAL_Z}) -- bad plane fit (too close? fingers in view?); "
+                        "detect from further back")
+        origin, R = panel_frame(button, n_base)
+        print(f"  button pixel {np.round(b_px, 1)}  -> {s*100:.1f} cm from the camera")
+        print(f"  button xyz (base) {np.round(origin, 3)}   panel normal (out) {np.round(R[:, 2], 3)}")
+        self.log({"panel_frame": {"origin": origin.tolist(), "R": R.tolist(), "button_px": b_px.tolist(),
+                                  "s": s, "n_px": npts}})
+        return origin, R
+
+    def teach_view(self) -> int:
+        """--teach-view: detect the panel from here and save its frame. No motion."""
+        try:
+            self.preflight(require_free=False, require_ready=False)
+        except Abort as e:
+            print(e)
+            return 2
+        print("\n== teach 1/2: record the panel frame from this view ==")
+        try:
+            origin, R = self.measure_panel_frame()
+        except Abort as e:
+            print(f"  NOT saved (the previous frame is kept): {e}")
+            return 2
+        self.taught_path().write_text(json.dumps({"panel_origin": origin.tolist(), "panel_R": R.tolist(),
+                                                  "t_view": time.time()}, indent=1))
+        print(f"  saved -> {self.taught_path()}")
+        print("  Now move the arm BY HAND to where the EE should go relative to the button, then run "
+              "--teach-pose. Do NOT move the microwave in between.")
+        return 0
+
+    def teach_pose(self) -> int:
+        """--teach-pose: record the EE's current position in the saved panel frame. No motion."""
+        data = json.loads(self.taught_path().read_text())
+        origin, R = np.asarray(data["panel_origin"]), np.asarray(data["panel_R"])
+        st = self.arm.state()
+        ee = np.asarray(list(st["ee_pos"])[:3], dtype=float)
+        quat = list(map(float, list(st["ee_pos"])[3:7]))
+        local = to_panel(ee, origin, R)
+        data.update(ee_local=local.tolist(), ee_quat=quat, ee_base_at_teach=ee.tolist(), t_pose=time.time())
+        self.taught_path().write_text(json.dumps(data, indent=1))
+        print("\n== teach 2/2: EE pose recorded relative to the button ==")
+        print(f"  EE xyz (base) {np.round(ee, 3)}")
+        print(f"  panel frame   {np.round(local * 100, 1)} cm  (x right, y up, z out of the panel)")
+        print(f"  i.e. {describe(local)}")
+        print(f"  saved -> {self.taught_path()}")
+        return 0
+
+    def back_to_view(self) -> int:
+        """--back-to-view: straight-line EE move to the xyz saved by the last preflight
+        (start_joints.json -- --teach-view saves the view pose there), wrist orientation kept.
+        No detection needed. <= 35 cm, 1 cm gated steps; holds on any failure."""
+        saved = json.loads((self.log_dir / "start_joints.json").read_text())
+        target = np.asarray(saved["ee_pos"][:3], dtype=float)
+        name = self.arm.arm_state_name()
+        ee_now = self.arm.ee_pos()
+        dist = float(np.linalg.norm(target - ee_now))
+        print(f"\n== back-to-view: straight line to the pose saved {time.ctime(saved['t'])} ==")
+        print(f"  arm state {name}")
+        print(f"  EE xyz now    {np.round(ee_now, 3)}")
+        print(f"  EE xyz target {np.round(target, 3)}   ({dist*100:.1f} cm, wrist orientation unchanged)")
+        if "SERVOING_READY" not in str(name) and not str(name).startswith("unknown"):
+            print("  refusing: arm is not SERVOING_READY (let go of the arm / release hand-guiding)")
+            return 2
+        if dist > 0.35:
+            print("  refusing: more than 35 cm -- move it closer by hand first")
+            return 2
+        if not self.args.execute:
+            print("  dry run -- add --execute to move")
+            return 0
+        if self.args.smooth:
+            try:
+                self.arm.smooth_line(target, "back to view", self.log)
+            except Abort as e:
+                print(f"\nABORT: {e}")
+                return 2
+            print(f"  done: EE {np.round(self.arm.ee_pos(), 3)}")
+            return 0
+        u, done, k = (target - ee_now) / max(dist, 1e-9), 0.0, 0
+        try:
+            while dist - done > 1e-4:
+                stp = min(RAY_STEP_MAX_M, dist - done)
+                k += 1
+                self.step(u * stp, f"back {k} (+{stp*100:.1f})")
+                done += stp
+        except Abort as e:
+            print(f"\nABORT: {e} -- holding after {done*100:.1f} cm")
+            return 2
+        print(f"  done: EE {np.round(self.arm.ee_pos(), 3)}")
+        return 0
+
+    def press_here(self) -> int:
+        """--press-here: press --presses times from the CURRENT position, straight into the
+        panel along the normal saved by --teach-view. No detection, no approach."""
+        data = json.loads(self.taught_path().read_text())
+        normal_out = np.asarray(data["panel_R"], dtype=float)[:, 2]
+        name = self.arm.arm_state_name()
+        print(f"\n== press-here: EE {np.round(self.arm.ee_pos(), 3)}, panel normal (out) {np.round(normal_out, 3)} ==")
+        if "SERVOING_READY" not in str(name) and not str(name).startswith("unknown"):
+            print(f"  refusing: arm state {name} (let go of the arm)")
+            return 2
+        try:
+            self.press_along_normal(normal_out)
+        except Abort as e:
+            print(f"\nABORT: {e}")
+            return 2
+        print("\ndone.")
+        return 0
+
+    def goto_taught(self) -> int:
+        """--goto-taught: detect the panel, move the EE to the taught panel-relative spot, hold, back."""
+        a = self.args
+        data = json.loads(self.taught_path().read_text())
+        if "ee_local" not in data:
+            print("no taught pose yet: run --teach-view, move the arm, then --teach-pose")
+            return 2
+        local = np.asarray(data["ee_local"], dtype=float)
+        try:
+            self.preflight(require_free=False)
+            print("\n== goto-taught: detect the panel, go to the taught spot ==")
+            origin, R = self.measure_panel_frame()
+            drift = float(np.linalg.norm(origin - np.asarray(data["panel_origin"], dtype=float)))
+            print(f"  button has moved {drift*100:.1f} cm since it was taught")
+            if drift > MAX_PANEL_DRIFT_M:
+                raise Abort(f"the microwave has moved {drift*100:.1f} cm (> {MAX_PANEL_DRIFT_M*100:.0f}) since "
+                            "--teach-view -- the presses are pushing it. Push it back, brace it, and re-run "
+                            "(or re-teach if it now sits somewhere new on purpose). Arm not commanded.")
+            target = from_panel(local, origin, R)
+            st = self.arm.state()
+            ee_now = np.asarray(list(st["ee_pos"])[:3], dtype=float)
+            ang = quat_angle_deg(list(st["ee_pos"])[3:7], data["ee_quat"])
+            print(f"  taught offset: {describe(local)}")
+            print(f"  EE xyz now    {np.round(ee_now, 3)}")
+            print(f"  EE xyz target {np.round(target, 3)}")
+            print(f"  wrist orientation now vs taught: {ang:.1f} deg apart (only position is replayed;"
+                  " the wrist keeps its current orientation)")
+            if ang > 15.0:
+                raise Abort(f"wrist orientation is {ang:.0f} deg from the taught one (> 15) -- start from a "
+                            "pose oriented like the taught one, or re-teach")
+            self._goto_exact(target, ee_now, max_dist=0.35,
+                             at_target=(lambda: self.press_along_normal(R[:, 2])) if a.stage >= 3 else None)
+        except Abort as e:
+            print(f"\nABORT: {e}")
+            return 2
+        print("\ndone.")
+        return 0
+
+    def press_along_normal(self, normal_out):
+        """From the taught spot: straight INTO the panel by --press-in, hold, straight back out."""
+        a = self.args
+        depth = a.press_in
+        if not 0 < depth <= MAX_PRESS_IN_M:
+            raise Abort(f"--press-in {depth*100:.1f} cm outside (0, {MAX_PRESS_IN_M*100:.0f}] cm")
+        u = -np.asarray(normal_out, dtype=float)   # into the panel
+        print(f"\n== press x{a.presses}: {depth*100:.1f} cm straight into the panel and back ==")
+        if a.smooth:
+            for i in range(1, a.presses + 1):
+                p0 = self.arm.ee_pos()
+                try:
+                    self.arm.smooth_line(p0 + u * depth, f"press {i} in", self.log, posture=self.seed_posture,
+                                         spacing=SMOOTH_PRESS_SPACING_M)
+                except Abort as e:
+                    if a.execute:
+                        print(f"  press aborted ({e}) -- backing out first")
+                        self.arm.smooth_line(p0, "press bail", self.log, posture=self.seed_posture)
+                    raise
+                if a.execute:
+                    time.sleep(PRESS_HOLD_S)
+                self.log({"stage": "press_normal", "press": i, "depth": depth, "smooth": True})
+                self.arm.smooth_line(p0, f"press {i} out", self.log, posture=self.seed_posture)
+            return
+        for i in range(1, a.presses + 1):
+            done, k = 0.0, 0
+            try:
+                while depth - done > 1e-4:
+                    stp = min(RAY_STEP_MAX_M, depth - done)
+                    k += 1
+                    self.step(u * stp, f"press {i}.{k} (+{stp*100:.1f})")
+                    done += stp
+            except Abort as e:
+                print(f"  press aborted ({e}) -- backing out {done*100:.1f} cm first")
+                while done > 1e-4:
+                    stp = min(RAY_STEP_MAX_M, done)
+                    self.step(-u * stp, "press bail")
+                    done -= stp
+                raise
+            if a.execute:
+                time.sleep(PRESS_HOLD_S)
+            self.log({"stage": "press_normal", "press": i, "depth": depth})
+            while done > 1e-4:
+                stp = min(RAY_STEP_MAX_M, done)
+                self.step(-u * stp, f"press {i} out (-{stp*100:.1f})")
+                done -= stp
+            if i < a.presses and a.execute:
+                time.sleep(0.5)
+
+    def press_open_loop(self, n_presses: int):
+        """From the standoff: forward (standoff + press_depth) along the ray, hold, straight back."""
+        a = self.args
+        if a.press_depth > NO_FORCE_MAX_PRESS_DEPTH_M:
+            raise Abort(f"--press-depth {a.press_depth*1000:.1f} mm > {NO_FORCE_MAX_PRESS_DEPTH_M*1000:.0f} mm cap")
+        if self.approach_capped:
+            print("\n== stage 3 (no force): skipped -- the approach was capped short of the standoff ==")
+            return
+        fwd = self.l_touch + a.press_depth - self.travelled
+        if not 0 < fwd <= a.standoff + NO_FORCE_MAX_PRESS_DEPTH_M + 1e-6:
+            raise Abort(f"press stroke {fwd*100:.2f} cm is outside (0, standoff + max depth] -- HOLDING HERE")
+        print(f"\n== stage 3 (no force): press x{n_presses}, {fwd*100:.2f} cm forward "
+              f"({a.press_depth*1000:.1f} mm past the computed touch) and back ==")
+        for i in range(1, n_presses + 1):
+            try:
+                self.move_along(self.ray_base, fwd, f"press {i}")
+            except Abort as e:
+                # The likely cause is the fingertip meeting the panel early (tip_dist too
+                # small). Holding would keep pushing, so back off what was done before holding.
+                done = self.travelled - (self.l_touch - a.standoff) if self.l_touch else 0.0
+                print(f"  press {i} aborted ({e}) -- backing off {max(done, 0)*100:.1f} cm first")
+                if done > 1e-4:
+                    self.move_along(-self.ray_base, done, f"press {i} bail")
+                raise
+            if a.execute:
+                time.sleep(PRESS_HOLD_S)
+            self.log({"stage": 3, "mode": "no_force", "press": i, "travelled": self.travelled})
+            self.move_along(-self.ray_base, fwd, f"press {i} back")
+            if i < n_presses and a.execute:
+                time.sleep(0.5)
+
     # ---- stage 4 ------------------------------------------------------------------------------
     def retract(self):
         print("\n== stage 4: retract to standoff ==")
@@ -648,7 +1143,17 @@ class Run:
                 if self.s_panel > CLOSE_STANDOFF_M + 0.03:
                     self.far_approach()
                 self.servo()
-            if a.stage >= 2:
+            if a.stage >= 2 and a.goto_button:
+                self.goto_button()
+                if a.stage >= 4:
+                    self.retract()
+            elif a.stage >= 2 and not self.use_force:
+                self.approach_open_loop()
+                if a.stage >= 3:
+                    self.press_open_loop(a.presses)
+                if a.stage >= 4:
+                    self.retract()
+            elif a.stage >= 2:
                 outcome = self.approach()
                 if a.stage >= 3 and outcome in ("contact", "dry_run"):
                     self.press(a.presses)
@@ -780,6 +1285,46 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     help=f"extra travel (m) past first contact for the press itself (default {PRESS_TRAVEL_M})")
     ap.add_argument("--fine-step", type=float, default=FINE_STEP_M,
                     help=f"step size (m) for the last {FINE_ZONE_M*100:.0f} cm before the cap (default {FINE_STEP_M})")
+    ap.add_argument("--no-force", action="store_true",
+                    help="do not use the press detector: approach to --standoff short of the button "
+                         "by depth geometry, then press --press-depth past it and back. Press depth "
+                         "then depends entirely on --tip-dist being right.")
+    ap.add_argument("--goto-button", action="store_true",
+                    help="after the servo, move the EE along the fingertip ray to the button's depth "
+                         "minus --ee-short, hold, then retract. No force sensing (implies --no-force).")
+    ap.add_argument("--ee-short", type=float, default=0.02,
+                    help="--goto-button: stop the EE this far (m) short of the button depth. 0 = EE level "
+                         "with the button; the fingertips past the EE then push into the panel (default 0.02)")
+    ap.add_argument("--ee-exact", action="store_true",
+                    help="--goto-button: move the EE itself to (button xyz - ee_short along the approach "
+                         "ray), straight line, instead of keeping its sideways offset from the fingertip ray")
+    ap.add_argument("--smooth", action="store_true",
+                    help="--goto-taught / --press-here / --back-to-view: send each straight-line move as ONE "
+                         "blended Cartesian trajectory (every point pre-checked with the same gates) instead "
+                         "of 1 cm stop-and-go joint steps")
+    ap.add_argument("--press-here", action="store_true",
+                    help="press --presses times from the current position, --press-in straight into the "
+                         "panel along the normal saved by --teach-view (no detection)")
+    ap.add_argument("--back-to-view", action="store_true",
+                    help="straight-line EE move back to the pose the last preflight saved (e.g. the "
+                         "--teach-view pose), wrist orientation unchanged, <= 35 cm")
+    ap.add_argument("--teach-view", action="store_true",
+                    help="TEACH 1/2 (no motion): detect the panel from the current view and save its frame")
+    ap.add_argument("--teach-pose", action="store_true",
+                    help="TEACH 2/2 (no motion): after moving the arm by hand, save the EE position "
+                         "relative to the panel frame from --teach-view")
+    ap.add_argument("--goto-taught", action="store_true",
+                    help="detect the panel, move the EE (straight line, <= 35 cm) to the taught "
+                         "panel-relative spot, press --press-in into the panel, and come back to the start "
+                         "(--stage 2: go there and stay, no press; --stage 3: press but stay)")
+    ap.add_argument("--press-in", type=float, default=PRESS_IN_M,
+                    help=f"--goto-taught: after reaching the spot, push this far (m) straight into the panel "
+                         f"and back (default {PRESS_IN_M}, max {MAX_PRESS_IN_M}). --stage 2 skips the press.")
+    ap.add_argument("--standoff", type=float, default=NO_FORCE_STANDOFF_M,
+                    help=f"--no-force: stop this far short of the button before pressing (default {NO_FORCE_STANDOFF_M})")
+    ap.add_argument("--press-depth", type=float, default=NO_FORCE_PRESS_DEPTH_M,
+                    help=f"--no-force: push this far past the computed touch (default {NO_FORCE_PRESS_DEPTH_M}, "
+                         f"max {NO_FORCE_MAX_PRESS_DEPTH_M})")
     ap.add_argument("--target", default=None, help="require the node to be locked on this button name")
     ap.add_argument("--home", action="store_true", help="after retracting, joint-move back to the start joints")
     ap.add_argument("--goto-start", action="store_true",
@@ -808,6 +1353,16 @@ def main(argv: list[str] | None = None) -> int:
     rclpy.init()
     try:
         run = Run(args)
+        if args.press_here:
+            return run.press_here()
+        if args.back_to_view:
+            return run.back_to_view()
+        if args.teach_view:
+            return run.teach_view()
+        if args.teach_pose:
+            return run.teach_pose()
+        if args.goto_taught:
+            return run.goto_taught()
         if args.goto_start:
             return run.goto_start()
         if args.jog is not None:

@@ -58,6 +58,7 @@ import numpy as np
 import rclpy
 from cv_bridge import CvBridge
 from geometry_msgs.msg import Point32, PointStamped, PolygonStamped, PoseStamped, Vector3Stamped
+from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import Bool, String
@@ -88,7 +89,10 @@ DEPTH_PATCH = 4
 # x=375..399 at y~393, so the centre moved ~6 px left of the first measurement
 # (391 was sitting at the flat's right end). Shifted to 385, then to 377 on
 # the user's visual check of the live overlay.
-LEFT_CLAW_PIXEL = (377, 394)
+# 2026-09-27: NEW (cyan, pointed) fingers -- the old (377, 394) is now mid-finger. Cyan-mask
+# (HSV 80-100) topmost rows over a 10-frame median: left tip x=404..411, right tip x=422..427,
+# both at y=349. The pointed tips meet, so aim at the midpoint of the pair, not the left tip.
+LEFT_CLAW_PIXEL = (416, 350)
 # Press-detector feed is considered dead after this long without a message. The
 # detector publishes every sample (~50 Hz), so half a second of silence is real.
 FORCE_STALE_S = 0.5
@@ -125,6 +129,10 @@ class ButtonDetectorNode(Node):
         self.get_logger().info(
             f"loaded reference from {ref} ({len(self.det.views)} view(s)), "
             f"target button {self.det.target!r}")
+        self._ref_dir = ref
+        # target_button can be changed live (`ros2 param set /button_detector target_button
+        # start_30s`; press_button does this), so one bring-up serves every button.
+        self.add_on_set_parameters_callback(self._on_set_params)
 
         self.bridge = CvBridge()
         self.depth = None
@@ -159,6 +167,19 @@ class ButtonDetectorNode(Node):
                                  self._on_force, 10)
         self.create_subscription(Bool, self.get_parameter("pressed_topic").value,
                                  self._on_pressed, 10)
+
+    def _on_set_params(self, params):
+        for prm in params:
+            if prm.name != "target_button":
+                continue
+            try:
+                det = ReferenceButtonDetector(self._ref_dir, target=prm.value or None)
+            except Exception as e:  # noqa: BLE001 -- unknown button name etc.: refuse, keep the old one
+                return SetParametersResult(successful=False, reason=str(e))
+            # Single-threaded executor: no frame callback runs mid-swap.
+            self.det = det
+            self.get_logger().info(f"target button -> {det.target!r}")
+        return SetParametersResult(successful=True)
 
     def _on_depth(self, msg):
         self.depth = msg

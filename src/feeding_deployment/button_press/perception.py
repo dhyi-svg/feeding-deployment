@@ -38,7 +38,10 @@ PX_SAMPLES_MIN = 3           # accept a shorter median rather than failing outri
 FORCE_STALE_S = 0.5          # press detector considered dead after this silence
 FORCE_SETTLE_S = 0.3         # wait this long after a step before reading force
 # ---- perception gates ------------------------------------------------------------------
-MIN_INLIERS = 12             # to START a run (preflight); 6-8-inlier locks have picked the wrong dome
+# To START a run (preflight); 6-8-inlier locks have picked the wrong dome. Was 12; lowered to 8
+# on 2026-09-27 (user request) -- this pose locks timer_clock steadily at 8-13 inliers and the
+# debug overlay showed the mark on the correct dome. Eyeball debug_image before trusting it.
+MIN_INLIERS = 8
 MIN_INLIERS_TRACK = 8        # to accept a re-servo correction mid-transit (a weak lock just skips it)
 LOCK_HOLD_S = 2.0
 FRESH_S = 1.0
@@ -192,6 +195,16 @@ class Perception(Node):
                         f"  ros2 run tf2_ros tf2_echo {self.arm_frame} {self.cam_frame}")
         q = tr.transform.rotation
         return R.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
+
+    def cam_position_in_base(self) -> np.ndarray:
+        """Camera optical-frame origin in the arm base frame (tf2), metres."""
+        try:
+            tr = self.tfbuf.lookup_transform(self.arm_frame, self.cam_frame, Time(),
+                                             timeout=Duration(seconds=2.0))
+        except Exception as e:  # noqa: BLE001
+            raise Abort(f"tf {self.arm_frame} <- {self.cam_frame} unavailable: {e}")
+        t = tr.transform.translation
+        return np.array([t.x, t.y, t.z])
 
     def ray(self, px) -> np.ndarray:
         return pixel_ray(px, *self.intrinsics())

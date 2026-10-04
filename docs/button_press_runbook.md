@@ -141,6 +141,37 @@ phase ran), `$P --goto-start [--execute]` (≤20° per joint, back to the joints
 the button 110 px above the claw and closes to 20 cm). It has never completed on hardware;
 start from ≤ ~20 cm until it has.
 
+## One-command press (vision only, no force) — 2026-10-03
+
+The arm starts with the panel in view (~25–40 cm away, roughly facing it). One call detects the
+panel, goes to a stored spot in front of the button (hand-measured), pushes 1.0 cm in,
+comes 1.0 cm out, and returns to the start.
+
+```bash
+./scripts/button_press/bringup.sh                 # replaces §0–3; no motion; prints READY
+python3 -u -m feeding_deployment.button_press.press_button --target timer_clock            # dry run: plans + gates every leg
+python3 -u -m feeding_deployment.button_press.press_button --target timer_clock --execute  # does it
+./scripts/button_press/bringup.sh stop
+```
+
+- `--target` is `start_30s` (default) or `timer_clock`. It is set on the
+  running detector, so there's no need to restart it.
+- `--presses N` (0 = go and come back), `--press-in` (default 0.010, max 0.03), `--refine`,
+  `--no-return`, `--steps` (stop-and-check instead of the default smooth trajectories). Speed preset `low` or `medium`.
+- The spot is the constant `PREPRESS_EE_OFFSET_M` / `PREPRESS_EE_QUAT_PANEL` in `press_button.py`,
+  relative to the detected button. Re-measure it when the fingers change:
+  `python3 -u scripts/button_press/measure_prepress_offset.py --target timer_clock`.
+  That script makes no motion: you hand-guide the arm, then paste the printed values.
+- **Detection from anywhere** (≈22–50+ cm): the dome-layout detector (`dome_pattern.py`) finds the
+  5 chrome domes by their 3+2 layout with plain OpenCV + depth. No reference images needed, and it
+  works where the SIFT lock fails. It is the primary detector. From further than 25 cm the arm first
+  stages 8 cm out from the pre-press spot (camera ~25 cm) and re-measures there with the domes,
+  falling back to SIFT. `--refine` adds a SIFT check at the spot itself (off by default). Far 3D estimates
+  read ~1.5 cm low (depth/hand-eye bias, seen 2026-10-03), which is why the final measurement, and
+  the offset measurement, happen at ~22 cm. A dry run from far away plans only up to the staging pose.
+- The whole sequence is pre-checked in the sim before the first move. On an abort mid-approach
+  it goes straight back to the start; an aborted press backs itself out and holds.
+
 ## 5. Shutdown
 
 Re-check `gripper_pos` and `get_arm_state()` (idle, `SERVOING_READY`), then stop in reverse:
