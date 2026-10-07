@@ -71,6 +71,38 @@ def make_sim():
     return scene, FeedingDeploymentPyBulletSimulator(scene, use_gui=False).robot
 
 
+def door_arc_waypoints(start_pose, hinge_position, arc_length_m, waypoint_spacing_m, direction=1,
+                       rotate_orientation=True):
+    """Waypoints along a door arc about a vertical hinge axis, starting from (not including)
+    `start_pose`, at constant height. Copied from `PerceptionInterface._generate_door_arc_waypoints`
+    so these scripts don't import the lab's whole perception stack for one function."""
+    if arc_length_m <= 0:
+        return []
+    if waypoint_spacing_m <= 0:
+        raise ValueError("waypoint_spacing_m must be > 0")
+    if direction not in (-1, 1):
+        raise ValueError("direction must be either +1 or -1")
+    hx, hy, hz = start_pose.position
+    cx, cy, _ = hinge_position
+    radius_vec = np.array([hx - cx, hy - cy], dtype=float)
+    radius = np.linalg.norm(radius_vec)
+    if radius < 1e-8:
+        raise ValueError("Handle pose is too close to hinge pose; radius is ~0.")
+    start_theta = np.arctan2(radius_vec[1], radius_vec[0])
+    total_angle = arc_length_m / radius
+    num_segments = max(1, int(np.ceil(arc_length_m / waypoint_spacing_m)))
+    start_rot = R.from_quat(start_pose.orientation)
+    waypoints = []
+    for i in range(1, num_segments + 1):
+        delta_angle = direction * i / num_segments * total_angle
+        theta = start_theta + delta_angle
+        orientation = ((R.from_euler("z", delta_angle) * start_rot).as_quat() if rotate_orientation
+                       else start_pose.orientation)
+        waypoints.append(Pose(position=(cx + radius * np.cos(theta), cy + radius * np.sin(theta), hz),
+                              orientation=orientation))
+    return waypoints
+
+
 def solve_ik(scene, rb, pos, quat, seed_joints):
     """PyBullet IK seeded from `seed_joints`; returns (joints, position error in m)."""
     for j, jj in enumerate(ARM):

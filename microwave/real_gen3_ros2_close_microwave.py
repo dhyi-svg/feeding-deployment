@@ -1,40 +1,36 @@
-"""Close the microwave door, adapted from the other lab's real `CloseDoorHLA.close_microwave()`
-(`src/feeding_deployment/actions/close_door.py` + `perceive_handle_closing_poses`) to this rig
-and this session's validated values, kept as simple as the two-phase shape they proved out
-lets it be.
+"""Close the microwave door. Phases (`--phase`):
 
-Their version and why it can't be used as-is here:
+* `push-close` -- the main close (validated on hardware 2026-09-25, door latched): no grasp, push
+  the door shut with the side of the hand (gripper left as is, e.g. holding a container). See
+  `door_push.push_close`.
+* `view` / `regrasp` -- get back onto the open door's handle recorded by the last release.
+* `swing` / `push` / `both` -- while holding the handle: swing the door most of the way shut, then
+  a small push along the approach axis to seat it (ran 2026-09-23 with `--smooth`).
+* `release` -- open the gripper, back off, park.
+
+Adapted from the Cornell lab's `CloseDoorHLA.close_microwave()`
+(`src/feeding_deployment/actions/close_door.py` + `perceive_handle_closing_poses`). Their
+version and why it can't be used as-is here:
 * `perceive_handle_closing_poses()` doesn't re-detect anything -- it just reloads the pickle
   `perceive_handle_opening_poses()` wrote out when the door was OPENED earlier in the same
-  `log_dir`. We have no such cache wired up (our whole session has been live re-detection with
-  the YOLO shim), so this script does a small LIVE push instead of replaying cached geometry.
+  `log_dir`. Here the open task saves its geometry to `~/.microwave_door.json` and
+  `~/.microwave_last_grasp.json` instead, and the close reads those.
 * Their push/pull phases run inside `collision_threshold(...)` -- a REAL torque-based safety
   check via a ROS 1 `/set_collision_threshold` service (`feeding_deployment/safety/
   collision_threshold.py`). That needs `rospy`, which this ROS 2 rig doesn't have; the context
   manager itself degrades to a no-op off ROS 1 (see its own docstring), so calling it here would
-  be cosmetic. Position-tracking-abort (validated all session) is the real safety net instead.
+  be cosmetic. Position-tracking-abort is the safety net instead (plus, for push-close, a
+  joint-torque contact check).
 * Their preset joint configs (`behind_back_retract_pos`, `microwave_push_starting_pos`, ...) are
   specific to the original lab rig's mount and don't transfer (CLAUDE.md already flags this for
   every `preset_actions/*.py`). This script never needs a named preset -- everything is relative
   to the arm's actual current pose.
 
-What's kept, because it's the actual proven shape: TWO phases, not one continuous pull to fully
-closed. (1) swing the door MOST of the way shut via the handle, stopping a few waypoints short
-of the computed end (their `closing_waypoints[-3]` pattern) rather than trying to pull all the
-way to 0 deg, since the geometry gets awkward and the door's own latch resistance takes over
-near fully closed. (2) a small additional PUSH along the same local approach axis to seat it the
-rest of the way, then release and retreat.
+What's kept from theirs for the grasped close: TWO phases, not one continuous pull to fully
+closed -- swing MOST of the way shut, stopping a few waypoints short of the computed end (their
+`closing_waypoints[-3]` pattern), then a small push to seat it.
 
-Reuses, unmodified: the hinge geometry, per-waypoint seeded-IK / joint-jump / tracking-abort /
-proactive-J6 guards from `real_gen3_ros2_grasp_and_swing_microwave.py`'s swing (same file that
-validated the OPENING direction tonight) -- just with `direction` flipped for closing.
-
-**Not run.** Written and syntax-checked only, same as
-`real_gen3_ros2_grasp_and_swing_microwave.py` was before this. Dry-run (`--execute` omitted)
-before trusting it on hardware. The push phase in particular (phase 2) has no analogue that was
-actually executed tonight -- the session's own push-the-door-open attempt was abandoned after a
-collision (see the joint-space-interp-hits-door finding), so treat `--phase push` with extra
-caution and a human ready to intervene.
+Always dry-run (omit `--execute`) first.
 """
 import argparse, sys, time
 
@@ -47,9 +43,7 @@ from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceC
 from feeding_deployment.control.robot_controller.command_interface import CartesianTrajectoryCommand, JointCommand
 
 from door_push import add_push_args, push_close
-from microwave_common import move_to_door_view, regrasp, release_and_back_off
-from feeding_deployment.simulation.scene_description import create_scene_description_from_config
-from feeding_deployment.simulation.simulator import FeedingDeploymentPyBulletSimulator
+from microwave_common import door_arc_waypoints, make_sim, move_to_door_view, regrasp, release_and_back_off
 
 ARM = [1, 2, 3, 4, 5, 6, 7]
 
@@ -65,12 +59,6 @@ MAX_REACH = 0.90
 J6_LIMIT_DEG = 119.7
 J6_GUARD_DEG = 115.0
 PUSH_MAX_JUMP_DEG = 20.0  # phase 2 is a small move; tighter guard is cheap
-
-
-def _sim():
-    scene = create_scene_description_from_config(
-        "src/feeding_deployment/simulation/configs/vention.yaml", "skewer")
-    return scene, FeedingDeploymentPyBulletSimulator(scene, use_gui=False).robot
 
 
 def _solve(scene, rb, pos, quat, seed_joints, iters=1000):
@@ -105,9 +93,8 @@ def run_swing_closed(ai, args):
     print(f"hinge ({'--hinge' if args.hinge is not None else 'fixed'}): {np.round(hinge, 4)} (radius {radius * 100:.1f}cm), "
           f"arc_length {arc_length_m * 100:.1f}cm for {args.target_close_deg}deg closing")
 
-    from feeding_deployment.interfaces.perception_interface import PerceptionInterface
-    wps_pose = PerceptionInterface._generate_door_arc_waypoints(
-        None, start_pose=grasp_pose, hinge_position=tuple(hinge),
+    wps_pose = door_arc_waypoints(
+        start_pose=grasp_pose, hinge_position=tuple(hinge),
         arc_length_m=arc_length_m, waypoint_spacing_m=WAYPOINT_SPACING_M,
         direction=args.direction, rotate_orientation=True)
     wps = [list(w.position) + list(w.orientation) for w in wps_pose]
@@ -126,7 +113,7 @@ def run_swing_closed(ai, args):
         print("\nDRY RUN (swing-closed) -- nothing commanded.")
         return
 
-    scene, rb = _sim()
+    scene, rb = make_sim()
     if args.smooth:
         # whole arc checked in sim first (chained IK from the real joints, same gates), then
         # one blended Cartesian trajectory -- same mechanism as the open script's --smooth
@@ -215,7 +202,7 @@ def run_push_shut(ai, args):
         print("\nDRY RUN (push) -- nothing commanded.")
         return
 
-    scene, rb = _sim()
+    scene, rb = make_sim()
     real_joints = np.array(ai.get_state()["position"], dtype=float)
     joints, ikerr = _solve(scene, rb, push_target, quat, real_joints)
     jump = float(np.degrees(np.max(np.abs(joints - real_joints))))

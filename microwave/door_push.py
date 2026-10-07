@@ -39,7 +39,7 @@ from feeding_deployment.control.robot_controller.command_interface import (
 from microwave_common import (
     BIG_MOVE_TIMEOUT_S, DOOR_FILE, J4_GUARD_DEG, DOOR_PAST_HANDLE, DOOR_T, FINGERTIP_PAST_TOOL, J6_GUARD_DEG, MAX_IK_ERR,
     MAX_STEP_JUMP_DEG, MIN_CLEAR, PARK_FILE, add_door_model, check_joint_path, clearance,
-    continuous_ok, execute_joint_plan, run_cartesian_trajectory, load_park, make_sim, plan_cartesian, plan_straight_line,
+    continuous_ok, execute_joint_plan, run_cartesian_trajectory, load_park, make_sim, plan_cartesian,
     save_door_geometry, solve_ik, wait_for_joints, wrap_joints)
 
 ARC_STEP_M = 0.02          # tool travel per sweep waypoint
@@ -341,7 +341,6 @@ def _plan_open_axes(scene, rb, df, st, args, deg0):
             if first is None and c0[0] <= 0.0:
                 first = (y, c0[1])
             bad = (err > MAX_IK_ERR or jump > MAX_STEP_JUMP_DEG or abs(j6) > J6_GUARD_DEG
-               or abs(np.degrees(nq[3])) > J4_GUARD_DEG
                    or abs(np.degrees(nq[3])) > J4_GUARD_DEG
                    or not continuous_ok(q, nq) or c_body[0] < MIN_CLEAR)
             if bad:

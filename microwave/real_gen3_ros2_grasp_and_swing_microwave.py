@@ -5,10 +5,10 @@
     python3 -u microwave/real_gen3_ros2_grasp_and_swing_microwave.py --release --execute
 
 1. Detect (`handle_detect.py`): YOLO box around the microwave, depth -> door plane, the
-   vertical cluster sticking out of it = handle. Looks until two agree within 3 cm.
+   vertical cluster sticking out of it = handle, the door edge farthest from it = hinge. Looks
+   until two agree within 3 cm (handle and hinge).
 2. Plan everything before any motion: the grasp (squared to the door face, one straight
-   Cartesian line from the view pose), the hinge (last run's hinge carried over in the door's
-   frame, from `~/.microwave_door.json`), and the largest swing (75 down to 45 deg) whose whole
+   Cartesian line from the view pose), and the largest swing (75 down to 45 deg) whose whole
    arc passes the sim gates (IK, reach, joint jump, J4/J6 guards).
 3. Execute: one blended motion into the grasp, close, one blended swing. The hand stays on the
    handle at the end.
@@ -18,7 +18,7 @@ go toward the base to clear the door's free edge, joint move to `park_pose.json`
 
 Run from the repo root (the sim config path is relative). See NOTES.md for the bring-up and env.
 """
-import argparse, json, sys, time
+import argparse, sys, time
 
 import numpy as np
 import pybullet as p
@@ -27,15 +27,12 @@ from pybullet_helpers.geometry import Pose, multiply_poses
 
 from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceClient
 from feeding_deployment.control.robot_controller.command_interface import CloseGripperCommand, OpenGripperCommand
-from feeding_deployment.interfaces.perception_interface import PerceptionInterface
 from feeding_deployment.ros2.realsense_ros2_interface import RealSenseROS2Interface
-from feeding_deployment.simulation.scene_description import create_scene_description_from_config
-from feeding_deployment.simulation.simulator import FeedingDeploymentPyBulletSimulator
 
 from door_push import record_door_angle
 from handle_detect import HandleDetector
-from microwave_common import (DOOR_FILE, J4_GUARD_DEG, plan_cartesian, release_and_back_off, run_cartesian_trajectory,
-                              save_door_geometry)
+from microwave_common import (J4_GUARD_DEG, door_arc_waypoints, make_sim, plan_cartesian,
+                              release_and_back_off, run_cartesian_trajectory, save_door_geometry)
 
 ARM = [1, 2, 3, 4, 5, 6, 7]
 
@@ -43,6 +40,7 @@ ARM = [1, 2, 3, 4, 5, 6, 7]
 MAX_LOOKS = 5              # keep looking until two detections agree within DETECT_AGREE
 MAX_EMPTY_RETRIES = 8      # per look: retries on an empty read (viewpoint-dependent YOLO misses)
 DETECT_AGREE = 0.03
+HINGE_AGREE = 0.03         # the two agreeing looks' hinges must agree this well too (horizontal)
 PLAUSIBLE_X = (0.30, 0.85)
 PLAUSIBLE_Y = (-0.50, 0.20)
 PLAUSIBLE_Z = (0.15, 0.65)
@@ -72,16 +70,11 @@ BACK_OFF_M = 0.20
 PRE_PARK_X = 0.216
 
 
-def _make_sim():
-    scene = create_scene_description_from_config("src/feeding_deployment/simulation/configs/vention.yaml", "skewer")
-    return scene, FeedingDeploymentPyBulletSimulator(scene, use_gui=False).robot
-
-
 def _swing_waypoints(start_pose, hinge, deg):
     """Door-arc waypoints [x, y, z, qx, qy, qz, qw] from `start_pose` about `hinge`."""
-    radius = float(np.linalg.norm(np.asarray(start_pose.position) - hinge))
-    wps = PerceptionInterface._generate_door_arc_waypoints(
-        None, start_pose=start_pose, hinge_position=tuple(hinge), arc_length_m=radius * np.radians(deg),
+    radius = float(np.linalg.norm(np.asarray(start_pose.position)[:2] - np.asarray(hinge)[:2]))
+    wps = door_arc_waypoints(
+        start_pose=start_pose, hinge_position=tuple(hinge), arc_length_m=radius * np.radians(deg),
         waypoint_spacing_m=SWING_WAYPOINT_SPACING_M, direction=SWING_DIRECTION, rotate_orientation=True)
     return [list(w.position) + list(w.orientation) for w in wps]
 
@@ -111,22 +104,8 @@ def _check_arc(scene, rb, wps, q0):
     return True, q, f"all {len(wps)} waypoints OK, final J6 {np.degrees(q[5]):.1f}deg"
 
 
-def _transfer_hinge(prev, h, n):
-    """Carry the last run's hinge over to this detection in the DOOR's frame (depth along the
-    normal + distance along the face from the handle), so a moved or turned microwave is handled."""
-    n0 = np.asarray(prev["closed_normal"], float)[:2]
-    n0 /= np.linalg.norm(n0)
-    t0 = np.array([-n0[1], n0[0]])
-    d = np.asarray(prev["hinge"], float) - np.asarray(prev["closed_handle"], float)
-    a, b = float(d[:2] @ n0), float(d[:2] @ t0)
-    n1 = np.asarray(n, float)[:2] / np.linalg.norm(np.asarray(n, float)[:2])
-    t1 = np.array([-n1[1], n1[0]])
-    xy = np.asarray(h, float)[:2] + a * n1 + b * t1
-    return np.array([xy[0], xy[1], float(h[2]) + float(d[2])])
-
-
 def detect_handle():
-    """Two agreeing looks. Returns (handle position, handle orientation, door normal, door_z, door_mid)."""
+    """Two agreeing looks. Returns (handle position, handle orientation, door normal, door_z, door_mid, hinge)."""
     rs = RealSenseROS2Interface()
     if not rs.wait_for_frames(30.0):
         sys.exit("No RGB-D frames")
@@ -142,9 +121,9 @@ def detect_handle():
             time.sleep(0.5)
         else:
             sys.exit(f"NO DETECTION ({tag}) after {MAX_EMPTY_RETRIES} retries")
-        print(f"  look {tag}: handle {np.round(det['handle'], 4)}  door normal {np.round(det['normal'], 3)}  "
-              f"door z {np.round(det['door_z'], 3)}")
-        return det["handle"], det["quat"], det["normal"], det["door_z"], det["door_mid"]
+        print(f"  look {tag}: handle {np.round(det['handle'], 4)}  hinge {np.round(det['hinge'], 4)}  "
+              f"door normal {np.round(det['normal'], 3)}  door z {np.round(det['door_z'], 3)}")
+        return det["handle"], det["quat"], det["normal"], det["door_z"], det["door_mid"], det["hinge"]
 
     looks, pair = [], None
     for i in range(1, MAX_LOOKS + 1):
@@ -155,9 +134,13 @@ def detect_handle():
             break
     if pair is None:
         sys.exit(f"No two of {len(looks)} detections agreed within {DETECT_AGREE * 100:.0f} cm -- refusing.")
-    (ha, _, na, zra, mida), (hb, orient, nb, zrb, midb) = pair, looks[-1]
-    print(f"detections agree to {np.linalg.norm(ha - hb) * 100:.1f} cm after {len(looks)} look(s)")
+    (ha, _, na, zra, mida, hga), (hb, orient, nb, zrb, midb, hgb) = pair, looks[-1]
+    print(f"detections agree to {np.linalg.norm(ha - hb) * 100:.1f} cm after {len(looks)} look(s); "
+          f"hinges to {np.linalg.norm(hga[:2] - hgb[:2]) * 100:.1f} cm")
+    if np.linalg.norm(hga[:2] - hgb[:2]) > HINGE_AGREE:
+        sys.exit(f"the two hinge detections differ by more than {HINGE_AGREE * 100:.0f} cm -- refusing.")
     h = (ha + hb) / 2.0
+    hinge = (hga + hgb) / 2.0
     n = (na + nb) / np.linalg.norm(na + nb)
     door_z = np.mean([zra, zrb], axis=0)
     door_mid = np.mean([mida, midb], axis=0)
@@ -167,8 +150,8 @@ def detect_handle():
     for nm, v, (lo, hi) in (("x", h[0], PLAUSIBLE_X), ("y", h[1], PLAUSIBLE_Y), ("z", h[2], PLAUSIBLE_Z)):
         if not lo <= v <= hi:
             sys.exit(f"handle {nm}={v:.3f} outside plausible {(lo, hi)} -- refusing.")
-    print(f"handle (mean) {np.round(h, 4)}")
-    return h, orient, n, door_z, door_mid
+    print(f"handle (mean) {np.round(h, 4)}  hinge (mean) {np.round(hinge, 4)}")
+    return h, orient, n, door_z, door_mid, hinge
 
 
 def grasp_pose(h, orient, n):
@@ -194,10 +177,7 @@ def grasp_pose(h, orient, n):
 
 
 def open_task(ai, execute):
-    prev = json.loads(DOOR_FILE.read_text()) if DOOR_FILE.exists() else {}
-    if not all(k in prev for k in ("hinge", "closed_handle", "closed_normal")):
-        sys.exit(f"{DOOR_FILE} needs hinge/closed_handle/closed_normal from an earlier run (see NOTES.md).")
-    scene, rb = _make_sim()
+    scene, rb = make_sim()
 
     st = ai.get_state()
     ee0, q0 = np.asarray(st["ee_pos"], dtype=float), np.asarray(st["position"], dtype=float)
@@ -209,7 +189,7 @@ def open_task(ai, execute):
             if float(ai.get_state()["gripper_pos"]) > 0.2:
                 sys.exit("Gripper still closed after opening -- refusing to grasp.")
 
-    h, orient, n, door_z, door_mid = detect_handle()
+    h, orient, n, door_z, door_mid, hinge = detect_handle()
     h, grasp = grasp_pose(h, orient, n)
 
     # --- plan everything before any motion ---
@@ -218,9 +198,8 @@ def open_task(ai, execute):
     if leg is None:
         sys.exit(f"grasp path fails a gate -- refusing before any motion. Start joints {np.round(np.degrees(q0), 1)}: "
                  f"start from a view pose with |J4| well under {J4_GUARD_DEG:.0f}.")
-    hinge = _transfer_hinge(prev, h, n)
-    radius = float(np.linalg.norm(g_p - hinge))
-    print(f"hinge (last hinge carried over in the door frame) {np.round(hinge, 4)}  radius {radius * 100:.1f} cm")
+    radius = float(np.linalg.norm(g_p[:2] - hinge[:2]))
+    print(f"hinge (detected) {np.round(hinge, 4)}  radius {radius * 100:.1f} cm")
     if not HINGE_RADIUS_RANGE[0] <= radius <= HINGE_RADIUS_RANGE[1]:
         sys.exit(f"hinge radius {radius * 100:.1f} cm is implausible (door ~35 cm) -- refusing.")
     for deg in range(SWING_MAX_TRY_DEG, SWING_MIN_DEG - 1, -5):

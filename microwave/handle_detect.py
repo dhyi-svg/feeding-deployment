@@ -8,8 +8,8 @@ The handle-finding half of `AppliancePerception.detect_handle_and_placement`, co
 3. RANSAC plane = the door face; reject it if its normal isn't horizontal (table/floor).
 4. Points 0-7 cm in front of the plane -> DBSCAN -> the most vertical, elongated cluster.
 5. Handle = the cluster's median, with camera y set 4 cm in from its extreme.
-6. Reject if the door edge farthest from the handle is not clearly on the far side (the plane
-   pulled in background).
+6. Hinge = the door-face point on the edge farthest from the handle, nearest the handle's height.
+   Reject if that edge is not clearly on the far side (the plane pulled in background).
 7. Into arm_base_link via tf2 (TFInterface, shared with the rest of the repo).
 
 Dropped vs the original: the hinge/placement/top-of-appliance poses, overlays, RViz markers,
@@ -62,8 +62,10 @@ class HandleDetector(TFInterface):
         return res.boxes.xyxy[best].cpu().numpy().astype(int)
 
     def detect(self, rgb, camera_info, depth):
-        """Returns dict(handle, quat, normal, door_z, door_mid) in arm_base_link, or None.
+        """Returns dict(handle, quat, normal, hinge, door_z, door_mid) in arm_base_link, or None.
         normal: horizontal door-face normal, out of the door toward the camera.
+        hinge: door-face point on the edge farthest from the handle, nearest the handle's height
+          (the swing pivots about the vertical line through it).
         door_z: (low, high) of the door face (1st/99th percentile height).
         door_mid: door-face point at the middle of its horizontal span."""
         transform = self.get_frame_to_frame_transform(camera_info)
@@ -151,6 +153,7 @@ class HandleDetector(TFInterface):
             "handle": Rb @ handle_cam + tb,
             "quat": HANDLE_QUAT,
             "normal": n_base / np.linalg.norm(n_base),
+            "hinge": Rb @ hinge_cam + tb,
             "door_z": (float(np.percentile(plane_base[:, 2], 1)), float(np.percentile(plane_base[:, 2], 99))),
             "door_mid": plane_base[int(np.argmin(np.abs(proj - 0.5 * (lo + hi))))].copy(),
         }
