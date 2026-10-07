@@ -4,6 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## ⏱ CURRENT STATE / NEXT STEP (fork, `microwave-task` branch — updated 2026-09-09)
 
+**2026-10-07 (Jetson, branch `microwave-wip`, UNCOMMITTED) — everything now runs under SHEPPY; read the "PICK UP HERE" section at the top of `microwave/NOTES.md` first.** The arm is `kinova_gen3_node` (sheppy container), driven through `microwave/sheppy_arm.py`; the old `arm_server.py`/`bulldog_bypass.py` bring-up described below is history. Grasp + swing (75° and 50°) ran on hardware; next: test the compliant impedance swing (written, not run), encode the user's push-open keypoint demo, build the `microwave_task` sheppy node.
+
 **2026-09-23 (`rchi-cpu-5`, branch `detect-fridge-handle`, UNCOMMITTED) — microwave work consolidated in `microwave/`; read `microwave/NOTES.md` first.** Full detect → face-square grasp → smooth (one blended Cartesian trajectory) 45° open works as one command (`--phase both --fast --smooth`); smooth close + push also works. Open problems and TODOs (de-hardcode door geometry, J6 caps the pull at ~45–68° so the open task needs a push phase, open-door re-grasp, park pose J3 near ±180°, YOLO misreading the microwave as bus/train) are all in that file.
 
 **2026-09-04 — evaluating YOLO11 as a lighter alternative to GroundingDINO for the appliance box.** COCO already has a `"microwave"` class (id 68), so the appliance bounding-box step doesn't need GroundingDINO's open-vocabulary text prompt. Two new scripts, written on a dev machine (`rchi-cpu-5`, no camera/arm/`ultralytics` there) and syntax-checked only -- **neither has been run against a real microwave/arm yet**:

@@ -1,0 +1,8 @@
+description: real wrist camera + real arm driver + cuRobo planner (go_to_* actions work)
+selections:
+  wrist_camera: d435i_docker
+  camera_view: opencv_window
+  arm: kinova_gen3_driver
+  arm_tf: rsp_driver_urdf
+  camera_calib_tf: easy_handeye2_calib
+  planner: curobo_planner

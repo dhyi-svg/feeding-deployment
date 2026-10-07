@@ -1,0 +1,4 @@
+description: wrist camera only -- the arm driver is stopped, so the arm is free for the Kinova joystick / web-app teleop
+selections:
+  wrist_camera: d435i_docker
+  camera_view: opencv_window

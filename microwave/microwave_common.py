@@ -130,14 +130,30 @@ def wait_for_joints(ai, q, tol_deg=1.0, timeout_s=6.0):
     return False
 
 
-def run_cartesian_trajectory(ai, traj, tol_m=0.01, settle_s=2.0, timeout_s=60.0):
+def fit_circle_xy(xy):
+    """Least-squares circle through 2-D points (Kasa fit). Returns (centre xy, radius, rms residual m)."""
+    xy = np.asarray(xy, dtype=float)
+    A = np.c_[2 * xy, np.ones(len(xy))]
+    b = (xy ** 2).sum(axis=1)
+    (cx, cy, c), *_ = np.linalg.lstsq(A, b, rcond=None)
+    r = float(np.sqrt(c + cx ** 2 + cy ** 2))
+    resid = np.linalg.norm(xy - [cx, cy], axis=1) - r
+    return np.array([cx, cy]), r, float(np.sqrt(np.mean(resid ** 2)))
+
+
+def run_cartesian_trajectory(ai, traj, tol_m=0.01, settle_s=2.0, timeout_s=60.0, impedance=None):
     """Send a CartesianTrajectoryCommand and judge it by where the arm ACTUALLY ends up, not
     the RPC return: the server's wait can be tripped by a stale END/ABORT notification and
     return False at once while Kortex runs the whole trajectory anyway (09-28: returned False
     with the arm still at the start, then reached every waypoint). Waits until the EE is within
     `tol_m` of the last waypoint, or has not moved for `settle_s` (after at least `settle_s`
-    had passed, so a not-yet-started motion isn't mistaken for a stop). Returns (reached, err_m, rpc_ok)."""
-    rpc_ok = ai.execute_command(CartesianTrajectoryCommand([(list(pp), list(qq)) for pp, qq in traj]))
+    had passed, so a not-yet-started motion isn't mistaken for a stop). Returns (reached, err_m, rpc_ok).
+    `impedance` (SheppyArm only): run it compliant, e.g. the door swing (SheppyArm.IMPEDANCE)."""
+    if impedance is not None and hasattr(ai, "move_cartesian"):
+        # sheppy: compliant (joint impedance) execution -- see SheppyArm.IMPEDANCE
+        rpc_ok = ai.move_cartesian([(list(pp), list(qq)) for pp, qq in traj], impedance=impedance)
+    else:
+        rpc_ok = ai.execute_command(CartesianTrajectoryCommand([(list(pp), list(qq)) for pp, qq in traj]))
     goal = np.asarray(traj[-1][0], dtype=float)
     t0 = time.time()
     last = np.asarray(ai.get_state()["ee_pos"][:3], dtype=float)
@@ -228,7 +244,15 @@ def plan_cartesian(scene, rb, p0, q0_quat, p1, q1_quat, seed_joints, label, bodi
 def execute_joint_plan(ai, plan, label):
     """One JointCommand per step, waiting for convergence to the COMMANDED joints. Kortex
     sometimes rejects a command (ROBOT_MOVEMENT_IN_PROGRESS) and the arm just stays put --
-    re-send that step once before giving up (kortex-dropped-substep-bug)."""
+    re-send that step once before giving up (kortex-dropped-substep-bug).
+    With `SheppyArm` (sheppy) the whole plan is ONE smooth trajectory through every step instead:
+    one JointCommand per ~2 cm step became a stop-and-go per step there (loud, 10-07)."""
+    if hasattr(ai, "move_joints"):
+        ok = ai.move_joints(list(plan))
+        if not (ok and wait_for_joints(ai, plan[-1])):
+            print(f"  {label}: not at the last step's joints -- stopping here.")
+            return False
+        return True
     for k, q in enumerate(plan, 1):
         for attempt in (1, 2):
             ai.execute_command(JointCommand(pos=q.tolist()))

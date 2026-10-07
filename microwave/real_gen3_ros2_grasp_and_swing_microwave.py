@@ -18,20 +18,20 @@ go toward the base to clear the door's free edge, joint move to `park_pose.json`
 
 Run from the repo root (the sim config path is relative). See NOTES.md for the bring-up and env.
 """
-import argparse, sys, time
+import argparse, contextlib, io, sys, time
 
 import numpy as np
 import pybullet as p
 from scipy.spatial.transform import Rotation as R
 from pybullet_helpers.geometry import Pose, multiply_poses
 
-from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceClient
+from sheppy_arm import SheppyArm
 from feeding_deployment.control.robot_controller.command_interface import CloseGripperCommand, OpenGripperCommand
 from feeding_deployment.ros2.realsense_ros2_interface import RealSenseROS2Interface
 
 from door_push import record_door_angle
 from handle_detect import HandleDetector
-from microwave_common import (J4_GUARD_DEG, door_arc_waypoints, make_sim, plan_cartesian,
+from microwave_common import (J4_GUARD_DEG, door_arc_waypoints, fit_circle_xy, make_sim, plan_cartesian,
                               release_and_back_off, run_cartesian_trajectory, save_door_geometry)
 
 ARM = [1, 2, 3, 4, 5, 6, 7]
@@ -43,13 +43,18 @@ DETECT_AGREE = 0.03
 HINGE_AGREE = 0.03         # the two agreeing looks' hinges must agree this well too (horizontal)
 PLAUSIBLE_X = (0.30, 0.85)
 PLAUSIBLE_Y = (-0.50, 0.20)
-PLAUSIBLE_Z = (0.15, 0.65)
+PLAUSIBLE_Z = (0.05, 0.65)   # was 0.15 (rchi-cpu-5); Jetson+sheppy 10-07: handle z 0.142, microwave ~4 cm above the arm base
 MAX_FACE_YAW_DEG = 70.0    # beyond this the plane fit is more likely wrong than the door
 
 # --- grasp (tuned on the arm, see NOTES.md) ---
-GRIP_EXT = -0.010          # along the approach axis (negative = past the detected handle)
-VERTICAL_CORR = 0.025      # world z
+GRIP_EXT = 0.088           # along the approach axis (negative = past the detected handle). Was -0.010 (rchi-cpu-5);
+                           # Jetson+sheppy+Capybara calib 10-07 touch check: planned grasp 9.8 cm too deep
+VERTICAL_CORR = 0.046      # world z. Was 0.025; 10-07 touch +2.1 cm (bar is vertical, height not critical)
 GRASP_X_ADJUST = 0.040     # along the approach axis
+GRASP_PITCHES_DEG = (0, 10, 17, 25, 30, 35)   # nose-down tilts tried about the finger axis (fingers stay
+                           # horizontal across the vertical bar); the smallest reaching the largest swing wins. A low
+                           # handle needs one: 10-07, handle z ~0.14, level -> swing max 25-35 deg (J6 hits its guard),
+                           # 17 -> 70, 25 -> 75 with J6 ending at 92 (sim); the user's hand-placed touches were ~17.
 MAX_REACH, MIN_Z, MAX_Z = 0.915, 0.15, 0.75
 GRASP_TRACK_ABORT = 0.03
 
@@ -63,6 +68,10 @@ SWING_MAX_JUMP_DEG = 25.0
 SWING_MAX_REACH = 0.90
 SWING_IK_PROBE_M = 0.01           # 200-iteration IK must get within 1 cm (else Kortex hits SINGULARITY_REGION)
 J6_GUARD_DEG = 115.0              # J6 hard limit is +-119.7
+SWING_COMPLIANT = True            # swing in joint impedance (SheppyArm.IMPEDANCE): the hand gives way to the door's
+                                  # real arc instead of dragging the microwave along a circle about a slightly wrong
+                                  # hinge (09-29 / 10-07); the driver's path tolerance (0.08 rad) is the force stop
+SWING_ARRIVE_TOL = 0.03           # compliant: the hand may end this far off the commanded end (the door decides)
 HINGE_RADIUS_RANGE = (0.25, 0.45)
 
 # --- release ---
@@ -106,7 +115,9 @@ def _check_arc(scene, rb, wps, q0):
 
 def detect_handle():
     """Two agreeing looks. Returns (handle position, handle orientation, door normal, door_z, door_mid, hinge)."""
-    rs = RealSenseROS2Interface()
+    rs = RealSenseROS2Interface(color_topic="/wrist_camera/color/image_raw",
+                                camera_info_topic="/wrist_camera/color/camera_info",
+                                depth_topic="/wrist_camera/aligned_depth_to_color/image_raw")
     if not rs.wait_for_frames(30.0):
         sys.exit("No RGB-D frames")
     detector = HandleDetector()
@@ -154,8 +165,9 @@ def detect_handle():
     return h, orient, n, door_z, door_mid, hinge
 
 
-def grasp_pose(h, orient, n):
-    """Grasp pose for handle position `h` (vertical-corrected here), squared to the door face."""
+def grasp_pose(h, orient, n, pitch_deg=0.0):
+    """Grasp pose for handle position `h` (vertical-corrected here), squared to the door face, tilted
+    `pitch_deg` nose-down about the finger axis. The tool point doesn't depend on the tilt."""
     h = h + np.array([0.0, 0.0, VERTICAL_CORR])
     quat = R.from_quat(orient) * R.from_euler("y", np.pi)
     # The detector's orientation is a fixed constant (right only for a door facing the arm
@@ -166,8 +178,11 @@ def grasp_pose(h, orient, n):
     print(f"door normal {np.round(n, 3)} -> yaw {np.degrees(yaw):+.1f} deg to face the door square")
     if abs(np.degrees(yaw)) > MAX_FACE_YAW_DEG:
         sys.exit(f"Face yaw {np.degrees(yaw):.1f} deg > {MAX_FACE_YAW_DEG} deg -- implausible plane fit? Refusing.")
-    quat = (R.from_euler("z", yaw) * quat).as_quat()
+    quat = (R.from_euler("z", yaw) * quat * R.from_euler("x", pitch_deg, degrees=True)).as_quat()
     approach = R.from_quat(quat).as_matrix()[:, 2]
+    # the tool point is placed along the LEVEL approach -- where the touch check put it -- whatever the tilt
+    approach[2] = 0.0
+    approach /= np.linalg.norm(approach)
     pos = h + approach * (GRASP_X_ADJUST - GRIP_EXT)
     print(f"grasp {np.round(pos, 4)}  range {np.linalg.norm(pos):.3f}")
     if np.linalg.norm(pos) > MAX_REACH or not MIN_Z <= pos[2] <= MAX_Z:
@@ -176,7 +191,7 @@ def grasp_pose(h, orient, n):
     return h, Pose(tuple(pos), tuple(quat))
 
 
-def open_task(ai, execute):
+def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG):
     scene, rb = make_sim()
 
     st = ai.get_state()
@@ -189,26 +204,42 @@ def open_task(ai, execute):
             if float(ai.get_state()["gripper_pos"]) > 0.2:
                 sys.exit("Gripper still closed after opening -- refusing to grasp.")
 
-    h, orient, n, door_z, door_mid, hinge = detect_handle()
-    h, grasp = grasp_pose(h, orient, n)
-
-    # --- plan everything before any motion ---
-    g_p, g_q = np.asarray(grasp.position), np.asarray(grasp.orientation)
-    leg = plan_cartesian(scene, rb, ee0[:3], ee0[3:7], g_p, g_q, q0, "to grasp")
-    if leg is None:
-        sys.exit(f"grasp path fails a gate -- refusing before any motion. Start joints {np.round(np.degrees(q0), 1)}: "
-                 f"start from a view pose with |J4| well under {J4_GUARD_DEG:.0f}.")
-    radius = float(np.linalg.norm(g_p[:2] - hinge[:2]))
+    h_raw, orient, n, door_z, door_mid, hinge = detect_handle()
+    h, grasp = grasp_pose(h_raw, orient, n)       # runs the grasp gates once, prints the grasp point
+    radius = float(np.linalg.norm(np.asarray(grasp.position)[:2] - hinge[:2]))
     print(f"hinge (detected) {np.round(hinge, 4)}  radius {radius * 100:.1f} cm")
     if not HINGE_RADIUS_RANGE[0] <= radius <= HINGE_RADIUS_RANGE[1]:
         sys.exit(f"hinge radius {radius * 100:.1f} cm is implausible (door ~35 cm) -- refusing.")
-    for deg in range(SWING_MAX_TRY_DEG, SWING_MIN_DEG - 1, -5):
-        ok, _, msg = _check_arc(scene, rb, _swing_waypoints(grasp, hinge, deg), leg[-1])
-        print(f"  swing {deg} deg: {'OK' if ok else 'fails -- ' + msg}")
-        if ok:
-            break
-    else:
-        sys.exit(f"no swing of {SWING_MIN_DEG}-{SWING_MAX_TRY_DEG} deg passes the sim gates -- refusing.")
+
+    # --- plan everything before any motion: grasp path + largest swing, for each nose-down tilt ---
+    best = None                                   # (swing deg, pitch, grasp, leg)
+    for pitch in GRASP_PITCHES_DEG:
+        with contextlib.redirect_stdout(io.StringIO()):
+            _, g = grasp_pose(h_raw, orient, n, pitch)
+            leg_p = plan_cartesian(scene, rb, ee0[:3], ee0[3:7], np.asarray(g.position), np.asarray(g.orientation),
+                                   q0, "to grasp")
+        if leg_p is None:
+            print(f"  tilt {pitch:2d} deg: grasp path fails a gate")
+            continue
+        for d in range(max_swing, min(SWING_MIN_DEG, max_swing) - 1, -5):
+            ok, _, msg = _check_arc(scene, rb, _swing_waypoints(g, hinge, d), leg_p[-1])
+            if ok:
+                break
+        else:
+            d, ok = None, False
+        print(f"  tilt {pitch:2d} deg: grasp J4 {np.degrees(leg_p[-1][3]):6.1f} J6 {np.degrees(leg_p[-1][5]):5.1f} -> "
+              + (f"swing {d} deg OK ({msg})" if ok else f"no swing >= {SWING_MIN_DEG} deg ({msg})"))
+        if ok and (best is None or d > best[0]):
+            best = (d, pitch, g, leg_p)
+        if ok and d == max_swing:
+            break                                 # smallest tilt that reaches the largest swing
+    if best is None:
+        sys.exit(f"no tilt in {GRASP_PITCHES_DEG} gives a grasp + swing of >= {SWING_MIN_DEG} deg that passes the "
+                 f"sim gates -- refusing before any motion. Start joints {np.round(np.degrees(q0), 1)}.")
+    deg, pitch, grasp, leg = best
+    g_p, g_q = np.asarray(grasp.position), np.asarray(grasp.orientation)
+    print(f"chosen: tilt {pitch} deg nose-down, swing {deg} deg; grasp {np.round(g_p, 4)}")
+    plan_cartesian(scene, rb, ee0[:3], ee0[3:7], g_p, g_q, q0, "to grasp")      # re-print the chosen path
 
     if not execute:
         print(f"\nDRY RUN -- would grasp, then swing {deg} deg. Nothing commanded.")
@@ -246,8 +277,24 @@ def open_task(ai, execute):
     if sent[-1] is not wps[-1]:
         sent.append(wps[-1])
     print(f"swing {deg} deg: {len(wps)} waypoints checked, sending {len(sent)} ...")
-    ok, err, _ = run_cartesian_trajectory(ai, [(w[:3], w[3:]) for w in sent])
+    imp = None
+    if SWING_COMPLIANT and hasattr(ai, "move_cartesian"):
+        from sheppy_arm import IMPEDANCE as imp
+        print(f"  compliant swing: joint impedance kq {imp['kq']}, zeta {imp['zeta']}, stop at {imp['path_tol']} rad lag")
+    ok, err, _ = run_cartesian_trajectory(ai, [(w[:3], w[3:]) for w in sent], impedance=imp,
+                                          tol_m=SWING_ARRIVE_TOL if imp else 0.01)
     final = ai.get_state()
+    path = np.array([p_[1:] for p_ in getattr(ai, "last_path", [])])
+    if len(path) > 20:
+        c, r, rms = fit_circle_xy(path[:, :2])
+        cmd = np.array([w[:3] for w in wps])
+        dev = np.max(np.linalg.norm(path[:, None, :2] - cmd[None, :, :2], axis=2).min(axis=1))
+        print(f"  measured hand path: {len(path)} samples, max {dev * 100:.1f} cm off the commanded arc; circle fit "
+              f"hinge {np.round(c, 4)} r {r * 100:.1f} cm (rms {rms * 1000:.1f} mm) vs detected hinge "
+              f"{np.round(hinge[:2], 4)} r {np.linalg.norm(np.asarray(ee[:2]) - hinge[:2]) * 100:.1f} cm -- "
+              f"off by {np.linalg.norm(c - hinge[:2]) * 100:.1f} cm")
+        if imp is not None and rms < 0.005:
+            save_door_geometry(hinge_fit=[float(c[0]), float(c[1]), float(hinge[2])], hinge_fit_r=r)
     print(f"SWING {'DONE' if ok else 'STOPPED SHORT'}: EE {np.round(final['ee_pos'][:3], 4)} "
           f"({err * 100:.1f} cm from the last waypoint)")
     record_door_angle(final["ee_pos"])
@@ -256,14 +303,17 @@ def open_task(ai, execute):
 def main():
     a = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     a.add_argument("--execute", action="store_true", help="command the arm; omit for a dry run")
+    a.add_argument("--swing-deg", type=int, default=SWING_MAX_TRY_DEG,
+                   help=f"largest swing to try (deg, default {SWING_MAX_TRY_DEG}); e.g. 50 leaves the door where the "
+                        "over-the-door retreat + push-open can reach it (10-07)")
     a.add_argument("--release", action="store_true",
                    help="after the swing: open the gripper, back off the handle, park")
     args = a.parse_args()
-    ai = ArmInterfaceClient()
+    ai = SheppyArm()
     if args.release:
         release_and_back_off(ai, BACK_OFF_M, args.execute, pre_park_x=PRE_PARK_X)
     else:
-        open_task(ai, args.execute)
+        open_task(ai, args.execute, args.swing_deg)
 
 
 if __name__ == "__main__":

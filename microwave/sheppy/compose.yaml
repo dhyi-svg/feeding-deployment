@@ -1,0 +1,32 @@
+# The arm for the microwave task, as compose services for sheppy (the compose path is the only
+# one sheppy ${VAR}-interpolates). Copied from ~/kinova-gen3-ros2/deploy/compose.yaml, but with
+# the published image instead of the locally built `kinova-gen3-ros2:kortex`.
+services:
+  kinova_gen3_driver:
+    image: ghcr.io/rammp-org/kinova-gen3-ros2:1.1.0
+    network_mode: host
+    ipc: host                      # DDS shared-memory transport
+    cap_add: [SYS_NICE]            # sched_setscheduler...
+    ulimits:                       # ...and the rlimits that let it succeed
+      rtprio: 99
+      memlock: -1
+    environment:                   # containers don't inherit sheppyd's env (sheppy docs)
+      ROS_DOMAIN_ID: "0"
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+    command:
+      - /module_ws/install/kinova_gen3_ros2/lib/kinova_gen3_ros2/kinova_gen3_node
+      - --ip
+      - ${KINOVA_ARM_IP:-192.168.1.10}
+      - --urdf
+      - /module_ws/src/kinova-gen3-driver/models/gen3_7dof_2f85.urdf
+      - --cpu
+      - ${KINOVA_RT_CORE:-11}      # isolcpus=11 / nohz_full=11 on this box
+
+  curobo_planner:                  # only the go_to_* actions need it
+    image: ghcr.io/rammp-org/rammp-curobo:1.1.0
+    runtime: nvidia                # JetPack: runtime, not --gpus
+    network_mode: host
+    ipc: host
+    environment:
+      ROS_DOMAIN_ID: "0"
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp

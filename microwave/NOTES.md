@@ -2,6 +2,202 @@
 
 Working notes for the scripts in this folder. Newest learnings first within each section.
 
+## 2026-10-07 END OF SESSION -- PICK UP HERE
+
+**State at shutdown:** `sheppy down` (all nodes + sheppyd stopped, no containers), arm powered off by the user.
+Door left OPEN ~50 deg, gripper open/empty. Everything below is UNCOMMITTED on `microwave-wip`.
+
+**Bring-up next time (Jetson, sheppy-only):**
+```bash
+source ~/feeding-deployment/microwave/sheppy/env.sh          # every terminal
+cd microwave/sheppy && sheppy up --manifest sheppy-manifest.yaml real-arm-camera   # arm + tf + calib + camera + view
+#   ... camera-only = release the arm for teleop (NEVER teleop / web-app with the arm node up -> WRONG_SERVOING_MODE crash)
+cd ~/feeding-deployment && python3 -u microwave/real_gen3_ros2_grasp_and_swing_microwave.py --swing-deg 50   # dry run
+```
+
+**Done today:** sheppy hybrid bring-up (host ROS 2 + ~/ros2_ws + .venv with Jetson torch), `SheppyArm` port (all
+scripts), Capybara calibration, touch-checked grasp (`GRIP_EXT` 0.088, `VERTICAL_CORR` 0.046), per-run grasp tilt
+search (low handle), full grasp + 75-deg swing + release on hardware, then grasp + 50-deg swing on hardware, new park
+pose, push-close fingers-left default, keypoint demo of the user's push-open.
+
+**Next, in order:**
+1. **Test the compliant (impedance) swing** -- written, NOT run: `SWING_COMPLIANT=True` in the open script ->
+   `SheppyArm.IMPEDANCE` (kq 80x4/30x3, zeta 0.5, 0.08 rad lag = force stop). Prints how far the hand strayed from the
+   commanded arc + a circle-fit hinge vs the detected one (fit ~1.7 cm accurate on a 50-deg arc). Start with the door
+   CLOSED (close it by hand/teleop first -- it's open now), `--swing-deg 50`, e-stop in hand; watch the microwave.
+   If impedance misbehaves set `SWING_COMPLIANT=False` (stiff, as run today).
+2. **Encode the user's push-open demo** `demos/push_open_2026-10-07.json` (+ `_door.json` = door state then; door
+   ~50 deg, hinge (0.826, 0.087), grasp at handle z 0.18, LEVEL grasp). Keypoints (tool xyz):
+   0 end of swing holding (0.511,-0.040,0.182) -> 1 open + straight UP 26 cm (0.511,-0.040,0.447) -> 2 high, forward +
+   RIGHT past the microwave's right side (0.760,-0.477,0.449) -> 3 DOWN to door height, wrist turning (0.716,-0.461,0.248)
+   -> 4 LEFT 18 cm into the opening (0.665,-0.282,0.246) -> 5 the PUSH: left 11 / back 13 cm + ~60 deg wrist turn
+   (0.537,-0.170,0.245). Express them relative to the detected hinge / door top / door angle (so they adapt to an
+   unknown microwave position/height), sim-gate every leg (`tools/sim_retreat_over.py` style), dry run, then real.
+   Note: it goes much wider/higher than the sim attempts (right of the microwave body, not just the door edge).
+3. **Build the `microwave_task` sheppy node** (agreed: route first, then node): long-running, keeps sim/YOLO/CUDA
+   warm (each script run now spends ~20-40 s on startup + re-planning even after a dry run), services
+   /microwave/open|release|close (+dry-run flag), latched `/microwave/door_state` + per-run JSON records in
+   `microwave/state/` (replaces the global `~/.microwave_door.json`, which carries stale keys between runs).
+4. Push-close for the 50-deg door (fingers left) -- sim-check; at 75 deg nothing planned (door points at the base).
+5. **The diagram** (today's goal 4, not done): the full open pipeline under sheppy -- nodes (camera, arm, tf,
+   calib, view) -> detect -> tilt search -> grasp -> (compliant) swing -> release -> over-the-door -> push -> park,
+   plus the door geometry (hinge, radius, door angle) it works in.
+6. Minor: rclpy spin-thread traceback/segfault at every script exit; 9% RT overruns in the arm node (no faults).
+
+## 2026-10-07 — goals for today
+
+1. Finish the sheppy implementation for this code (started in `0138d9d8`: detector hinge, local `door_arc_waypoints`).
+2. Try it on the real arm.
+3. Test a complete door opening.
+4. Make a diagram (of the open pipeline / door geometry).
+
+**From now on everything runs under sheppy** (user, 10-07). The `arm_server.py` / `stub_base_server.py` /
+`bulldog_bypass.py` RPC stack and the hand-started ROS 2 nodes in every section below are the OLD bring-up --
+history, not procedure. Under sheppy the arm is `kinova_gen3_node` (container from `~/kinova-gen3-ros2`, fragment
+`rammp-alternative.yaml`): `/joint_states`, `/ee_state`, `/gripper_state`, `/setpoint/*` streams, and the
+`execute_joint_trajectory` / `go_to_ee_pose` / ... actions (the `go_to_*` ones need the cuRobo planner container
+too). The scripts here still talk to `ArmInterfaceClient` -- porting them onto that interface is the sheppy work.
+
+Order: read the arm + RealSense state first, then work out how to use sheppy (`~/.local/bin/sheppy`,
+`sheppyd`, `~/rammp-deployments/december_2026/sheppy-manifest.yaml`).
+
+**Sheppy bring-up (10-07, this box: Jetson, `eno1` 192.168.1.11, arm 192.168.1.10).** Docs:
+https://rammp-org.github.io/sheppy/ and https://rammp-org.github.io/development/ (hybrid workflow = stable modules as
+containers under sheppy, our code native from `~/ros2_ws`). `~/rammp-deployments/december_2026` (= origin/main) has
+cameras only -- no arm node, no profiles (the docs' `real-arm-cameras` profile doesn't exist yet). So a **local copy**
+lives in `microwave/sheppy/`: `sheppy-manifest.yaml` (wrist_camera D435i / mock, arm, planner), `compose.yaml` (arm +
+cuRobo, published ghcr images), `profiles/{real-arm-camera,real-arm-camera-planner,mock}.yaml`.
+```bash
+cd microwave/sheppy
+export ROS_DOMAIN_ID=0 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp   # sheppyd hands its env to nodes; set before `up`
+sheppy up --manifest sheppy-manifest.yaml real-arm-camera
+sheppy status; sheppy logs -n 25 arm
+# no ROS on the host yet -> read topics from inside a container:
+docker exec sheppy-arm bash -c 'source /opt/ros/humble/setup.bash; source /module_ws/install/setup.bash;
+  ros2 topic echo --once --qos-reliability best_effort /joint_states'
+sheppy down
+```
+- Images: `ghcr.io/rammp-org/kinova-gen3-ros2:1.1.0`, `rammp-suite-software/realsense:main`, `rammp-curobo:1.1.0`.
+  All CycloneDDS (`RMW_IMPLEMENTATION=rmw_cyclonedds_cpp` baked in); set it + `ROS_DOMAIN_ID` in every container's
+  `environment:` anyway (containers don't inherit sheppyd's env).
+- The realsense image's ENTRYPOINT already runs `realsense2_camera_node` with `/etc/rammp/realsense/realsense.yaml`:
+  settings go in sheppy `params:`, `command:` only renames (`[--ros-args, -r, __node:=wrist_camera]`). The december
+  manifest's `command: ros2 launch ... rs_launch.py` would be appended to that entrypoint -- looks wrong there.
+- Plain `docker run` fails on this kernel (iptables `raw` table missing); host networking (what sheppy uses) is fine.
+- **First read (10-07, arm untouched):** arm node `up (real)`, 0 faults (178 RT overruns in the first 5 s, max
+  cycle 172 ms -- watch). Joints (deg) `[0.0, -11.5, -180.0, -151.7, 0.1, -23.2, 90.1]` (folded/retract pose), EE
+  `(0.165, 0.001, 0.295)`, gripper 0.0087 (open), not e-stopped, arbitration disabled. **J4 -2.6477 rad is 0.7 deg
+  inside its +-2.66 URDF limit** -- the arm repo's runbook (09-01) saw a run abort with J4 at -2.660; don't stream the
+  measured pose back from here. Camera: colour 15.0 Hz, aligned depth ~14 Hz, D435i serial 140122079014, USB 3.2.
+- **Host ROS 2 for the hybrid workflow (10-07):** installed `ros-humble-ros-base ros-dev-tools rmw-cyclonedds-cpp
+  cv-bridge tf2-ros tf2-tools tf2-geometry-msgs robot-state-publisher xacro control-msgs trajectory-msgs
+  diagnostic-msgs` (apt, `ros2-apt-source`), rosdep init/update. `~/ros2_ws/src/rammp-interfaces-ros2` -> symlink to
+  `~/rammp-interfaces-ros2` at **v1.1.0** (= what the arm image is built against; the realsense image has 1.0.0, only
+  sensor_msgs used from it). `colcon build --symlink-install`: 4 packages, 34 s. From a host shell with
+  `source /opt/ros/humble/setup.bash; source ~/ros2_ws/install/setup.bash; export ROS_DOMAIN_ID=0
+  RMW_IMPLEMENTATION=rmw_cyclonedds_cpp` the containers' topics/actions are all visible (`/joint_states`, `/ee_state`,
+  `/gripper_state`, `/setpoint/*`, `/wrist_camera/...` at 15 Hz, `/execute_joint_trajectory`, `/go_to_*`).
+- **TF under sheppy** (local manifest, both real profiles): `arm_tf` = robot_state_publisher on
+  `~/kinova-gen3-driver/models/gen3_7dof_2f85.urdf` with `gen3_` sed-stripped (the driver publishes `joint_1..7`, so
+  the URDF must match; stripped, its frames are `base_link .. end_effector_link`, Kinova's standard flange), and
+  `camera_calib_tf` = `feeding_deployment.ros2.calibration_tf` (easy_handeye2 file, `end_effector_link ->
+  camera_color_optical_frame` + `base_link -> arm_base_link` alias). Checked: `tf2_echo base_link end_effector_link`
+  = `/ee_state` exactly (0.165, 0.001, 0.295). The camera publishes `camera_color_optical_frame` (frame names don't
+  follow the `__node:=wrist_camera` rename). **The calibration file isn't on this box yet** (copy from rchi-cpu-5).
+  sheppyd hands its env to `process` nodes: start it (`sheppy up`) from a shell with ROS + ~/ros2_ws sourced, and
+  `PYTHONPATH=src:$PYTHONPATH` (prepend, don't replace -- replacing lost rclpy).
+- **Every terminal: `source ~/feeding-deployment/microwave/sheppy/env.sh`** (ROS + ~/ros2_ws + DDS vars + `.venv` +
+  `PYTHONPATH=src` + the CUDA lib path, cd to repo root). Start `sheppy up` from such a terminal too.
+- **Python deps: `~/feeding-deployment/.venv`** (`uv venv --system-site-packages`, so rclpy/cv_bridge come from
+  /opt/ros): numpy 1.26 (<2 for cv_bridge), scipy, scikit-learn, open3d 0.20, pybullet (compiles ~15 min on arm64),
+  pybullet_helpers (prpl-mono git), ultralytics 8.4. **torch gotchas (JetPack 6.2 = R36.4.4, CUDA 12.6 driver):**
+  PyPI's torch is a cu130 build -> `cuda False` ("driver too old"); with `--extra-index-url pypi.org` uv takes PyPI's
+  copy of the same version even with the Jetson index first. Install NVIDIA's wheels BY URL from
+  `https://pypi.jetson-ai-lab.io/jp6/cu126/+simple/{torch,torchvision}/` (torch 2.11.0, torchvision 0.26.0). They need
+  `libcupti.so.12` + `libcudss.so.0` (not in this JetPack's apt set): pip `nvidia-cuda-cupti-cu12~=12.6` and
+  `nvidia-cudss-cu12==0.8.0.10`, then REMOVE every other pip `nvidia-*` (cuDSS drags in desktop cuBLAS 12.9 ->
+  `CUBLAS_STATUS_ALLOC_FAILED`) so cuBLAS/cuDNN come from JetPack (/usr/local/cuda/lib64, cuDNN 9.3); env.sh puts
+  the two pip lib dirs on `LD_LIBRARY_PATH`. Verified: matmul / conv / torchvision NMS on the Orin GPU.
+- **Calibration = Capybara's** (the old Jetson rig's easy_handeye2 file, pasted by the user 10-07; translation
+  (0.016, 0.043, 0.053), ~180 deg about z) in `~/.ros2/easy_handeye2/calibrations/wrist_camera_calib.calib`. Checked
+  via tf2: image-down = base -z (-0.91), view +x tilted ~23 deg down, image-right = base -y -> orientation right for
+  this upright camera (YOLO: 'microwave' 0.91 unflipped, 'train' flipped -> no flip, as handle_detect assumes).
+  Live camera window: sheppy node `camera_view` (`tools/camera_view.py`, OpenCV on DISPLAY :1).
+  **Releasing the arm for teleop = `sheppy up ... camera-only`** (stops `arm`/`arm_tf`/`camera_calib_tf`); back with
+  `... real-arm-camera` (the node starts holding wherever the arm is).
+- **Detection + touch check (10-07, `tools/touch_check.py detect|compare`):** microwave ~74 cm out, handle
+  (0.737, -0.138, 0.139..0.148), hinge (0.757, +0.189) -> radius ~33 cm, door face z 0.04-0.32; two views agree to
+  ~1 cm, looks within a view to 0.1 cm. `PLAUSIBLE_Z` min 0.15 -> 0.05 (microwave sits ~4 cm above the arm base here).
+  Touch 1 with the rchi-cpu-5 constants: planned grasp **9.8 cm too deep** (sideways +0.1, vertical +2.1) -- those
+  constants compensated that calib's depth bias; with this one the detected handle is where it is (touched tool
+  4.8 cm in front of it = fingertips ~1.4 cm past the bar's centre). -> **`GRIP_EXT` -0.010 -> +0.088,
+  `VERTICAL_CORR` 0.025 -> 0.046.** Touch 2 (different view): **2.3 cm total** (approach -0.4, sideways -1.7,
+  vertical -1.5). Orientation diffs (14-18 deg) were the hand placement pitched ~17 deg nose-down; finger axis/roll
+  matched, yaw within 5 deg -- plan's level approach kept.
+- **Low handle -> J6 caps the swing; fixed by a per-run grasp TILT search (10-07).** With the handle at z ~0.14
+  above the arm base a LEVEL grasp only swings 25-35 deg (J6 passes its 115 guard ~30 deg in; null-space IK only
+  got ~40). Pitching the hand nose-down about the finger axis (fingers stay horizontal across the vertical bar --
+  the user's touches were ~17 nose-down) frees the wrist: 0/10 -> <45, 17 -> 70, **25 -> 75 (J6 ends 92)**. Now
+  `GRASP_PITCHES_DEG = (0, 10, 17, 25, 30, 35)`: plan grasp + largest swing for each, keep the smallest tilt reaching
+  the largest swing (a high handle should keep 0). Tool point unchanged by the tilt (placed along the level
+  approach). The microwave height is unknown in deployment (usually low) -- don't hard-code height-specific values.
+  Push-open (`door_push`, `tools/sim_push_open.py`) was tried first after a 25-deg pull: every route failed on J6
+  starting from the cramped end-of-pull wrist (arc also needs `--push-in` for small openings) -- moot with the tilt.
+- **SheppyArm Cartesian = straight lines now** (`cartesian_knots`): each segment from the current pose cut into
+  <= 2 cm / 5 deg steps (= plan_cartesian) before IK, refused if a step jumps > 20 deg or breaks the J4/J6 guards;
+  timing counts rotation (1 rad = 15 cm) and never exceeds JOINT_SPEED. (The grasp is ONE waypoint; Kortex drew
+  the straight line itself, the first SheppyArm version would have joint-interpolated it.) Offline execution sim
+  (grasp + 75-deg swing as sent): 0.1 mm off, max J6 92, max J4 139. Tested on hardware: `tools/sheppy_motion_test.py
+  cartesian` (+3 cm x and back) landed 0.3 mm / 0.02 deg -- before the densify change.
+- **First full open under sheppy (10-07):** grasp (auto tilt 25 deg) + 75 deg swing WORKED on hardware (user ran it),
+  then `--release --execute` (back off 20 cm, toward base, park) done -- but the park pose isn't the one the user
+  wants; they're teleoping the new end pose (-> `park_pose.json`). User notes: the release sounded loud (fine,
+  ignore); the run felt slow -> `SheppyArm` peaks raised to JOINT_SPEED 0.5 rad/s, CART_SPEED 9 cm/s, and
+  `execute_joint_plan` now sends a whole leg as ONE smooth trajectory under SheppyArm (was one stop-and-go move per
+  2 cm step). Exit of every script: harmless rclpy spin-thread traceback / segfault at shutdown -- to fix.
+- **New park pose (10-07, teleoped by the user, `park_pose.json` v4):** joints [34.6, 37.7, -156.5, -128.7, 59.7,
+  78.3, 74.4] deg, tool (0.484, -0.248, 0.246) -- low, in front of the microwave on the right (v3 = the high 09-25 one,
+  kept as `previous`). Release to it not yet dry-run.
+- **Target flow (user, 10-07): grasp -> swing -> release -> PUSH the door the rest of the way open -> park.** Ideally
+  the arm finishes the open with a push. `door_push.push_open` + `tools/sim_push_open.py` exist (sim only); after the
+  25-deg pull every route failed on J6 from the cramped end-of-pull wrist -- re-test from the end of the now-75-deg
+  tilted swing (or after release + back-off, from a fresh posture, not chained from the pull's end).
+- **Push-open route work (10-07, sim only).** User: retreat/push go UP AND OVER the door, not back toward the base;
+  diagonals OK but don't head into the microwave; turn AFTER coming down. Findings (`tools/sim_retreat_over.py`, ad-hoc
+  sims): at 60-75 deg the open door points at the arm base, so any descent on its right side puts the forearm over the
+  door. **Swing 50-55 deg + out 5 cm, up to door top +12 cm, across to 16 cm right of the free edge, down, level the
+  hand -> passes (>= 3.5 cm).** The push from there doesn't yet: facing in (+x) the wrist trails into the free edge;
+  fingers pointing right (user's idea: push with the WRIST, mirror of push-close; camera side faces up then) the
+  bracelet passes the free edge at 0.3-1.5 cm on the forward leg. Next: user demonstrates the push by teleop after a
+  real 50-deg open (`tools/record_demo.py`), encode it door-relative. Open script: `--swing-deg N` caps the swing.
+- **Push-close (10-07): fingers point LEFT by default now** (`--keep-orientation` = old as-is behaviour). From a
+  75-deg door + the new park pose (hand on the door's RIGHT side) nothing plans: fingers-left puts the wrist inside the
+  door at every swing start (door points at the base); as-is needs `--route-over` (passes up/over/down, 3.7 cm) but the
+  swing then fails J4 (-145, guard 144) at every push z/radius tried. Closed by teleop. Re-check push-close for the
+  50-deg door before the next close.
+- **OPEN CONCERN (user, 10-07): the swing arc isn't accurate and could break the door.** Nothing measures the door
+  during the swing: the arc is a circle about the DETECTED hinge, the hand is position-controlled, and the only
+  stop is the driver's 0.15 rad tracking tolerance (a stiff arm pulling a door off its hinge won't lag that much).
+  09-29 it dragged the whole microwave at 75-80 deg. To do: watch joint efforts during the swing (/joint_states
+  effort, like push-close's contact rule) and stop -- or re-centre -- when they rise; or swing in IMPEDANCE mode
+  (`control_mode 1` in ExecuteJointTrajectory) so the hand yields to the door's real arc; fit the hinge from the
+  first few cm of travel.
+- **Port: `microwave/sheppy_arm.py` (`SheppyArm`)** replaces `ArmInterfaceClient` in every script/tool (same
+  `get_state()` / `execute_command()`; `ARM_RPC_HOST` gone). Joint moves = one `execute_joint_trajectory` goal;
+  `CartesianTrajectoryCommand` = the poses IK'd with the scripts' own `solve_ik` (chained from the real joints) then one
+  joint-trajectory goal, i.e. the arm follows the sim-checked joint path, not Kortex's Cartesian interpolation;
+  gripper = `/setpoint/gripper` at 50 Hz until it settles (the 2F-85 latches it). Dense 20 ms points with velocities
+  (-> the driver's cubic Hermite, not linear), min-jerk timing, peak 0.35 rad/s joint / 6 cm/s Cartesian,
+  `path_tolerance` 0.15 rad per joint (driver-side tracking abort), Ctrl-C cancels the goal.
+  **`ee_pos` = Kinova `tool_frame` = flange + 0.120 m along flange z** (what Kortex's tool pose was and what
+  `FINGERTIP_PAST_TOOL` is measured from); `/ee_state` is the flange. Camera topics now `/wrist_camera/...`.
+  Verified 10-07: sim `tool_frame` FK at the real joints == `/ee_state` + 0.12 to 0.1 mm, same quaternion -- the
+  sim the scripts plan in, the old Kortex tool frame and the new driver agree.
+- **First SheppyArm motion (10-07, attended):** `tools/sheppy_motion_test.py joint`: J6 +5 deg and back, both
+  SUCCESSFUL, landed within 0.01 deg. `... gripper`: close 0.009 -> 0.969, open -> 0.009. (`cartesian` not run yet.)
+  Driver RT telemetry: faults 0, but ~9% overrun cycles (20k / 225k) and n ~900/s, i.e. the 1 kHz loop runs late
+  -- didn't affect tracking; watch it (host isolcpus=11/nohz_full=11 is set, core 11 is the driver's `--cpu`).
+
 ## 2026-09-29 (late) — open script cleaned up: current commands
 
 **The open script's flags are gone.** `--phase`, `--one-take`, `--swing-max`, `--fast`, `--smooth`, `--hinge`,

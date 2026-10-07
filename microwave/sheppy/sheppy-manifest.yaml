@@ -1,0 +1,107 @@
+# Sheppy manifest for the microwave task -- a local copy of
+# ~/rammp-deployments/december_2026/sheppy-manifest.yaml, cut down to the wrist camera and the arm.
+#   sheppy microwave/sheppy/sheppy-manifest.yaml            # TUI
+#   sheppy up --manifest microwave/sheppy/sheppy-manifest.yaml real-arm-camera   # headless
+machines: []
+nodes:
+  - name: wrist_camera
+    description: Intel RealSense D435i, wrist mounted
+    select: single
+    alternatives:
+      - id: d435i_docker
+        kind: docker
+        # The image's entrypoint already runs realsense2_camera_node with
+        # /etc/rammp/realsense/realsense.yaml; `params` override it, `command` only renames.
+        container:
+          image: ghcr.io/rammp-org/rammp-suite-software/realsense:main
+          privileged: true
+          network_mode: host
+          ipc: host
+          volumes:
+            - /dev:/dev
+          user: "1000:44"          # gid 44 = video (/dev/video* is root:video 0660)
+          environment:
+            ROS_DOMAIN_ID: "0"
+            RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+            HOME: /tmp
+          command: [--ros-args, -r, __node:=wrist_camera]   # topics /wrist_camera/...
+        params:
+          # The D435i has a separate RGB sensor -> rgb_camera.color_profile. 640x480x15:
+          # the driver default stalled the colour stream on earlier rigs.
+          rgb_camera.color_profile: 640x480x15
+          depth_module.depth_profile: 640x480x15
+          align_depth.enable: true  # handle_detect.py wants depth aligned to colour
+        publishes:
+          - /wrist_camera/color/image_raw
+          - /wrist_camera/color/camera_info
+          - /wrist_camera/aligned_depth_to_color/image_raw
+      - id: wrist_camera_mock
+        kind: process
+        command: "bash -lc 'source /opt/ros/humble/setup.bash && ros2 topic pub -r 10 /wrist_camera/color/image_raw sensor_msgs/msg/Image \"{}\"'"
+        publishes:
+          - /wrist_camera/color/image_raw
+
+  - name: arm
+    description: Kinova Gen3 7-DOF + Robotiq 2F-85 (kinova_gen3_node)
+    select: single
+    alternatives:
+      - id: kinova_gen3_driver     # from ~/kinova-gen3-ros2/rammp-alternative.yaml
+        kind: docker
+        ros_node_name: kinova_gen3_node
+        compose:
+          file: compose.yaml
+          service: kinova_gen3_driver
+        params:
+          arbitration_mode: disabled
+          estop_clear_max_age_s: 1.0
+          expect_gripper: true
+        publishes: [/joint_states, /ee_state, /control_status, /stream_status, /gripper_state, /diagnostics]
+        subscribes: [/estop, /setpoint/joint_position, /setpoint/joint_velocity, /setpoint/joint_torque,
+                     /setpoint/pose, /setpoint/twist, /setpoint/gripper]
+
+  - name: arm_tf
+    description: robot_state_publisher on the driver's own URDF, gen3_ prefix stripped
+    select: single
+    alternatives:
+      # /joint_states says joint_1..7 (the driver strips gen3_), so the URDF has to as well;
+      # stripped, its frames are base_link .. end_effector_link -- what calibration_tf hangs off.
+      - id: rsp_driver_urdf
+        kind: process
+        command: >-
+          sed 's/gen3_//g' $HOME/kinova-gen3-driver/models/gen3_7dof_2f85.urdf > /tmp/gen3_tf.urdf &&
+          exec ros2 run robot_state_publisher robot_state_publisher
+          --ros-args -p robot_description:="$(cat /tmp/gen3_tf.urdf)"
+        publishes: [/tf, /tf_static, /robot_description]
+        subscribes: [/joint_states]
+
+  - name: camera_calib_tf
+    description: hand-eye calibration (end_effector_link -> camera_color_optical_frame) + arm_base_link alias
+    select: single
+    alternatives:
+      - id: easy_handeye2_calib
+        kind: process
+        command: >-
+          cd $HOME/feeding-deployment && PYTHONPATH=$PWD/src:$PYTHONPATH exec python3 -m feeding_deployment.ros2.calibration_tf
+          --calib $HOME/.ros2/easy_handeye2/calibrations/wrist_camera_calib.calib
+        publishes: [/tf_static]
+
+  - name: camera_view
+    description: live window (colour | depth) of the wrist camera on the Jetson's desktop (:1)
+    select: single
+    alternatives:
+      - id: opencv_window
+        kind: process
+        command: >-
+          export DISPLAY=${DISPLAY:-:1} && source $HOME/feeding-deployment/microwave/sheppy/env.sh &&
+          exec python3 microwave/tools/camera_view.py
+        subscribes: [/wrist_camera/color/image_raw, /wrist_camera/aligned_depth_to_color/image_raw]
+
+  - name: planner
+    description: cuRobo planner behind the arm's go_to_* actions
+    select: single
+    alternatives:
+      - id: curobo_planner
+        kind: docker
+        compose:
+          file: compose.yaml
+          service: curobo_planner

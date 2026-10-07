@@ -4,14 +4,17 @@ Never commands the arm. Stop with Ctrl-C / SIGINT / SIGTERM, or by creating the 
 given by --stop-file. Used 09-28 to record the user's push-open (release, back off,
 push the door the rest of the way) so it can be translated into planner legs.
 
-    ARM_RPC_HOST=127.0.0.1 python3 microwave/tools/record_demo.py --out microwave/demos/microwave_demo.csv
+    python3 microwave/tools/record_demo.py --out microwave/demos/microwave_demo.csv
 """
 import argparse, csv, signal, time
 from pathlib import Path
 
 import numpy as np
 
-from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceClient
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # microwave/
+from sheppy_arm import SheppyArm
 
 a = argparse.ArgumentParser()
 a.add_argument("--out", required=True)
@@ -24,7 +27,7 @@ for sig in (signal.SIGINT, signal.SIGTERM):
     signal.signal(sig, lambda *_: stop.update(now=True))
 Path(args.stop_file).unlink(missing_ok=True)
 
-ai = ArmInterfaceClient()
+ai = SheppyArm()
 out = Path(args.out).expanduser()
 with out.open("w", newline="") as fh:
     w = csv.writer(fh)

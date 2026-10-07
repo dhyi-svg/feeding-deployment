@@ -635,7 +635,14 @@ def _plan_close(scene, rb, df, st, args, deg0):
     side = np.r_[-df.e, 0.0]                       # along the closed door, toward the hinge
     q0 = np.array(st["position"], float)
     p_now = np.array(st["ee_pos"][:3])
-    quat = _facing_forward(st["ee_pos"][3:7], fwd) if args.face_door else tuple(st["ee_pos"][3:7])
+    if args.face_door:
+        quat = _facing_forward(st["ee_pos"][3:7], fwd)
+    elif args.keep_orientation:
+        quat = tuple(st["ee_pos"][3:7])
+    else:
+        # default (user, 10-07): fingers pointing LEFT -- horizontal, along the closed door toward the hinge --
+        # pushing with the side of the hand; the turn happens on the way to the swing start
+        quat = _facing_forward(st["ee_pos"][3:7], side)
     z = args.push_z if args.push_z is not None else p_now[2]
     if args.route_over:
         # --route-over: the swing/push run at mid door height (unless --push-z)
@@ -907,8 +914,11 @@ def add_push_args(a, close=False):
                             "(~33 cm out) -- the 09-25 hand demo went left to ~8 cm past the hinge, forward "
                             "to 28 cm, swung at 26-27 cm")
         a.add_argument("--face-door", action="store_true",
-                       help="push-close: turn the approach to the closed door's normal first (default: keep "
-                            "the hand's orientation as it is, like the demo)")
+                       help="push-close: turn the approach to the closed door's normal first (default: fingers "
+                            "pointing left, along the closed door toward the hinge)")
+        a.add_argument("--keep-orientation", action="store_true",
+                       help="push-close: keep the hand's orientation as it is (the 09-25 demo, e.g. holding a "
+                            "container) instead of turning the fingers to point left")
         a.add_argument("--push-stop-short", type=float, default=0.03,
                        help="push-close: end the swing this far short of the model's closed door (m); the model "
                             "put the closed face 1-1.5 cm too deep on 09-25")

@@ -3,10 +3,10 @@ import json, sys, types
 from pathlib import Path
 import numpy as np
 sys.path.insert(0, "microwave")
-from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceClient
+from sheppy_arm import SheppyArm
 from door_push import DoorFrame, _plan_retreat_over
 from microwave_common import make_sim
-st = ArmInterfaceClient().get_state()
+st = SheppyArm().get_state()
 st = {"ee_pos": np.array(st["ee_pos"], float), "position": np.array(st["position"], float)}
 door = json.loads((Path.home() / ".microwave_door.json").read_text())
 print("door angle from held handle:", round(DoorFrame(door, 1.0).angle_of(st["ee_pos"]), 1))

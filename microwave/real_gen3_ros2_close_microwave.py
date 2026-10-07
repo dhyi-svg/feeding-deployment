@@ -39,7 +39,7 @@ import pybullet as p
 from scipy.spatial.transform import Rotation as R
 from pybullet_helpers.geometry import Pose, multiply_poses
 
-from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceClient
+from sheppy_arm import SheppyArm
 from feeding_deployment.control.robot_controller.command_interface import CartesianTrajectoryCommand, JointCommand
 
 from door_push import add_push_args, push_close
@@ -272,7 +272,7 @@ def main():
     add_push_args(a, close=True)
     args = a.parse_args()
 
-    ai = ArmInterfaceClient()
+    ai = SheppyArm()
 
     if args.phase == "push-close":
         push_close(ai, args)

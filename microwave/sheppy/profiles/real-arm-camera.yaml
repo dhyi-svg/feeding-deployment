@@ -1,0 +1,7 @@
+description: real wrist camera + real arm driver (no planner -- go_to_* actions won't complete)
+selections:
+  wrist_camera: d435i_docker
+  camera_view: opencv_window
+  arm: kinova_gen3_driver
+  arm_tf: rsp_driver_urdf
+  camera_calib_tf: easy_handeye2_calib

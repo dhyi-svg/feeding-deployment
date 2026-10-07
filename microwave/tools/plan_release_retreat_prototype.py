@@ -16,7 +16,10 @@ import json, sys
 import numpy as np, pybullet as p
 from scipy.spatial.transform import Rotation as R
 from pybullet_helpers.geometry import Pose, multiply_poses
-from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceClient
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # microwave/
+from sheppy_arm import SheppyArm
 from feeding_deployment.simulation.scene_description import create_scene_description_from_config
 from feeding_deployment.simulation.simulator import FeedingDeploymentPyBulletSimulator
 
@@ -31,7 +34,7 @@ MIN_CLEAR = 0.03                              # plan must keep every link >= 3 c
 J6_GUARD = 115.0
 MAX_JUMP = 25.0
 
-st = ArmInterfaceClient().get_state()
+st = SheppyArm().get_state()
 q0 = np.array(st["position"], float)
 ee = np.array(st["ee_pos"], float)
 pos0, quat0 = ee[:3], ee[3:7]

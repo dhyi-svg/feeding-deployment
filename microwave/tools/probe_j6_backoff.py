@@ -2,9 +2,9 @@ import sys
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 sys.path.insert(0, "microwave")
-from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceClient
+from sheppy_arm import SheppyArm
 from microwave_common import make_sim, solve_ik
-st = ArmInterfaceClient().get_state()
+st = SheppyArm().get_state()
 ee, q0 = np.array(st["ee_pos"], float), np.array(st["position"], float)
 m = R.from_quat(ee[3:7]).as_matrix()
 print("approach (tool z)", np.round(m[:, 2], 3), " tool x", np.round(m[:, 0], 3), " tool y", np.round(m[:, 1], 3))
