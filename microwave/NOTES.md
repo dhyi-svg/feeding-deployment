@@ -2,6 +2,52 @@
 
 Working notes for the scripts in this folder. Newest learnings first within each section.
 
+## 2026-10-07 (late) -- STOPPED HERE: full open + close ran on hardware via `door_task.py`
+
+**State at shutdown:** `sheppy down`, nothing running. The arm was left at the close's END pose (hand beside the
+microwave's left side at the closed door, gripper open) -- move it away by teleop before anything else next time.
+
+- `microwave/door_task.py open|close|full|retract [--execute]` (run from the REPO ROOT -- sim config path is relative):
+  open = open_task (grasp + 50-deg swing) + push-open demo replay; close = close demo replay + retract (back off 15 cm,
+  park, gripper untouched). Ran today: grasp + swing OK; push-open needed `--trust-demo 1` (lift-off leg starts next
+  to the door face; the door model says 1.9 cm); close demo ran to 0.1 cm of its last keypoint (did the door latch? --
+  ask the user); RETRACT refused: back-off step 1 puts the bracelet 2.9 cm from the microwave body (< 3 cm) -- the
+  replay reached the close end in a DIFFERENT IK branch than the demo (J3 69 / J4 -34 / J7 -115 vs demo 163 / -2 / 77).
+  Not yet in door_task: trust settings to match what ran (push-open trust 1), retract back-off clearance.
+- **Hinge correction is suspect:** with `HINGE_*` applied the stiff swing still bulged 2.0 cm and the fit moved out
+  another 2.3 cm (r 38.6) -> the 2 cm is likely the arm yielding under drag, not hinge error; circle fits of a STIFF
+  path are biased. Consider removing `HINGE_BEHIND_FACE`/`HINGE_PAST_EDGE` (set 0) until measured another way.
+- Door file now: `hinge` = detected edge (what demos + door model use), `hinge_pivot` = corrected pivot (swing).
+- sklearn removed (open3d DBSCAN, identical clusters on a test cloud, ~3x faster); not yet run on a live detection.
+- Next: decide IK branch handling for replays (seed from the demo's recorded joints, so the replay follows the
+  demo's arm configuration), retract fix, view-pose preset (start J4 was past 144 twice), lateral grasp check,
+  update the architecture artifact (https://claude.ai/artifact/Fpk7ieA9L26sCttRDViCfN), trim door_push.py.
+
+## 2026-10-07 (afternoon) -- push-open from the user's demo WORKED; close demo recorded
+
+- **Full open on hardware:** grasp -> stiff 50-deg swing -> `push_open_demo.py --trust-demo 3 --execute`: release, up,
+  over to the right of the microwave, down, left into the opening, push -- ended 0.0 cm from the demo's last keypoint.
+  Now generalised: `demo_replay.py encode <demo>` stores a keypoint demo in DOOR coordinates (along the door as a
+  fraction of hinge-handle distance, off the face in m, height from door top / grasp, orientation vs door facing);
+  `demo_replay.py run <demo>.door.json [--trust-demo N] [--execute]` maps it onto today's door, sim-gates, replays.
+  `demos/push_open_2026-10-07.door.json` = the open demo with +3 cm along-door at kp2/kp3 (as run). The 50-deg door
+  model puts the REAL demo poses 2-7 cm inside the door from kp3 on -> `--trust-demo 3` (body-only checks from leg 3).
+- **Swing:** impedance dropped (tripped its 0.08 rad stop at the latch even with a stiff first 10 deg). Stiff swing
+  measured path bulged 2.0 cm; circle fit -> real pivot 1.6 cm behind the face, 2.1 cm past the detected edge (r 36.0 vs
+  33.7) -> `HINGE_BEHIND_FACE` / `HINGE_PAST_EDGE` applied to the detected hinge (not yet run with it). Grip force on the
+  handle 0.25 (`GRASP_FORCE`, was 0.5) so the bar can turn in the fingers (microwave leaned forward). Detector now aims at
+  the MIDDLE of the handle bar (was 4 cm from the cluster's max camera y = the bar's BOTTOM end on this upright camera),
+  `VERTICAL_CORR` 0. Grasp still landed right of the bar twice (calibration, few cm, both signs seen) -> lateral touch
+  check still to do. Detection frames saved to `~/microwave_detections/`.
+- **Close demo** `demos/push_close_2026-10-07.json` (+ `_door.json`): kp1 START holding a container, wrist rotated 90
+  (could be the opposite way), up 24 cm, LEFT over the open door to past the hinge (kp3 y +0.23, kp4 y +0.41 -- user:
+  the real move left will be LESS far left), down to door height beside the microwave's left side (kp5). The push that
+  shuts the door is NOT demonstrated yet. Large wrist joint changes between kp2-kp4 (J5/J7 flip) -- watch the replay.
+- To do: encode + replay the close (with less-left adjust, roll-180 option), finish the push-to-shut, lateral grasp
+  correction, door model from the measured hinge so --trust-demo isn't needed, drop sklearn (open3d has DBSCAN),
+  trim door_push.py (old push-open planners superseded), update the architecture artifact
+  (https://claude.ai/artifact/Fpk7ieA9L26sCttRDViCfN).
+
 ## 2026-10-07 END OF SESSION -- PICK UP HERE
 
 **State at shutdown:** `sheppy down` (all nodes + sheppyd stopped, no containers), arm powered off by the user.

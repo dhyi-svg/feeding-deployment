@@ -306,11 +306,12 @@ class SheppyArm:
             time.sleep(0.01)
         return fut.result()
 
-    def gripper(self, position, timeout_s=4.0):
+    def gripper(self, position, timeout_s=4.0, force=None):
         """Stream /setpoint/gripper at 50 Hz until the fingers stop moving (or `timeout_s`). The
         2F-85 latches the last command, so it holds after the stream stops."""
         m = GripperSetpoint()
-        m.position, m.speed, m.force = float(position), GRIPPER_SPEED, GRIPPER_FORCE
+        m.position, m.speed = float(position), GRIPPER_SPEED
+        m.force = float(GRIPPER_FORCE if force is None else force)   # a current ceiling: lower = looser hold
         t0, last, still_since = time.time(), self._grip, None
         while time.time() - t0 < timeout_s:
             self._grip_pub.publish(m)

@@ -18,7 +18,8 @@ go toward the base to clear the door's free edge, joint move to `park_pose.json`
 
 Run from the repo root (the sim config path is relative). See NOTES.md for the bring-up and env.
 """
-import argparse, contextlib, io, sys, time
+import argparse, contextlib, io, json, sys, time
+from pathlib import Path
 
 import numpy as np
 import pybullet as p
@@ -49,7 +50,8 @@ MAX_FACE_YAW_DEG = 70.0    # beyond this the plane fit is more likely wrong than
 # --- grasp (tuned on the arm, see NOTES.md) ---
 GRIP_EXT = 0.088           # along the approach axis (negative = past the detected handle). Was -0.010 (rchi-cpu-5);
                            # Jetson+sheppy+Capybara calib 10-07 touch check: planned grasp 9.8 cm too deep
-VERTICAL_CORR = 0.046      # world z. Was 0.025; 10-07 touch +2.1 cm (bar is vertical, height not critical)
+VERTICAL_CORR = 0.0        # world z. 0.025 (rchi-cpu-5) -> 0.046 (10-07 touch) -> 0: the detector now returns the
+                           # MIDDLE of the bar, not a point near its bottom end
 GRASP_X_ADJUST = 0.040     # along the approach axis
 GRASP_PITCHES_DEG = (0, 10, 17, 25, 30, 35)   # nose-down tilts tried about the finger axis (fingers stay
                            # horizontal across the vertical bar); the smallest reaching the largest swing wins. A low
@@ -68,9 +70,17 @@ SWING_MAX_JUMP_DEG = 25.0
 SWING_MAX_REACH = 0.90
 SWING_IK_PROBE_M = 0.01           # 200-iteration IK must get within 1 cm (else Kortex hits SINGULARITY_REGION)
 J6_GUARD_DEG = 115.0              # J6 hard limit is +-119.7
-SWING_COMPLIANT = True            # swing in joint impedance (SheppyArm.IMPEDANCE): the hand gives way to the door's
+SWING_COMPLIANT = False           # swing in joint impedance (SheppyArm.IMPEDANCE): the hand gives way to the door's
                                   # real arc instead of dragging the microwave along a circle about a slightly wrong
                                   # hinge (09-29 / 10-07); the driver's path tolerance (0.08 rad) is the force stop
+GRASP_FORCE = 0.25                # gripper current ceiling on the handle (SheppyArm default 0.5): a looser hold lets the
+                                  # bar turn/shift in the fingers instead of tipping the microwave forward (10-07)
+HINGE_BEHIND_FACE = 0.016         # real pivot vs the detected hinge (the door's visible edge): this far behind the door
+HINGE_PAST_EDGE = 0.021           # face and this far beyond the edge, away from the handle. Measured 10-07 from the
+                                  # hand's path in a stiff 50-deg swing (circle fit rms 0.6 mm; r 36.0 vs 33.7 cm)
+SWING_STIFF_DEG = 10              # ... but the first part stiff: the latch needs a firm pull, and on 10-07 the soft
+                                  # arm's lag tripped the force stop before the door opened (~5 deg)
+SWING_FIT_MIN_DEG = 15            # fit a hinge to the measured path only over at least this much arc
 SWING_ARRIVE_TOL = 0.03           # compliant: the hand may end this far off the commanded end (the door decides)
 HINGE_RADIUS_RANGE = (0.25, 0.45)
 
@@ -113,6 +123,24 @@ def _check_arc(scene, rb, wps, q0):
     return True, q, f"all {len(wps)} waypoints OK, final J6 {np.degrees(q[5]):.1f}deg"
 
 
+DETECT_FRAMES_DIR = Path.home() / "microwave_detections"
+
+
+def _save_frame(d, tag, attempt, det):
+    """Keep every detection's colour + depth frame (and the result) for looking at misses afterwards."""
+    try:
+        import cv2
+        DETECT_FRAMES_DIR.mkdir(exist_ok=True)
+        stem = DETECT_FRAMES_DIR / f"{time.strftime('%Y%m%d_%H%M%S')}_look{tag}_try{attempt}"
+        cv2.imwrite(str(stem) + "_rgb.jpg", d["rgb_image"])            # the interface hands over bgr8
+        cv2.imwrite(str(stem) + "_depth.png", d["depth_image"])
+        if det is not None:
+            stem.with_suffix(".json").write_text(json.dumps({k: (np.asarray(v).tolist() if not isinstance(v, (str, float, int)) else v)
+                                                             for k, v in det.items()}))
+    except Exception as e:  # never let debugging output stop a run
+        print(f"  (could not save the detection frame: {e})")
+
+
 def detect_handle():
     """Two agreeing looks. Returns (handle position, handle orientation, door normal, door_z, door_mid, hinge)."""
     rs = RealSenseROS2Interface(color_topic="/wrist_camera/color/image_raw",
@@ -126,6 +154,7 @@ def detect_handle():
         for attempt in range(1, MAX_EMPTY_RETRIES + 1):
             d = rs.get_camera_data()
             det = detector.detect(d["rgb_image"], d["camera_info"], d["depth_image"])
+            _save_frame(d, tag, attempt, det)
             if det is not None:
                 break
             print(f"  no detection on look {tag} (retry {attempt}/{MAX_EMPTY_RETRIES})")
@@ -192,6 +221,7 @@ def grasp_pose(h, orient, n, pitch_deg=0.0):
 
 
 def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG):
+    """Detect, plan, grasp, swing. Returns True when the swing finished (or the dry run passed); exits on any refusal."""
     scene, rb = make_sim()
 
     st = ai.get_state()
@@ -204,7 +234,13 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG):
             if float(ai.get_state()["gripper_pos"]) > 0.2:
                 sys.exit("Gripper still closed after opening -- refusing to grasp.")
 
-    h_raw, orient, n, door_z, door_mid, hinge = detect_handle()
+    h_raw, orient, n, door_z, door_mid, hinge_seen = detect_handle()
+    # the real pivot sits behind the face and beyond the visible edge (HINGE_*), expressed in the door's own frame
+    away = np.r_[hinge_seen[:2] - h_raw[:2], 0.0]
+    away /= np.linalg.norm(away)
+    hinge = hinge_seen - np.r_[n[:2], 0.0] / np.linalg.norm(n[:2]) * HINGE_BEHIND_FACE + away * HINGE_PAST_EDGE
+    print(f"hinge: detected edge {np.round(hinge_seen, 4)} -> corrected pivot {np.round(hinge, 4)} "
+          f"({HINGE_BEHIND_FACE * 100:.1f} cm behind the face, {HINGE_PAST_EDGE * 100:.1f} cm past the edge)")
     h, grasp = grasp_pose(h_raw, orient, n)       # runs the grasp gates once, prints the grasp point
     radius = float(np.linalg.norm(np.asarray(grasp.position)[:2] - hinge[:2]))
     print(f"hinge (detected) {np.round(hinge, 4)}  radius {radius * 100:.1f} cm")
@@ -243,7 +279,7 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG):
 
     if not execute:
         print(f"\nDRY RUN -- would grasp, then swing {deg} deg. Nothing commanded.")
-        return
+        return True
 
     # --- grasp ---
     _, e, _ = run_cartesian_trajectory(ai, [(list(g_p), list(g_q))])
@@ -252,7 +288,10 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG):
         sys.exit(f"Tracking {e * 100:.1f} cm at the grasp -- ABORT, gripper untouched.")
     # closed-door geometry for the close task (door_z/door_mid written even when None, so stale ones can't linger)
     save_door_geometry(closed_normal=n, closed_grasp_pos=g_p, closed_handle=h, door_z=door_z, door_mid=door_mid)
-    ai.execute_command(CloseGripperCommand())
+    if hasattr(ai, "gripper"):
+        ai.gripper(1.0, force=GRASP_FORCE)         # looser hold (sheppy)
+    else:
+        ai.execute_command(CloseGripperCommand())
     t0, last = time.time(), -1.0
     time.sleep(0.6)
     while time.time() - t0 < 3.5:   # until the fingers stop closing
@@ -272,7 +311,7 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG):
     ok, _, msg = _check_arc(scene, rb, wps, st["position"])
     if not ok:
         sys.exit(f"swing re-check from the real grasp failed ({msg}) -- stopping, still holding the handle.")
-    save_door_geometry(hinge=hinge)
+    save_door_geometry(hinge=hinge_seen, hinge_pivot=hinge)   # demos + door model use the detected edge; swing uses the pivot
     sent = wps[SWING_SEND_EVERY - 1::SWING_SEND_EVERY]
     if sent[-1] is not wps[-1]:
         sent.append(wps[-1])
@@ -280,12 +319,33 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG):
     imp = None
     if SWING_COMPLIANT and hasattr(ai, "move_cartesian"):
         from sheppy_arm import IMPEDANCE as imp
-        print(f"  compliant swing: joint impedance kq {imp['kq']}, zeta {imp['zeta']}, stop at {imp['path_tol']} rad lag")
-    ok, err, _ = run_cartesian_trajectory(ai, [(w[:3], w[3:]) for w in sent], impedance=imp,
-                                          tol_m=SWING_ARRIVE_TOL if imp else 0.01)
+    radius = float(np.linalg.norm(np.asarray(ee[:2]) - hinge[:2]))
+    n_stiff = min(len(wps), int(np.ceil(radius * np.radians(SWING_STIFF_DEG) / SWING_WAYPOINT_SPACING_M)))
+    if imp is None or n_stiff >= len(wps):
+        ok, err, _ = run_cartesian_trajectory(ai, [(w[:3], w[3:]) for w in sent])
+        path = np.array([p_[1:] for p_ in getattr(ai, "last_path", [])])
+    else:
+        stiff, soft = wps[:n_stiff], wps[n_stiff:]
+        soft_sent = soft[SWING_SEND_EVERY - 1::SWING_SEND_EVERY]
+        if not soft_sent or soft_sent[-1] is not soft[-1]:
+            soft_sent.append(soft[-1])
+        print(f"  first {SWING_STIFF_DEG} deg stiff ({len(stiff)} waypoints, breaks the latch), then compliant: joint "
+              f"impedance kq {imp['kq']}, zeta {imp['zeta']}, stop at {imp['path_tol']} rad lag")
+        ok, err, _ = run_cartesian_trajectory(ai, [(w[:3], w[3:]) for w in stiff], tol_m=0.01)
+        path = np.array([p_[1:] for p_ in getattr(ai, "last_path", [])])
+        if not ok:
+            print(f"  stiff part stopped {err * 100:.1f} cm short -- not starting the compliant part.")
+        else:
+            ok, err, _ = run_cartesian_trajectory(ai, [(w[:3], w[3:]) for w in soft_sent], impedance=imp,
+                                                  tol_m=SWING_ARRIVE_TOL)
+            soft_path = np.array([p_[1:] for p_ in getattr(ai, "last_path", [])])
+            path = np.vstack([path, soft_path]) if len(soft_path) else path
     final = ai.get_state()
-    path = np.array([p_[1:] for p_ in getattr(ai, "last_path", [])])
-    if len(path) > 20:
+    arc_deg = 0.0
+    if len(path) > 1:
+        a0, a1 = path[0, :2] - hinge[:2], path[-1, :2] - hinge[:2]
+        arc_deg = abs(np.degrees(np.arctan2(a0[0] * a1[1] - a0[1] * a1[0], a0 @ a1)))
+    if len(path) > 20 and arc_deg >= SWING_FIT_MIN_DEG:
         c, r, rms = fit_circle_xy(path[:, :2])
         cmd = np.array([w[:3] for w in wps])
         dev = np.max(np.linalg.norm(path[:, None, :2] - cmd[None, :, :2], axis=2).min(axis=1))
@@ -298,6 +358,7 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG):
     print(f"SWING {'DONE' if ok else 'STOPPED SHORT'}: EE {np.round(final['ee_pos'][:3], 4)} "
           f"({err * 100:.1f} cm from the last waypoint)")
     record_door_angle(final["ee_pos"])
+    return bool(ok)
 
 
 def main():
