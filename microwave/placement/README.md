@@ -1,54 +1,84 @@
 # Microwave container placement
 
-Puts a container the gripper is already holding into the **open** microwave. The arm has NOT been
-moved by this code yet. Older open items: `../NOTES.md`, 2026-10-02 section.
+Puts the OXO box the gripper is holding into the **open** microwave: real-time detection,
+cavity + floor from depth, obstacle-aware level insertion, impedance lowering, release, retract.
+**Software complete and tested offline; NOT yet run on the robot.** History of the SAM 3 version:
+`../NOTES.md` (2026-10-02 section) and the 10-04 status in git (`75f508dc`).
 
-## Status (2026-10-04, first lab session)
+## Pipeline
 
-Confirmed on the rig (rchi-cpu-5, gripper empty and closed, door open 90 deg):
-- Node starts, SAM 3 loads; live overlay on `/microwave_place/interior_overlay` segments the open
-  microwave's interior with the prompt "inside of open microwave" (user: box accurate to ~2 cm).
-- Depth -> 3D -> `arm_base_link` -> cavity bounds + placement point runs live; `/microwave_place/placement_point`
-  published (e.g. x 0.958, y 0.234, z 0.035).
-- `plan_place`: two looks agreed within 3 cm; pre-insert/above/place poses passed every pose check
-  (level, aimed in, fits, reach, under the top); IK of the first planned step solved (0.01 cm).
+| Step | What | Code |
+|---|---|---|
+| Detect | YOLO26s (COCO `microwave`, fallback bus/train/... as `handle_detect.py`) on the image turned upright from tf (camera is mounted rolled 90 deg); >= 3 detections must agree with their median box (IoU 0.6, 25 px), 20 s timeout | `microwave_detector.py` |
+| Cloud | ROI pixels with aligned depth -> camera points -> `arm_base_link` (tf2) -> hand + held box removed -> 8 mm voxels -> statistical outlier removal | `point_cloud.py` |
+| Cavity | level sheets from a gravity-aligned height histogram (floor, turntable, ceiling), walls by RANSAC; back wall = a wall with floor running up to it; insertion axis = -back normal; floor fit checked level (<= 6 deg -- also catches a wrong camera roll), flat, big, below the camera; opening, side walls, top. >= 3 looks must agree. No door JSON | `cavity_perception.py` |
+| Target | hand re-oriented to aim the box along the axis and level it; box footprint centred between the walls, near end 3 cm inside, >= 4 cm from the back; support height measured under the footprint (turntable); refuses if something stands there, the box is too wide/long/tall or out of reach | `cavity_perception.placement_target` |
+| Plan | PyBullet Gen3: existing `solve_ik` + orientation-error, joint-limit (URDF + J2/J4/J6 guards), wrap, jump checks; collision of links + held box vs cavity slabs and 3 cm scene voxels (open door, front, counter); box tilt <= 2 deg on every insertion step. Impedance: J6 pulled to -67.6 on the approach, held there inside | `placement_planner.py` |
+| Execute | `JointCommand` steps (convergence-checked); lowering by task impedance (`switch_to_task_compliant_mode` + `CartesianCommand`, contact = lag + stall, abort on drift / tracking / timeout / RPC error, always leaves compliant mode) or planned position steps | `placement_workflow.py`, `impedance_lowering.py` |
+| Release | re-planned from where the hand is: open (verified), lift 5 mm, straight back out (placed box is an obstacle), park if that leg passes | `placement_workflow.plan_release` |
 
-Not confirmed / blocking:
-- **Door collision model is stale**: `plan_place` refused at step 1 of "to pre-insert" (gripper 3.5 cm
-  inside the modelled door). The microwave moved ~16 cm left (+y) since the 10-03 door file, and the
-  door slab is placed from `closed_grasp_pos`, which disagrees with the 10-03 refit hinge by ~13 cm.
-  Measured: the real 90-deg door's inner face is ~8 in (0.20 m) left of the gripper's left finger
-  (y ~0.43); the model has it at y ~0.07. Fix next: refresh the door file (re-detect handle/hinge),
-  or a placement-only door-model shift (planned, not written).
-- Rest of the IK/collision planning (all three legs), and **any arm motion inward** (execute_place),
-  lowering, release, park.
-- Floor z 0.035 looks low (door bottom was z ~0.10 on 10-03): touch the floor and compare before
-  lowering; maybe a depth correction (`PLACE_DEPTH_CORR`).
-- `~/.microwave_door.json` `door_open_deg` was hand-set to 90 (backup `.bak_2026-10-04`).
+**Impedance and J6.** `compliant_controller.py` task mode uses a 6-DOF model with J6 fixed at
+**-67.6 deg** (`hack_gen3_robotiq_2f_85.urdf`; checked offline: FK exact there, 53 cm off at +67.6).
+So impedance is only entered with the real J6 within 3 deg of that. The planner gets there by
+self-motion on the approach -- possible only from the **J6 < 0 wrist branch**. The 09-29 container
+hold (J6 +80) is on the other branch: the plan then refuses and prints the flipped joints
+(J5+180, -J6, J7+180, same hand pose) to hold the box in -- flip the wrist BEFORE picking the box
+up. `--lowering position` is the fallback (planned steps ending 1 cm above the support).
 
-| File | What |
-|---|---|
-| `microwave_place_node.py` | ROS 2 node: live SAM 3 overlay + plan/execute services. Start here to build on it. |
-| `real_gen3_ros2_place_container_microwave.py` | The steps as functions (`plan_placement`, `execute_placement`, `plan_release`, `execute_release`, `look_inside`) + a CLI. |
-| `microwave_cavity.py` | Pure numpy: interior points -> cavity bounds + placement point. Tests: `tests/test_microwave_cavity.py`. |
-
-Pipeline: wrist camera colour image -> **SAM 3** (off the shelf, prompt "inside of open microwave")
--> interior mask -> aligned depth -> 3D points -> tf to `arm_base_link` -> cavity box -> placement
-point (two looks must agree within 3 cm) -> pre-insert / above / place tool poses (hand orientation
-held fixed) -> PyBullet plan with IK / joint-limit / door-clearance checks -> joint commands over the
-arm RPC. The final lowering is position-controlled; impedance control is a TODO (`lower_container`).
-
-## Run (from the repo root, bring-up already up)
+## Commands (repo root; nothing moves without `--execute` + typing `go`)
 
 ```bash
-python3 -u microwave/placement/microwave_place_node.py --ros-args -p container_drop:=0.05
-ros2 run rqt_image_view rqt_image_view /microwave_place/interior_overlay     # watch SAM 3 live
+microwave/placement/bringup.sh                 # arm_server, joint bridge, stub base, bypass, speed low, rsp, calib tf, camera
+source ~/microwave_place_logs/bringup/env.sh
+python3 microwave/placement/tools/check_camera_roll.py               # which roll the published calibration needs
+python3 microwave/placement/tools/rotate_camera_calibration.py --roll-deg <that>   # writes ..._roll<deg>.calib
+microwave/placement/bringup.sh stop && microwave/placement/bringup.sh            # picks up the rolled calib
 
-ros2 service call /microwave_place/plan_place std_srvs/srv/Trigger           # look + plan, no motion
-ros2 param set /microwave_place allow_execute true                           # only when ready to move
-ros2 service call /microwave_place/execute_place std_srvs/srv/Trigger
-ros2 service call /microwave_place/plan_release std_srvs/srv/Trigger
-ros2 service call /microwave_place/execute_release std_srvs/srv/Trigger
+P=microwave/placement/real_gen3_ros2_place_container_microwave.py
+python3 -u $P perceive                                           # detection + cavity, overlays in ~/microwave_place_logs/<t>/
+python3 -u $P plan --container-drop <m>                          # + every leg in sim
+python3 -u $P place --container-drop <m> --execute --stop-after pre-insert   # then insert, then lower
+python3 -u $P release [--execute]
+python3 -u $P plan --replay ~/microwave_place_logs/<t>           # offline re-plan of a saved run
+# ROS 2 node (live overlay, clouds, markers, services) -- dry-run unless allow_execute:=true
+python3 -u microwave/placement/microwave_place_node.py --ros-args -p container_drop:=<m>
+ros2 run rqt_image_view rqt_image_view /microwave_place/overlay
+ros2 service call /microwave_place/plan_place std_srvs/srv/Trigger
+# tests (~1 min)
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_microwave_placement_perception.py tests/test_microwave_placement_planning.py
 ```
 
-Topics, services and parameters are listed in the node's docstring.
+Tunables: `placement_config.py` (defaults, documented), overrides in `placement_config.yaml`.
+Offline scenes: `synthetic_scene.py` (ray-cast microwave, door, turntable, counter; any camera roll).
+
+## Hardware checklist (stop at the first failure; e-stop in hand from step 4)
+
+1. **Perception only** (gripper empty, door open, camera looking in): `bringup.sh`, `check_camera_roll.py`
+   must say OK (or write + publish the rolled calibration and re-run until it does). `perceive` 3x:
+   overlay box on the microwave, floor dots on the floor, yellow box on the walls; looks agree;
+   floor tilt < 2 deg. Fail = refusal text + overlays in the log dir.
+2. **Frames/geometry**: touch the floor and the back wall with the gripper (teleop) and compare with
+   `cavity.json` (floor_z, back). > 1 cm off along the look direction -> set `cloud.depth_corr_m`.
+   > 1-2 cm otherwise -> the calibration translation (roll pivot) needs a real easy_handeye2 run.
+3. **Container + hold**: measure `container.drop/width/height/far_past_tool` into the YAML. Hold the
+   box on the J6 < 0 branch (the flipped joints a refused `plan` prints). `plan`: all legs pass,
+   clearance numbers sane, RViz `/microwave_place/markers` box sits in the cavity.
+4. **Supervised approach**: `place --execute --stop-after pre-insert` -- box level, aimed into the opening,
+   ~8 cm in front. Then `--stop-after insert` (re-plans from there) -- box enters without touching,
+   stops 4 cm above the floor. Stop if anything rubs or tilts.
+5. **Impedance lowering**: `place --execute` from a fresh plan. Expect "contact after ~4 cm"; box resting,
+   arm not sagging. Abort criteria are automatic (drift 2 cm, tracking 6 cm, 20 s). If compliant mode
+   misbehaves: e-stop, restart arm_server + bulldog_bypass + joint_state_bridge; use `--lowering position`.
+6. **Release**: `release` (dry) then `release --execute`: gripper opens, lifts 5 mm, backs out; park may be
+   refused (J4 guard, known) -- return by hand.
+7. **End to end**: `all --container-drop <m> --execute` (two `go` prompts).
+
+## Open items that need the rig
+
+- Which roll sign the remount is (`check_camera_roll.py` decides) and the pivot translation (~cm).
+- Container dimensions/drop, and whether the box + hand fit this microwave's opening height (in sim a
+  20 cm cavity is too low for an 11 cm box held 8.5 cm below the tool with 4 + 3 cm clearances).
+- Whether YOLO finds the OPEN microwave from the look pose (it misreads it as bus/train sometimes).
+- Task-impedance gains are the feeding ones, never run on rchi-cpu-5; the 1 s gravity-compensation
+  phase in `switch_out_of_compliant_mode` happens with the box resting on the floor.
+- Camera frame-age gate assumes camera stamps on the system clock (1 s max age).
