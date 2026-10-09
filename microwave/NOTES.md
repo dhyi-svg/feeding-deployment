@@ -2,6 +2,21 @@
 
 Working notes for the scripts in this folder. Newest learnings first within each section.
 
+## 2026-10-03 — PLAN FOR TODAY
+1. Test the open + close code on hardware (one-take open, then close).
+2. **Finish the close code** — must be done today.
+3. Make a diagram of the whole microwave flow (open / close / placement).
+
+**10-03 — why the swing dragged the microwave: the hinge was in the wrong place.** Fit a circle to a hand-guided
+gripping swing (`demos/microwave_swing_fit_2026-10-03_take2.csv`, 98 deg, rms 0.35 cm, r 31.7 cm): hinge is
+**+3.3 cm in front of the handle along the door normal, -30.4 cm along the face**. The carried-over hinge in the
+door file sat **17.8 cm behind** the handle (radius 34.3 looked right, position didn't), so the commanded arc
+started ~30 deg off straight-out and shoved the body sideways. Door file rewritten with the fit (backup
+`~/.microwave_door.json.bak_2026-10-03_prefit`). Open script now refuses a hinge outside -6..+6 cm depth vs the
+handle (`HINGE_DEPTH_RANGE`). Door also rose ~7 cm closed -> 98 deg (0.231 -> 0.300) -- NOT modeled (user call).
+New `--light-grip [RELAX]`: after closing, re-command the gripper to its contact reading minus RELAX
+(`set_gripper`, no server restart) so the bar can turn in the fingers. Untested on hardware.
+
 ## 2026-10-02 — container placement into the OPEN microwave (code + offline checks only, NOT run on hardware)
 
 `placement/real_gen3_ros2_place_container_microwave.py` (new; geometry in `placement/microwave_cavity.py`). Perceives the interior AFTER the door is open --

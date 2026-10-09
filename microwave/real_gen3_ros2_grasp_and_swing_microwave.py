@@ -11,7 +11,8 @@
    frame, from `~/.microwave_door.json`), and the largest swing (75 down to 45 deg) whose whole
    arc passes the sim gates (IK, reach, joint jump, J4/J6 guards).
 3. Execute: one blended motion into the grasp, close, one blended swing. The hand stays on the
-   handle at the end.
+   handle at the end. `--light-grip [RELAX]` backs the fingers off to contact (minus RELAX) after
+   closing, so the bar can turn in them instead of the arm twisting the microwave (experimental).
 
 `--release` (separate run, after the swing): open the gripper, back straight off the handle,
 go toward the base to clear the door's free edge, joint move to `park_pose.json`.
@@ -66,6 +67,9 @@ SWING_MAX_REACH = 0.90
 SWING_IK_PROBE_M = 0.01           # 200-iteration IK must get within 1 cm (else Kortex hits SINGULARITY_REGION)
 J6_GUARD_DEG = 115.0              # J6 hard limit is +-119.7
 HINGE_RADIUS_RANGE = (0.25, 0.45)
+# hinge minus handle along the door normal (+ = toward the arm). Fit to a hand-guided swing (10-03): +3.3 cm.
+# The carried-over hinge it replaced sat 17.8 cm BEHIND the handle and dragged the microwave sideways.
+HINGE_DEPTH_RANGE = (-0.06, 0.06)
 
 # --- release ---
 BACK_OFF_M = 0.20
@@ -193,7 +197,19 @@ def grasp_pose(h, orient, n):
     return h, Pose(tuple(pos), tuple(quat))
 
 
-def open_task(ai, execute):
+def _light_grip(ai, relax):
+    """Back the fingers off from where they stopped on the handle, so the bar can turn/slide in them
+    instead of the arm twisting the microwave. Returns the new gripper reading."""
+    contact = float(ai.get_state()["gripper_pos"])
+    target = max(0.0, contact - relax)
+    ai._arm_interface.set_gripper(target)
+    time.sleep(0.8)
+    g = float(ai.get_state()["gripper_pos"])
+    print(f"light grip: contact {contact:.4f} -> commanded {target:.4f}, now {g:.4f}")
+    return g
+
+
+def open_task(ai, execute, grip_relax=None):
     prev = json.loads(DOOR_FILE.read_text()) if DOOR_FILE.exists() else {}
     if not all(k in prev for k in ("hinge", "closed_handle", "closed_normal")):
         sys.exit(f"{DOOR_FILE} needs hinge/closed_handle/closed_normal from an earlier run (see NOTES.md).")
@@ -220,7 +236,13 @@ def open_task(ai, execute):
                  f"start from a view pose with |J4| well under {J4_GUARD_DEG:.0f}.")
     hinge = _transfer_hinge(prev, h, n)
     radius = float(np.linalg.norm(g_p - hinge))
-    print(f"hinge (last hinge carried over in the door frame) {np.round(hinge, 4)}  radius {radius * 100:.1f} cm")
+    depth = float((hinge - h)[:2] @ (np.asarray(n, float)[:2] / np.linalg.norm(np.asarray(n, float)[:2])))
+    print(f"hinge (last hinge carried over in the door frame) {np.round(hinge, 4)}  radius {radius * 100:.1f} cm  "
+          f"depth vs handle {depth * 100:+.1f} cm")
+    if not HINGE_DEPTH_RANGE[0] <= depth <= HINGE_DEPTH_RANGE[1]:
+        sys.exit(f"hinge is {depth * 100:+.1f} cm from the handle along the door normal (expected "
+                 f"{HINGE_DEPTH_RANGE[0] * 100:+.0f}..{HINGE_DEPTH_RANGE[1] * 100:+.0f}) -- the door file's hinge is "
+                 f"wrong; re-fit it from a hand-guided swing (NOTES.md 10-03). Refusing.")
     if not HINGE_RADIUS_RANGE[0] <= radius <= HINGE_RADIUS_RANGE[1]:
         sys.exit(f"hinge radius {radius * 100:.1f} cm is implausible (door ~35 cm) -- refusing.")
     for deg in range(SWING_MAX_TRY_DEG, SWING_MIN_DEG - 1, -5):
@@ -254,6 +276,9 @@ def open_task(ai, execute):
     print(f"gripper after close: {g:.4f} (can't confirm a grasp on this rig -- watch it)")
     if g < 0.2:
         sys.exit("Gripper is OPEN -- nothing grasped. Refusing to swing.")
+    if grip_relax is not None:
+        if _light_grip(ai, grip_relax) < 0.2:
+            sys.exit("Gripper reads OPEN after the light grip -- refusing to swing.")
 
     # --- swing, re-checked from where the arm actually is ---
     st = ai.get_state()
@@ -279,12 +304,15 @@ def main():
     a.add_argument("--execute", action="store_true", help="command the arm; omit for a dry run")
     a.add_argument("--release", action="store_true",
                    help="after the swing: open the gripper, back off the handle, park")
+    a.add_argument("--light-grip", type=float, nargs="?", const=0.0, default=None, metavar="RELAX",
+                   help="after closing, re-command the gripper to where it stopped minus RELAX (default 0 = "
+                        "hold at contact, no squeeze) so the handle can turn in the fingers; omit = full squeeze")
     args = a.parse_args()
     ai = ArmInterfaceClient()
     if args.release:
         release_and_back_off(ai, BACK_OFF_M, args.execute, pre_park_x=PRE_PARK_X)
     else:
-        open_task(ai, args.execute)
+        open_task(ai, args.execute, args.light_grip)
 
 
 if __name__ == "__main__":
