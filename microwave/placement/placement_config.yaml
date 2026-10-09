@@ -1,0 +1,19 @@
+# Rig overrides for the microwave container placement (rchi-cpu-5). Defaults and the meaning of
+# every key: placement_config.py. Anything set here wins over the defaults; --container-drop,
+# --lowering and --device on the command line win over this file.
+#
+# MEASURE before the first --execute (README "hardware checklist"):
+#   container.drop            tool frame -> bottom of the held box, straight down (m)
+#   container.width / height  the held box
+#   container.far_past_tool   how far the box reaches past the tool frame (0.062 fingertips + stick-out)
+#   cloud.depth_corr_m        compare a perceived floor z with a touched floor
+#
+# container:
+#   drop: 0.09
+#   width: 0.12
+#   height: 0.11
+#   far_past_tool: 0.214
+# lowering:
+#   mode: impedance        # or position
+# detector:
+#   device: cpu            # if the GPU is taken by someone else's job (nvidia-smi)
