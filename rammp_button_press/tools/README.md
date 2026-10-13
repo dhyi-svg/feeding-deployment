@@ -13,4 +13,5 @@ the arm is a DRY RUN unless given `--execute`, and only ever with someone at the
 | `mock_stream_driver.py`, `run_imp_mock.py` | offline streaming-tier mock for the impedance press (domain 77) |
 | `dome_pattern_shape_wip.py` | **work in progress**: colour-free dome detector (grey rings + depth + the 3+2 formation, 5 same-size spots) for the cream microwave. Correct and steady on live red frames; NOT reliable on the saved/recoloured frames yet -- tune on real cream frames before installing it |
 | `eval_frames.py WIP_MODULE red\|cream` | run a detector module over `frames/` (red, or recoloured cream); `frames/base_red.json` = the colour detector's answers |
+| `record_frames.py LABEL [-n N]` | save colour + real depth + intrinsics frames (read-only) for tuning the detector on a new panel |
 | `live_compare.py` | colour detector vs the WIP shape one on live frames, plus the same frames recoloured cream (read-only) |
