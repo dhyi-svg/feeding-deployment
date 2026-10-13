@@ -1,0 +1,43 @@
+# The arm driver as a compose service for sheppy (the compose path is the only one sheppy
+# ${VAR}-interpolates). From ~/kinova-gen3-ros2/deploy/compose.yaml with the published image.
+# Plus RAMMP's cuRobo planner (from the same compose file): the long moves (staging, back to
+# start, bail) use go_to_ee_pose, which plans through it. The approach and the press stay
+# straight sim-gated execute_joint_trajectory legs.
+services:
+  kinova_gen3_driver:
+    image: ghcr.io/rammp-org/kinova-gen3-ros2:1.1.0
+    network_mode: host
+    ipc: host                      # DDS shared-memory transport
+    cap_add: [SYS_NICE]            # sched_setscheduler...
+    ulimits:                       # ...and the rlimits that let it succeed
+      rtprio: 99
+      memlock: -1
+    environment:                   # containers don't inherit sheppyd's env
+      ROS_DOMAIN_ID: "0"
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+    command:
+      - /module_ws/install/kinova_gen3_ros2/lib/kinova_gen3_ros2/kinova_gen3_node
+      - --ip
+      - ${KINOVA_ARM_IP:-192.168.1.10}
+      - --urdf
+      - /module_ws/src/kinova-gen3-driver/models/gen3_7dof_2f85.urdf
+      - --cpu
+      - ${KINOVA_RT_CORE:-11}      # isolcpus=11 / nohz_full=11 on this Jetson
+
+  # Owned by rammp-org/RAMMP-CuRobo (v1.1.0 = the version the 1.1.0 driver compiles against).
+  # Planning only: nothing in it can move the arm. Default CMD = planner.launch.py
+  # config:=gen3_real.yaml, whose world is the arm's pedestal + a table under it -- NOT the
+  # microwave, counter, wheelchair or user.
+  curobo_planner:
+    image: ghcr.io/rammp-org/rammp-curobo:1.1.0
+    runtime: nvidia                # JetPack exposes the GPU this way, NOT --gpus
+    network_mode: host
+    ipc: host
+    environment:
+      ROS_DOMAIN_ID: "0"
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp   # must match the driver, or go_to_* hang in planning
+    volumes:
+      - rammp-curobo-cache:/root/.cache        # compiled CUDA kernels: skips the minutes-long warmup
+
+volumes:
+  rammp-curobo-cache:

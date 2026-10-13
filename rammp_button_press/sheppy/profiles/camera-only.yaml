@@ -1,0 +1,4 @@
+description: wrist camera + cuRobo planner (plans only) -- the arm driver is stopped, so the arm is free to hand-guide / teleop (never with the driver up)
+selections:
+  wrist_camera: d435i_docker
+  planner: curobo_planner

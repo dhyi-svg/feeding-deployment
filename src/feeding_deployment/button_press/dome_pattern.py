@@ -12,6 +12,8 @@ How it works:
                  row of 2, 0.92 s lower, offset half a step) and count candidates that land within
                  FIT_TOL * s. A fit must hit all 5 AND its spacing must measure DOME_SPACING_MM
                  in metres via depth -- label text and knob highlights fail one or the other.
+                 The 5 blobs must also be similar in size (MIN_DOME_SIZE_RATIO): domes, not a mix
+                 of domes and label-text specks.
                  3 domes on top vs 2 below fixes "up", so a rolled camera still names them right.
   3. 3D          panel plane fitted (geometry.fit_plane_inverse_depth) to the red pixels around
                  the domes -- not to the domes, where the depth sensor lies on chrome.
@@ -37,6 +39,13 @@ LAYOUT = np.array([[-1.0, 0.0], [0.0, 0.0], [1.0, 0.0], [-0.58, 0.92], [0.42, 0.
 FIT_TOL = 0.2                 # max dome miss, fraction of s (true fits: <= 0.17 on the test frames)
 MIN_RANGE_M = 0.22            # closer than this, domes break into several highlights: abstain
 MAX_RANGE_M = 1.2
+# Blob size check, on the equivalent radius sqrt(area / pi). On 2026-10-12 (RAMMP Jetson), from a
+# close view (~24 cm) a 3+2 fit using two specks in the "Timer/Clock" label (r 1.5 px) and three
+# real domes (r 8.3-8.9 px) beat the true layout on 12/12 frames, putting start_30s on the
+# Timer/Clock button: smallest/largest 0.17. True fits: 0.93 at 24 cm, 0.66 from 48 cm at a steep
+# angle (where a dome is only its highlight, r 1.5-2.3 px). A size floor relative to the spacing
+# (0.08 s) was tried and rejected those oblique real domes (0.061 s). Size only, no roundness.
+MIN_DOME_SIZE_RATIO = 0.4     # smallest of the 5 blobs >= this x the largest
 # Region (layout units) whose red pixels the panel plane is fitted to: the button block and the
 # red panel around it, not the knob/display above or the microwave's bottom edge.
 PLANE_REGION = np.array([[-2.2, -1.2], [2.2, -1.2], [2.2, 2.0], [-2.2, 2.0]])
@@ -63,7 +72,7 @@ def _masks(bgr):
 
 
 def candidates(bgr, depth_m, fx):
-    """[(u, v, z)] chrome blobs with red around them and a usable depth nearby."""
+    """[(u, v, z, r)] chrome blobs with red around them and a usable depth nearby; r = sqrt(area / pi) px."""
     red, chrome = _masks(bgr)
     n, _, st, cen = cv2.connectedComponentsWithStats(chrome.astype(np.uint8))
     h_img, w_img = red.shape
@@ -82,7 +91,7 @@ def candidates(bgr, depth_m, fx):
         patch = patch[(patch > 0.1) & (patch < 2.0)]
         if patch.size < 5:
             continue
-        out.append((float(cx), float(cy), float(np.median(patch))))
+        out.append((float(cx), float(cy), float(np.median(patch)), float(np.sqrt(a / np.pi))))
     return out
 
 
@@ -92,6 +101,7 @@ def fit_layout(cands, fx):
         return None
     P = np.array([[c[0], c[1]] for c in cands])
     Z = np.array([c[2] for c in cands])
+    Rb = np.array([c[3] for c in cands])
     best = None
     for i in range(len(P)):
         for j in range(len(P)):
@@ -110,6 +120,9 @@ def fit_layout(cands, fx):
             e = dist[np.arange(5), k] / s
             if (e >= FIT_TOL).any() or len(set(k)) < 5:
                 continue
+            r = Rb[k]
+            if r.min() < MIN_DOME_SIZE_RATIO * r.max():
+                continue
             if best is None or e.mean() < best[0]:
                 region = P[i] + s * (PLANE_REGION[:, :1] * ex + PLANE_REGION[:, 1:] * ey)
                 best = (float(e.mean()), P[k], s, s_mm, float(np.median(Z[k])), region)
@@ -120,7 +133,7 @@ def fit_layout(cands, fx):
                    z=z, region=region)
 
 
-def detect(bgr, depth_m, fx):
+def detect(bgr, depth_m, fx, hint=None):  # noqa: ARG001 -- hint: used by the shape-only version only
     """DomeFit for this frame, or None (no fit, or outside MIN_RANGE_M..MAX_RANGE_M)."""
     fit = fit_layout(candidates(bgr, depth_m, fx), fx)
     if fit is None or not MIN_RANGE_M <= fit.z <= MAX_RANGE_M:

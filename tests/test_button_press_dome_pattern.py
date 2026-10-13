@@ -80,3 +80,22 @@ def test_button_xyz_on_plane():
     n, dd = np.array([0.0, 0.0, -1.0]), -0.4          # fronto-parallel plane at z = 0.4 (n toward camera)
     x = dp.button_xyz_cam((320.0 + 60.6, 240.0), n, dd, intr)
     np.testing.assert_allclose(x, [0.04, 0.0, 0.4], atol=1e-9)
+
+
+def _layout_px(z=0.3, centre=(320, 260), pitch_mm=19.3):
+    s = pitch_mm / 1000 * FX / z
+    return {name: np.array(centre) + s * np.array([u, v]) for name, (u, v) in zip(dp.NAMES, dp.LAYOUT)}, s
+
+
+def test_fit_with_two_specks_rejected():
+    # Three real domes plus two label-text specks in the layout: the sizes don't match, so no fit
+    # (2026-10-12: such a fit put start_30s on the Timer/Clock button).
+    img = np.full((480, 640, 3), RED, np.uint8)
+    pts, s = _layout_px()
+    for name, p in pts.items():
+        c = tuple(int(round(v)) for v in p)
+        if name in ("power_level", "stop_eco"):
+            cv2.rectangle(img, (c[0] - 1, c[1] - 1), (c[0] + 1, c[1] + 1), (230, 230, 230), -1)
+        else:
+            cv2.circle(img, c, int(0.25 * s), (225, 225, 225), -1)
+    assert dp.detect(img, np.full((480, 640), 0.3, np.float32), FX) is None

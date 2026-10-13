@@ -1,0 +1,46 @@
+# The microwave button press as a RAMMP module: the /press_button action server.
+#
+# A fragment for a RAMMP sheppy manifest (the way kinova-gen3-ros2 ships its driver's). This repo
+# does not edit RAMMP's manifests; whoever owns one adds this node to it. Our own manifest
+# (sheppy/sheppy-manifest.yaml) is the reference deployment and runs everything it needs.
+#
+# Runs NATIVELY (hybrid workflow), not in a container: it needs the venv with pybullet / scipy /
+# opencv (rammp_button_press/sheppy/env.sh) and the ros2_ws with rammp-interfaces-ros2 v1.1.0,
+# rammp_curobo_interfaces (RAMMP-CuRobo v1.1.0) and rammp_button_press_interfaces built.
+#
+# NEEDS, from the rest of the manifest:
+#   - kinova_gen3_node (kinova-gen3-ros2 1.1.0): /joint_states, /ee_state, /gripper_state,
+#     /control_status, /diagnostics, /execute_joint_trajectory
+#   - the cuRobo planner (RAMMP-CuRobo 1.1.0): /rammp_curobo/plan_to_pose
+#   - the wrist RealSense: /wrist_camera/color/{image_raw,camera_info},
+#     /wrist_camera/aligned_depth_to_color/image_raw  (align_depth on; camera_ns param to rename)
+#   - tf base_link -> camera_color_optical_frame: robot_state_publisher on the driver URDF PLUS
+#     a calibrated end_effector_link -> camera_color_optical_frame (RAMMP publishes no calibrated
+#     wrist-camera tf; ours is the calibration_tf node). PER RIG: a new arm/camera needs its own
+#     hand-eye calibration and a re-measured PREPRESS_EE_OFFSET_M (measure_prepress_offset).
+#
+# Interface: action /press_button, rammp_button_press_interfaces/action/PressButton
+#   goal {target, presses, press_in_m, execute, no_return} -> result {success, moved, message,
+#   log_file}, feedback {stage}. Cancel = stop and hold where the arm is.
+id: rammp_button_press
+tier: experimental
+kind: process
+ros_node_name: button_press
+# allow_execute:=false -> every goal is a dry run whatever it asks. Flip only for attended runs.
+command: >-
+  bash -c 'source $HOME/feeding-deployment/rammp_button_press/sheppy/env.sh &&
+  exec ros2 run rammp_button_press press_server --ros-args -p allow_execute:=false'
+params:
+  allow_execute: false
+  acquire_control: false    # true where the driver runs arbitration_mode: enforced
+publishes:
+  - /button_press/target_pose
+subscribes:
+  - /joint_states
+  - /ee_state
+  - /gripper_state
+  - /control_status
+  - /diagnostics
+  - /wrist_camera/color/image_raw
+  - /wrist_camera/color/camera_info
+  - /wrist_camera/aligned_depth_to_color/image_raw

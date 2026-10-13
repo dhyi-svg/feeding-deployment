@@ -1,0 +1,125 @@
+# Sheppy manifest for the microwave button press on RAMMP's stack (hybrid workflow: the
+# press script runs natively on the host, these nodes under sheppy). Start from a shell where
+# env.sh has been sourced (sheppyd hands its env to `process` nodes):
+#
+#   source ~/feeding-deployment/rammp_button_press/sheppy/env.sh
+#   cd ~/feeding-deployment/rammp_button_press/sheppy && sheppy up --manifest sheppy-manifest.yaml arm-camera
+#
+# The camera / arm / arm_tf blocks are the ones microwave/sheppy/ (microwave-wip) ran on this
+# Jetson on 2026-10-07, copied rather than referenced so the two tasks can't break each other.
+# RAMMP publishes no calibrated wrist-camera tf, hence arm_tf + camera_calib_tf.
+machines: []
+nodes:
+  - name: wrist_camera
+    description: Intel RealSense D435i, wrist mounted
+    select: single
+    alternatives:
+      - id: d435i_docker
+        kind: docker
+        container:
+          image: ghcr.io/rammp-org/rammp-suite-software/realsense:main
+          privileged: true
+          network_mode: host
+          ipc: host
+          volumes:
+            - /dev:/dev
+          user: "1000:44"          # gid 44 = video (/dev/video* is root:video 0660)
+          environment:
+            ROS_DOMAIN_ID: "0"
+            RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+            HOME: /tmp
+          # The image's ENTRYPOINT already runs realsense2_camera_node: settings go in params,
+          # command only renames (topics /wrist_camera/...).
+          command: [--ros-args, -r, __node:=wrist_camera]
+        # = scripts/button_press/bringup.sh (button-task), where the dome detector was tuned
+        params:
+          rgb_camera.color_profile: 640x480x15
+          depth_module.depth_profile: 640x480x15
+          align_depth.enable: true            # press_button reads depth aligned to colour
+          rgb_camera.auto_exposure_priority: false
+          enable_gyro: false                  # IMU off: it reset-loops otherwise
+          enable_accel: false
+          enable_motion: false
+        publishes:
+          - /wrist_camera/color/image_raw
+          - /wrist_camera/color/camera_info
+          - /wrist_camera/aligned_depth_to_color/image_raw
+      - id: wrist_camera_mock
+        kind: process
+        command: "bash -lc 'source /opt/ros/humble/setup.bash && ros2 topic pub -r 10 /wrist_camera/color/image_raw sensor_msgs/msg/Image \"{}\"'"
+        publishes:
+          - /wrist_camera/color/image_raw
+
+  - name: arm
+    description: Kinova Gen3 7-DOF + Robotiq 2F-85 (kinova_gen3_node)
+    select: single
+    alternatives:
+      - id: kinova_gen3_driver     # from ~/kinova-gen3-ros2/rammp-alternative.yaml
+        kind: docker
+        ros_node_name: kinova_gen3_node
+        compose:
+          file: compose.yaml
+          service: kinova_gen3_driver
+        params:
+          arbitration_mode: disabled
+          estop_clear_max_age_s: 1.0
+          expect_gripper: true
+        publishes: [/joint_states, /ee_state, /control_status, /stream_status, /gripper_state, /diagnostics]
+        subscribes: [/estop, /setpoint/joint_position, /setpoint/joint_velocity, /setpoint/joint_torque,
+                     /setpoint/pose, /setpoint/twist, /setpoint/gripper]
+
+  - name: planner
+    description: RAMMP cuRobo planner (go_to_ee_pose plans through it; it never moves the arm)
+    select: single
+    alternatives:
+      - id: curobo_planner         # from ~/kinova-gen3-ros2/rammp-alternative.curobo.yaml
+        kind: docker
+        compose:
+          file: compose.yaml
+          service: curobo_planner
+        publishes: []
+        subscribes: []
+
+  - name: arm_tf
+    description: robot_state_publisher on the driver's own URDF, gen3_ prefix stripped (frames base_link .. end_effector_link)
+    select: single
+    alternatives:
+      - id: rsp_driver_urdf
+        kind: process
+        command: >-
+          sed 's/gen3_//g' $HOME/kinova-gen3-driver/models/gen3_7dof_2f85.urdf > /tmp/gen3_tf_button.urdf &&
+          exec ros2 run robot_state_publisher robot_state_publisher
+          --ros-args -p robot_description:="$(cat /tmp/gen3_tf_button.urdf)"
+        publishes: [/tf, /tf_static, /robot_description]
+        subscribes: [/joint_states]
+
+  - name: button_press
+    description: /press_button action server (rammp_button_press_interfaces/PressButton)
+    select: single
+    alternatives:
+      # Every goal is a dry run (detect + plan + gates), whatever it asks for.
+      - id: press_server_dry
+        kind: process
+        command: >-
+          bash -c 'source $HOME/feeding-deployment/rammp_button_press/sheppy/env.sh &&
+          exec ros2 run rammp_button_press press_server --ros-args -p allow_execute:=false'
+        publishes: [/button_press/target_pose]
+      # Goals with execute: true MOVE THE ARM. Only with someone at the e-stop.
+      - id: press_server_execute
+        kind: process
+        command: >-
+          bash -c 'source $HOME/feeding-deployment/rammp_button_press/sheppy/env.sh &&
+          exec ros2 run rammp_button_press press_server --ros-args -p allow_execute:=true'
+        publishes: [/button_press/target_pose]
+
+  - name: camera_calib_tf
+    description: hand-eye calibration end_effector_link -> camera_color_optical_frame
+    select: single
+    alternatives:
+      - id: easy_handeye2_calib
+        kind: process
+        # BUTTON_CALIB overrides the file (env.sh). The default is the calibration on this box.
+        command: >-
+          exec ros2 run rammp_button_press calibration_tf
+          --calib ${BUTTON_CALIB:-$HOME/.ros2/easy_handeye2/calibrations/wrist_camera_calib.calib}
+        publishes: [/tf_static, /tf]

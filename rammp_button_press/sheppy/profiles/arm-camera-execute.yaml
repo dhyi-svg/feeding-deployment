@@ -1,0 +1,8 @@
+description: wrist camera + arm driver + cuRobo planner + arm tf + hand-eye calibration tf (everything press_button needs) + the /press_button server ALLOWED TO MOVE THE ARM (someone at the e-stop)
+selections:
+  wrist_camera: d435i_docker
+  arm: kinova_gen3_driver
+  arm_tf: rsp_driver_urdf
+  camera_calib_tf: easy_handeye2_calib
+  planner: curobo_planner
+  button_press: press_server_execute
