@@ -6,6 +6,8 @@ its `README.md` for how detection and the panel frame work), ported from the Cor
 to sheppy (RAMMP's hybrid workflow). An `ament_python` package, self-contained: it needs
 neither `feeding_deployment` nor its RPC stack installed.
 
+**New rig (different Jetson / arm)? Start with [`NEW_RIG.md`](NEW_RIG.md).**
+
 **Status (2026-10-12):** builds; 35 offline tests pass; full dry runs against a mock driver +
 synthetic camera (detect → panel frame → every leg gated). On hardware: session checks, live
 detection and a dry run pass; `PREPRESS_EE_OFFSET_M` re-measured on this rig (hand-placed
