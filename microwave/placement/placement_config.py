@@ -26,7 +26,15 @@ REPO_ROOT = HERE.parents[1]
 
 @dataclass
 class DetectorConfig:
-    """Real-time microwave detector: YOLO (COCO 'microwave', id 68) on the upright colour image."""
+    """Microwave detector on the upright colour image. backend 'sam3' (default): SAM 3 text-prompted
+    segmentation (scripts/detect_handle_sam3.py), its mask's box is the region of interest;
+    'yolo': YOLO COCO 'microwave' (id 68) box."""
+    backend: str = "sam3"
+    sam3_prompt: str = "inside of open microwave"   # validated on the rig 10-04 (box accurate ~2 cm)
+    sam3_repo: str = "MTerryJack/sam3"               # detect_handle_sam3.DEFAULT_REPO
+    sam3_dtype: str = "bf16"
+    sam3_roi_margin_px: int = 40     # the interior mask stops at the opening: grow it so the opening's
+                                     # edges and the face above it are in the cloud too
     model: str = str(REPO_ROOT / "yolo26s.pt")   # same weights as the open task's handle_detect.py
     class_ids: list = field(default_factory=lambda: [68])          # COCO microwave
     # classes YOLO confuses this red microwave with (bus 5, train 6, suitcase 28, oven 69,
@@ -93,8 +101,10 @@ class CavityConfig:
     max_width_m: float = 0.70
     min_height_m: float = 0.08
     max_height_m: float = 0.45
-    wall_behind_front_m: float = 0.03  # a side-wall plane must sit this far behind the opening
+    wall_behind_front_m: float = 0.03  # walls used for the top must sit this far behind the opening
+    side_wall_reach_back_m: float = 0.06  # a side wall must run to within this of the back wall (the open door doesn't)
     back_wall_max_view_angle_deg: float = 55.0  # back-wall normal vs the camera's horizontal view direction
+    back_wall_vertical_tol_deg: float = 25.0    # the back wall may slope this much (Comfee: 12.5 deg, 10-20 rig frame)
     # agreement across looks
     min_looks: int = 3
     max_looks: int = 8
@@ -128,6 +138,9 @@ class PlacementConfig:
     level_tol_deg: float = 2.0         # container up vs world up on every insertion/placement step
     max_reach_m: float = 0.915         # |tool position| from arm_base_link (rchi-cpu-5 grasp gate)
     retract_lift_m: float = 0.005      # after release, lift the open fingers this much before backing out
+    # False = rehearsal with an EMPTY gripper (--no-container): same look, plan and motion, the box is
+    # only virtual (still in the collision model); the gripper is not required to hold anything
+    require_held: bool = True
 
 
 @dataclass
@@ -210,6 +223,8 @@ def load_config(path=None, overrides=None):
         data = yaml.safe_load(Path(path).read_text()) or {}
         _merge(cfg, data)
     _merge(cfg, copy.deepcopy(overrides or {}))
+    if cfg.detector.backend not in ("sam3", "yolo"):
+        raise ValueError(f"detector.backend must be 'sam3' or 'yolo', got {cfg.detector.backend!r}")
     if cfg.lowering.mode not in ("impedance", "position"):
         raise ValueError(f"lowering.mode must be 'impedance' or 'position', got {cfg.lowering.mode!r}")
     return cfg

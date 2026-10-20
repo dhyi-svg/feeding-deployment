@@ -35,6 +35,7 @@ class MicrowaveScene:
     door_open: bool = True
     door_side: float = 1.0               # +1 hinge on the left (+l), -1 on the right
     counter_gap: float = 0.03            # microwave feet
+    back_tilt_deg: float = 0.0           # back wall leaning away at the top (the Comfee's ~12)
     held_box: OBB = None
     boxes: list = field(default_factory=list)
 
@@ -60,7 +61,7 @@ class MicrowaveScene:
         self.boxes = [
             box(-0.02, D + 0.04, lo, hi, -0.05, 0.0, "floor"),
             box(-0.02, D + 0.04, lo, hi, H, H + 0.05, "ceiling"),
-            box(D, D + 0.04, lo, hi, -0.05, H + 0.05, "back"),
+            self._back(o, D, lo, hi, H),
             box(-0.02, D + 0.04, *sorted((W / 2 * s, hinge_l)), -0.05, H + 0.05, "hinge wall"),
             box(-0.02, D + 0.04, *sorted((-W / 2 * s, panel_l)), -0.05, H + 0.05, "panel"),
             box(-0.70, D + 0.15, -0.9, 0.9, -0.05 - self.counter_gap - 0.05, -0.05 - self.counter_gap, "counter"),
@@ -72,6 +73,16 @@ class MicrowaveScene:
         if self.held_box is not None:
             self.boxes.append(self.held_box)
         self.exterior = [b for b in self.boxes if b.name in ("floor", "ceiling", "back", "hinge wall", "panel")]
+
+    def _back(self, o, D, lo, hi, H):
+        """Back wall: a slab whose inner face passes through (D, floor) and leans back_tilt_deg away at the top."""
+        a = np.radians(self.back_tilt_deg)
+        n_in = -self.f * np.cos(a) + Z * np.sin(a)            # inner face normal (toward the opening, a bit up)
+        up = np.cross(self.l, n_in) if np.cross(self.l, n_in) @ Z > 0 else -np.cross(self.l, n_in)
+        half = np.array([0.02, (hi - lo) / 2, (H + 0.10) / 2 / np.cos(a)])
+        base = o + self.f * D + self.l * (lo + hi) / 2 + Z * -0.05
+        c = base + up * half[2] - n_in * half[0]
+        return OBB(c, np.column_stack([-n_in, self.l, up]), half, "back")
 
     # ground truth along the cavity axes
     def truth(self):

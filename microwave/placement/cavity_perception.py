@@ -284,7 +284,9 @@ def estimate_cavity(points, cam_pos, cfg, seed=0):
     # back wall: faces the camera, and a floor runs up to it
     cos_view = np.cos(np.radians(cfg.back_wall_max_view_angle_deg))
     cands = []
-    for w in walls:
+    # the back wall may slope (the Comfee's does, ~12 deg) -- side walls must still be vertical
+    back_tol = cfg.back_wall_vertical_tol_deg
+    for w in [p for p in planes if p.kind in ("wall", "other") and abs(90.0 - p.tilt_deg()) <= back_tol]:
         f = _horizontal(-w.normal)
         if f is not None and f @ view_h >= cos_view:
             cands.append((float(w.centroid @ view_h), w, f))
@@ -336,45 +338,69 @@ def estimate_cavity(points, cam_pos, cfg, seed=0):
     if cam_pos[2] - floor_z < cfg.floor_below_camera_m:
         raise CavityError(f"floor z {floor_z:.3f} is not below the camera (z {cam_pos[2]:.3f})")
 
-    sources = {}
-    back = float(np.median(back_wall.points @ f))
+    sources = {"back": "back wall plane"}
+    for refine in (0, 1):
+        # the NEAR side of the back wall (a wall leaning away at the top has its median 2-3 cm
+        # further back than its foot, where the box ends up)
+        back = float(np.percentile(back_wall.points @ f, 10))
+        ff, fl = complex_pts @ f, complex_pts @ l
+
+        # side walls: vertical, parallel to f, running back to the back wall (the open door and the
+        # front frame never reach it), beside the floor
+        mid_l = 0.5 * (np.percentile(fl, 3) + np.percentile(fl, 97))
+        left, right = float(np.percentile(fl, 97)), float(np.percentile(fl, 3))
+        sources["left"] = sources["right"] = "visible floor extent"
+        sin_par = np.sin(np.radians(25))
+        best_l = best_r = None                                 # (lateral position, f where the wall starts)
+        for w in walls:
+            if w is back_wall or abs(w.normal @ f) > sin_par:
+                continue
+            wf_ = w.points @ f
+            if np.percentile(wf_, 97) < back - cfg.side_wall_reach_back_m or np.median(wf_) > back:
+                continue
+            wz = np.median(w.points[:, 2])
+            if not floor_z - 0.02 <= wz <= floor_z + cfg.max_height_m:
+                continue
+            s_ = float(np.median(w.points @ l))
+            start_f = float(np.percentile(wf_, 3))
+            if s_ > mid_l and w.normal @ l < 0 and (best_l is None or s_ < best_l[0]):
+                best_l = (s_, start_f, w)
+            elif s_ < mid_l and w.normal @ l > 0 and (best_r is None or s_ > best_r[0]):
+                best_r = (s_, start_f, w)
+        if best_l is not None and best_l[0] >= left - 0.01:
+            left, sources["left"] = best_l[0], "side wall plane"
+        if best_r is not None and best_r[0] <= right + 0.01:
+            right, sources["right"] = best_r[0], "side wall plane"
+
+        # the two long side walls give the insertion axis better than the (possibly sloped,
+        # curved) back wall: re-measure along their mean direction once
+        if refine == 0 and best_l is not None and best_r is not None:
+            t = [_horizontal(np.cross(Z, w[2].normal)) for w in (best_l, best_r)]
+            f_w = _horizontal(sum(ti if ti @ f > 0 else -ti for ti in t))
+            if f_w is not None and f_w @ f > np.cos(np.radians(10)):
+                f, l = f_w, np.cross(Z, f_w)
+                sources["axis"] = "side walls"
+                continue
+        break
+
+    # opening: where the floor starts -- or, when the camera is too low to see the front of the
+    # floor, where the side walls start (the later of the two walls: conservative)
     front = float(np.percentile(ff, 3))
-    sources["front"], sources["back"] = "floor start", "back wall plane"
-    # the exterior face around the opening (faces the camera, between the floor start and ~6 cm in front)
+    sources["front"] = "floor start"
+    wall_starts = [w[1] for w in (best_l, best_r) if w is not None]
+    if wall_starts and max(wall_starts) < front:
+        front, sources["front"] = max(wall_starts), "side walls' front ends"
+    # the exterior face around the opening (faces the camera, just behind the floor start)
     for w in walls:
         if w is back_wall or _horizontal(-w.normal) is None or _horizontal(-w.normal) @ f < np.cos(np.radians(20)):
             continue
-        wf = float(np.median(w.points @ f))
-        if front - 0.06 <= wf <= front + 0.03 and wf > front:
-            front, sources["front"] = wf, "front face plane"
+        wf_ = float(np.median(w.points @ f))
+        if front < wf_ <= front + 0.03:
+            front, sources["front"] = wf_, "front face plane"
     depth = back - front
     if not cfg.min_depth_m <= depth <= cfg.max_depth_m:
         raise CavityError(f"cavity depth {depth * 100:.1f} cm outside "
                           f"{cfg.min_depth_m * 100:.0f}-{cfg.max_depth_m * 100:.0f}")
-
-    # side walls: parallel to f, behind the opening, beside the floor
-    mid_l = 0.5 * (np.percentile(fl, 3) + np.percentile(fl, 97))
-    left, right = float(np.percentile(fl, 97)), float(np.percentile(fl, 3))
-    sources["left"] = sources["right"] = "visible floor extent"
-    sin_par = np.sin(np.radians(25))
-    best_l, best_r = None, None
-    for w in walls:
-        if w is back_wall or abs(w.normal @ f) > sin_par:
-            continue
-        if np.median(w.points @ f) < front + cfg.wall_behind_front_m:
-            continue                                      # in front of the opening (the open door, the frame)
-        wz = np.median(w.points[:, 2])
-        if not floor_z - 0.02 <= wz <= floor_z + cfg.max_height_m:
-            continue
-        s = float(np.median(w.points @ l))
-        if s > mid_l and w.normal @ l < 0 and (best_l is None or s < best_l):
-            best_l = s
-        elif s < mid_l and w.normal @ l > 0 and (best_r is None or s > best_r):
-            best_r = s
-    if best_l is not None and best_l >= left - 0.01:
-        left, sources["left"] = best_l, "side wall plane"
-    if best_r is not None and best_r <= right + 0.01:
-        right, sources["right"] = best_r, "side wall plane"
     width = left - right
     if not cfg.min_width_m <= width <= cfg.max_width_m:
         raise CavityError(f"cavity width {width * 100:.1f} cm outside "

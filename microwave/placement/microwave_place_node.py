@@ -52,7 +52,7 @@ sys.path.insert(0, str(HERE.parent))
 from feeding_deployment.ros2.node import get_node  # noqa: E402
 
 import placement_workflow as wf  # noqa: E402
-from microwave_detector import YoloMicrowaveDetector  # noqa: E402
+from microwave_detector import build_detector  # noqa: E402
 from placement_config import load_config  # noqa: E402
 
 FRAME_ID = "arm_base_link"
@@ -78,12 +78,12 @@ class MicrowavePlaceNode:
         from feeding_deployment.perception.tf_interface import TFInterface
         from feeding_deployment.ros2.realsense_ros2_interface import RealSenseROS2Interface
         cfg = self._cfg()
-        self.log.info(f"loading {cfg.detector.model} + camera + tf ...")
+        self.log.info(f"loading the {cfg.detector.backend} detector + camera + tf ...")
         rs = RealSenseROS2Interface()
         if not rs.wait_for_frames(30.0):
             self.log.warn("no RGB-D frames yet -- is realsense2_camera up with align_depth.enable:=true?")
         self.source = wf.RosFrameSource(rs, TFInterface(), cfg.stabilizer.max_frame_age_s)
-        self.detector = YoloMicrowaveDetector(cfg.detector)
+        self.detector = build_detector(cfg.detector)
         self.arm_cls = ArmInterfaceClient
         self.arm = None
         self.model_lock = threading.Lock()

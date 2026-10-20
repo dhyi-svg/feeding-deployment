@@ -212,7 +212,7 @@ def perceive(source, detector, cfg, tool_pose=None, log=print, log_dir=None, clo
             cv2.imwrite(str(log_dir / "no_detection.png"), draw_overlay(last["frame"], msg=str(e)[:95], ok=False))
         raise PlacementRefused(f"{e} -- overlays in {log_dir}") from None
     t_det = clock() - t0
-    m = cfg.cloud.roi_margin_px
+    m = getattr(detector, "roi_margin_px", cfg.cloud.roi_margin_px)   # SAM 3's interior mask needs more
     roi = (roi[0] - m, roi[1] - m, roi[2] + m, roi[3] + m)
 
     looks, errors, frame, roi_cloud, merged, inl = [], [], None, None, None, None
@@ -357,8 +357,12 @@ def plan_placement(arm, perception, cfg, log=print):
     st = arm.get_state()
     q0 = wrap_joints(np.asarray(st["position"], float))
     ee = np.asarray(st["ee_pos"], float)
-    if float(st["gripper_pos"]) < GRIPPER_HOLDING_MIN:
+    if cfg.placement.require_held and float(st["gripper_pos"]) < GRIPPER_HOLDING_MIN:
         raise PlacementRefused(f"gripper is open ({float(st['gripper_pos']):.2f}) -- nothing held")
+    if not cfg.placement.require_held:
+        if cfg.lowering.mode != "position":
+            raise PlacementRefused("an empty-gripper rehearsal (--no-container) uses --lowering position only")
+        log("  REHEARSAL: empty gripper, the box is virtual (planned and collision-checked as if held)")
     cav = perception.cavity
     try:
         target = cp.placement_target(cav, perception.scene_cloud, ee[3:7], cfg.container, cfg.placement, cfg.cavity)
@@ -461,7 +465,7 @@ def execute_placement(arm, plan, cfg, stop_after="lower", log=print):
     if time.time() - plan.time > PLAN_MAX_AGE_S:
         raise PlacementRefused(f"plan older than {PLAN_MAX_AGE_S:.0f} s -- re-plan")
     check_unmoved(arm, plan.q0)
-    if float(arm.get_state()["gripper_pos"]) < GRIPPER_HOLDING_MIN:
+    if cfg.placement.require_held and float(arm.get_state()["gripper_pos"]) < GRIPPER_HOLDING_MIN:
         raise PlacementRefused("gripper is open -- nothing held")
     legs = {leg.label: leg for leg in plan.legs}
     for stage, label in (("pre-insert", "align + to pre-insert"), ("insert", "insert")):

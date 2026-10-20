@@ -14,6 +14,7 @@ import yaml
 from scipy.spatial.transform import Rotation as R
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "microwave" / "placement"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "microwave"))
 import camera_roll  # noqa: E402
 import cavity_perception as cp  # noqa: E402
 import point_cloud as pcm  # noqa: E402
@@ -304,3 +305,56 @@ def test_config_rejects_unknown_keys_and_bad_mode():
         load_config(overrides={"container": {"dorp": 0.1}})
     with pytest.raises(ValueError, match="lowering.mode"):
         load_config(overrides={"lowering": {"mode": "force"}})
+
+
+# ---------------------------------------------------------------- regressions from the rig
+def test_sloped_back_wall_seen_from_a_low_camera():
+    """The Comfee's back wall slopes ~12 deg and the look pose can be level with the floor, so
+    the front of the floor is hidden: the opening comes from the side walls' front ends."""
+    scene = MicrowaveScene(back_tilt_deg=12.0, turntable=0.0)
+    o = np.asarray(scene.origin)
+    T = look_at_camera(o - scene.f * 0.35 + np.array([0, 0, 0.09]), o + scene.f * 0.25 + np.array([0, 0, 0.06]), 90)
+    cloud, _ = roi_cloud(scene, T)
+    cav = cp.estimate_cavity(cloud, T[:3, 3], CFG.cavity)
+    t = scene.truth()
+    assert abs(cav.floor_z - t["floor_z"]) < 0.005
+    assert np.degrees(np.arccos(cav.f @ scene.f)) < 2.0
+    assert t["front"] - 0.03 < cav.front < t["front"] + 0.04
+    assert 0.20 < cav.depth < 0.33   # the synthetic wall already leans ~1 cm at floor height
+
+
+def test_real_rig_frame_2026_10_20():
+    """Wrist camera (rolled 90 deg on its mount) looking into the open Comfee, rchi-cpu-5."""
+    import placement_workflow as wf
+    fr = wf.Frame.load(Path(__file__).resolve().parent / "data" / "microwave_lookin_2026-10-20.npz")
+    assert pcm.upright_k(fr.base_T_cam) == 1             # the calibration already carries the roll
+    pts, _ = wf.scene_points(fr, CFG, roi=(171, 0, 643, 480))   # YOLO's box on this frame (+ margin)
+    cav = cp.estimate_cavity(pcm.filter_cloud(pts, CFG.cloud), fr.cam_pos, CFG.cavity)
+    assert cav.floor_tilt_deg() < 2.0
+    assert 0.25 < cav.depth < 0.31 and 0.28 < cav.width < 0.33 and 0.18 < cav.height < 0.27
+    assert abs(cav.floor_z - 0.051) < 0.01
+
+
+def test_sam3_detector_rotates_upright_and_boxes_the_mask():
+    """SAM 3 backend (model stubbed): runs on the upright RGB image, returns the mask's box in RAW pixels."""
+    from microwave_detector import Sam3MicrowaveDetector, build_detector
+    d = Sam3MicrowaveDetector.__new__(Sam3MicrowaveDetector)
+    d.cfg = CFG.detector
+    seen = {}
+
+    class Model:
+        def segment(self, rgb):
+            seen["shape"] = rgb.shape
+            m = rgb[:, :, 0] > 0
+            return m, 0.8, None
+
+    d.model = Model()
+    raw = np.zeros((480, 640, 3), np.uint8)
+    raw[200:260, 100:400, 2] = 255                    # red in BGR -> channel 0 after the RGB flip
+    raw[0, 0] = (1, 2, 0)                             # BGR order check: RGB (0, 2, 1), not in the mask
+    T = look_at_camera([0.3, 0.0, 0.4], [0.8, 0.0, 0.2], 90)
+    out = d.detect(raw, T, stamp=1.0)
+    assert seen["shape"] == (640, 480, 3) and out.k_upright == 3
+    np.testing.assert_allclose(out.box, (100, 200, 399, 259))
+    assert out.conf == pytest.approx(0.8) and out.label == CFG.detector.sam3_prompt
+    assert CFG.detector.backend == "sam3" and callable(build_detector)

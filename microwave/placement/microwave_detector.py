@@ -1,5 +1,6 @@
-"""Real-time microwave detector for the placement task (replaces SAM 3 there), plus the
-stabiliser that turns a stream of per-frame boxes into one trusted region of interest.
+"""Microwave detectors for the placement task, plus the stabiliser that turns a stream of
+per-frame boxes into one trusted region of interest. `build_detector(cfg)` picks the backend:
+SAM 3 (default, `Sam3MicrowaveDetector`) or YOLO (`YoloMicrowaveDetector`).
 
 Detector: YOLO26s, COCO 'microwave' (class 68) -- the same weights and fallback classes as the
 open task's `handle_detect.py`, ~10-20 ms per frame on the RTX 4070 Ti (SAM 3 was ~1 s). It only
@@ -14,8 +15,10 @@ after `timeout_s` -- a refusal, never a guess.
 """
 from __future__ import annotations
 
+import sys
 import time
 from collections import deque
+from pathlib import Path
 from dataclasses import dataclass
 
 import numpy as np
@@ -64,6 +67,40 @@ class YoloMicrowaveDetector:
         box, conf, label = hit
         return Detection(rot_box_to_raw(box, k, bgr.shape), conf, label,
                          time.time() if stamp is None else stamp, fallback, k)
+
+
+class Sam3MicrowaveDetector:
+    """SAM 3 text-prompted segmentation (the repo's `scripts/detect_handle_sam3.Sam3HandleDetector`,
+    same model/loader the fridge task uses) on the upright image; the box around the mask, in RAW
+    pixels, is the detection. ~1 s per frame on the GPU, so the stabiliser's >= 3 agreeing
+    detections take a few seconds."""
+
+    def __init__(self, cfg):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+        import detect_handle_sam3  # heavy (torch + transformers), only where a detector is built
+        self.cfg = cfg
+        self.roi_margin_px = cfg.sam3_roi_margin_px
+        self.model = detect_handle_sam3.Sam3HandleDetector(prompt=cfg.sam3_prompt, repo=cfg.sam3_repo,
+                                                           dtype=cfg.sam3_dtype)
+
+    def detect(self, bgr, base_T_cam=None, stamp=None):
+        k = upright_k(base_T_cam) if (base_T_cam is not None and self.cfg.upright_from_tf) else 0
+        img = np.ascontiguousarray(np.rot90(bgr, k)) if k else bgr
+        seg = self.model.segment(np.ascontiguousarray(img[:, :, ::-1]))       # SAM 3 wants RGB
+        if seg is None:
+            return None
+        mask, score, _ = seg
+        mask = np.asarray(mask) > 0
+        if mask.ndim != 2 or not mask.any():
+            return None
+        ys, xs = np.nonzero(mask)
+        box = rot_box_to_raw((float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max())), k, bgr.shape)
+        return Detection(box, float(score), self.cfg.sam3_prompt, time.time() if stamp is None else stamp, False, k)
+
+
+def build_detector(cfg):
+    """The configured detector (cfg = DetectorConfig)."""
+    return Sam3MicrowaveDetector(cfg) if cfg.backend == "sam3" else YoloMicrowaveDetector(cfg)
 
 
 def iou(a, b):

@@ -311,3 +311,17 @@ def test_impedance_refuses_j6_off_the_model():
     with pytest.raises(il.ImpedanceRefused, match="J6"):
         run_lower(arm)
     assert not arm.in_compliant_mode and not arm.cmds
+
+
+def test_empty_gripper_rehearsal(sim, tmp_path):
+    cfg = load_config(overrides={"container": {"drop": 0.085}, "lowering": {"mode": "position"},
+                                 "placement": {"require_held": False}, "stabilizer": {"frame_period_s": 0.0}})
+    _, scene, arm, per = perceive_and_plan(sim, Q_HOLD, "position", tmp_path)
+    arm.s["g"] = 0.01                                                # open, nothing held
+    plan = wf.plan_placement(arm.m, per, cfg, log=lambda *_: None)
+    ok, msg = wf.execute_placement(arm.m, plan, cfg, stop_after="insert", log=lambda *_: None)
+    assert ok and "insert" in msg
+    np.testing.assert_allclose(arm.get_state()["ee_pos"][:3], plan.target.above, atol=0.005)
+    with pytest.raises(wf.PlacementRefused, match="position only"):
+        wf.plan_placement(arm.m, per, load_config(overrides={"container": {"drop": 0.085},
+                                                             "placement": {"require_held": False}}), log=lambda *_: None)

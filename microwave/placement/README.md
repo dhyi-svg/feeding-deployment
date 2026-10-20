@@ -2,14 +2,14 @@
 
 Puts the OXO box the gripper is holding into the **open** microwave: real-time detection,
 cavity + floor from depth, obstacle-aware level insertion, impedance lowering, release, retract.
-**Software complete and tested offline; NOT yet run on the robot.** History of the SAM 3 version:
+**Perception run live on the rig 2026-10-20 (look-in works, see below); no placement motion into the microwave yet.** History of the SAM 3 version:
 `../NOTES.md` (2026-10-02 section) and the 10-04 status in git (`75f508dc`).
 
 ## Pipeline
 
 | Step | What | Code |
 |---|---|---|
-| Detect | YOLO26s (COCO `microwave`, fallback bus/train/... as `handle_detect.py`) on the image turned upright from tf (camera is mounted rolled 90 deg); >= 3 detections must agree with their median box (IoU 0.6, 25 px), 20 s timeout | `microwave_detector.py` |
+| Detect | **SAM 3** (default; `scripts/detect_handle_sam3.py`'s model, prompt "inside of open microwave", ~1.8 s/frame, 0.91 on the 10-20 rig frame) or YOLO26s (`detector.backend: yolo`), on the image turned upright from tf (camera mounted rolled 90 deg); >= 3 detections must agree with their median box (IoU 0.6, 25 px), 20 s timeout; SAM 3's box is grown 40 px | `microwave_detector.py` |
 | Cloud | ROI pixels with aligned depth -> camera points -> `arm_base_link` (tf2) -> hand + held box removed -> 8 mm voxels -> statistical outlier removal | `point_cloud.py` |
 | Cavity | level sheets from a gravity-aligned height histogram (floor, turntable, ceiling), walls by RANSAC; back wall = a wall with floor running up to it; insertion axis = -back normal; floor fit checked level (<= 6 deg -- also catches a wrong camera roll), flat, big, below the camera; opening, side walls, top. >= 3 looks must agree. No door JSON | `cavity_perception.py` |
 | Target | hand re-oriented to aim the box along the axis and level it; box footprint centred between the walls, near end 3 cm inside, >= 4 cm from the back; support height measured under the footprint (turntable); refuses if something stands there, the box is too wide/long/tall or out of reach | `cavity_perception.placement_target` |
@@ -40,6 +40,8 @@ python3 -u $P plan --container-drop <m>                          # + every leg i
 python3 -u $P place --container-drop <m> --execute --stop-after pre-insert   # then insert, then lower
 python3 -u $P release [--execute]
 python3 -u $P plan --replay ~/microwave_place_logs/<t>           # offline re-plan of a saved run
+python3 -u $P place --no-container --container-drop 0.09 --execute --stop-after insert   # empty-gripper rehearsal
+python3 -u microwave/placement/tools/move_look_pose.py --back 0.06 --up 0.12 --tilt 15 [--execute]   # +tilt = nose down
 # ROS 2 node (live overlay, clouds, markers, services) -- dry-run unless allow_execute:=true
 python3 -u microwave/placement/microwave_place_node.py --ros-args -p container_drop:=<m>
 ros2 run rqt_image_view rqt_image_view /microwave_place/overlay
@@ -82,3 +84,19 @@ Offline scenes: `synthetic_scene.py` (ray-cast microwave, door, turntable, count
 - Task-impedance gains are the feeding ones, never run on rchi-cpu-5; the 1 s gravity-compensation
   phase in `switch_out_of_compliant_mode` happens with the box resting on the floor.
 - Camera frame-age gate assumes camera stamps on the system clock (1 s max age).
+
+## 2026-10-20 first rig session (empty gripper)
+
+- Camera calibration already carries the 90 deg roll (YOLO/SAM 3 only detect with the tf-derived upright turn;
+  floor fits 0.4-2.5 deg). No re-calibration needed for the roll.
+- Fixes from real frames: the back wall slopes ~12 deg (allowed up to 25); the opening comes from the side walls'
+  front ends when the camera can't see the front of the floor; the insertion axis from the side walls; back wall
+  measured at its near side. Real frame kept as a test: `tests/data/microwave_lookin_2026-10-20.npz`.
+- Arm fell when powered off (no brakes) -- park it / support it first. After the fall J4 sat at -151.7 (past
+  -147.8): every command refused until pushed back by hand.
+- A held round tupperware covers the camera's view of the cavity: look BEFORE grasping (planned: plan from a saved
+  look, `--cavity-from`), or look over it.
+- Refusals seen (all correct, nothing moved): reach 0.932 > 0.915; box top vs a cavity top under-measured from a
+  low view (top from the highest visible wall points -- use the front face above the opening); path to park blocked
+  by the J4 guard from the look pose (return by hand).
+- `move_look_pose.py`'s first version tilted the hand UP for +tilt; fixed and sign-checked.

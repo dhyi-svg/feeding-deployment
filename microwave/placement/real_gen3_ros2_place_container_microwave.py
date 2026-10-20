@@ -15,6 +15,7 @@ to move the arm. Run from the repo root (the sim config path is relative), with 
     python3 -u $P all   --container-drop 0.09 --execute      # place, then (after a second 'go') release
 
     python3 -u $P plan --replay ~/microwave_place_logs/<run>  # offline: a saved run's frames + arm state
+    python3 -u $P place --no-container --container-drop 0.09 --execute --stop-after insert   # empty-gripper rehearsal
 
 Options: --lowering impedance|position (default from placement_config.yaml: impedance),
 --config FILE, --device cpu (YOLO on CPU if the GPU is busy), --yes.
@@ -55,14 +56,14 @@ def _state_stub(state):
 
 def _build(args, cfg):
     """(arm, frame source, detector) for this run."""
-    from microwave_detector import YoloMicrowaveDetector
+    from microwave_detector import build_detector
     if args.replay:
         run = Path(args.replay).expanduser()
         state_file = run / "arm_state.json"
         if not state_file.exists():
             raise wf.PlacementRefused(f"{state_file} missing -- replay needs a run saved by this script")
         frames = sorted(run.glob("frame_*.npz"))
-        return _state_stub(json.loads(state_file.read_text())), wf.ReplayFrameSource(frames), YoloMicrowaveDetector(cfg.detector)
+        return _state_stub(json.loads(state_file.read_text())), wf.ReplayFrameSource(frames), build_detector(cfg.detector)
     from feeding_deployment.control.robot_controller.arm_client import ArmInterfaceClient
     from feeding_deployment.perception.tf_interface import TFInterface
     from feeding_deployment.ros2.realsense_ros2_interface import RealSenseROS2Interface
@@ -71,8 +72,8 @@ def _build(args, cfg):
     if not rs.wait_for_frames(30.0):
         raise wf.PlacementRefused("no RGB-D frames -- is realsense2_camera up with align_depth.enable:=true?")
     source = wf.RosFrameSource(rs, TFInterface(), cfg.stabilizer.max_frame_age_s)
-    print(f"loading {cfg.detector.model} ...")
-    return arm, source, YoloMicrowaveDetector(cfg.detector)
+    print(f"loading the {cfg.detector.backend} detector ...")
+    return arm, source, build_detector(cfg.detector)
 
 
 def _perceive(arm, source, det, cfg, log_dir=None):
@@ -101,6 +102,8 @@ def main():
     a.add_argument("--device", help="YOLO device, e.g. cpu")
     a.add_argument("--replay", help="a ~/microwave_place_logs/<run> dir: its frames + arm state (dry run only)")
     a.add_argument("--yes", action="store_true", help="skip the typed 'go' confirmations")
+    a.add_argument("--no-container", action="store_true",
+                   help="rehearsal with an EMPTY gripper: same look/plan/motion, the box only virtual (position lowering)")
     args = a.parse_args()
 
     over = {}
@@ -108,6 +111,13 @@ def main():
         over.setdefault("container", {})["drop"] = args.container_drop
     if args.lowering:
         over.setdefault("lowering", {})["mode"] = args.lowering
+    if args.no_container:
+        # empty-gripper rehearsal: a smaller virtual box, and the hand may be levelled more on the way
+        # in (nothing to spill). A real container run keeps the normal limits.
+        over.setdefault("placement", {}).update(require_held=False, max_tilt_correction_deg=25.0)
+        over.setdefault("lowering", {})["mode"] = "position"
+        for k, v in (("far_past_tool", 0.14), ("width", 0.10), ("height", 0.08)):
+            over.setdefault("container", {}).setdefault(k, v)
     if args.device:
         over.setdefault("detector", {})["device"] = args.device
     cfg = load_config(args.config, over)
