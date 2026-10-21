@@ -15,7 +15,7 @@ Used by `real_gen3_ros2_grasp_and_swing_microwave.py` (release after opening) an
 All gripper motion goes through `execute_command(Open/CloseGripperCommand())` --
 `ArmInterfaceClient` has no `open_gripper()` method.
 """
-import json, time
+import json, subprocess, threading, time
 from pathlib import Path
 
 import numpy as np
@@ -239,6 +239,119 @@ def plan_cartesian(scene, rb, p0, q0_quat, p1, q1_quat, seed_joints, label, bodi
         q = nq
     print(f"  {label}: {n} steps, orientation change {ang:.0f} deg, worst clearance {worst[0] * 100:.1f} cm")
     return plan
+
+
+ELBOW_LINK, WRIST_LINK = 4, 6     # forearm_link (at J4, the elbow), spherical_wrist_2_link (at J6, the wrist)
+
+
+def wrist_offset(scene, rb, q):
+    """How far (m, sideways = base y) the wrist is to the RIGHT of the elbow at joints q (negative: to its
+    left). Right/left as seen from behind the arm looking out along +x, i.e. at the microwave."""
+    for j, jj in enumerate(ARM):
+        p.resetJointState(rb.robot_id, jj, float(q[j]), physicsClientId=rb.physics_client_id)
+    y = lambda l: p.getLinkState(rb.robot_id, l, physicsClientId=rb.physics_client_id)[4][1]
+    return float(y(ELBOW_LINK) - y(WRIST_LINK))
+
+
+SIDE_MARGIN = 0.02                # plan_side_path: the wrist at least this far on its side of the elbow
+SIDE_RANDOM_SEEDS = 60            # IK seeds per step: this many random, plus each kept solution of the step before
+SIDE_KEEP = 40                    # solutions kept per step (lowest cost, >= 3 deg apart). 30/25 missed the 10-07
+                                  #   close's narrow passage (hand at y ~0, moving left); 60/40 finds it, ~30 s
+SIDE_RNG_SEED = 0
+
+
+def _steps(p0, q0, p1, q1):
+    """The plan_cartesian steps of one straight leg: [(pos, quat)], ~2 cm / <= 5 deg apart."""
+    from scipy.spatial.transform import Slerp
+    rots = R.from_quat([q0, q1])
+    ang = float(np.degrees((rots[0].inv() * rots[1]).magnitude()))
+    n = max(1, int(np.ceil(max(np.linalg.norm(np.asarray(p1) - p0) / STEP_M, ang / 5.0))))
+    sl = Slerp([0, 1], rots)
+    return [(np.asarray(p0) + (np.asarray(p1) - p0) * k / n, sl([k / n]).as_quat()[0]) for k in range(1, n + 1)]
+
+
+def plan_side_path(scene, rb, pts, q_start, side, bodies_per_leg, clear_per_leg, label="leg"):
+    """Joint path through the straight legs pts[0] -> pts[1] -> ... ([(pos, quat)]; pts[0] = where the hand
+    is, at joints q_start) with the wrist >= SIDE_MARGIN on `side` ("right"/"left") of the elbow from the
+    end of leg 1 on (leg 1 may change sides). Plain chained IK takes the nearest solution each step and
+    can walk into a configuration that dead-ends later, so this searches: every step gets sampled IK
+    solutions that pass the gates (IK, J4/J6, side, clearance to that leg's bodies); consecutive steps
+    connect when no joint moves > MAX_STEP_JUMP_DEG (no wrap); the path with the least joint motion wins,
+    and is re-checked like plan_cartesian (clearance along each step). Returns [joints per leg] or None."""
+    sign = 1.0 if side == "right" else -1.0
+    rng = np.random.default_rng(SIDE_RNG_SEED)
+    steps = []                                         # (pos, quat, leg index)
+    for i in range(len(pts) - 1):
+        steps += [(pp, qq, i) for pp, qq in _steps(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1])]
+    layer = [(np.asarray(q_start, float), 0.0, None)]   # (joints, cost, back-pointer into the previous layer)
+    layers = [layer]
+    for k, (pos, quat, leg) in enumerate(steps):
+        prev = layers[-1]
+        seeds = [rng.uniform(-np.pi, np.pi, 7) for _ in range(SIDE_RANDOM_SEEDS)]
+        seeds += [q for q, _, _ in prev] + [q + rng.normal(0.0, 0.15, 7) for q, _, _ in prev]
+        cands = []
+        for s0 in seeds:
+            q, e = solve_ik(scene, rb, pos, quat, s0)
+            for _ in range(3):
+                if e <= 0.002:
+                    break
+                q, e = solve_ik(scene, rb, pos, quat, q)
+            qd = np.degrees(q)
+            if (e > 0.005 or abs(qd[3]) > J4_GUARD_DEG or abs(qd[5]) > J6_GUARD_DEG):
+                continue
+            last_of_leg1 = leg == 0 and (k + 1 == len(steps) or steps[k + 1][2] != 0)
+            if (leg > 0 or last_of_leg1) and sign * wrist_offset(scene, rb, q) < SIDE_MARGIN:
+                continue
+            if bodies_per_leg[leg] is not None and clearance(rb, q, bodies_per_leg[leg])[0] < clear_per_leg[leg]:
+                continue
+            # cheapest way here from the previous step
+            best = None
+            for j, (pq, pc, _) in enumerate(prev):
+                d = short_delta(pq, q)
+                if np.degrees(np.max(np.abs(d))) <= MAX_STEP_JUMP_DEG and continuous_ok(pq, q):
+                    c = pc + float(np.linalg.norm(d))
+                    if best is None or c < best[0]:
+                        best = (c, j)
+            if best is not None:
+                cands.append((q, best[0], best[1]))
+        cands.sort(key=lambda t: t[1])
+        kept = []
+        for c in cands:
+            if all(np.degrees(np.max(np.abs(short_delta(o[0], c[0])))) > 3.0 for o in kept):
+                kept.append(c)
+            if len(kept) >= SIDE_KEEP:
+                break
+        if not kept:
+            print(f"  {label} {leg + 1}: no joints with the wrist {side} of the elbow reach step {k + 1} "
+                  f"({np.round(pos, 3)}) from the step before -- refusing.")
+            return None
+        layers.append(kept)
+    # back-track the cheapest, then re-check it the way plan_cartesian does
+    path, j = [], 0
+    for li in range(len(layers) - 1, 0, -1):
+        q, _, j_prev = layers[li][j]
+        path.append(q)
+        j = j_prev
+    path.reverse()
+    legs, q_prev, worst = [[] for _ in range(len(pts) - 1)], np.asarray(q_start, float), {}
+    for (pos, quat, leg), q in zip(steps, path):
+        if bodies_per_leg[leg] is not None:
+            w = min([clearance(rb, q_prev + short_delta(q_prev, q) * s_ / 3, bodies_per_leg[leg]) for s_ in (1, 2, 3)],
+                    key=lambda t: t[0])
+            if w[0] < clear_per_leg[leg]:
+                print(f"  {label} {leg + 1}: clearance {w[0] * 100:.1f} cm between steps ({w[1]}) -- refusing.")
+                return None
+            worst[leg] = min(worst.get(leg, w), w, key=lambda t: t[0])
+        legs[leg].append(q)
+        q_prev = q
+    for i, leg in enumerate(legs):
+        off = [sign * wrist_offset(scene, rb, q) for q in leg]
+        jumps = [np.degrees(np.max(np.abs(short_delta(a, b)))) for a, b in zip(([q_start] + path)[:-1], [q_start] + path)][1:]
+        print(f"  {label} {i + 1}: {len(leg)} steps, wrist {min(off) * 100:+.0f}..{max(off) * 100:+.0f} cm {side} of "
+              f"the elbow, worst clearance {worst.get(i, (9.0, ''))[0] * 100:.1f} cm, J4 "
+              f"{np.degrees(min(q[3] for q in leg)):.0f}..{np.degrees(max(q[3] for q in leg)):.0f}")
+    print(f"  largest joint step {max(np.degrees(np.max(np.abs(short_delta(a, b)))) for a, b in zip([q_start] + path[:-1], path)):.1f} deg")
+    return legs
 
 
 def execute_joint_plan(ai, plan, label):
@@ -623,3 +736,193 @@ def move_to_door_view(ai, execute, standoff=DOOR_VIEW_STANDOFF, open_deg=DOOR_VI
     ok = execute_joint_plan(ai, path, "to view")
     print(f"{'AT VIEW POSE' if ok else 'STOPPED EARLY'}: EE {np.round(ai.get_state()['ee_pos'][:3], 4)}")
     return ok
+
+
+# ---------------------------------------------------------------------------
+# Wrist-camera frames for the run log (and the open task's detection frames)
+# ---------------------------------------------------------------------------
+WRIST_COLOR_TOPIC = "/wrist_camera/color/image_raw"
+WRIST_INFO_TOPIC = "/wrist_camera/color/camera_info"
+WRIST_DEPTH_TOPIC = "/wrist_camera/aligned_depth_to_color/image_raw"
+_camera = None
+
+
+def grab_frames(n=1, gap_s=0.3):
+    """`n` RGB-D frames from the wrist camera, each with K and base_T_cam (tf2 arm_base_link <- camera).
+    Reads topics only -- nothing is commanded. The subscriptions are made once and kept."""
+    global _camera
+    if _camera is None:
+        from feeding_deployment.perception.tf_interface import TFInterface
+        from feeding_deployment.ros2.realsense_ros2_interface import RealSenseROS2Interface
+        rs = RealSenseROS2Interface(color_topic=WRIST_COLOR_TOPIC, camera_info_topic=WRIST_INFO_TOPIC,
+                                    depth_topic=WRIST_DEPTH_TOPIC)
+        if not rs.wait_for_frames(30.0):
+            raise RuntimeError("no RGB-D frames from the wrist camera")
+        _camera = (rs, TFInterface())
+    rs, tf = _camera
+    frames = []
+    for i in range(n):
+        if i:
+            time.sleep(gap_s)
+        d = rs.get_camera_data()
+        t = tf.get_frame_to_frame_transform(d["camera_info"])
+        if t is None:
+            raise RuntimeError("no arm_base_link <- camera transform")
+        frames.append({"rgb": d["rgb_image"], "depth_mm": d["depth_image"],
+                       "K": np.asarray(d["camera_info"].K, dtype=float).reshape(3, 3),
+                       "base_T_cam": tf.make_homogeneous_transform(t), "time": time.time()})
+    return frames
+
+
+def save_frame(frame, tag, out_dir, result=None, arm_state=None):
+    """<time>_<tag>: _rgb.jpg + .npz (uint16 depth mm, K, base_T_cam, arm joints/tool pose if given) +
+    _result.json. ~0.3 MB a frame. Returns the path stem (None if it could not save)."""
+    try:
+        import cv2
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stem = out_dir / f"{time.strftime('%Y%m%d_%H%M%S', time.localtime(frame.get('time', time.time())))}_{tag}"
+        if frame.get("rgb") is not None:
+            cv2.imwrite(str(stem) + "_rgb.jpg", frame["rgb"], [cv2.IMWRITE_JPEG_QUALITY, 90])
+        depth = np.nan_to_num(np.asarray(frame["depth_mm"], dtype=np.float32), nan=0.0)
+        extra = {}
+        if arm_state is not None:
+            extra = {"joints": np.asarray(arm_state["position"], float), "ee": np.asarray(arm_state["ee_pos"], float)}
+        if frame.get("base_T_cam") is not None:
+            extra["base_T_cam"] = frame["base_T_cam"]
+        np.savez_compressed(str(stem) + ".npz", depth_mm=np.clip(depth, 0, 65535).astype(np.uint16),
+                            K=frame["K"], **extra)
+        if result is not None:
+            Path(str(stem) + "_result.json").write_text(json.dumps(_jsonable(result), indent=1))
+        return stem
+    except Exception as e:     # never let debugging output stop a run
+        print(f"  (could not save the frame: {e})")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Run log: one directory per door_task run
+# ---------------------------------------------------------------------------
+RUNS_DIR = Path.home() / "microwave_runs"
+STREAM_HZ = 25.0                  # arm state sampling while a run is on
+CMD_EVERY = 5                     # keep every 5th commanded trajectory sample (20 ms -> 100 ms)
+
+
+def _jsonable(x):
+    if isinstance(x, dict):
+        return {str(k): _jsonable(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_jsonable(v) for v in x]
+    if isinstance(x, np.ndarray):
+        return np.round(x.astype(float), 5).tolist()
+    if isinstance(x, (np.floating, np.integer, np.bool_)):
+        return x.item()
+    if isinstance(x, Path):
+        return str(x)
+    return x
+
+
+def _git_info():
+    repo = Path(__file__).resolve().parent.parent
+    try:
+        run = lambda *a: subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True, timeout=5).stdout
+        return {"commit": run("rev-parse", "--short", "HEAD").strip(), "branch": run("branch", "--show-current").strip(),
+                "modified": [l[3:] for l in run("status", "--porcelain", "--untracked-files=no").splitlines()]}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def arm_snapshot(st):
+    return {"joints_deg": np.degrees(np.asarray(st["position"], float)), "ee": np.asarray(st["ee_pos"], float),
+            "gripper": float(st["gripper_pos"]), "effort": np.asarray(st.get("effort", []), float)}
+
+
+class RunLog:
+    """Everything a door_task run leaves behind, in RUNS_DIR/<time>_<what>/:
+
+    run.json  -- args, git commit, and a timestamped event list: arm state at start/end, the door used
+                 for the close (source + values) and its decoded keypoints, every trajectory goal sent
+                 (commanded joints every CMD_EVERY samples, ok or not, measured end joints), every gripper
+                 command, step outcomes. Rewritten after each event, so a crash keeps what came before.
+    arm.npz   -- the arm sampled at STREAM_HZ for the whole run: t, joints, velocity, effort (torques),
+                 tool pose, gripper (float32).
+    frames    -- camera frames (save_frame: real depth, K, camera pose, arm joints): `frame(tag)`.
+    Read-only towards the arm: it only wraps SheppyArm's send/gripper calls to note them."""
+
+    def __init__(self, what, args, ai):
+        self.ai, self.t0 = ai, time.time()
+        self.dir = RUNS_DIR / f"{time.strftime('%Y%m%d_%H%M%S')}_{what}"
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.data = {"what": what, "args": args, "start": time.strftime("%Y-%m-%d %H:%M:%S"), "git": _git_info(),
+                     "events": []}
+        self._samples, self._stop = [], threading.Event()
+        self._thread = threading.Thread(target=self._sample, daemon=True)
+        self._thread.start()
+        self._wrap(ai)
+        self.event("start", arm=arm_snapshot(ai.get_state()))
+        print(f"run log: {self.dir}")
+
+    def event(self, kind, **kw):
+        self.data["events"].append({"t": round(time.time() - self.t0, 3), "kind": kind, **_jsonable(kw)})
+        try:
+            (self.dir / "run.json").write_text(json.dumps(self.data, indent=1))
+        except Exception as e:
+            print(f"  (run log: could not write run.json: {e})")
+
+    def frame(self, tag):
+        """One RGB-D frame from the wrist camera, saved here with the arm's state (camera read only)."""
+        try:
+            f = grab_frames(1)[0]
+            stem = save_frame(f, tag, self.dir, arm_state=self.ai.get_state())
+            self.event("frame", tag=tag, path=stem)
+        except Exception as e:      # a missing camera must not stop the run
+            print(f"  (run log: no '{tag}' frame: {e})")
+            self.event("frame_failed", tag=tag, error=str(e))
+
+    def _sample(self):
+        while not self._stop.is_set():
+            try:
+                st = self.ai.get_state()
+                self._samples.append((time.time() - self.t0, st["position"], st.get("velocity", np.zeros(7)),
+                                      st.get("effort", np.zeros(7)), st["ee_pos"], st["gripper_pos"]))
+            except Exception:
+                pass
+            time.sleep(1.0 / STREAM_HZ)
+
+    def _wrap(self, ai):
+        """Note every trajectory goal and gripper command SheppyArm sends (the calls themselves unchanged)."""
+        if hasattr(ai, "_send"):
+            send = ai._send
+
+            def logged_send(t, q, qd, impedance=None):
+                start = round(time.time() - self.t0, 3)
+                ok = send(t, q, qd, impedance)
+                q = np.asarray(q)
+                self.event("trajectory", start=start, ok=ok, planned_s=float(t[-1]), n_points=len(t), impedance=impedance,
+                           q_cmd_deg=np.degrees(np.vstack([q[::CMD_EVERY], q[-1:]])),
+                           end=arm_snapshot(ai.get_state()))
+                return ok
+            ai._send = logged_send
+        if hasattr(ai, "gripper"):
+            grip = ai.gripper
+
+            def logged_gripper(position, timeout_s=4.0, force=None):
+                r = grip(position, timeout_s=timeout_s, force=force)
+                self.event("gripper", cmd=position, force=force, measured=float(ai.get_state()["gripper_pos"]))
+                return r
+            ai.gripper = logged_gripper
+
+    def close(self, ok):
+        self._stop.set()
+        self._thread.join(timeout=1.0)
+        try:
+            self.event("end", ok=bool(ok), arm=arm_snapshot(self.ai.get_state()))
+        except Exception as e:
+            self.event("end", ok=bool(ok), error=str(e))
+        if self._samples:
+            t, q, dq, tau, ee, g = zip(*self._samples)
+            np.savez_compressed(self.dir / "arm.npz", t=np.asarray(t, np.float32), joints=np.asarray(q, np.float32),
+                                velocity=np.asarray(dq, np.float32), effort=np.asarray(tau, np.float32),
+                                ee=np.asarray(ee, np.float32), gripper=np.asarray(g, np.float32))
+        print(f"run log: {self.dir} ({len(self._samples)} arm samples)")
+

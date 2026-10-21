@@ -1,0 +1,112 @@
+{
+ "source": "push_close_2026-10-07.json",
+ "door_open_deg": 49.995389792084985,
+ "hinge_to_handle_m": 0.3291420378344496,
+ "keypoints": [
+  {
+   "label": "START: holding container, wrist rotated 90 deg",
+   "a": 0.8968263741065183,
+   "b": 0.24881389837578646,
+   "z_ref": "grasp",
+   "dz": 0.09184324993764076,
+   "quat_door": [
+    0.743523193570199,
+    -0.006415117387964171,
+    -0.6619389584376327,
+    0.09470439374481499
+   ],
+   "gripper": 0.9869
+  },
+  {
+   "label": "2",
+   "a": 0.9052961182965394,
+   "b": 0.2505426135862389,
+   "z_ref": "top",
+   "dz": 0.2014134330032793,
+   "quat_door": [
+    0.7427062827195156,
+    -0.008962781313667791,
+    -0.6632384220962191,
+    0.09177059232346728
+   ],
+   "gripper": 0.9869
+  },
+  {
+   "label": "3",
+   "a": -0.38177188556568487,
+   "b": 0.29150308655706836,
+   "z_ref": "top",
+   "dz": 0.2038134330032793,
+   "quat_door": [
+    0.74315663984807,
+    -0.006136023828808978,
+    -0.6610398036009043,
+    0.10347432491481269
+   ],
+   "gripper": 0.9869
+  },
+  {
+   "label": "4",
+   "a": -0.7082381994722433,
+   "b": 0.30339288988268837,
+   "z_ref": "top",
+   "dz": 0.2058134330032793,
+   "quat_door": [
+    0.6022896778046765,
+    0.38548337017158585,
+    -0.478173361343292,
+    0.5099019041274043
+   ],
+   "gripper": 0.9869
+  },
+  {
+   "label": "5",
+   "a": -0.412280273108828,
+   "b": 0.3026490718512284,
+   "z_ref": "grasp",
+   "dz": 0.10854324993764075,
+   "quat_door": [
+    0.6029500125819701,
+    0.38811527025116327,
+    -0.4750558943680198,
+    0.5100389363092483
+   ],
+   "gripper": 0.9869
+  },
+  {
+   "label": "END: diagonal push, door shut",
+   "a": -0.14808036068986777,
+   "b": 0.001153146579958088,
+   "z_ref": "grasp",
+   "dz": 0.11014324993764074,
+   "quat_door": [
+    0.6128372085291255,
+    0.37279524625762,
+    -0.4904403890263123,
+    0.4948964386835585
+   ],
+   "gripper": 0.9869
+  }
+ ],
+ "adjust": {
+  "4": [
+   0.08,
+   0.0
+  ],
+  "5": [
+   0.18,
+   0.0
+  ],
+  "6": [
+   0.1,
+   0.0
+  ]
+ },
+ "start": 1,
+ "notes": [
+  "kp0 = end of the push-open (not part of the close); the close STARTS at kp1 (holding a container, wrist rotated 90 deg -- in use it may be rotated the opposite way: replay should also try the hand rolled 180 deg).",
+  "user (10-07): in the real close the move LEFT over the door (kp3-kp4, y +0.23 / +0.41) will be LESS far left -- pull kp3-kp5 back toward the hinge when encoding (demo_replay.py encode --adjust).",
+  "The demo stops at kp5 (beside the microwave's left side at door height); the push that shuts the door is not demonstrated yet.",
+  "2026-10-21: push keypoints (kp5, END) moved a further 10 cm along the door toward the handle (user: push more to the right than the 10-07 run). Previous encoding: push_close_2026-10-07.door.json."
+ ]
+}

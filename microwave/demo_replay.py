@@ -18,6 +18,13 @@ first keypoint, sim-gates every leg (IK, joint jump, J4/J6, wrap, >= DEMO_MIN_CL
 model; legs from --trust-demo on against the microwave body only -- the 10-07 door model put the
 user's REAL push-open poses 2-7 cm inside the door), then (--execute) does the demo's gripper action
 and follows the keypoints as one smooth trajectory.
+
+--wrist-side right|left: hold the arm in the configuration with the wrist on that side of the elbow (as
+seen from behind the arm) from the first keypoint on: a searched joint path that keeps the wrist >= 3 cm
+on that side all the way, with the least joint motion (microwave_common.plan_side_path), and the PLANNED
+joint path is what is sent. (Without it the arm re-solves IK from its current joints, which
+takes the nearest configuration -- e.g. in the 10-07 close demo the elbow stays put while the hand goes
+left, and the wrist ends up left of it.)
 """
 import argparse, json, sys, time
 from pathlib import Path
@@ -26,7 +33,8 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 
 from door_push import DoorFrame, drop
-from microwave_common import DOOR_FILE, make_sim, plan_cartesian, run_cartesian_trajectory
+from microwave_common import (DOOR_FILE, make_sim, plan_cartesian, plan_side_path, run_cartesian_trajectory,
+                              wrist_offset)
 
 OVER_TOP_MIN = 0.08          # points above the door top stay at least this far above today's top
 START_TOL = 0.06             # the hand must be within this of the demo's first keypoint
@@ -84,12 +92,22 @@ def decode(enc, door):
     return pts
 
 
-def plan(scene, rb, door, st, kps, trust_from, lift_off=False):
+def plan(scene, rb, door, st, kps, trust_from, lift_off=False, wrist_side=None):
+    """Sim-gated joint path through `kps` from the arm's state `st`: one list of joints per leg, or None.
+    `wrist_side` ("right"/"left"): keep the wrist on that side of the elbow from the first keypoint on."""
     df = DoorFrame(door, door.get("open_sign", -1.0))
-    bodies = df.bodies(scene, rb, float(door.get("door_open_deg", 50.0)))
     q, legs = np.asarray(st["position"], float), []
+    bodies = df.bodies(scene, rb, float(door.get("door_open_deg", 50.0)))
     try:
         pts = [(np.asarray(st["ee_pos"][:3]), np.asarray(st["ee_pos"][3:7]))] + kps
+        if wrist_side:
+            print(f"keeping the wrist {wrist_side} of the elbow; now {wrist_offset(scene, rb, q) * 100:+.0f} cm right of it")
+            trusted = [trust_from is not None and i + 1 >= trust_from for i in range(len(kps))]
+            return plan_side_path(
+                scene, rb, pts, q, wrist_side,
+                [[b for b in bodies if b[1] == "microwave body"] if t else bodies for t in trusted],
+                [LIFT_OFF_MIN_CLEAR if (i == 0 and lift_off) else DEMO_MIN_CLEAR for i in range(len(kps))],
+                "leg")
         for i in range(len(pts) - 1):
             trusted = trust_from is not None and i + 1 >= trust_from
             check = [b for b in bodies if b[1] == "microwave body"] if trusted else bodies
@@ -105,9 +123,20 @@ def plan(scene, rb, door, st, kps, trust_from, lift_off=False):
     return legs
 
 
-def run(enc_path, execute, trust_from, ai=None):
+def leg_lengths(pts, legs):
+    """Per-step travel (m, a turn counted like SheppyArm) for timing a planned joint path."""
+    from sheppy_arm import ROT_EQUIV_M
+    out = []
+    for (p0, q0), (p1, q1), leg in zip(pts[:-1], pts[1:], legs):
+        n = len(leg)
+        ang = float((R.from_quat(q0).inv() * R.from_quat(q1)).magnitude())
+        out += [max(1e-4, float(np.linalg.norm(np.asarray(p1) - p0)) / n, ang / n * ROT_EQUIV_M)] * n
+    return out
+
+
+def run(enc_path, execute, trust_from, ai=None, wrist_side=None):
     """Replay one encoded demo. `ai`: an open SheppyArm to reuse (door_task chains steps); else one is made here.
-    Returns True when it reached the last keypoint (or the dry run passed)."""
+    `wrist_side`: see the module doc. Returns True when it reached the last keypoint (or the dry run passed)."""
     from sheppy_arm import SheppyArm
     enc = json.loads(Path(enc_path).read_text())
     door = json.loads(DOOR_FILE.read_text())
@@ -128,7 +157,7 @@ def run(enc_path, execute, trust_from, ai=None):
             return False
         scene, rb = make_sim()
         lift_off = enc["keypoints"][0]["gripper"] > 0.2 and enc["keypoints"][1]["gripper"] < 0.2
-        legs = plan(scene, rb, door, st, pts[1:], trust_from, lift_off)
+        legs = plan(scene, rb, door, st, pts[1:], trust_from, lift_off, wrist_side)
         if legs is None:
             print("a leg fails a gate -- refusing, arm untouched.")
             return False
@@ -141,7 +170,15 @@ def run(enc_path, execute, trust_from, ai=None):
             print("opening the gripper ...")
             ai.gripper(0.0)
             time.sleep(0.5)
-        ok, err, _ = run_cartesian_trajectory(ai, [(list(p), list(q)) for p, q in pts[1:]])
+        if wrist_side:
+            # the planned joints themselves: re-solving IK on the arm would drift back to the nearest configuration
+            path = [(np.asarray(st["ee_pos"][:3]), np.asarray(st["ee_pos"][3:7]))] + pts[1:]
+            sent = ai.move_joints([qq for leg in legs for qq in leg], cart_lengths=leg_lengths(path, legs))
+            time.sleep(0.3)
+            err = float(np.linalg.norm(np.asarray(ai.get_state()["ee_pos"][:3]) - pts[-1][0]))
+            ok = sent and err < 0.01
+        else:
+            ok, err, _ = run_cartesian_trajectory(ai, [(list(p), list(q)) for p, q in pts[1:]])
         print(f"{'DONE' if ok else 'STOPPED SHORT'}: hand {np.round(ai.get_state()['ee_pos'][:3], 3)} "
               f"({err * 100:.1f} cm from the last keypoint)")
         return bool(ok)
@@ -162,6 +199,8 @@ def main():
     r_.add_argument("encoded")
     r_.add_argument("--execute", action="store_true")
     r_.add_argument("--trust-demo", type=int, default=None, metavar="LEG")
+    r_.add_argument("--wrist-side", choices=["right", "left"], default=None,
+                    help="hold the wrist on this side of the elbow (default: whatever IK gives)")
     args = a.parse_args()
     if args.cmd == "encode":
         adj = {int(i): (float(da), float(db)) for i, da, db in
@@ -173,7 +212,7 @@ def main():
         for k in enc["keypoints"]:
             print(f"  {k['label'][:30]:30s} a {k['a']:+.3f} x r   b {k['b'] * 100:+6.1f} cm   z {k['dz'] * 100:+6.1f} cm from {k['z_ref']}")
     else:
-        sys.exit(0 if run(args.encoded, args.execute, args.trust_demo) else 1)
+        sys.exit(0 if run(args.encoded, args.execute, args.trust_demo, wrist_side=args.wrist_side) else 1)
 
 
 if __name__ == "__main__":

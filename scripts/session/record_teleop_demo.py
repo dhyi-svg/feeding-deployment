@@ -1,6 +1,6 @@
 """READ-ONLY recorder for a human-teleoped demo: RGB-D + arm state + ground-truth poses.
 
-Records a task being done by hand (Xbox controller plugged into the arm) so autonomous
+Records a task being done by hand (Kinova joystick / Xbox controller on the arm) so autonomous
 perception can later be replayed against the exact same frames, with the human's own EE
 poses as ground truth. It commands nothing.
 
@@ -14,16 +14,21 @@ that only ever calls ``RefreshFeedback()`` -- no fault clearing, no servoing-mod
 no ``/tmp/kinova.lock``. Prove that on your hardware with ``--check`` *while teleoping*
 before recording anything you care about.
 
-Bring-up (arm_server / stub base / bulldog are NOT needed and should be stopped)::
+Bring-up under sheppy (the arm DRIVER must be down -- teleop and kinova_gen3_node can't run
+together -- but the camera, robot_state_publisher and the hand-eye calibration are up)::
 
-    ros2 launch launch/ros2/microwave_bringup.launch.py use_joint_state_bridge:=false
-    $PY -u scripts/session/record_teleop_demo.py --check --tag pos_A     # while teleoping
-    $PY -u scripts/session/record_teleop_demo.py --tag pos_A --note "door open, 2nd try"
+    source ~/feeding-deployment/microwave/sheppy/env.sh
+    (cd ~/feeding-deployment/microwave/sheppy && sheppy up --manifest sheppy-manifest.yaml teleop-record)
+    PYTHONPATH=~/kortex_isolated:$PYTHONPATH python3 -u scripts/session/record_teleop_demo.py --check --tag pos_A
+    PYTHONPATH=~/kortex_isolated:$PYTHONPATH python3 -u scripts/session/record_teleop_demo.py --tag pos_A
 
-``use_joint_state_bridge:=false`` because the launch's own bridge reads the arm RPC,
-which is down; this script publishes ``/joint_states`` itself from its Kortex session so
-``robot_state_publisher`` still builds the TF tree and every saved frame carries a real
-``arm_base_link <- camera_color_optical_frame`` matrix.
+With the driver down nothing else publishes ``/joint_states``, so this script publishes it
+from its Kortex session (``joint_1..7``, the names sheppy's stripped URDF uses) and
+``robot_state_publisher`` still builds the TF tree: every saved frame carries a real
+``arm_base_link <- camera_color_optical_frame`` matrix. Needs ``kortex_api`` -- kept OUT of the
+sheppy venv in ``~/kortex_isolated`` and put on PYTHONPATH for this command only
+(``PYTHONPATH=~/kortex_isolated:$PYTHONPATH python3 -u ...``; see microwave/CLOSE_TESTING.md). Camera topics: sheppy's ``/wrist_camera/...``
+(``--camera-ns``; ``/camera`` for the old ``microwave_bringup.launch.py``).
 
 While recording, the terminal is a tagging console:
 
@@ -202,14 +207,16 @@ class LatestState:
             return self._state, self._stamp
 
 
-def open_camera(timeout_sec: float):
+def open_camera(timeout_sec: float, ns: str = "/wrist_camera"):
     from feeding_deployment.ros2.realsense_ros2_interface import RealSenseROS2Interface
 
-    camera = RealSenseROS2Interface()
+    camera = RealSenseROS2Interface(color_topic=f"{ns}/color/image_raw",
+                                    camera_info_topic=f"{ns}/color/camera_info",
+                                    depth_topic=f"{ns}/aligned_depth_to_color/image_raw")
     if not camera.wait_for_frames(timeout_sec):
         raise SystemExit(
-            "No synchronised RGB-D frames. Start the camera:\n"
-            "  ros2 launch launch/ros2/microwave_bringup.launch.py use_joint_state_bridge:=false"
+            f"No synchronised RGB-D frames on {ns}/... Start the camera (arm driver down):\n"
+            "  cd ~/feeding-deployment/microwave/sheppy && sheppy up --manifest sheppy-manifest.yaml teleop-record"
         )
     return camera
 
@@ -242,7 +249,8 @@ def start_joint_state_publishing(arm, latest: LatestState, rate_hz: float, stop:
     """Publish /joint_states from the read-only Kortex session, on a background thread.
 
     Nothing else can: the launch's own bridge reads ``arm_server.py``, whose Kortex
-    session teleop has faulted. Without this, robot_state_publisher has no joint angles
+    session teleop has faulted (under sheppy: the arm driver is down for teleop). Without this,
+    robot_state_publisher has no joint angles
     and there is no ``arm_base_link -> camera_color_optical_frame`` to stamp frames with.
     """
     from feeding_deployment.ros2.joint_state_bridge import JointStateBridge
@@ -291,7 +299,7 @@ def run_check(args, arm) -> int:
     if args.no_camera:
         return 0
 
-    camera = open_camera(args.camera_timeout)
+    camera = open_camera(args.camera_timeout, args.camera_ns)
     from feeding_deployment.perception.tf_interface import TFInterface
 
     data = camera.get_camera_data()
@@ -313,8 +321,8 @@ def run_check(args, arm) -> int:
     stop.set()
     if transform is None:
         print(f"TF           : NO {BASE_FRAME} -> {CAMERA_FRAME} at the frame stamp.")
-        print("               Check the launch is up (robot_state_publisher + the static")
-        print("               hand-eye calibration) and that nothing else owns /joint_states.")
+        print("               Check sheppy's teleop-record profile is up (arm_tf + camera_calib_tf)")
+        print("               and that nothing else owns /joint_states (the arm driver must be down).")
         return 1
     t = transform.transform.translation
     print(f"TF           : camera at {np.round([t.x, t.y, t.z], 3)} in {BASE_FRAME}")
@@ -363,6 +371,8 @@ def main() -> int:
     parser.add_argument("--no-joint-states", action="store_true",
                         help="do not publish /joint_states (use if something else already does)")
     parser.add_argument("--camera-timeout", type=float, default=30.0)
+    parser.add_argument("--camera-ns", default="/wrist_camera",
+                        help="camera topic namespace: /wrist_camera (sheppy) or /camera (old launch)")
     parser.add_argument("--tf-timeout", type=float, default=0.3,
                         help="how long to wait for the transform at a frame's stamp")
     parser.add_argument("--min-free-gb", type=float, default=2.0,
@@ -467,7 +477,7 @@ def record(args, arm) -> int:  # pylint: disable=too-many-branches,too-many-stat
     camera = tf_interface = None
     camera_info_dict = None
     if not args.no_camera:
-        camera = open_camera(args.camera_timeout)
+        camera = open_camera(args.camera_timeout, args.camera_ns)
         from feeding_deployment.perception.tf_interface import TFInterface
 
         if not args.no_joint_states:

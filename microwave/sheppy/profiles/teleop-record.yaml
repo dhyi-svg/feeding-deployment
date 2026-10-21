@@ -1,0 +1,6 @@
+description: teleop recording -- wrist camera + TF (robot_state_publisher + hand-eye calib), arm DRIVER DOWN so the arm is free for Kinova joystick / web-app teleop; scripts/session/record_teleop_demo.py publishes /joint_states from a read-only Kortex session
+selections:
+  wrist_camera: d435i_docker
+  camera_view: opencv_window
+  arm_tf: rsp_driver_urdf
+  camera_calib_tf: easy_handeye2_calib

@@ -33,7 +33,7 @@ from feeding_deployment.ros2.realsense_ros2_interface import RealSenseROS2Interf
 from door_push import record_door_angle
 from handle_detect import HandleDetector
 from microwave_common import (J4_GUARD_DEG, door_arc_waypoints, fit_circle_xy, make_sim, plan_cartesian,
-                              release_and_back_off, run_cartesian_trajectory, save_door_geometry)
+                              release_and_back_off, run_cartesian_trajectory, save_door_geometry, save_frame)
 
 ARM = [1, 2, 3, 4, 5, 6, 7]
 
@@ -126,17 +126,16 @@ def _check_arc(scene, rb, wps, q0):
 DETECT_FRAMES_DIR = Path.home() / "microwave_detections"
 
 
-def _save_frame(d, tag, attempt, det):
-    """Keep every detection's colour + depth frame (and the result) for looking at misses afterwards."""
+def _save_frame(d, tag, attempt, det, detector):
+    """Keep every detection's colour + depth frame (and the result) for looking at misses afterwards: real
+    depth (uint16 mm), K and the camera pose (microwave_common.save_frame). Until 10-21 the depth was written
+    as a float32 PNG, which saturated to 0/255 -- those older frames have no usable depth."""
     try:
-        import cv2
-        DETECT_FRAMES_DIR.mkdir(exist_ok=True)
-        stem = DETECT_FRAMES_DIR / f"{time.strftime('%Y%m%d_%H%M%S')}_look{tag}_try{attempt}"
-        cv2.imwrite(str(stem) + "_rgb.jpg", d["rgb_image"])            # the interface hands over bgr8
-        cv2.imwrite(str(stem) + "_depth.png", d["depth_image"])
-        if det is not None:
-            stem.with_suffix(".json").write_text(json.dumps({k: (np.asarray(v).tolist() if not isinstance(v, (str, float, int)) else v)
-                                                             for k, v in det.items()}))
+        t = detector.get_frame_to_frame_transform(d["camera_info"])
+        frame = {"rgb": d["rgb_image"], "depth_mm": d["depth_image"],          # bgr8, float32 mm
+                 "K": np.asarray(d["camera_info"].K, dtype=float).reshape(3, 3),
+                 "base_T_cam": None if t is None else detector.make_homogeneous_transform(t)}
+        save_frame(frame, f"look{tag}_try{attempt}", DETECT_FRAMES_DIR, result=det)
     except Exception as e:  # never let debugging output stop a run
         print(f"  (could not save the detection frame: {e})")
 
@@ -154,7 +153,7 @@ def detect_handle():
         for attempt in range(1, MAX_EMPTY_RETRIES + 1):
             d = rs.get_camera_data()
             det = detector.detect(d["rgb_image"], d["camera_info"], d["depth_image"])
-            _save_frame(d, tag, attempt, det)
+            _save_frame(d, tag, attempt, det, detector)
             if det is not None:
                 break
             print(f"  no detection on look {tag} (retry {attempt}/{MAX_EMPTY_RETRIES})")
