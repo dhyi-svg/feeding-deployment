@@ -114,6 +114,32 @@ class CavityConfig:
 
 
 @dataclass
+class LookConfig:
+    """Getting a usable view without a hand-picked look pose (placement_workflow.perceive_auto)."""
+    # 1) the current view; 2) a saved earlier look, re-verified against what is visible now;
+    # 3) (only with --execute) the arm moves to scored viewpoints and fuses what it sees
+    saved_max_age_s: float = 3600.0
+    verify_min_points: int = 300     # current points that must land on the saved cavity's surfaces ...
+    verify_median_m: float = 0.012   # ... with this median distance (the microwave has not moved)
+    distances_m: tuple = (0.40, 0.50, 0.60)     # camera distance in front of the opening
+    heights_above_floor_m: tuple = (0.03, 0.07, 0.12, 0.18, 0.25)   # camera height above the cavity floor
+    laterals_m: tuple = (-0.08, 0.0, 0.08)
+    yaws_deg: tuple = (-10.0, 0.0, 10.0)        # approach turned from the cavity axis
+    pitches_down_deg: tuple = (0.0, 5.0, 10.0, 15.0, 25.0, 35.0)    # nose-down tilt of the hand
+    max_container_tilt_deg: float = 15.0        # a held box may tilt at most this much while looking
+    empty_max_tilt_deg: float = 35.0            # empty gripper: the hand may tip further
+    # the hand as seen by the camera (tool frame |x|, |y|, z range): fingers + gripper front only -- the
+    # self-filter box reaches back past the camera itself and would 'cover' the whole image
+    hand_occluder_box: tuple = (0.045, 0.05, -0.06, 0.075)
+    min_visible: float = 0.40        # predicted fraction of the cavity floor/back wall the view must see
+    min_incidence_deg: float = 12.0  # ... seen at least this far off its surface (grazing = no depth)
+    trusted_floor_tol_m: float = 0.04  # a fused result must agree with a saved look's floor/back this well
+    max_views: int = 4               # viewpoints tried before refusing
+    frames_per_view: int = 3
+    crop_margin_m: float = 0.15      # fused cloud: the coarse cavity box grown by this
+
+
+@dataclass
 class ContainerConfig:
     """The held OXO box, in the TOOL frame (z = approach). Measure on the held box."""
     drop: float = -1.0                 # tool frame -> container BOTTOM, straight down (m). REQUIRED (< 0 = unset)
@@ -134,7 +160,7 @@ class PlacementConfig:
     release_gap_m: float = 0.01        # position-mode lowering ends the box bottom this far above the support
     pre_insert_standoff_m: float = 0.08    # pre-insert: box far end this far in front of the opening
     max_yaw_correction_deg: float = 30.0   # alignment may turn the hand at most this much about vertical
-    max_tilt_correction_deg: float = 10.0  # ... and level it by at most this much
+    max_tilt_correction_deg: float = 20.0  # ... and level it by at most this much (covers the look tilt)
     level_tol_deg: float = 2.0         # container up vs world up on every insertion/placement step
     max_reach_m: float = 0.915         # |tool position| from arm_base_link (rchi-cpu-5 grasp gate)
     retract_lift_m: float = 0.005      # after release, lift the open fingers this much before backing out
@@ -186,6 +212,7 @@ class LoweringConfig:
 class Config:
     detector: DetectorConfig = field(default_factory=DetectorConfig)
     stabilizer: StabilizerConfig = field(default_factory=StabilizerConfig)
+    look: LookConfig = field(default_factory=LookConfig)
     cloud: PointCloudConfig = field(default_factory=PointCloudConfig)
     cavity: CavityConfig = field(default_factory=CavityConfig)
     container: ContainerConfig = field(default_factory=ContainerConfig)

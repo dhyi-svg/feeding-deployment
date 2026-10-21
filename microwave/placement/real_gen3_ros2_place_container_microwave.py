@@ -76,9 +76,8 @@ def _build(args, cfg):
     return arm, source, build_detector(cfg.detector)
 
 
-def _perceive(arm, source, det, cfg, log_dir=None):
+def _perceive(arm, source, det, cfg, log_dir=None, execute=False, yes=False):
     st = arm.get_state()
-    ee = np.asarray(st["ee_pos"], float)
     run_dir = Path(log_dir) if log_dir else wf.LOG_ROOT / time.strftime("%Y%m%d_%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "arm_state.json").write_text(json.dumps({k: np.asarray(v).tolist() if not np.isscalar(v) else v
@@ -88,7 +87,9 @@ def _perceive(arm, source, det, cfg, log_dir=None):
         print(f"arm: {state_name}, gripper {float(st['gripper_pos']):.2f}, J {np.round(np.degrees(st['position']), 1).tolist()}")
     except AttributeError:
         pass
-    return wf.perceive(source, det, cfg, tool_pose=(ee[:3], ee[3:7]), log_dir=run_dir)
+    # the current view, else a verified saved look, else (with --execute) the arm finds a better view
+    return wf.perceive_auto(arm, source, det, cfg, execute=execute, log_dir=run_dir,
+                            confirm_move=lambda what: _confirm(what, yes))
 
 
 def main():
@@ -138,9 +139,10 @@ def main():
             sys.exit(0 if ok else 1)
 
         arm, source, det = _build(args, cfg)
-        per = _perceive(arm, source, det, cfg)
+        per = _perceive(arm, source, det, cfg, execute=args.execute and args.command in ("place", "all"), yes=args.yes)
         if args.command == "perceive":
-            print(f"\nPERCEIVE ONLY. {per.cavity.summary()}\noverlays/frames: {per.log_dir}")
+            print(f"\nPERCEIVE ONLY ({per.timings.get('source', 'this view')}). {per.cavity.summary()}\n"
+                  f"overlays/frames: {per.log_dir}")
             return
         plan = wf.plan_placement(arm, per, cfg)
         print("\nPLAN\n" + plan.summary() + f"\n(logged to {plan.log_dir})")

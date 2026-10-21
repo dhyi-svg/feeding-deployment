@@ -25,6 +25,24 @@ hold (J6 +80) is on the other branch: the plan then refuses and prints the flipp
 (J5+180, -J6, J7+180, same hand pose) to hold the box in -- flip the wrist BEFORE picking the box
 up. `--lowering position` is the fallback (planned steps ending 1 cm above the support).
 
+## Looking without a set pose, and with the container held (`placement_workflow.perceive_auto`)
+
+The wrist camera sits 16.8 cm behind the tool frame looking along the approach (measured 10-20), so a
+held container is right in front of it. Every `perceive` / `plan` / `place` looks in this order:
+1. **From where the arm is.** While holding, the look is only trusted if the held box could see >= 40% of
+   the cavity it measured (projected container vs cavity) -- a mostly-blocked view gave a bogus cavity.
+2. **A saved earlier look** (`~/.microwave_place_look.json`, every successful look is saved; 1 h), checked
+   surface by surface against what is visible now (floor/back/left/right each >= 50% of its points within
+   1.5 cm): a microwave pushed 4 cm is rejected (back wall 0%). Best moment to save one: right after the
+   door is opened, empty gripper.
+3. **The arm finds a view** (only `place`/`all --execute`, after its own `go`): candidate viewpoints in front
+   of the opening with the container kept level (<= 15 deg tilt) -- low and nose-down, so the cavity shows
+   above the container -- scored by predicted visibility (incl. grazing angles), IK/joint guards, reach;
+   checked moves (straight, else joint space); points fused across views; next views re-planned from the
+   latest estimate until both side walls are seen. Dry runs list the views instead of moving.
+The move from the look pose to pre-insert falls back to a checked joint-space move if the straight line
+hits a joint guard. `view_planner.py`; closed-loop tests with the held box rendered at the gripper.
+
 ## Commands (repo root; nothing moves without `--execute` + typing `go`)
 
 ```bash

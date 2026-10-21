@@ -325,3 +325,98 @@ def test_empty_gripper_rehearsal(sim, tmp_path):
     with pytest.raises(wf.PlacementRefused, match="position only"):
         wf.plan_placement(arm.m, per, load_config(overrides={"container": {"drop": 0.085},
                                                              "placement": {"require_held": False}}), log=lambda *_: None)
+
+
+# ---------------------------------------------------------------- looking without a hand-picked pose
+# tool -> camera, measured on the rig 2026-10-20 (two runs agreed to 1 mm): the camera sits 16.8 cm behind
+# the tool frame and looks along the approach, so a held box is right in front of it
+_cx = np.array([-1.0, 0.009, 0.004])
+_cz = np.array([0.004, -0.071, 0.997]) / np.linalg.norm([0.004, -0.071, 0.997])
+_cx = _cx - _cz * (_cx @ _cz)
+_cx /= np.linalg.norm(_cx)
+T_TOOL_CAM = np.eye(4)
+T_TOOL_CAM[:3, :3] = np.column_stack([_cx, np.cross(_cz, _cx), _cz])
+T_TOOL_CAM[:3, 3] = [0.023, 0.063, -0.168]
+
+
+class WristRig:
+    """Camera on the (mocked) arm's wrist; the held box rendered at the gripper, so it blocks the view
+    exactly as on the robot."""
+
+    def __init__(self, sim, cfg, scene, q, holding=True):
+        self.sim, self.cfg, self.scene, self.holding = sim, cfg, scene, holding
+        self.arm = ArmMock(sim, q, cfg.lowering.model_j6_rad)
+        p, qq = sim.fk(q)
+        from scipy.spatial.transform import Rotation as Rot
+        u = Rot.from_quat(qq).as_matrix().T @ [0, 0, 1.0]
+        u[2] = 0
+        self.up = u / np.linalg.norm(u)
+        self.i = 0
+
+    def get(self):
+        import synthetic_scene as ss
+        from scipy.spatial.transform import Rotation as Rot
+        st = self.arm.get_state()
+        p, qq = st["ee_pos"][:3], st["ee_pos"][3:]
+        Tt = np.eye(4)
+        Tt[:3, :3], Tt[:3, 3] = Rot.from_quat(qq).as_matrix(), p
+        sc = ss.MicrowaveScene.__new__(ss.MicrowaveScene)
+        sc.__dict__.update(self.scene.__dict__)
+        sc.boxes = list(self.scene.boxes)
+        if self.holding:
+            sc.boxes.append(ss.OBB(*wf.held_box_obb(p, qq, self.cfg.container, self.up), "held box"))
+        T = Tt @ T_TOOL_CAM
+        self.i += 1
+        d, b, _ = render(sc, T, K, noise_mm=1.0, seed=self.i)
+        return wf.Frame(b, d, K, T, time.time())
+
+    def detect(self, bgr, T, stamp):
+        return Detection(exterior_box_px(self.scene, T, K), 0.9, "microwave", stamp)
+
+
+@pytest.fixture
+def look_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(wf, "LOOK_FILE", tmp_path / "look.json")
+    return tmp_path / "look.json"
+
+
+def test_container_blocks_the_view_so_the_arm_finds_one(sim, tmp_path, look_file):
+    cfg = cfg_for("position")
+    scene = MicrowaveScene(**SCENE)
+    rig = WristRig(sim, cfg, scene, Q_HOLD)
+    q_start = rig.arm.s["q"].copy()
+    asked = []
+    per = wf.perceive_auto(rig.arm.m, rig, rig, cfg, execute=True, confirm_move=asked.append,
+                           log=lambda *_: None, log_dir=tmp_path / "run")
+    assert asked and "fused" in per.timings["source"]
+    assert np.max(np.abs(rig.arm.s["q"] - q_start)) > np.radians(5)          # it moved to look
+    t, c = scene.truth(), per.cavity
+    assert abs(c.floor_z - t["floor_z"]) < 0.005
+    assert abs(c.width - (t["left"] - t["right"])) < 0.02
+    assert c.sources["left"] == c.sources["right"] == "side wall plane"
+    assert look_file.exists()
+    plan = wf.plan_placement(rig.arm.m, per, cfg, log=lambda *_: None)
+    assert [leg.label.split(" (")[0] for leg in plan.legs] == ["align + to pre-insert", "insert", "lower"]
+
+
+def test_saved_look_reused_when_blocked_and_rejected_once_the_microwave_moves(sim, tmp_path, look_file):
+    cfg = cfg_for("position")
+    scene = MicrowaveScene(**SCENE)
+    rig = WristRig(sim, cfg, scene, Q_HOLD, holding=False)
+    rig.arm.s["q"] = np.radians([50.0, 41.0, 157.0, -130.0, -138.0, -68.0, -173.0])   # a clear view, nothing held
+    rig.arm.s["g"] = 0.01                                                    # gripper open: nothing in it
+    first = wf.perceive_auto(rig.arm.m, rig, rig, cfg, log=lambda *_: None, log_dir=tmp_path / "a")
+    assert look_file.exists()
+    # now holding the box at the 09-29 hold: the current view is blocked, the saved look verifies
+    rig2 = WristRig(sim, cfg, scene, Q_HOLD)
+    per = wf.perceive_auto(rig2.arm.m, rig2, rig2, cfg, log=lambda *_: None, log_dir=tmp_path / "b")
+    assert per.timings["source"] == "saved look (verified)"
+    assert abs(per.cavity.floor_z - first.cavity.floor_z) < 1e-9
+    rig2.arm.m.execute_command.assert_not_called()
+    # the microwave got pushed 4 cm: the saved look no longer fits what is visible -> not used;
+    # in a dry run the arm does not move to look, it says what it would do
+    moved = MicrowaveScene(**{**SCENE, "origin": (SCENE["origin"][0] + 0.04, SCENE["origin"][1], SCENE["origin"][2])})
+    rig3 = WristRig(sim, cfg, moved, Q_HOLD)
+    with pytest.raises(wf.PlacementRefused, match="with --execute the arm would look"):
+        wf.perceive_auto(rig3.arm.m, rig3, rig3, cfg, log=lambda *_: None, log_dir=tmp_path / "c")
+    rig3.arm.m.execute_command.assert_not_called()

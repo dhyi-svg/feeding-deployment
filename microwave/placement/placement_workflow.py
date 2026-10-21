@@ -273,6 +273,292 @@ def cavity_from_dict(d):
                      floor_rms=d["floor_rms"], floor_points=np.asarray(d["floor_points"]), sources=d["sources"])
 
 
+def _joint_move_to(sim, label, pos, quat, q0, bodies, min_clear, max_tilt, j6=None, log=print, tries=8):
+    """A checked joint-space move to an IK solution at (pos, quat): the solution nearest q0 that passes."""
+    rng = np.random.default_rng(0)
+    errors = []
+    sols = []
+    for k in range(tries):
+        seed = q0 if k == 0 else wrap_joints(q0 + rng.normal(0, 0.6, 7))
+        q, pe, oe = sim.ik_locked_j6(pos, quat, seed, j6) if j6 is not None else sim.ik(pos, quat, seed)
+        if pe > 0.005 or oe > 2.0 or sim.joint_problem(q):
+            continue
+        sols.append(q)
+    for q in sorted(sols, key=lambda q: float(np.max(np.abs(short_delta(q0, q))))):
+        try:
+            leg = sim.joint_move(label, q0, q, bodies, min_clear, max_tilt)
+            log(f"  {label}: {leg.info['joint_move_deg']:.0f} deg joint move, clearance "
+                f"{leg.worst_clearance[0] * 100:.1f} cm, box tilt <= {leg.worst_tilt_deg:.1f} deg")
+            return leg
+        except PlanError as e:
+            errors.append(str(e))
+    raise PlanError(f"{label}: no checked joint-space move ({len(sols)} IK solutions; "
+                    + ("; ".join(errors[:2]) or "none inside the joint guards") + ")")
+
+
+# ---------------------------------------------------------------------------
+# looking without a hand-picked pose
+# ---------------------------------------------------------------------------
+LOOK_FILE = Path.home() / ".microwave_place_look.json"
+
+
+def save_look(per):
+    np.save(per.log_dir / "look_scene_cloud.npy", per.scene_cloud.astype(np.float32))
+    LOOK_FILE.write_text(json.dumps({"time": time.time(), "when": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                     "log_dir": str(per.log_dir), "cavity": cavity_to_dict(per.cavity)}, indent=1))
+
+
+def load_look():
+    if not LOOK_FILE.exists():
+        return None
+    rec = json.loads(LOOK_FILE.read_text())
+    rec["cavity"] = cavity_from_dict(rec["cavity"])
+    cloud = Path(rec["log_dir"]) / "look_scene_cloud.npy"
+    rec["scene_cloud"] = np.load(cloud) if cloud.exists() else np.zeros((0, 3))
+    return rec
+
+
+def surface_checks(cavity, points, slab=0.06, tol=0.015, inset=0.02):
+    """Per surface of the saved cavity (floor, back, left, right): of the points NOW within +-slab of
+    it (and inside its extent), the fraction within tol. A surface that moved has few near it."""
+    p = np.asarray(points, float)
+    pf, pl, pz = p @ cavity.f, p @ cavity.l, p[:, 2]
+    in_f = (pf > cavity.front + inset) & (pf < cavity.back - inset)
+    in_l = (pl > cavity.right + inset) & (pl < cavity.left - inset)
+    in_z = (pz > cavity.floor_z + inset) & (pz < cavity.top - inset)
+    out = {}
+    for name, d, ext in (("floor", pz - cavity.floor_z, in_f & in_l), ("back", pf - cavity.back, in_l & in_z),
+                         ("left", pl - cavity.left, in_f & in_z), ("right", pl - cavity.right, in_f & in_z)):
+        near = ext & (np.abs(d) < slab)
+        n = int(np.count_nonzero(near))
+        out[name] = (n, float(np.mean(np.abs(d[near]) < tol)) if n else 0.0)
+    return out
+
+
+def verify_saved_look(cavity, frame, cfg, tool_pose=None, box_obb=None, min_surface_pts=80, min_frac=0.5):
+    """(ok, message): do the surfaces visible NOW sit where the saved cavity says? Each surface the camera
+    sees (>= min_surface_pts near it) must have >= min_frac of them within 1.5 cm, and at least two
+    surfaces must be seen -- a microwave pushed a few cm moves at least one of them."""
+    pts, _ = scene_points(frame, cfg, tool_pose, box_obb, stride=2)
+    checks = surface_checks(cavity, pts, tol=cfg.look.verify_median_m + 0.003)
+    seen = {k: v for k, v in checks.items() if v[0] >= min_surface_pts}
+    desc = ", ".join(f"{k} {v[1] * 100:.0f}% of {v[0]}" for k, v in checks.items())
+    if len(seen) < 2:
+        return False, f"too little of the saved cavity is visible to check it ({desc})"
+    bad = [k for k, v in seen.items() if v[1] < min_frac]
+    if bad:
+        return False, f"{', '.join(bad)} not where the saved look had it ({desc}) -- has the microwave moved?"
+    return True, f"saved cavity confirmed ({desc})"
+
+
+def held_box_local(ccfg, up_local):
+    a, up = np.array([0.0, 0.0, 1.0]), np.asarray(up_local, float)
+    lat = np.cross(a, up)
+    length = ccfg.far_past_tool - ccfg.near_past_tool
+    c = a * (ccfg.near_past_tool + length / 2) + lat * ccfg.lateral_offset + up * (-max(ccfg.drop, 0) + ccfg.height / 2)
+    return c, np.column_stack([a, lat, up]), np.array([length / 2, ccfg.width / 2, ccfg.height / 2])
+
+
+def _crop(points, coarse, m, trusted=False):
+    """Points in the coarse cavity box grown by m. trusted (from a saved look): only 4 cm below the
+    known floor, so the counter in front of the microwave can't be taken for the floor."""
+    p = np.asarray(points, float)
+    l = coarse.l()
+    rel = p - coarse.opening
+    a, b, c = rel @ coarse.f, rel @ l, rel[:, 2]
+    below = 0.04 if trusted else m
+    keep = ((a > -m) & (a < coarse.depth + m) & (np.abs(b) < coarse.width / 2 + m)
+            & (c > -coarse.height / 2 - below) & (c < coarse.height / 2 + m))
+    return p[keep]
+
+
+def perceive_auto(arm, source, detector, cfg, execute=False, confirm_move=None, log=print, log_dir=None):
+    """A usable cavity without a hand-picked look pose:
+    1. look from where the arm is (the normal `perceive`);
+    2. else a saved earlier look, re-verified against what the camera sees now (works with the
+       container blocking most of the view);
+    3. else -- only with execute -- move to scored viewpoints (view_planner) and fuse what they see.
+    Every successful look is saved for 2. Raises PlacementRefused."""
+    import view_planner as vp
+    log_dir = Path(log_dir) if log_dir else LOG_ROOT / time.strftime("%Y%m%d_%H%M%S")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    st = arm.get_state()
+    ee = np.asarray(st["ee_pos"], float)
+    tool_pose = (ee[:3], ee[3:7])
+    holding = cfg.placement.require_held and float(st["gripper_pos"]) >= GRIPPER_HOLDING_MIN
+    box_obb = held_box_obb(*tool_pose, cfg.container) if (holding and cfg.container.drop > 0) else None
+    up_local = box_local = None
+    if box_obb is not None:
+        Rm = R.from_quat(tool_pose[1]).as_matrix()
+        up_local = Rm.T @ np.array([0.0, 0.0, 1.0])
+        up_local[2] = 0.0
+        up_local /= max(np.linalg.norm(up_local), 1e-9)
+        box_local = held_box_local(cfg.container, up_local)
+    T_tool = np.eye(4)
+    T_tool[:3, :3], T_tool[:3, 3] = R.from_quat(tool_pose[1]).as_matrix(), tool_pose[0]
+
+    def blocked_fraction_ok(cav, frame):
+        """While holding: how much of THIS cavity could this view see past the held box? A look the
+        box mostly blocked is not trusted (10-20 synthetic run: a 40%-blocked view gave a 10 cm-tall
+        cavity, the panel taken for the opening)."""
+        if box_local is None:
+            return True, 1.0
+        coarse_c = vp.CoarseCavity.from_cavity(cav)
+        pts, nrm = coarse_c.sample_points()
+        occ = vp.occluder_polygons(frame.base_T_cam, T_tool, frame.K, frame.depth_mm.shape, box_local,
+                                   cfg.look.hand_occluder_box)
+        vis = vp.visible_fraction(frame.base_T_cam, frame.K, frame.depth_mm.shape, pts, occ, nrm,
+                                  cfg.look.min_incidence_deg)
+        return vis >= cfg.look.min_visible, vis
+
+    try:
+        per = perceive(source, detector, cfg, tool_pose=tool_pose, log=log, log_dir=log_dir)
+        ok, vis = blocked_fraction_ok(per.cavity, per.frame)
+        if not ok:
+            raise PlacementRefused(f"the held box blocks this view: it could see only {vis * 100:.0f}% of the "
+                                   f"cavity it measured (need {cfg.look.min_visible * 100:.0f}%) -- not trusted")
+        save_look(per)
+        return per
+    except PlacementRefused as e:
+        first_error = str(e)
+        log(f"look from here failed: {first_error}")
+
+    saved = load_look()
+    fr = source.get()
+    if saved is not None and time.time() - saved["time"] <= cfg.look.saved_max_age_s:
+        ok, msg = verify_saved_look(saved["cavity"], fr, cfg, tool_pose, box_obb)
+        log(f"saved look from {time.strftime('%H:%M:%S', time.localtime(saved['time']))}: {msg}")
+        if ok:
+            scene, _ = scene_points(fr, cfg, tool_pose, box_obb, stride=3)
+            scene = np.vstack([scene, saved["scene_cloud"]]) if len(saved["scene_cloud"]) else scene
+            return Perception(saved["cavity"], None, [], [saved["cavity"]], saved["cavity"].floor_points, scene, fr,
+                              log_dir, {"source": "saved look (verified)"})
+
+    # coarse idea of the cavity, to aim the viewpoints
+    trusted = saved is not None
+    if saved is not None:
+        coarse = vp.CoarseCavity.from_cavity(saved["cavity"])
+    else:
+        try:
+            roi, _ = wait_for_stable(lambda: detector.detect(fr.bgr, fr.base_T_cam, fr.stamp), cfg.stabilizer,
+                                     log=log)
+        except TimeoutError:
+            raise PlacementRefused(f"{first_error}; no saved look and the microwave is not detected from here -- "
+                                   "point the camera at the microwave once (or look before grasping)") from None
+        pts, _ = scene_points(fr, cfg, tool_pose, box_obb, roi=roi)
+        p = np.median(pts, axis=0)
+        f = p - fr.cam_pos
+        f[2] = 0
+        f /= np.linalg.norm(f)
+        coarse = vp.CoarseCavity(p - f * 0.12, f, 0.30, 0.30, 0.22)
+    log(f"  coarse cavity ({'saved look' if trusted else 'detection'}): opening {np.round(coarse.opening, 3).tolist()} "
+        f"axis {np.round(coarse.f, 2).tolist()} {coarse.width * 100:.0f} x {coarse.depth * 100:.0f} x {coarse.height * 100:.0f} cm")
+    tool_T_cam = np.linalg.inv(T_tool) @ fr.base_T_cam
+    views = vp.candidate_views(coarse, tool_T_cam, fr.K, fr.depth_mm.shape, cfg.look, cfg.placement.max_reach_m,
+                               box_local, up_local, cfg.look.hand_occluder_box)
+    sim = PlacementSim(cfg)
+    if box_local is not None:
+        sim.attach_box(cfg.container, up_local)
+    q_now = wrap_joints(np.asarray(st["position"], float))
+    feasible = vp.feasible_views(views, sim, q_now, limit=cfg.look.max_views, log=log)
+    if not feasible:
+        raise PlacementRefused(f"{first_error}; and no reachable viewpoint sees the cavity past the gripper "
+                               f"({len(views)} candidates before IK)")
+    if not execute:
+        raise PlacementRefused(f"{first_error}; with --execute the arm would look from {len(feasible)} better "
+                               f"viewpoint(s), best sees {feasible[0].visible * 100:.0f}% of the cavity -- nothing moved")
+    if confirm_move is not None:
+        confirm_move(f"Move to up to {len(feasible)} viewpoints to look into the microwave.")
+
+    obstacles = scene_points(fr, cfg, tool_pose, box_obb, stride=3)[0]
+    sim.add_voxels(pcm.voxel_downsample(obstacles, cfg.planner.obstacle_voxel_m), cfg.planner.obstacle_voxel_m)
+    fused, last_err, best = [], first_error, None
+
+    def complete(c):
+        return sum(c.sources.get(k) == "side wall plane" for k in ("left", "right"))
+
+    def finish(per):
+        (log_dir / "cavity.json").write_text(json.dumps(cavity_to_dict(per.cavity), indent=1))
+        save_look(per)
+        return per
+
+    visited = []
+
+    def replan(coarse_now):
+        stq = wrap_joints(np.asarray(arm.get_state()["position"], float))
+        vs = vp.candidate_views(coarse_now, tool_T_cam, fr.K, fr.depth_mm.shape, cfg.look, cfg.placement.max_reach_m,
+                                box_local, up_local, cfg.look.hand_occluder_box)
+        vs = [w for w in vs if all(np.linalg.norm(w.tool_pos - p) > 0.06 for p in visited)]
+        return vp.feasible_views(vs, sim, stq, limit=cfg.look.max_views, log=log)
+
+    queue = list(feasible)
+    i = 0
+    while queue and i < cfg.look.max_views:
+        v = queue.pop(0)
+        i += 1
+        visited.append(v.tool_pos)
+        st = arm.get_state()
+        q_now = wrap_joints(np.asarray(st["position"], float))
+        p_now, quat_now = np.asarray(st["ee_pos"][:3], float), np.asarray(st["ee_pos"][3:7], float)
+        try:
+            try:
+                leg = sim.plan_leg(f"to view {i}", p_now, quat_now, v.tool_pos, v.tool_quat, q_now, sim.voxels,
+                                   cfg.planner.min_clearance_m, level=False, with_box=box_local is not None, log=log)
+                if up_local is not None and leg.worst_tilt_deg > cfg.look.max_container_tilt_deg + 2:
+                    raise PlanError(f"box tilts {leg.worst_tilt_deg:.0f} deg on the way")
+            except PlanError:
+                leg = _joint_move_to(sim, f"to view {i} (joint)", v.tool_pos, v.tool_quat, q_now, sim.voxels,
+                                     cfg.planner.min_clearance_m, cfg.look.max_container_tilt_deg + 2, None, log)
+        except PlanError as e:
+            log(f"  view {i}: no checked move ({e})")
+            continue
+        if not execute_joint_plan(arm, leg.joints, f"to view {i}"):
+            raise PlacementRefused(f"move to view {i} stopped early -- check the arm")
+        st = arm.get_state()
+        ee = np.asarray(st["ee_pos"], float)
+        tp = (ee[:3], ee[3:7])
+        bo = held_box_obb(*tp, cfg.container, up_local) if box_local is not None else None
+        for k in range(cfg.look.frames_per_view):
+            frk = source.get()
+            frk.save(log_dir / f"view{i}_frame{k}.npz")
+            pts, _ = scene_points(frk, cfg, tp, bo)
+            fused.append(pcm.voxel_downsample(pts, cfg.cloud.voxel_m))      # raw: re-cropped below
+            obstacles = np.vstack([obstacles, scene_points(frk, cfg, tp, bo, stride=4)[0]])
+        # crop around the LATEST idea of the cavity (a detection-only guess is pulled sideways by the
+        # control panel -- 10-20 synthetic run lost a side wall to it), wider while it is only a guess
+        margin = cfg.look.crop_margin_m if trusted else cfg.look.crop_margin_m + 0.10
+        cloud = pcm.filter_cloud(_crop(np.vstack(fused), coarse, margin, trusted), cfg.cloud)
+        try:
+            looks = [cp.estimate_cavity(cloud, frk.cam_pos, cfg.cavity, seed=s) for s in range(cfg.cavity.min_looks)]
+            merged, _ = cp.merge_cavities(looks, cfg.cavity)
+        except cp.CavityError as e:
+            last_err = str(e)
+            log(f"  after view {i}: {e}")
+            continue
+        if trusted:
+            ref = saved["cavity"]
+            off = max(abs(merged.floor_z - ref.floor_z),
+                      abs(merged.point(merged.back, (merged.left + merged.right) / 2, 0) @ ref.f - ref.back))
+            if off > cfg.look.trusted_floor_tol_m:
+                last_err = f"fused cavity is {off * 100:.0f} cm off the saved look (floor/back) -- not trusted"
+                log(f"  after view {i}: {last_err}")
+                continue
+        log(f"cavity from {i} view(s): {merged.summary()}")
+        coarse = vp.CoarseCavity.from_cavity(merged)           # re-centre the crop on what was measured
+        if not trusted:
+            queue = replan(coarse)                              # ... and aim the next views at it
+        per = Perception(merged, None, [], looks, cloud, obstacles, frk, log_dir, {"source": f"{i} fused view(s)"})
+        if complete(merged) == 2:
+            return finish(per)
+        if best is None or complete(merged) >= complete(best.cavity):
+            best = per
+        log(f"  only {complete(merged)} of 2 side walls seen -- looking from the next viewpoint too")
+    if best is not None:
+        log("  using the most complete fused cavity (missing walls taken at the visible floor's edge: narrower = safe)")
+        return finish(best)
+    raise PlacementRefused(f"no cavity after {i} viewpoints: {last_err} -- frames in {log_dir}")
+
+
 # ---------------------------------------------------------------------------
 # planning
 # ---------------------------------------------------------------------------
@@ -397,10 +683,18 @@ def plan_placement(arm, perception, cfg, log=print):
                                f"({start_clear[1]}) -- move it clear and re-plan")
     legs = []
     try:
-        leg = sim.plan_leg("align + to pre-insert", ee[:3], ee[3:7], target.pre, target.quat, q0, bodies,
-                           pc.min_clearance_m, j6_pull=(j6, 6.0) if impedance else None, level=False, log=log)
-        if leg.worst_tilt_deg > cfg.placement.max_tilt_correction_deg + cfg.placement.level_tol_deg:
-            raise PlanError(f"align: box tilts {leg.worst_tilt_deg:.1f} deg on the way")
+        max_tilt = cfg.placement.max_tilt_correction_deg + cfg.placement.level_tol_deg
+        try:
+            leg = sim.plan_leg("align + to pre-insert", ee[:3], ee[3:7], target.pre, target.quat, q0, bodies,
+                               pc.min_clearance_m, j6_pull=(j6, 6.0) if impedance else None, level=False, log=log)
+            if leg.worst_tilt_deg > max_tilt:
+                raise PlanError(f"align: box tilts {leg.worst_tilt_deg:.1f} deg on the way")
+        except PlanError as e:
+            # from wherever the look left the arm, a straight line can run into a joint guard (J4 at
+            # the look pose, 10-20): a checked joint-space move to an IK solution at pre-insert instead
+            log(f"  straight align leg failed ({e}) -- trying a joint-space move to pre-insert")
+            leg = _joint_move_to(sim, "align + to pre-insert (joint)", target.pre, target.quat, q0, bodies,
+                                 pc.min_clearance_m, max_tilt, j6 if impedance else None, log)
         legs.append(leg)
         q = leg.joints[-1]
         if impedance:

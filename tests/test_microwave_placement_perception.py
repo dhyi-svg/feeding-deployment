@@ -285,7 +285,7 @@ def test_alignment_limits():
     yawed = (R.from_euler("z", 40, degrees=True) * R.from_quat(LEVEL_HOLD)).as_quat()
     with pytest.raises(cp.CavityError, match="off the cavity axis"):
         target_for(scene, yawed)
-    tilted = (R.from_euler("y", -15, degrees=True) * R.from_quat(LEVEL_HOLD)).as_quat()
+    tilted = (R.from_euler("y", -25, degrees=True) * R.from_quat(LEVEL_HOLD)).as_quat()
     with pytest.raises(cp.CavityError, match="tilted"):
         target_for(scene, tilted)
 

@@ -149,10 +149,10 @@ class MicrowavePlaceNode:
         return res
 
     def _perceive(self, cfg):
-        st = self.arm.get_state()
-        ee = np.asarray(st["ee_pos"], float)
         with self.model_lock:
-            per = wf.perceive(self.source, self.detector, cfg, tool_pose=(ee[:3], ee[3:7]), log=self.log.info)
+            # the node never moves the arm to look (plan_place is a no-motion service): current view or a
+            # verified saved look; the CLI's `place --execute` also searches viewpoints
+            per = wf.perceive_auto(self.arm, self.source, self.detector, cfg, execute=False, log=self.log.info)
         self.perception = per
         self._publish_cloud(self.pub_cloud, per.roi_cloud)
         self._publish_markers(per.cavity, None)
