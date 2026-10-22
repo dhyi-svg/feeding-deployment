@@ -42,6 +42,11 @@ SWING_DEG = 90                    # swing when no --swing-deg is given (--swing-
                                   # swing or the run refuses -- no smaller fallback
 DOOR_FILE = Path.home() / ".fridge_door.json"   # hinge + closed-door grasp go here, never into the microwave's file
 
+# --- release: let go, then back straight out of the handle. The microwave's 0.20 failed the sim checks from 4 of the
+# 5 real 09-20 swing endings (J6 / IK); 0.12 passed from all 5 (and is what worked on the microwave on 10-21)
+BACK_OFF_M = 0.12
+LAST_GRASP_FILE = Path.home() / ".fridge_last_grasp.json"   # the release's grasp record, never the microwave's
+
 # --- "sam3" option only: it sees no door, and its point is the handle's visible pixels, not the microwave detector's
 SAM3_DOOR_NORMAL = np.array([-1.0, 0.0, 0.0])   # assumed: the door faces the arm head-on
 SAM3_GRIP_EXT, SAM3_GRASP_X_ADJUST = 0.037, 0.0
@@ -49,7 +54,8 @@ SAM3_GRIP_EXT, SAM3_GRASP_X_ADJUST = 0.037, 0.0
 OVERRIDES = dict(
     FRIDGE_HANDLE_DETECTOR=HANDLE_DETECTOR, PLAUSIBLE_Y=PLAUSIBLE_Y, PLAUSIBLE_Z=PLAUSIBLE_Z,
     MAX_REACH=MAX_REACH, SWING_MAX_REACH=SWING_MAX_REACH, GRASP_FORCE=GRASP_FORCE,
-    FRIDGE_HINGE_OFFSET_FROM_GRASP=HINGE_OFFSET_FROM_GRASP, DOOR_SAVE_FILE=DOOR_FILE,
+    FRIDGE_HINGE_OFFSET_FROM_GRASP=HINGE_OFFSET_FROM_GRASP, DOOR_SAVE_FILE=DOOR_FILE, FRIDGE_LAST_GRASP_FILE=LAST_GRASP_FILE,
+    BACK_OFF_M=BACK_OFF_M,
 )
 if HANDLE_DETECTOR == "sam3":
     OVERRIDES.update(GRIP_EXT=SAM3_GRIP_EXT, GRASP_X_ADJUST=SAM3_GRASP_X_ADJUST)

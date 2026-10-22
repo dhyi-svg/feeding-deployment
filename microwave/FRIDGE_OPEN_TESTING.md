@@ -19,17 +19,27 @@ the 10-21 recording (black door, white handle).
 
 | How | Effect |
 |---|---|
-| **Software e-stop in T3** (keep this typed out in T3 ahead of time) | The arm stops and **holds where it is**, powered; the gripper keeps its grip. All motion is refused until cleared. |
+| **Software e-stop in T3** (first choice) | The driver cancels the motion and the arm **holds where it is**, powered (it does not drop); the gripper keeps its grip. All motion is refused until it is cleared. |
 | **Ctrl-C in T2** | Cancels the running motion; the arm stops and holds, powered. |
-| Physical e-stop button | Last resort only (driver hung or dead): cuts power and the arm drops. |
+| Physical e-stop button | Last resort only (the driver process is hung or dead): it cuts power and the arm drops. |
+
+**This one is the e-stop.** Keep it typed out in T3 ahead of time and send it to stop the robot:
 
 ```bash
 ros2 topic pub --once /estop rammp_common_interfaces/msg/EStop "{engaged: true, source: 'operator', reason: 'stop'}"
-ros2 topic pub --once /estop rammp_common_interfaces/msg/EStop "{engaged: false, source: 'operator', reason: 'clear'}"   # clear, right before continuing
 ```
 
-If the driver is faulted afterwards, run `sheppy restart arm` in T1. Never teleop while the arm driver is up: switch to
-`camera-only` first.
+**This one does not stop anything: it clears the e-stop afterwards.** Send it only right before you continue (only a
+fresh message counts):
+
+```bash
+ros2 topic pub --once /estop rammp_common_interfaces/msg/EStop "{engaged: false, source: 'operator', reason: 'clear'}"
+```
+
+If the driver is faulted afterwards, run `sheppy restart arm` in T1.
+
+Never teleop while the arm driver is up: it crashes the driver. Run `sheppy down` in T1 first, and bring it back up
+with step 1 after.
 
 ## Commands
 
@@ -41,13 +51,12 @@ source ~/feeding-deployment/microwave/sheppy/env.sh     # also cd's to the repo 
 
 | Step | Terminal | Command | What it does |
 |---|---|---|---|
-| 0 | T1 | `cd microwave/sheppy && sheppy up --manifest sheppy-manifest.yaml camera-only`, then teleop | **Point the arm at the fridge** (door closed). The camera must face the door roughly square-on, with the handle in view and the door filling most of the image. The camera should be ~50–60 cm from the door (the 10-21 recording was 55 cm). Keep J4 around −130 to −135°. |
-| 1 | T1 | `sheppy up --manifest sheppy-manifest.yaml real-arm-camera && sheppy status` | Starts the arm driver, camera and TF. Every node should show as running. |
-| 2 | T2 | `python3 -u microwave/real_gen3_ros2_grasp_and_swing_microwave.py --fridge --swing-deg 90` | **Dry run.** Detects, plans and moves nothing. Check the printed handle, hinge and grasp, and look at `~/microwave_detections/*_rgb.jpg`. |
-| 3 | T2 | Same as step 2 plus `--execute` | **Open, 90°.** Grasps and swings the door 90°, then stops holding the handle. |
-| 4 | T2 | `python3 -c "import sys; sys.path.insert(0, 'microwave'); from sheppy_arm import SheppyArm; SheppyArm().gripper(0.0)"` | **Let go.** Opens the gripper; the arm stays put. `--release` refuses with `--fridge`. Then switch to `camera-only` (T1) and teleop the arm away. |
-| 5 | — | Close the door by hand, go back to step 0, run step 3 again | **Repeat.** For a wider open, change the number in `--swing-deg`: it is not capped at 90 (the fridge branch's runs reached ~100°). |
-| 6 | T1 | `sheppy down` | Shutdown. |
+| 0 | — | Teleop, with sheppy down (nothing running) | **Point the arm at the fridge** (door closed). The camera must face the door roughly square-on, with the handle in view and the door filling most of the image. The camera should be ~50–60 cm from the door (the 10-21 recording was 55 cm). Keep J4 around −130 to −135°. |
+| 1 | T1 | `sheppy up --manifest microwave/sheppy/sheppy-manifest.yaml real-arm-camera && sheppy status` | Starts the arm driver, camera, TF and the camera window (teleop is off from here on). Every node should show as running. |
+| 2 | T2 | `python3 -u microwave/real_gen3_ros2_grasp_and_swing_microwave.py --fridge --swing-deg 90 --execute` | **Open, 90°.** Grasps, swings the door 90°, then lets go and backs 12 cm straight out of the handle. If you want a dry run first, don't add the execute flag.|
+| 3 | T2 |  — |  Teleop to grab the tupperware (need to run `sheppy down` first) |
+| 4 | — | Close the door by hand, go back to step 0, run step 2 again | **Repeat.** For a wider open, change the number in `--swing-deg`: it is not capped at 90 (the fridge branch's runs reached ~100°). |
+| 5 | T1 | `sheppy down` | Shutdown. |
 
 ## What to expect
 
@@ -58,7 +67,7 @@ source ~/feeding-deployment/microwave/sheppy/env.sh     # also cd's to the repo 
 2. Moves to 12 cm (or 10 cm) straight out from the handle, square to the door.
 3. Goes straight in and closes the gripper.
 4. Swings the door `--swing-deg` (90 here), exactly. There is no smaller fallback.
-5. Ends **holding the handle**. There is no push-open and no release.
+5. Lets go and backs 12 cm straight out of the handle (checked in sim first, from where the swing ended). No push-open, no park.
 
 **Stops before any motion if:**
 - detection fails, or two looks don't agree within 3 cm
@@ -71,6 +80,8 @@ source ~/feeding-deployment/microwave/sheppy/env.sh     # also cd's to the repo 
 - the grasp lands more than 3 cm off. It stops with the gripper untouched.
 - the gripper reads open after closing. Nothing is grasped, so it doesn't swing.
 - the swing re-check fails. It stops still holding the handle.
+- the back-off fails its sim check after the swing. It doesn't let go: the hand stays on the handle. Run step 2's
+  command with `--release` instead of `--swing-deg 90` to retry, or `sheppy down` and teleop.
 
 **Watch for:**
 - **Where the fingers close.** The grasp offset is the microwave's `GRIP_EXT` (never tested on this handle), and nothing

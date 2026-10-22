@@ -105,6 +105,7 @@ FRIDGE = False
 DOOR_SAVE_FILE = None              # None = microwave_common.DOOR_FILE
 FRIDGE_HINGE_OFFSET_FROM_GRASP = None   # fridge: measured hinge offset from the closed-door grasp point
                                         #   (door frame: into the door, along it toward the hinge, up)
+FRIDGE_LAST_GRASP_FILE = None      # fridge: the release's grasp record (the microwave's stays microwave_common's)
 FRIDGE_HANDLE_DETECTOR = None      # fridge: "depth" (this file's detect_handle, fridge_detect.FridgeDepthDetector) or "sam3"
 
 
@@ -410,6 +411,17 @@ def push_open(ai, execute):
     return demo_replay.run(PUSH_OPEN, True, PUSH_OPEN_TRUST_FROM, ai=ai)
 
 
+def fridge_release(ai, execute):
+    """After a fridge swing: open the gripper and back straight out of the handle (sim-checked first; if the back-off
+    fails a check, nothing moves and the hand stays on the handle). No park: the park pose and door model are the
+    microwave's."""
+    print("\n===== release + back off the handle =====")
+    if not execute:
+        print("  (starts where the swing ends: planned and sim-checked then, before it moves)")
+        return True
+    return release_and_back_off(ai, BACK_OFF_M, True, save_path=FRIDGE_LAST_GRASP_FILE, park=False)
+
+
 def main():
     a = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     a.add_argument("--execute", action="store_true", help="command the arm; omit for a dry run")
@@ -423,25 +435,27 @@ def main():
     a.add_argument("--fridge", action="store_true",
                    help="open a fridge instead: depth handle detection over the whole image (or SAM 3, see "
                         "fridge_constants.HANDLE_DETECTOR), measured hinge, fridge_constants.py; "
-                        "grasp + swing only (no push-open, no --release). Swings exactly --swing-deg (default "
-                        "fridge_constants.SWING_DEG) or refuses")
+                        "grasp, swing, then let go and back out of the handle (no push-open, no park; --release "
+                        "does just the let-go + back-out). Swings exactly --swing-deg (default fridge_constants.SWING_DEG) "
+                        "or refuses")
     args = a.parse_args()
     if args.fridge:
-        if args.release:
-            sys.exit("--release is microwave-only (microwave door model + park path) -- not with --fridge.")
         import fridge_constants
         globals().update(fridge_constants.OVERRIDES, FRIDGE=True)
-        args.no_push_open = True
-    if args.fridge:
         swing = min_swing = args.swing_deg or fridge_constants.SWING_DEG   # exactly this swing, or refuse
     else:
         swing = args.swing_deg or (SWING_MAX_TRY_DEG if args.no_push_open else PUSH_OPEN_SWING_DEG)
         min_swing = SWING_MIN_DEG
     ai = SheppyArm()
-    if args.release:
+    if args.release and args.fridge:
+        release_and_back_off(ai, BACK_OFF_M, args.execute, save_path=FRIDGE_LAST_GRASP_FILE, park=False)
+    elif args.release:
         release_and_back_off(ai, BACK_OFF_M, args.execute, pre_park_x=PRE_PARK_X)
-    elif open_task(ai, args.execute, swing, min_swing) and not args.no_push_open:
-        push_open(ai, args.execute)
+    elif open_task(ai, args.execute, swing, min_swing):
+        if args.fridge:
+            fridge_release(ai, args.execute)
+        elif not args.no_push_open:
+            push_open(ai, args.execute)
 
 
 if __name__ == "__main__":

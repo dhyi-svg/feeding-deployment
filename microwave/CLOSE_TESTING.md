@@ -11,13 +11,14 @@ This is the close that latched the door on 10-21: the route-over push-close in
 | **Ctrl-C in T2** | Cancels the running motion; the arm stops and holds, powered. |
 | Physical e-stop button | Last resort only (the driver process is hung or dead): it cuts power and the arm drops. |
 
-Software e-stop, typed out in T3 ahead of time:
+**This one is the e-stop.** Keep it typed out in T3 ahead of time and send it to stop the robot:
 
 ```bash
 ros2 topic pub --once /estop rammp_common_interfaces/msg/EStop "{engaged: true, source: 'operator', reason: 'stop'}"
 ```
 
-Clear it right before you continue (only a fresh message counts):
+**This one does not stop anything: it clears the e-stop afterwards.** Send it only right before you continue (only a
+fresh message counts):
 
 ```bash
 ros2 topic pub --once /estop rammp_common_interfaces/msg/EStop "{engaged: false, source: 'operator', reason: 'clear'}"
@@ -25,8 +26,8 @@ ros2 topic pub --once /estop rammp_common_interfaces/msg/EStop "{engaged: false,
 
 If the driver is faulted afterwards, run `sheppy restart arm` in T1.
 
-Never teleop while the arm driver is up: it crashes the driver. Run
-`sheppy up --manifest sheppy-manifest.yaml camera-only` in T1 first, and switch back to `real-arm-camera` after.
+Never teleop while the arm driver is up: it crashes the driver. Run `sheppy down` in T1 first, and bring it back up
+with step 1 after.
 
 ## Commands
 
@@ -36,14 +37,12 @@ Run this first in every terminal:
 source ~/feeding-deployment/microwave/sheppy/env.sh     # also cd's to the repo root
 ```
 
-| Terminal | Command | What it does |
-|---|---|---|
 | Step | Terminal | Command | What it does |
 |---|---|---|---|
-| 0 | T1 | `cd microwave/sheppy && sheppy up --manifest sheppy-manifest.yaml camera-only`, then teleop | **Point the arm at the microwave** (door closed). Nothing in the code does this; it is always placed by hand. Every open on 10-21/22 started with the hand ~45 cm out, ~20 cm right of the arm's centre line, ~25–30 cm up, and the camera facing the microwave square-on, tilted ~15° down. The whole door (all four edges) must be in the camera window. Keep J4 around −130 to −135°: a start at −146.6° made the open refuse every grasp. |
-| 1 | T1 | `sheppy up --manifest sheppy-manifest.yaml real-arm-camera && sheppy status` | Starts the arm driver, camera and TF (teleop is off from here on). Every node should show as running. |
+| 0 | — | Teleop, with sheppy down (nothing running) | **Point the arm at the microwave** (door closed). Nothing in the code does this; it is always placed by hand. Every open on 10-21/22 started with the hand ~45 cm out, ~20 cm right of the arm's centre line, ~25–30 cm up, and the camera facing the microwave square-on, tilted ~15° down. The whole door (all four edges) must be in the camera window. Keep J4 around −130 to −135°: a start at −146.6° made the open refuse every grasp. |
+| 1 | T1 | `sheppy up --manifest microwave/sheppy/sheppy-manifest.yaml real-arm-camera && sheppy status` | Starts the arm driver, camera, TF and the camera window (teleop is off from here on). Every node should show as running. |
 | 2 | T2 | `python3 -u microwave/real_gen3_ros2_grasp_and_swing_microwave.py --execute` | **Open, once.** Detects from where the arm is, so it must still be at the step 0 pose. Saves the door to `~/.microwave_door.json`, then grasps, swings 50°, lets go and pushes the door to about 90°. |
-| 3 | T2 | Teleop to grab the container, may need sheppy down for teleop to work | **Grip the container.** |
+| 3 | T1 | `sheppy down`, then teleop to grab the container, then the step 1 command again | **Grip the container.** |
 | 4 | T2 | `python3 -u microwave/real_gen3_ros2_close_microwave.py --phase push-close --route-over --keep-orientation --door-deg 90 --hold-offset-x -0.152 --push-radius 0.17 --push-radius-end 0.15 --over-above 0.18 --push-z 0.22 --push-contact-nm 6 --execute` | **Close** while holding the container (the 10-21 command that latched). Drop `--execute` for a dry run that plans and moves nothing. |
 | 5 | — | Open the door by hand to ~90°, then run step 4 again. | **Repeat the close** as often as you like. The arm starts where the last close left it, and the container stays in the gripper. |
 | 6 | T1 | `sheppy down` | Shutdown. |

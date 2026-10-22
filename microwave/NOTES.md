@@ -3,6 +3,15 @@
 Working notes for the scripts in this folder. Newest learnings first within each section.
 
 
+## 2026-10-22 (17:23) -- first SUCCESSFUL fridge open (`--fridge`, user-confirmed)
+
+- `real_gen3_ros2_grasp_and_swing_microwave.py --fridge --execute` (depth detector over the whole image, measured
+  hinge from `fridge_constants.py`, `HANDLE_CENTRE_TO_FACE_M` 0.053): grasp + 90-deg swing, door file 90.0 deg.
+  Handle (0.562, -0.426, 0.636), grasp (0.514, -0.430, 0.636), door yaw 4.5 deg. Ends holding the handle (no release).
+- Record: `~/microwave_detections/20261022_172303_fridge_open_SUCCESS.json` (+ that run's two detection frames).
+- Earlier runs the same day missed: the white glossy handle's front face gives NO depth, only its edges, so the handle
+  cluster is an edge strip (17:01-17:18: right edge; 17:03: the monitor beside the fridge, from the whole-image search).
+
 ## 2026-10-21 (evening) -- impedance code removed; full open ran again
 
 - Compliant-swing branch + `SWING_COMPLIANT`/`SWING_STIFF_DEG`/`SWING_ARRIVE_TOL` deleted from the grasp+swing script
