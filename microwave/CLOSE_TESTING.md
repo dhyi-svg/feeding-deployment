@@ -1,274 +1,98 @@
-# Microwave close — real-robot testing plan (Jetson, sheppy)
+# Microwave close — how to test
 
-Written 2026-10-21. Nothing in here has been run on the robot yet: every command is either
-read-only, a dry run, or motion you start yourself with `--execute`.
+This is the close that latched the door on 10-21: the route-over push-close in
+`real_gen3_ros2_close_microwave.py --phase push-close` (code: `door_push.push_close`). It runs after the open.
 
-What this covers:
+## Stop the robot
 
-- **Part A**: record a teleop demo (joint angles + RGB-D frames) to work out the elbow-push
-  joint plan by hand.
-- **Part B**: test the close code at low speed.
+| How | Effect |
+|---|---|
+| **Software e-stop in T3** (first choice) | The driver cancels the motion and the arm **holds where it is**, powered (it does not drop); the gripper keeps its grip. All motion is refused until it is cleared. |
+| **Ctrl-C in T2** | Cancels the running motion; the arm stops and holds, powered. |
+| Physical e-stop button | Last resort only (the driver process is hung or dead): it cuts power and the arm drops. |
 
-What the close does: `door_task.py close` replays the 10-07 close demo relative to the door the
-open task detected (`~/.microwave_door.json`). By default it runs exactly as on 10-07 (plain IK,
-the wrist ends left of the elbow); flags select the wrist-right variant and/or a push 10 cm
-further toward the handle. The push is done by the forearm/wrist sweeping across the door.
-
-All commands run from the repo root unless they `cd` somewhere else. Every terminal needs:
+Software e-stop, typed out in T3 ahead of time:
 
 ```bash
-source ~/feeding-deployment/microwave/sheppy/env.sh      # ROS 2 + ~/ros2_ws + .venv; also cd's to the repo root
+ros2 topic pub --once /estop rammp_common_interfaces/msg/EStop "{engaged: true, source: 'operator', reason: 'stop'}"
 ```
 
-## 0. Stop levers — read before any motion
-
-| # | What | When |
-|---|---|---|
-| 1 | **Physical e-stop button** | Anything about to hit something. Always the first choice. |
-| 2 | **Ctrl-C** in the terminal running `door_task.py` | Wrong but not urgent. `SheppyArm` cancels the running trajectory goal (the arm stops) and the run log is still written. |
-| 3 | **Software e-stop** from a spare terminal (keep it typed out, ready to send) | `door_task.py` hung or isn't the thing moving. The driver stops the arm and refuses motion until cleared. |
-| 4 | **Stop the arm driver:** `cd ~/feeding-deployment/microwave/sheppy && sheppy up --manifest sheppy-manifest.yaml camera-only` | Take the driver away entirely (this also frees the arm for teleop). `sheppy down` stops everything. |
-
-Software e-stop (#3):
+Clear it right before you continue (only a fresh message counts):
 
 ```bash
-# engage (never refused, even if stale)
-ros2 topic pub --once /estop rammp_common_interfaces/msg/EStop "{engaged: true, source: 'operator', reason: 'stop'}"
-# clear (only a FRESH message is honoured -- run it right before you continue)
 ros2 topic pub --once /estop rammp_common_interfaces/msg/EStop "{engaged: false, source: 'operator', reason: 'clear'}"
 ```
 
-If the driver is faulted after a stop: `cd ~/feeding-deployment/microwave/sheppy && sheppy restart arm`.
-Check `sheppy status` before moving again.
+If the driver is faulted afterwards, run `sheppy restart arm` in T1.
 
-**Never teleop (Kinova joystick / web app) while the arm driver is up.** It takes the arm out
-of low-level servoing and crashes the driver. Switch to `camera-only` or `teleop-record` first.
+Never teleop while the arm driver is up: it crashes the driver. Run
+`sheppy up --manifest sheppy-manifest.yaml camera-only` in T1 first, and switch back to `real-arm-camera` after.
 
-Suggested terminal layout:
+## Commands
 
-- **T1:** sheppy (`up`, `status`, `logs`)
-- **T2:** the commands
-- **T3:** the e-stop command typed out, ready to send
-
----
-
-## Part A — teleop recording (joint angles + occasional camera frames)
-
-Script: `scripts/session/record_teleop_demo.py`, ported to sheppy on 10-21 (it previously
-needed the old `microwave_bringup.launch.py` stack).
-
-How it works:
-
-- **Read-only.** It never commands the arm.
-- **Arm data.** It reads the arm through its own read-only Kortex session, so it works while
-  the arm driver is down and you teleop. It publishes `/joint_states` from that session, so
-  sheppy's `robot_state_publisher` and hand-eye calibration give every frame its camera pose.
-- **What it records:**
-  - every arm sample at 30 Hz: joints, velocity, torque, tool pose, gripper
-  - RGB-D frames at 2 Hz while the arm moves, plus a short settle afterwards; none while it's parked
-- **Tagging keypoints.** Type a label and press Enter to tag the current instant (e.g.
-  `behind_door`, `push_start`, `shut`). Each tag stores the arm state and forces a frame.
-  `q` + Enter (or Ctrl-C) stops.
-- **Output:** `~/captures/teleop_<time>/`
-  - `state.jsonl`: all samples
-  - `events.jsonl`: your tags, with joints
-  - `frames/NNNNNN/`: rgb jpg, uint16 depth png, camera info, base←camera matrix, arm state
-  - `meta.json`
-- **Size:** about 16 MB/min while moving.
-
-**A1. One-time: `kortex_api` in its own folder (the sheppy venv is NOT touched).**
-
-The recorder needs `kortex_api` to read the arm while the driver is down. It goes into
-`~/kortex_isolated` and is only put on `PYTHONPATH` for the recorder's own command (A3/A4),
-so nothing else ever imports it. `--no-deps`: it uses the protobuf already on the system
-(3.12.4) instead of the wheel's broken 3.5.1 pin, and installs nothing else. Tested this
-way on 10-21 (imports, plus the recorder's Kortex module).
+Run this first in every terminal:
 
 ```bash
-cp ~/.cache/uv/git-v0/checkouts/00bab5f3d33091f1/36265a0c/prpl-tidybot/kortex_wheels/kortex_api-2.6.0.post3-py3-none-any.whl ~/
-uv pip install --python /usr/bin/python3 --no-deps --target ~/kortex_isolated ~/kortex_api-2.6.0.post3-py3-none-any.whl
+source ~/feeding-deployment/microwave/sheppy/env.sh     # also cd's to the repo root
 ```
 
-To remove it completely: `rm -rf ~/kortex_isolated`.
-
-If the cached wheel is gone, Kinova hosts the same file:
-`https://artifactory.kinovaapps.com/artifactory/generic-public/kortex/API/2.6.0/kortex_api-2.6.0.post3-py3-none-any.whl`
-
-**A2. Bring up the camera + TF with the arm driver DOWN** (T1):
-
-```bash
-cd ~/feeding-deployment/microwave/sheppy
-sheppy up --manifest sheppy-manifest.yaml teleop-record     # wrist camera, camera window, robot_state_publisher, hand-eye calib
-sheppy status
-```
-
-**A3. Prove it works while you teleop** (T2). Move the arm with the joystick while this runs.
-The numbers must change, nothing may error, and the TF line must print a camera position:
-
-```bash
-PYTHONPATH=~/kortex_isolated:$PYTHONPATH python3 -u scripts/session/record_teleop_demo.py --check --tag elbow_close
-```
-
-**A4. Record** (T2). Teleop the whole motion and tag the keypoints as you go:
-
-```bash
-PYTHONPATH=~/kortex_isolated:$PYTHONPATH python3 -u scripts/session/record_teleop_demo.py --tag elbow_close --note "door open ~90, microwave at <where>"
-#   start<Enter>  behind_door<Enter>  push_start<Enter>  shut<Enter>  ...  q<Enter>
-```
-
-Useful options:
-
-- `--frame-hz 1` for fewer frames
-- `--all-frames` to also record while the arm is still
-- `--no-camera` for joints only
-- `--out DIR`
-- `--camera-ns /camera` only for the old launch stack
-
-**A5. Give the arm back to the driver** (T1):
-
-```bash
-cd ~/feeding-deployment/microwave/sheppy && sheppy up --manifest sheppy-manifest.yaml real-arm-camera
-```
-
-Send me the `~/captures/teleop_<time>/` folder name; the tagged joint configurations in
-`events.jsonl` are what the elbow-push plan will be built from.
-
-**Untested under sheppy:** `--check` (A3) is the test. If the TF line fails, check
-`ros2 topic echo --once /joint_states` shows `joint_1`..`joint_7`, and check
-`sheppy logs arm_tf`.
-
----
-
-## Part B — testing the close code (low speed)
-
-### B1. Bring-up (T1)
-
-```bash
-source ~/feeding-deployment/microwave/sheppy/env.sh
-cd microwave/sheppy && sheppy up --manifest sheppy-manifest.yaml real-arm-camera   # camera + arm driver + TF + calib + view
-sheppy status                                                                         # every node running
-```
-
-### B2. Read-only checks (T2, nothing moves)
-
-```bash
-ros2 topic hz /joint_states                                    # ~ steady rate; Ctrl-C after a few lines
-ros2 topic hz /wrist_camera/color/image_raw                    # ~15 Hz
-ros2 run tf2_ros tf2_echo arm_base_link camera_color_optical_frame   # must resolve (the calib chain is up)
-ros2 topic echo --once /gripper_state                          # note whether the gripper is open
-```
-
-### B3. Get the arm to the close's start pose
-
-The close starts where the push-open ends, and refuses unless the hand is within 6 cm of that
-point. The reliable way there is to run the open first (door CLOSED at the start), slow:
-
-```bash
-python3 -u microwave/door_task.py open --speed 0.3                 # dry run: detect, plan, print -- nothing moves
-python3 -u microwave/door_task.py open --speed 0.3 --execute       # grasp, 50-deg swing, release + push it further open
-```
-
-**Or skip the open** (door CLOSED at the start, arm clear of the microwave):
-
-```bash
-python3 -u microwave/door_task.py close --skip-opening --speed 0.3             # dry run: detects from where the arm is, checks the move to the close start
-python3 -u microwave/door_task.py close --skip-opening --speed 0.3 --execute
-```
-
-What `--execute` does:
-
-1. Joint move to the view pose: home moved 15 cm back, 20 cm right and 13 cm down, camera tilted 15° down
-   (where the 10-21 opens were started by hand).
-2. Detect the closed microwave and write `~/.microwave_door.json`, as the open does.
-3. Ask you to open the door by hand (~90°, never more than 110°), then press Enter.
-4. "Close the gripper?": `y` closes it (e.g. on a container you hand it). The arm doesn't move.
-5. "Start the closing sequence?": only `y` moves the arm. It goes straight to the close's start
-   (sim-checked against the door at 90°), then the close and retract run as in B5.
-
-Combine it with the B4 flags as usual. In the dry run nothing moves, nothing is asked and the door file isn't
-written. Detection runs from wherever the arm is, so it can miss if the arm isn't near the view pose.
-
-### B4. Close: dry run first (nothing moves)
-
-```bash
-python3 -u microwave/door_task.py close --speed 0.3                                   # as on 10-07 (default)
-python3 -u microwave/door_task.py close --speed 0.3 --push-offset                     # push 10 cm further right
-python3 -u microwave/door_task.py close --speed 0.3 --close-wrist-side right          # wrist right of the elbow
-```
-
-Check the output:
-
-- `hand now ..., X cm from the demo's start`: X must be ≤ 6.
-- `all 5 legs pass`. With `--close-wrist-side right` the planning takes ~30 s.
-- It ends with `DRY RUN -- nothing commanded` and `CLOSE OK (dry run)`.
-
-In sim (10-21), `--close-wrist-side right --push-offset` together is refused at the end of the
-push: no wrist-right configuration reaches it. The other three combinations plan.
-
-Known refusal: the close's start pose sits at the J4 guard (144°). If it refuses on J4, note
-the printed joints and stop. Don't loosen guards on the robot.
-
-### B5. Close: execute slowly (hand on the e-stop)
-
-```bash
-python3 -u microwave/door_task.py close --speed 0.3 --execute                         # add the same flags as the dry run
-```
-
-What happens:
-
-1. It re-plans from where the arm actually is.
-2. It moves at 30% speed: up, left over the door, down beside the microwave, push shut.
-3. It retracts: 15 cm back off the door, then to the park pose.
-
-Watch:
-
-- the elbow and wrist passing over the open door
-- the bracelet meeting the door at the end
-- whether the door **latches** (write it down: there's no sensor for it)
-
-Go up in speed only after a clean run: `--speed 0.5`, then `1.0`.
-
-### B6. After each run
-
-- Run log: `ls -t ~/microwave_runs/ | head -1`. It holds:
-  - `run.json`: events, door used, every trajectory goal (commanded joints, ok or not)
-  - `arm.npz`: joints/torques at 25 Hz
-  - RGB-D frames at the start and after the close
-- Note the latch result and anything odd. Send me the run folder name.
-- Move the arm somewhere safe (or `door_task.py retract --speed 0.3 --execute`).
-
-### B7. Shutdown (T1)
-
-```bash
-cd ~/feeding-deployment/microwave/sheppy && sheppy down
-```
-
----
-
-## Option flags
-
-`microwave/door_task.py {open|close|full|retract}`
-
-| Flag | Values | Default | What it does |
+| Terminal | Command | What it does |
+|---|---|---|
+| Step | Terminal | Command | What it does |
 |---|---|---|---|
-| `--execute` | — | off (dry run) | Command the arm. Without it everything is planned and printed only. |
-| `--speed` | 0–1 | 1.0 | Scales every arm motion's speed (Cartesian 9 cm/s and joint 29°/s peaks at 1.0). |
-| `--close-wrist-side` | `left`, `right` | `left` | `left`: the close as run on 10-07 (plain IK from the current joints; the wrist ends left of the elbow). `right`: a planned joint path that keeps the wrist right of the elbow (~30 s planning). |
-| `--push-offset` | — | off | Use `demos/push_close_2026-10-07_right10.door.json`: the push (kp5, END) 10 cm further along the door toward the handle. Off = the original 10-07 encoding. |
-| `--skip-opening` | — | off | `close` only: view pose, detect, then the prompts (open the door by hand, close the gripper?, start?) and a move to the close's start, instead of running the open first (B3). |
-| `--max-push-trim` | metres | 0.08 | `close`: if the push's end is out of reach, end it up to this much short (0 = refuse). |
+| 0 | T1 | `cd microwave/sheppy && sheppy up --manifest sheppy-manifest.yaml camera-only`, then teleop | **Point the arm at the microwave** (door closed). Nothing in the code does this; it is always placed by hand. Every open on 10-21/22 started with the hand ~45 cm out, ~20 cm right of the arm's centre line, ~25–30 cm up, and the camera facing the microwave square-on, tilted ~15° down. The whole door (all four edges) must be in the camera window. Keep J4 around −130 to −135°: a start at −146.6° made the open refuse every grasp. |
+| 1 | T1 | `sheppy up --manifest sheppy-manifest.yaml real-arm-camera && sheppy status` | Starts the arm driver, camera and TF (teleop is off from here on). Every node should show as running. |
+| 2 | T2 | `python3 -u microwave/real_gen3_ros2_grasp_and_swing_microwave.py --execute` | **Open, once.** Detects from where the arm is, so it must still be at the step 0 pose. Saves the door to `~/.microwave_door.json`, then grasps, swings 50°, lets go and pushes the door to about 90°. |
+| 3 | T2 | Teleop to grab the container, may need sheppy down for teleop to work | **Grip the container.** |
+| 4 | T2 | `python3 -u microwave/real_gen3_ros2_close_microwave.py --phase push-close --route-over --keep-orientation --door-deg 90 --hold-offset-x -0.152 --push-radius 0.17 --push-radius-end 0.15 --over-above 0.18 --push-z 0.22 --push-contact-nm 6 --execute` | **Close** while holding the container (the 10-21 command that latched). Drop `--execute` for a dry run that plans and moves nothing. |
+| 5 | — | Open the door by hand to ~90°, then run step 4 again. | **Repeat the close** as often as you like. The arm starts where the last close left it, and the container stays in the gripper. |
+| 6 | T1 | `sheppy down` | Shutdown. |
 
-The close always uses the door in `~/.microwave_door.json`, written by the open or by `--skip-opening`, so
-run one of them first in the same session (or at least without moving the wheelchair or the microwave).
+Every close uses the door saved by the open in step 2; `--door-deg 90` tells it how far the door is open. If the
+microwave or the wheelchair moves, run step 2 again first: on 10-21 a moved microwave left the door unclosed.
 
----
+## What to expect
 
-## Known issues to watch
+**Prompts:** none. Neither script asks for input; each runs straight through once started.
 
-- **J4 guard at the close start.** Every IK solution for the 10-07 close's start pose has
-  |J4| ≈ 144–146°, right at the guard, so planning can refuse there.
-- **Clearance with `--push-offset`** was 2.2 cm in sim (minimum 2 cm), against the demo's
-  recorded door. The dry run re-checks it against the real door file.
-- **The door angle isn't measured.** The close assumes the door is open no more than 110°.
-- **The retract was refused on 10-07** (2.9 cm clearance at its first step). If it refuses
-  again, the arm stays where the close ended. Teleop it away (driver down first).
+**Open** (expected):
+1. Two camera looks, then a plan.
+2. Moves to 25 cm in front of the handle, goes straight in and closes the gripper.
+3. Swings the door 50°.
+4. Lets go, goes up, over to the right, down and in, and pushes the door further open.
+5. Ends beside the door with the gripper open.
+
+**Open stops before any motion if:**
+- detection fails, or two looks don't agree within 3 cm
+- the handle position or the door size is implausible
+- no grasp + swing passes the sim checks
+
+**Open stops partway if:**
+- the grasp lands more than 3 cm off. It stops with the gripper untouched.
+- the gripper reads open after closing. Nothing is grasped, so it doesn't swing.
+- the swing re-check fails. It stops still holding the handle.
+
+**Close** (expected):
+1. Plans everything first.
+2. Goes up to 18 cm above the door top, left past the hinge, down to z 0.22, then right and forward behind the door.
+3. Swings the door shut, stopping 3 cm short of the detected closed position.
+4. Pushes in one slow continuous move (~1.2 cm/s), at most 3.5 cm.
+5. Stops the push when the joint torque jumps by more than 12 Nm. It prints `door shut ... push stopped`.
+6. Backs off the door, then backs out up to 20 cm.
+7. Prints `PUSH-CLOSE DONE`.
+
+The gripper is never touched.
+
+**Close stops before any motion** if no plan passes every check (`no plan passes every gate -- refusing, arm
+untouched`). It is usually J4: lower `--push-radius` / `--push-radius-end` by 2 cm and dry-run again.
+
+**Close stops partway, leaving the arm where it is, if:**
+- a leg doesn't reach its planned joints (`... -- stopping here`)
+- any joint lags its path by more than ~9° (the driver aborts)
+
+**Watch for:**
+- `reached the planned maximum without a clear contact`: the door may not be shut. Check it by eye.
+- The container is not in the collision model. Watch it as it passes over the door top.
+- Whether the door latched. Nothing measures it.
+
+Each run prints everything it does. The open also saves its camera frames to `~/microwave_detections/`.

@@ -100,6 +100,11 @@ PUSH_OPEN_SWING_DEG = 50           # the push-open demo starts from a ~50 deg sw
 PUSH_OPEN_TRUST_FROM = 3           # the 50-deg door model contradicts the user's real push-open poses from leg 3 on
 PRE_PARK_X = 0.216
 
+# --- --fridge: fridge_constants.OVERRIDES replaces the constants above of the same name (see main) ---
+FRIDGE = False
+DOOR_SAVE_FILE = None              # None = microwave_common.DOOR_FILE
+HINGE_OFFSET_FROM_GRASP = None     # fridge: measured hinge offset from the grasp point (no detected hinge)
+
 
 def _swing_waypoints(start_pose, hinge, deg):
     """Door-arc waypoints [x, y, z, qx, qy, qz, qw] from `start_pose` about `hinge`."""
@@ -154,6 +159,9 @@ def _save_frame(d, tag, attempt, det, detector):
 
 def detect_handle():
     """Two agreeing looks. Returns (handle position, handle orientation, door normal, door_z, door_mid, hinge)."""
+    if FRIDGE:
+        from fridge_detect import detect_fridge_handle
+        return detect_fridge_handle()
     rs = RealSenseROS2Interface(color_topic="/wrist_camera/color/image_raw",
                                 camera_info_topic="/wrist_camera/color/camera_info",
                                 depth_topic="/wrist_camera/aligned_depth_to_color/image_raw")
@@ -203,13 +211,6 @@ def detect_handle():
             sys.exit(f"handle {nm}={v:.3f} outside plausible {(lo, hi)} -- refusing.")
     print(f"handle (mean) {np.round(h, 4)}  hinge (mean) {np.round(hinge, 4)}")
     return h, orient, n, door_z, door_mid, hinge
-
-
-def hinge_pivot(hinge_seen, h_raw, n):
-    """The real pivot sits behind the face and beyond the visible edge (HINGE_*), expressed in the door's own frame."""
-    away = np.r_[hinge_seen[:2] - h_raw[:2], 0.0]
-    away /= np.linalg.norm(away)
-    return hinge_seen - np.r_[n[:2], 0.0] / np.linalg.norm(n[:2]) * HINGE_BEHIND_FACE + away * HINGE_PAST_EDGE
 
 
 def grasp_pose(h, orient, n, pitch_deg=0.0):
@@ -276,10 +277,19 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG):
                 sys.exit("Gripper still closed after opening -- refusing to grasp.")
 
     h_raw, orient, n, door_z, door_mid, hinge_seen = detect_handle()
-    hinge = hinge_pivot(hinge_seen, h_raw, n)
-    print(f"hinge: detected edge {np.round(hinge_seen, 4)} -> corrected pivot {np.round(hinge, 4)} "
-          f"({HINGE_BEHIND_FACE * 100:.1f} cm behind the face, {HINGE_PAST_EDGE * 100:.1f} cm past the edge)")
-    h, grasp = grasp_pose(h_raw, orient, n)       # runs the grasp gates once, prints the grasp point
+    if FRIDGE:
+        # no detected edge: the measured hinge offset from the (closed-door) grasp point
+        h, grasp = grasp_pose(h_raw, orient, n)
+        hinge = hinge_seen = np.asarray(grasp.position) + HINGE_OFFSET_FROM_GRASP
+        print(f"hinge: grasp + measured offset {np.round(HINGE_OFFSET_FROM_GRASP, 3)}")
+    else:
+        # the real pivot sits behind the face and beyond the visible edge (HINGE_*), expressed in the door's own frame
+        away = np.r_[hinge_seen[:2] - h_raw[:2], 0.0]
+        away /= np.linalg.norm(away)
+        hinge = hinge_seen - np.r_[n[:2], 0.0] / np.linalg.norm(n[:2]) * HINGE_BEHIND_FACE + away * HINGE_PAST_EDGE
+        print(f"hinge: detected edge {np.round(hinge_seen, 4)} -> corrected pivot {np.round(hinge, 4)} "
+              f"({HINGE_BEHIND_FACE * 100:.1f} cm behind the face, {HINGE_PAST_EDGE * 100:.1f} cm past the edge)")
+        h, grasp = grasp_pose(h_raw, orient, n)   # runs the grasp gates once, prints the grasp point
     radius = float(np.linalg.norm(np.asarray(grasp.position)[:2] - hinge[:2]))
     print(f"hinge (detected) {np.round(hinge, 4)}  radius {radius * 100:.1f} cm")
     if not HINGE_RADIUS_RANGE[0] <= radius <= HINGE_RADIUS_RANGE[1]:
@@ -324,7 +334,8 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG):
     if e > GRASP_TRACK_ABORT:
         sys.exit(f"Tracking {e * 100:.1f} cm at the grasp -- ABORT, gripper untouched.")
     # closed-door geometry for the close task (door_z/door_mid written even when None, so stale ones can't linger)
-    save_door_geometry(closed_normal=n, closed_grasp_pos=g_p, closed_handle=h, door_z=door_z, door_mid=door_mid)
+    save_door_geometry(closed_normal=n, closed_grasp_pos=g_p, closed_handle=h, door_z=door_z, door_mid=door_mid,
+                       door_file=DOOR_SAVE_FILE)
     if hasattr(ai, "gripper"):
         ai.gripper(1.0, force=GRASP_FORCE)         # looser hold (sheppy)
     else:
@@ -348,7 +359,7 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG):
     ok, _, msg = _check_arc(scene, rb, wps, st["position"])
     if not ok:
         sys.exit(f"swing re-check from the real grasp failed ({msg}) -- stopping, still holding the handle.")
-    save_door_geometry(hinge=hinge_seen, hinge_pivot=hinge)   # demos + door model use the detected edge; swing uses the pivot
+    save_door_geometry(hinge=hinge_seen, hinge_pivot=hinge, door_file=DOOR_SAVE_FILE)   # demos + door model use the detected edge; swing uses the pivot
     sent = wps[SWING_SEND_EVERY - 1::SWING_SEND_EVERY]
     if sent[-1] is not wps[-1]:
         sent.append(wps[-1])
@@ -370,7 +381,10 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG):
               f"off by {np.linalg.norm(c - hinge[:2]) * 100:.1f} cm")
     print(f"SWING {'DONE' if ok else 'STOPPED SHORT'}: EE {np.round(final['ee_pos'][:3], 4)} "
           f"({err * 100:.1f} cm from the last waypoint)")
-    record_door_angle(final["ee_pos"])
+    if FRIDGE:
+        save_door_geometry(door_open_deg=arc_deg, door_file=DOOR_SAVE_FILE)   # record_door_angle reads the microwave's
+    else:
+        record_door_angle(final["ee_pos"])
     return bool(ok)
 
 
@@ -394,7 +408,16 @@ def main():
                    help="stop after the swing, still holding the handle")
     a.add_argument("--release", action="store_true",
                    help="after a --no-push-open swing: open the gripper, back off the handle, park")
+    a.add_argument("--fridge", action="store_true",
+                   help="open a fridge instead: SAM 3 handle detection, measured hinge, fridge_constants.py; "
+                        "grasp + swing only (no push-open, no --release)")
     args = a.parse_args()
+    if args.fridge:
+        if args.release:
+            sys.exit("--release is microwave-only (microwave door model + park path) -- not with --fridge.")
+        import fridge_constants
+        globals().update(fridge_constants.OVERRIDES, FRIDGE=True)
+        args.no_push_open = True
     swing = args.swing_deg or (SWING_MAX_TRY_DEG if args.no_push_open else PUSH_OPEN_SWING_DEG)
     ai = SheppyArm()
     if args.release:

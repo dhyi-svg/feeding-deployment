@@ -535,12 +535,13 @@ MIN_CLEAR = 0.03                  # every arm/gripper link must stay >= 3 cm fro
 FINGER_JOINTS = [12, 14, 16, 17, 19, 21]
 
 
-def save_door_geometry(**kw):
-    """Merge door facts into DOOR_FILE: closed_normal / closed_grasp_pos (grasp), hinge (swing)."""
-    d = json.loads(DOOR_FILE.read_text()) if DOOR_FILE.exists() else {}
+def save_door_geometry(door_file=None, **kw):
+    """Merge door facts into `door_file` (default DOOR_FILE): closed_normal / closed_grasp_pos (grasp), hinge (swing)."""
+    door_file = door_file or DOOR_FILE
+    d = json.loads(door_file.read_text()) if door_file.exists() else {}
     d.update({k: (np.asarray(v).tolist() if not isinstance(v, str) else v) for k, v in kw.items()})
     d["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    DOOR_FILE.write_text(json.dumps(d, indent=1))
+    door_file.write_text(json.dumps(d, indent=1))
 
 
 def _yaw_about(center, xy, ang):
