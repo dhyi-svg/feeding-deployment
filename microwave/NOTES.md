@@ -2,6 +2,69 @@
 
 Working notes for the scripts in this folder. Newest learnings first within each section.
 
+
+## 2026-10-21 (evening) -- impedance code removed; full open ran again
+
+- Compliant-swing branch + `SWING_COMPLIANT`/`SWING_STIFF_DEG`/`SWING_ARRIVE_TOL` deleted from the grasp+swing script
+  (user: "just remove impedance for now"); `impedance=` plumbing in sheppy_arm/microwave_common left, unused.
+- `real_gen3_ros2_grasp_and_swing_microwave.py --execute` ran end to end: tilt 10, grasp 0.0 cm, gripper 0.80, stiff
+  50-deg swing 0.0 cm (path bulge 2.0 cm, fit r 38.0 vs 36.1, hinge off 2.2 cm -- the 10-07 pattern again), door file
+  ~54 deg, push-open all 5 legs, ended 0.0 cm from the last keypoint.
+- Then the route-over push-close (`--door-deg 90`): the default `--push-radius 0.28` was refused (swing step 7 J4 -144.1,
+  just past the 144 guard -- hand comes closest to the base in front of the hinge); `--push-radius 0.24
+  --push-radius-end 0.22` passed (J4 max -137.3) and RAN: route over, 22-step swing, push to the full 45 mm with no
+  torque contact (max change 1.78 Nm < 3.0), backed out 20 cm. Latch not confirmed by the script.
+- Door did NOT fully close. Cause: the microwave had MOVED -- re-detect for the reopen found handle x +4.6 cm, hinge
+  x +6.3 cm, yaw -0.9 -> -3.7 deg vs the first open's detection (the door file the close used). The push ran out of
+  its 45 mm budget against a stale door; user also said the route-over and push points were a bit low (next try
+  `--over-above 0.13 --push-z 0.22`, dry run passed). Push-close should re-detect the door before closing.
+- Reopen (from a view pose near the base) ran clean: tilt 0, grasp 0.0 cm, swing 0.0 cm, push-open 0.0 cm.
+- **Container close (user teleop-grasped the tupperware, gripper 0.98) RAN:** `--phase push-close --route-over
+  --keep-orientation --door-deg 90 --hold-offset-x -0.152 --push-radius 0.17 --push-radius-end 0.15 --over-above 0.13
+  --push-z 0.22 --push-max 0.08 --execute`. Radius 0.24 and 0.20 refused on J4 (-146.4 / -144.5: the 15 cm container
+  offset pulls the hand toward the base); 0.17 passed (J4 max -140.7), back-out shortened to 6 cm by J4. Torque
+  contact at push 3 (+15 mm, 3.36 Nm) -> stopped. Gripper still 0.98 (holding) at the end.
+  User: "almost there, a little far from closing", and the container CLIPPED the door going round (it is not in the
+  collision model). Next: `--over-above 0.18` + `--push-contact-nm 6` (keep pushing through the first contact).
+- One run crashed the arm driver mid route-over: WRONG_SERVOING_MODE, and the gripper read OPEN (0.009) after --
+  neither our code nor the driver commands the gripper there; the arm web app was open in Firefox (suspect).
+- **Container close with `--over-above 0.18 --push-contact-nm 6` (rest as above) RAN clean:** torque 3.4 Nm at +20 mm
+  (first contact), dip, then 12.1 / 17.8 Nm at +30 / +35 mm -> stopped. Gripper held (0.99).
+  Door CLOSED (user) -- latch at +30 mm = exactly the detected closed face (swing ends 3 cm short), so the initial
+  detection was right. User wanted it to stop sooner -> push now bounded by the detection: `--push-max` default
+  = `--push-stop-short` + `--push-preload` (3.5 cm, 7 x 5 mm), and the push stops on ONE step above 2 x
+  `--push-contact-nm` (that run would have stopped at +30 mm, 12.1 Nm). Not yet run on hardware.
+- **Ran it:** fresh open (detect from the view pose; handle x +1.7 cm vs the reopen -- the close pushes it back), user
+  re-gripped the tupperware, close with no `--push-max`: contact 4.6 Nm at +10 mm, 13.0 Nm at +20 mm -> stopped on the
+  single-jump rule. **Door LATCHED** (user). Close command that worked:
+  `real_gen3_ros2_close_microwave.py --phase push-close --route-over --keep-orientation --door-deg 90 --hold-offset-x
+  -0.152 --push-radius 0.17 --push-radius-end 0.15 --over-above 0.18 --push-z 0.22 --push-contact-nm 6 --execute`
+- **Grasp tilt: 14 deg nose-down first (TEMPORARY).** User hand-placed the grasp they want (perpendicular to the door,
+  bar centred in the pads): `demos/user_grasp_pose_2026-10-21.json` -- depth identical to the code's grasp (x 0.770),
+  pad centre ~1 cm up / 1 cm left (noise), but 13.6 deg nose-down because THIS RIG'S ARM BASE IS TILTED. So
+  `GRASP_PITCHES_DEG` now tries 14 first. **Real deployment: base will be level -> restore (0, 10, 17, 25, 30, 35).**
+- **Smooth push:** on sheppy the close push is now ONE slow continuous move (`PUSH_SPEED_SCALE` 0.25, ~1.2 cm/s)
+  with the J1-J4 torque change polled ~100 Hz via the new `SheppyArm.move_joints(monitor=...)`, cancelled (driver
+  stops + holds, PREEMPTED) once it passes 2 x `--push-contact-nm`. Free-air cancel test passed (stopped, next goal
+  accepted, back to 0.01 cm). Filmed run: open (tilt 14 chosen) + container close; push stopped at ~+15 mm, 12.0 Nm.
+
+## 2026-10-21 -- impedance swing SCRAPPED; straight-in approach
+
+- **Approach now lines up on the door normal, then goes straight in** (`PREGRASP_STANDOFFS` 25/20/15/10 cm, the largest
+  that passes the gates; `plan_approach`). Ran once on hardware at 25 cm: grasp tracking 0.0 cm. Before, it was one
+  diagonal line from the view pose (user: "approaches on an angle").
+- **Impedance (compliant) swing: scrapped -- keep `SWING_COMPLIANT = False`.** Run 1 (path_tol 0.08 rad): aborted
+  PATH_TOLERANCE_VIOLATED right after the stiff 10 deg, door ~16 deg. Run 2 (path_tol 0.30): got to ~51 deg but the
+  gripper read 1.00 after (0.74 on the handle) -> the handle slipped out of the loose (`GRASP_FORCE` 0.25) grip; the arm
+  made a wild turn, user e-stopped, arm dropped off the network. Driver's `final_error` came back all zeros (no help).
+- Detection from the close-up view (hand ~23 cm from the door) is bad: YOLO says "train", hinge 5 cm off. From the
+  park pose the microwave fills the frame -> no box at all. Detect from further back (all 4 edges in view).
+- `--release`'s 20 cm back-off hits the J6 guard at a ~16 deg door; 12 cm + straight to park worked.
+- The push-close in `real_gen3_ros2_close_microwave.py --phase push-close --route-over --keep-orientation --door-deg 90`
+  ran on hardware after a push-open (torque contact at +10 mm); latch not confirmed. The door file's angle is the
+  post-swing one, so after a push-open pass `--door-deg` by hand.
+- Standing rule (user): the open is always the 50-deg swing + push-open.
+
 ## 2026-10-07 (late) -- STOPPED HERE: full open + close ran on hardware via `door_task.py`
 
 **State at shutdown:** `sheppy down`, nothing running. The arm was left at the close's END pose (hand beside the

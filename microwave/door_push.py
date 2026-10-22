@@ -50,6 +50,7 @@ VIA_OFF_FACE = 0.12        # ... and this far off the face, either side
 GAP = 0.04                 # approach pose: closest link this far from the door (>= MIN_CLEAR)
 CLOSE_FRONT_MARGIN = 0.06  # push-close: sideways leg passes this far in front of the free edge (past fingertips)
 PUSH_STEP_M = 0.005        # push-close: final push step
+PUSH_SPEED_SCALE = 0.25    # push-close on sheppy: one continuous push at this x CART_SPEED (~1.2 cm/s average)
 OPEN_RIGHT_MARGIN = 0.12   # push-open: go this far right of the open door's free edge before going in
 OPEN_OFF_DOOR = 0.12       # push-open: after the push, move this far right, off the door, before backing out
 OPEN_PUSH_LAG = 5.0        # push-open: door assumed this many deg past the hand after the push (way-out check)
@@ -780,10 +781,12 @@ def _plan_close(scene, rb, df, st, args, deg0):
         if u_end + CLOSE_HAND_HALF > df.u_handle - HANDLE_MARGIN:
             print("  the hand would end on the handle (not in the door model) -- refusing; lower --push-radius.")
             return None
-        # final push: straight in, PUSH_STEP_M at a time, up to push_max (stopped at runtime by
+        # final push: straight in, PUSH_STEP_M at a time, up to push_max -- by default to the detected
+        # closed door + the preload (the door is assumed not to have moved since detection) -- stopped at runtime by
         # the torque check once the door is shut)
         push, pq_ = [], qq
-        n_push = int(round(args.push_max / PUSH_STEP_M))
+        push_max = args.push_max if args.push_max is not None else args.push_stop_short + args.push_preload
+        n_push = int(round(push_max / PUSH_STEP_M))
         for k in range(1, n_push + 1):
             tgt = end + fwd * PUSH_STEP_M * k
             nq, err = solve_ik(scene, rb, tgt, quat, pq_)
@@ -866,8 +869,13 @@ def _push_until_shut(ai, push, contact_nm):
     """Step the planned push joints one at a time; after each, compare the joint torques
     (`effort`, J1-J4) with a baseline taken before the push. The door hitting its frame shows as
     a change that keeps RISING -- stop when it is above `contact_nm` and rose on two steps in a
-    row, or when a step can't be reached. A single threshold can't do this: the torque zero
-    drifts with pose (kinova-wrench-bias-not-noise). Returns the number of steps taken."""
+    row, when one step alone takes it above 2 x `contact_nm` (the latch caught: don't push again),
+    or when a step can't be reached. A single threshold can't do this: the torque zero
+    drifts with pose (kinova-wrench-bias-not-noise). Returns the number of steps taken.
+    On sheppy (`move_joints`) the push is ONE slow continuous move instead (no stop-and-go), with the
+    torque change watched live and the move cancelled the moment it passes 2 x `contact_nm`."""
+    if hasattr(ai, "move_joints"):
+        return _push_continuous(ai, push, contact_nm)
     time.sleep(1.0)
     base = np.array(ai.get_state()["effort"], float)
     prev, rises = 0.0, 0
@@ -881,12 +889,37 @@ def _push_until_shut(ai, push, contact_nm):
         rises = rises + 1 if sig > prev + 0.05 else 0
         print(f"  push {k}: +{k * PUSH_STEP_M * 1000:.0f} mm  torque change {sig:5.2f} Nm  "
               f"{'rising' if rises else '-'}{'' if reached else '  NOT REACHED (blocked)'}")
-        if not reached or (sig > contact_nm and rises >= 2):
+        if not reached or (sig > contact_nm and rises >= 2) or sig > 2 * contact_nm:
             print(f"  -> door shut (push {k}); stopping the push")
             return k
         prev = sig
     print("  push: reached the planned maximum without a clear contact -- check the door by eye")
     return len(push)
+
+
+def _push_continuous(ai, push, contact_nm):
+    time.sleep(1.0)
+    base = np.array(ai.get_state()["effort"], float)
+    stop_nm, peak = 2 * contact_nm, [0.0]
+    print(f"push: baseline torques J1-J4 {np.round(base[:4], 2)} Nm; one continuous push, stop when the change "
+          f"> {stop_nm:.1f} Nm")
+
+    def latched():
+        sig = float(np.linalg.norm(np.array(ai.get_state()["effort"], float)[:4] - base[:4]))
+        peak[0] = max(peak[0], sig)
+        return sig > stop_nm
+
+    ai.move_joints(list(push), cart_lengths=[PUSH_STEP_M] * len(push), speed_scale=PUSH_SPEED_SCALE,
+                   monitor=latched)
+    time.sleep(0.3)
+    q = np.asarray(ai.get_state()["position"], float)
+    k = 1 + int(np.argmin([np.max(np.abs((np.asarray(p_) - q + np.pi) % (2 * np.pi) - np.pi)) for p_ in push]))
+    if ai.monitor_stopped:
+        print(f"  -> door shut at ~+{k * PUSH_STEP_M * 1000:.0f} mm (torque change {peak[0]:.2f} Nm); push stopped")
+    else:
+        print(f"  push: reached the planned maximum (+{len(push) * PUSH_STEP_M * 1000:.0f} mm, peak torque change "
+              f"{peak[0]:.2f} Nm) without a clear contact -- check the door by eye")
+    return k
 
 
 def _run_sweep(ai, sweep, poses, smooth):
@@ -922,8 +955,9 @@ def add_push_args(a, close=False):
         a.add_argument("--push-stop-short", type=float, default=0.03,
                        help="push-close: end the swing this far short of the model's closed door (m); the model "
                             "put the closed face 1-1.5 cm too deep on 09-25")
-        a.add_argument("--push-max", type=float, default=0.045,
-                       help="push-close: final push straight in, at most this far (m), stopped by the torque check")
+        a.add_argument("--push-max", type=float, default=None,
+                       help="push-close: final push straight in, at most this far (m), stopped by the torque check; "
+                            "default --push-stop-short + --push-preload = to the detected closed door + the preload")
         a.add_argument("--push-contact-nm", type=float, default=3.0,
                        help="push-close: joint-torque change (J1-J4 norm, Nm) that, rising twice, means the door is shut")
         a.add_argument("--push-z", type=float, default=None,

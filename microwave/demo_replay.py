@@ -34,7 +34,7 @@ from scipy.spatial.transform import Rotation as R
 
 from door_push import DoorFrame, drop
 from microwave_common import (DOOR_FILE, make_sim, plan_cartesian, plan_side_path, run_cartesian_trajectory,
-                              wrist_offset)
+                              trim_to_reach, wrist_offset)
 
 OVER_TOP_MIN = 0.08          # points above the door top stay at least this far above today's top
 START_TOL = 0.06             # the hand must be within this of the demo's first keypoint
@@ -134,9 +134,11 @@ def leg_lengths(pts, legs):
     return out
 
 
-def run(enc_path, execute, trust_from, ai=None, wrist_side=None):
+def run(enc_path, execute, trust_from, ai=None, wrist_side=None, max_end_trim=0.0):
     """Replay one encoded demo. `ai`: an open SheppyArm to reuse (door_task chains steps); else one is made here.
-    `wrist_side`: see the module doc. Returns True when it reached the last keypoint (or the dry run passed)."""
+    `wrist_side`: see the module doc. `max_end_trim` (m): if the last leg runs out of reach on today's door
+    (e.g. the close's push when the microwave sits further out), pull its end back along the leg by up to this
+    much. Returns True when it reached the last keypoint (or the dry run passed)."""
     from sheppy_arm import SheppyArm
     enc = json.loads(Path(enc_path).read_text())
     door = json.loads(DOOR_FILE.read_text())
@@ -156,6 +158,16 @@ def run(enc_path, execute, trust_from, ai=None, wrist_side=None):
             print(f"not at the demo's start (> {START_TOL * 100:.0f} cm) -- refusing.")
             return False
         scene, rb = make_sim()
+        if max_end_trim > 0:
+            p0, q0 = pts[-2] if len(pts) > 1 else (np.asarray(st["ee_pos"][:3]), np.asarray(st["ee_pos"][3:7]))
+            end, trim = trim_to_reach(scene, rb, p0, q0, pts[-1][0], pts[-1][1], wrist_side, max_end_trim)
+            if end is None:
+                print(f"the last leg is out of reach by more than {max_end_trim * 100:.0f} cm -- refusing.")
+                return False
+            if trim > 0:
+                print(f"last keypoint out of reach: pulled back {trim * 100:.0f} cm along the last leg -> "
+                      f"{np.round(end, 3)} (the push ends short of the demo's)")
+                pts[-1] = (end, pts[-1][1])
         lift_off = enc["keypoints"][0]["gripper"] > 0.2 and enc["keypoints"][1]["gripper"] < 0.2
         legs = plan(scene, rb, door, st, pts[1:], trust_from, lift_off, wrist_side)
         if legs is None:
@@ -201,6 +213,8 @@ def main():
     r_.add_argument("--trust-demo", type=int, default=None, metavar="LEG")
     r_.add_argument("--wrist-side", choices=["right", "left"], default=None,
                     help="hold the wrist on this side of the elbow (default: whatever IK gives)")
+    r_.add_argument("--max-end-trim", type=float, default=0.0, metavar="M",
+                    help="pull the last keypoint back along the last leg by up to M metres if out of reach")
     args = a.parse_args()
     if args.cmd == "encode":
         adj = {int(i): (float(da), float(db)) for i, da, db in
@@ -212,7 +226,8 @@ def main():
         for k in enc["keypoints"]:
             print(f"  {k['label'][:30]:30s} a {k['a']:+.3f} x r   b {k['b'] * 100:+6.1f} cm   z {k['dz'] * 100:+6.1f} cm from {k['z_ref']}")
     else:
-        sys.exit(0 if run(args.encoded, args.execute, args.trust_demo, wrist_side=args.wrist_side) else 1)
+        sys.exit(0 if run(args.encoded, args.execute, args.trust_demo, wrist_side=args.wrist_side,
+                       max_end_trim=args.max_end_trim) else 1)
 
 
 if __name__ == "__main__":

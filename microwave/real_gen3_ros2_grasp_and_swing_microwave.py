@@ -1,20 +1,28 @@
-"""Open the microwave on `rchi-cpu-5`: detect the handle, grasp it, swing the door open.
+"""Open the microwave on `rchi-cpu-5`: detect the handle, grasp it, swing the door open, let
+go and push it further open -- one run.
 
     python3 -u microwave/real_gen3_ros2_grasp_and_swing_microwave.py             # dry run
-    python3 -u microwave/real_gen3_ros2_grasp_and_swing_microwave.py --execute
+    python3 -u microwave/real_gen3_ros2_grasp_and_swing_microwave.py --execute   # grasp, 50-deg swing, push-open
+    python3 -u microwave/real_gen3_ros2_grasp_and_swing_microwave.py --no-push-open --execute   # stop after the swing
     python3 -u microwave/real_gen3_ros2_grasp_and_swing_microwave.py --release --execute
 
 1. Detect (`handle_detect.py`): YOLO box around the microwave, depth -> door plane, the
    vertical cluster sticking out of it = handle, the door edge farthest from it = hinge. Looks
    until two agree within 3 cm (handle and hinge).
-2. Plan everything before any motion: the grasp (squared to the door face, one straight
-   Cartesian line from the view pose), and the largest swing (75 down to 45 deg) whose whole
-   arc passes the sim gates (IK, reach, joint jump, J4/J6 guards).
+2. Plan everything before any motion: the grasp (squared to the door face: a straight line
+   from the view pose to a line-up point 25 cm out (or less), then straight in along the door normal), and the
+   largest swing (75 down to 45 deg) whose whole arc passes the sim gates (IK, reach, joint jump, J4/J6 guards).
 3. Execute: one blended motion into the grasp, close, one blended swing. The hand stays on the
    handle at the end.
 
-`--release` (separate run, after the swing): open the gripper, back straight off the handle,
-go toward the base to clear the door's free edge, joint move to `park_pose.json`.
+4. Push-open (default; `--no-push-open` to stop after the swing): let go of the handle and replay the
+   user's push-open demo relative to the door (`demo_replay.py`, demos/push_open_2026-10-07.door.json):
+   up, over to the right of the microwave, down, into the opening, push it further open. The swing
+   is then PUSH_OPEN_SWING_DEG (the demo starts from a ~50 deg swing). Planned and sim-gated from
+   where the swing actually ends, before anything moves -- so a dry run only lists its keypoints.
+
+`--release` (separate run, after the swing; instead of the push-open): open the gripper, back straight off the
+handle, go toward the base to clear the door's free edge, joint move to `park_pose.json`.
 
 Run from the repo root (the sim config path is relative). See NOTES.md for the bring-up and env.
 """
@@ -53,7 +61,14 @@ GRIP_EXT = 0.088           # along the approach axis (negative = past the detect
 VERTICAL_CORR = 0.0        # world z. 0.025 (rchi-cpu-5) -> 0.046 (10-07 touch) -> 0: the detector now returns the
                            # MIDDLE of the bar, not a point near its bottom end
 GRASP_X_ADJUST = 0.040     # along the approach axis
-GRASP_PITCHES_DEG = (0, 10, 17, 25, 30, 35)   # nose-down tilts tried about the finger axis (fingers stay
+PREGRASP_STANDOFFS = (0.25, 0.20, 0.15, 0.10)   # line up this far straight out from the grasp (door normal, level),
+                           # already squared, then go straight in along the normal; the largest that passes the gates
+                           # (10 cm still looked diagonal on 10-21: most of the approach was the view -> line-up leg)
+GRASP_PITCHES_DEG = (14, 10, 17, 25, 30, 35, 0)   # TEMPORARY 14 first (10-21): the arm's base is tilted a little on
+                           # this rig, so the user's hand-placed grasp "perpendicular to the door" was 14 deg nose-down
+                           # (demos/user_grasp_pose_2026-10-21.json). REAL DEPLOYMENT: the base will be level -> go back
+                           # to (0, 10, 17, 25, 30, 35) (level first).
+                           # Nose-down tilts tried about the finger axis, IN ORDER (fingers stay
                            # horizontal across the vertical bar); the smallest reaching the largest swing wins. A low
                            # handle needs one: 10-07, handle z ~0.14, level -> swing max 25-35 deg (J6 hits its guard),
                            # 17 -> 70, 25 -> 75 with J6 ending at 92 (sim); the user's hand-placed touches were ~17.
@@ -70,22 +85,19 @@ SWING_MAX_JUMP_DEG = 25.0
 SWING_MAX_REACH = 0.90
 SWING_IK_PROBE_M = 0.01           # 200-iteration IK must get within 1 cm (else Kortex hits SINGULARITY_REGION)
 J6_GUARD_DEG = 115.0              # J6 hard limit is +-119.7
-SWING_COMPLIANT = False           # swing in joint impedance (SheppyArm.IMPEDANCE): the hand gives way to the door's
-                                  # real arc instead of dragging the microwave along a circle about a slightly wrong
-                                  # hinge (09-29 / 10-07); the driver's path tolerance (0.08 rad) is the force stop
 GRASP_FORCE = 0.25                # gripper current ceiling on the handle (SheppyArm default 0.5): a looser hold lets the
                                   # bar turn/shift in the fingers instead of tipping the microwave forward (10-07)
 HINGE_BEHIND_FACE = 0.016         # real pivot vs the detected hinge (the door's visible edge): this far behind the door
 HINGE_PAST_EDGE = 0.021           # face and this far beyond the edge, away from the handle. Measured 10-07 from the
                                   # hand's path in a stiff 50-deg swing (circle fit rms 0.6 mm; r 36.0 vs 33.7 cm)
-SWING_STIFF_DEG = 10              # ... but the first part stiff: the latch needs a firm pull, and on 10-07 the soft
-                                  # arm's lag tripped the force stop before the door opened (~5 deg)
 SWING_FIT_MIN_DEG = 15            # fit a hinge to the measured path only over at least this much arc
-SWING_ARRIVE_TOL = 0.03           # compliant: the hand may end this far off the commanded end (the door decides)
 HINGE_RADIUS_RANGE = (0.25, 0.45)
 
 # --- release ---
 BACK_OFF_M = 0.20
+PUSH_OPEN = Path(__file__).resolve().parent / "demos" / "push_open_2026-10-07.door.json"
+PUSH_OPEN_SWING_DEG = 50           # the push-open demo starts from a ~50 deg swing
+PUSH_OPEN_TRUST_FROM = 3           # the 50-deg door model contradicts the user's real push-open poses from leg 3 on
 PRE_PARK_X = 0.216
 
 
@@ -193,6 +205,13 @@ def detect_handle():
     return h, orient, n, door_z, door_mid, hinge
 
 
+def hinge_pivot(hinge_seen, h_raw, n):
+    """The real pivot sits behind the face and beyond the visible edge (HINGE_*), expressed in the door's own frame."""
+    away = np.r_[hinge_seen[:2] - h_raw[:2], 0.0]
+    away /= np.linalg.norm(away)
+    return hinge_seen - np.r_[n[:2], 0.0] / np.linalg.norm(n[:2]) * HINGE_BEHIND_FACE + away * HINGE_PAST_EDGE
+
+
 def grasp_pose(h, orient, n, pitch_deg=0.0):
     """Grasp pose for handle position `h` (vertical-corrected here), squared to the door face, tilted
     `pitch_deg` nose-down about the finger axis. The tool point doesn't depend on the tilt."""
@@ -219,6 +238,29 @@ def grasp_pose(h, orient, n, pitch_deg=0.0):
     return h, Pose(tuple(pos), tuple(quat))
 
 
+def pregrasp_point(grasp, standoff):
+    """`standoff` straight back from the grasp along its level approach axis (= into the door face)."""
+    approach = R.from_quat(grasp.orientation).as_matrix()[:, 2]
+    approach[2] = 0.0
+    approach /= np.linalg.norm(approach)
+    return np.asarray(grasp.position) - approach * standoff
+
+
+def plan_approach(scene, rb, ee0, grasp, q0):
+    """View pose -> line-up point (turning square to the door on the way) -> straight in to the grasp, for the
+    largest PREGRASP_STANDOFFS that passes. Returns (joint plan of both legs, line-up point), or (None, None)."""
+    g_p, g_q = np.asarray(grasp.position), np.asarray(grasp.orientation)
+    for standoff in PREGRASP_STANDOFFS:
+        pre_p = pregrasp_point(grasp, standoff)
+        leg1 = plan_cartesian(scene, rb, ee0[:3], ee0[3:7], pre_p, g_q, q0, f"to line-up {standoff * 100:.0f} cm out")
+        if leg1 is None:
+            continue
+        leg2 = plan_cartesian(scene, rb, pre_p, g_q, g_p, g_q, leg1[-1], "straight in")
+        if leg2 is not None:
+            return leg1 + leg2, pre_p
+    return None, None
+
+
 def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG):
     """Detect, plan, grasp, swing. Returns True when the swing finished (or the dry run passed); exits on any refusal."""
     scene, rb = make_sim()
@@ -234,10 +276,7 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG):
                 sys.exit("Gripper still closed after opening -- refusing to grasp.")
 
     h_raw, orient, n, door_z, door_mid, hinge_seen = detect_handle()
-    # the real pivot sits behind the face and beyond the visible edge (HINGE_*), expressed in the door's own frame
-    away = np.r_[hinge_seen[:2] - h_raw[:2], 0.0]
-    away /= np.linalg.norm(away)
-    hinge = hinge_seen - np.r_[n[:2], 0.0] / np.linalg.norm(n[:2]) * HINGE_BEHIND_FACE + away * HINGE_PAST_EDGE
+    hinge = hinge_pivot(hinge_seen, h_raw, n)
     print(f"hinge: detected edge {np.round(hinge_seen, 4)} -> corrected pivot {np.round(hinge, 4)} "
           f"({HINGE_BEHIND_FACE * 100:.1f} cm behind the face, {HINGE_PAST_EDGE * 100:.1f} cm past the edge)")
     h, grasp = grasp_pose(h_raw, orient, n)       # runs the grasp gates once, prints the grasp point
@@ -251,8 +290,7 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG):
     for pitch in GRASP_PITCHES_DEG:
         with contextlib.redirect_stdout(io.StringIO()):
             _, g = grasp_pose(h_raw, orient, n, pitch)
-            leg_p = plan_cartesian(scene, rb, ee0[:3], ee0[3:7], np.asarray(g.position), np.asarray(g.orientation),
-                                   q0, "to grasp")
+            leg_p, _ = plan_approach(scene, rb, ee0, g, q0)
         if leg_p is None:
             print(f"  tilt {pitch:2d} deg: grasp path fails a gate")
             continue
@@ -274,14 +312,14 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG):
     deg, pitch, grasp, leg = best
     g_p, g_q = np.asarray(grasp.position), np.asarray(grasp.orientation)
     print(f"chosen: tilt {pitch} deg nose-down, swing {deg} deg; grasp {np.round(g_p, 4)}")
-    plan_cartesian(scene, rb, ee0[:3], ee0[3:7], g_p, g_q, q0, "to grasp")      # re-print the chosen path
+    _, pre_p = plan_approach(scene, rb, ee0, grasp, q0)                        # re-print the chosen path
 
     if not execute:
         print(f"\nDRY RUN -- would grasp, then swing {deg} deg. Nothing commanded.")
         return True
 
     # --- grasp ---
-    _, e, _ = run_cartesian_trajectory(ai, [(list(g_p), list(g_q))])
+    _, e, _ = run_cartesian_trajectory(ai, [(list(pre_p), list(g_q)), (list(g_p), list(g_q))])
     print(f"grasp: tracking {e * 100:.1f} cm")
     if e > GRASP_TRACK_ABORT:
         sys.exit(f"Tracking {e * 100:.1f} cm at the grasp -- ABORT, gripper untouched.")
@@ -315,30 +353,8 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG):
     if sent[-1] is not wps[-1]:
         sent.append(wps[-1])
     print(f"swing {deg} deg: {len(wps)} waypoints checked, sending {len(sent)} ...")
-    imp = None
-    if SWING_COMPLIANT and hasattr(ai, "move_cartesian"):
-        from sheppy_arm import IMPEDANCE as imp
-    radius = float(np.linalg.norm(np.asarray(ee[:2]) - hinge[:2]))
-    n_stiff = min(len(wps), int(np.ceil(radius * np.radians(SWING_STIFF_DEG) / SWING_WAYPOINT_SPACING_M)))
-    if imp is None or n_stiff >= len(wps):
-        ok, err, _ = run_cartesian_trajectory(ai, [(w[:3], w[3:]) for w in sent])
-        path = np.array([p_[1:] for p_ in getattr(ai, "last_path", [])])
-    else:
-        stiff, soft = wps[:n_stiff], wps[n_stiff:]
-        soft_sent = soft[SWING_SEND_EVERY - 1::SWING_SEND_EVERY]
-        if not soft_sent or soft_sent[-1] is not soft[-1]:
-            soft_sent.append(soft[-1])
-        print(f"  first {SWING_STIFF_DEG} deg stiff ({len(stiff)} waypoints, breaks the latch), then compliant: joint "
-              f"impedance kq {imp['kq']}, zeta {imp['zeta']}, stop at {imp['path_tol']} rad lag")
-        ok, err, _ = run_cartesian_trajectory(ai, [(w[:3], w[3:]) for w in stiff], tol_m=0.01)
-        path = np.array([p_[1:] for p_ in getattr(ai, "last_path", [])])
-        if not ok:
-            print(f"  stiff part stopped {err * 100:.1f} cm short -- not starting the compliant part.")
-        else:
-            ok, err, _ = run_cartesian_trajectory(ai, [(w[:3], w[3:]) for w in soft_sent], impedance=imp,
-                                                  tol_m=SWING_ARRIVE_TOL)
-            soft_path = np.array([p_[1:] for p_ in getattr(ai, "last_path", [])])
-            path = np.vstack([path, soft_path]) if len(soft_path) else path
+    ok, err, _ = run_cartesian_trajectory(ai, [(w[:3], w[3:]) for w in sent])
+    path = np.array([p_[1:] for p_ in getattr(ai, "last_path", [])])
     final = ai.get_state()
     arc_deg = 0.0
     if len(path) > 1:
@@ -352,28 +368,39 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG):
               f"hinge {np.round(c, 4)} r {r * 100:.1f} cm (rms {rms * 1000:.1f} mm) vs detected hinge "
               f"{np.round(hinge[:2], 4)} r {np.linalg.norm(np.asarray(ee[:2]) - hinge[:2]) * 100:.1f} cm -- "
               f"off by {np.linalg.norm(c - hinge[:2]) * 100:.1f} cm")
-        if imp is not None and rms < 0.005:
-            save_door_geometry(hinge_fit=[float(c[0]), float(c[1]), float(hinge[2])], hinge_fit_r=r)
     print(f"SWING {'DONE' if ok else 'STOPPED SHORT'}: EE {np.round(final['ee_pos'][:3], 4)} "
           f"({err * 100:.1f} cm from the last waypoint)")
     record_door_angle(final["ee_pos"])
     return bool(ok)
 
 
+def push_open(ai, execute):
+    """After the swing: release the handle and push the door further open (the user's 10-07 demo, door-relative)."""
+    import demo_replay
+    print("\n===== release + push further open =====")
+    if not execute:
+        print("  (starts where the swing ends: planned and sim-gated then, before it moves)")
+        return True
+    return demo_replay.run(PUSH_OPEN, True, PUSH_OPEN_TRUST_FROM, ai=ai)
+
+
 def main():
     a = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     a.add_argument("--execute", action="store_true", help="command the arm; omit for a dry run")
-    a.add_argument("--swing-deg", type=int, default=SWING_MAX_TRY_DEG,
-                   help=f"largest swing to try (deg, default {SWING_MAX_TRY_DEG}); e.g. 50 leaves the door where the "
-                        "over-the-door retreat + push-open can reach it (10-07)")
+    a.add_argument("--swing-deg", type=int, default=None,
+                   help=f"largest swing to try (deg; default {PUSH_OPEN_SWING_DEG} with the push-open, where the demo "
+                        f"starts, else {SWING_MAX_TRY_DEG})")
+    a.add_argument("--no-push-open", action="store_true",
+                   help="stop after the swing, still holding the handle")
     a.add_argument("--release", action="store_true",
-                   help="after the swing: open the gripper, back off the handle, park")
+                   help="after a --no-push-open swing: open the gripper, back off the handle, park")
     args = a.parse_args()
+    swing = args.swing_deg or (SWING_MAX_TRY_DEG if args.no_push_open else PUSH_OPEN_SWING_DEG)
     ai = SheppyArm()
     if args.release:
         release_and_back_off(ai, BACK_OFF_M, args.execute, pre_park_x=PRE_PARK_X)
-    else:
-        open_task(ai, args.execute, args.swing_deg)
+    elif open_task(ai, args.execute, swing) and not args.no_push_open:
+        push_open(ai, args.execute)
 
 
 if __name__ == "__main__":

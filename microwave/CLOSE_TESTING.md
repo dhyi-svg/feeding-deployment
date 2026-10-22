@@ -168,6 +168,26 @@ python3 -u microwave/door_task.py open --speed 0.3                 # dry run: de
 python3 -u microwave/door_task.py open --speed 0.3 --execute       # grasp, 50-deg swing, release + push it further open
 ```
 
+**Or skip the open** (door CLOSED at the start, arm clear of the microwave):
+
+```bash
+python3 -u microwave/door_task.py close --skip-opening --speed 0.3             # dry run: detects from where the arm is, checks the move to the close start
+python3 -u microwave/door_task.py close --skip-opening --speed 0.3 --execute
+```
+
+What `--execute` does:
+
+1. Joint move to the view pose: home moved 15 cm back, 20 cm right and 13 cm down, camera tilted 15° down
+   (where the 10-21 opens were started by hand).
+2. Detect the closed microwave and write `~/.microwave_door.json`, as the open does.
+3. Ask you to open the door by hand (~90°, never more than 110°), then press Enter.
+4. "Close the gripper?": `y` closes it (e.g. on a container you hand it). The arm doesn't move.
+5. "Start the closing sequence?": only `y` moves the arm. It goes straight to the close's start
+   (sim-checked against the door at 90°), then the close and retract run as in B5.
+
+Combine it with the B4 flags as usual. In the dry run nothing moves, nothing is asked and the door file isn't
+written. Detection runs from wherever the arm is, so it can miss if the arm isn't near the view pose.
+
 ### B4. Close: dry run first (nothing moves)
 
 ```bash
@@ -235,9 +255,11 @@ cd ~/feeding-deployment/microwave/sheppy && sheppy down
 | `--speed` | 0–1 | 1.0 | Scales every arm motion's speed (Cartesian 9 cm/s and joint 29°/s peaks at 1.0). |
 | `--close-wrist-side` | `left`, `right` | `left` | `left`: the close as run on 10-07 (plain IK from the current joints; the wrist ends left of the elbow). `right`: a planned joint path that keeps the wrist right of the elbow (~30 s planning). |
 | `--push-offset` | — | off | Use `demos/push_close_2026-10-07_right10.door.json`: the push (kp5, END) 10 cm further along the door toward the handle. Off = the original 10-07 encoding. |
+| `--skip-opening` | — | off | `close` only: view pose, detect, then the prompts (open the door by hand, close the gripper?, start?) and a move to the close's start, instead of running the open first (B3). |
+| `--max-push-trim` | metres | 0.08 | `close`: if the push's end is out of reach, end it up to this much short (0 = refuse). |
 
-The close always uses the door the open task detected (`~/.microwave_door.json`), so run the
-open first in the same session (or at least without moving the wheelchair or the microwave).
+The close always uses the door in `~/.microwave_door.json`, written by the open or by `--skip-opening`, so
+run one of them first in the same session (or at least without moving the wheelchair or the microwave).
 
 ---
 

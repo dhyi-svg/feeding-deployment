@@ -270,6 +270,43 @@ def _steps(p0, q0, p1, q1):
     return [(np.asarray(p0) + (np.asarray(p1) - p0) * k / n, sl([k / n]).as_quat()[0]) for k in range(1, n + 1)]
 
 
+def reachable(scene, rb, pos, quat, side=None, seeds=SIDE_RANDOM_SEEDS):
+    """Some IK solution reaches (pos, quat) within plan_side_path's gates (IK, J4/J6 guards, and with `side`
+    the wrist >= SIDE_MARGIN on that side of the elbow)? Random seeds, no clearance -- a quick pre-check."""
+    sign = 1.0 if side == "right" else -1.0
+    rng = np.random.default_rng(SIDE_RNG_SEED)
+    for _ in range(seeds):
+        q, e = solve_ik(scene, rb, pos, quat, rng.uniform(-np.pi, np.pi, 7))
+        for _ in range(3):
+            if e <= 0.002:
+                break
+            q, e = solve_ik(scene, rb, pos, quat, q)
+        qd = np.degrees(q)
+        if e > 0.005 or abs(qd[3]) > J4_GUARD_DEG or abs(qd[5]) > J6_GUARD_DEG:
+            continue
+        if side and sign * wrist_offset(scene, rb, q) < SIDE_MARGIN:
+            continue
+        return True
+    return False
+
+
+def trim_to_reach(scene, rb, p0, q0, p1, q1, side=None, max_trim=0.08, step=0.01):
+    """End of the straight leg p0 -> p1 pulled back toward p0 until every step of the leg is `reachable`
+    (orientation as plan_side_path would slerp it). Returns (new p1, trimmed metres), or (None, None) if
+    more than `max_trim` would be needed."""
+    d = np.asarray(p1, float) - p0
+    length = float(np.linalg.norm(d))
+    trim = 0.0
+    while trim <= max_trim + 1e-9:
+        end = np.asarray(p0, float) + d * (1.0 - trim / length)
+        bad = next((pp for pp, qq in _steps(p0, q0, end, q1) if not reachable(scene, rb, pp, qq, side)), None)
+        if bad is None:
+            return end, trim
+        # jump straight past the first unreachable step (steps are ~STEP_M apart)
+        trim = max(trim + step, length - float(np.linalg.norm(bad - p0)) + step)
+    return None, None
+
+
 def plan_side_path(scene, rb, pts, q_start, side, bodies_per_leg, clear_per_leg, label="leg"):
     """Joint path through the straight legs pts[0] -> pts[1] -> ... ([(pos, quat)]; pts[0] = where the hand
     is, at joints q_start) with the wrist >= SIDE_MARGIN on `side` ("right"/"left") of the elbow from the

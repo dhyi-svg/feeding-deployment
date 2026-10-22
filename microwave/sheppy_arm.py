@@ -62,8 +62,9 @@ PATH_TOL_RAD = 0.15                # ~8.6 deg tracking guard per joint (driver-s
 GRIPPER_FORCE = 0.5
 GRIPPER_SPEED = 0.5
 # Joint impedance for compliant moves (the door swing): the driver's documented teleop starting point
-# (kinova-gen3-driver docs/guide/control-modes.md). In impedance mode lag ~ force, so a tight path
-# tolerance doubles as a force stop.
+# (kinova-gen3-driver docs/guide/control-modes.md). In impedance mode lag ~ force (kq x lag), so the path
+# tolerance doubles as a force stop. NOT USED for the door swing (scrapped 10-21): 0.08 rad aborted just after
+# the latch; 0.30 rad let the arm swing wildly once the handle slipped out of the fingers (e-stopped).
 IMPEDANCE = {"kq": (80.0, 80.0, 80.0, 80.0, 30.0, 30.0, 30.0), "zeta": 0.5,
              "torque_limit": (39.0, 39.0, 39.0, 39.0, 9.0, 9.0, 9.0), "path_tol": 0.08}
 ERRORS = {0: "SUCCESSFUL", -1: "INVALID_GOAL", -4: "PATH_TOLERANCE_VIOLATED",
@@ -207,11 +208,13 @@ class SheppyArm:
             return self.gripper(1.0)
         raise TypeError(f"SheppyArm: unsupported command {type(cmd).__name__}")
 
-    def move_joints(self, knots, cart_lengths=None, speed_scale=1.0, impedance=None):
+    def move_joints(self, knots, cart_lengths=None, speed_scale=1.0, impedance=None, monitor=None):
         """Through joint `knots` (wrapped or not) from the measured joints. `cart_lengths`: the
         Cartesian distance of each segment -- given, the path is timed in metres at CART_SPEED,
         otherwise in joint-space radians at JOINT_SPEED. `impedance`: a dict like IMPEDANCE -> run
-        compliant (joint impedance) instead of stiff position control."""
+        compliant (joint impedance) instead of stiff position control. `monitor`: polled at ~100 Hz
+        while the trajectory runs; when it returns True the goal is cancelled (the driver stops the
+        arm and holds), `monitor_stopped` is set and the call returns True."""
         q0 = np.array(self._js[0])
         path = [q0] + _unwrap_from(q0, knots)
         seg = (np.asarray(cart_lengths, dtype=float) if cart_lengths is not None
@@ -225,7 +228,7 @@ class SheppyArm:
         joint_travel = float(np.sum([np.max(np.abs(b - a)) for a, b in zip(path[:-1], path[1:])]))
         duration = max(MIN_DURATION_S, 1.875 * s_knots[-1] / speed, 1.875 * joint_travel / (JOINT_SPEED * speed_scale))
         t, q, qd = _min_jerk_samples(path, s_knots, duration)
-        return self._send(t, q, qd, impedance)
+        return self._send(t, q, qd, impedance, monitor)
 
     def move_cartesian(self, traj, impedance=None):
         """`traj`: [(pos, quat xyzw), ...] in the base frame, like CartesianTrajectoryCommand. Each
@@ -243,7 +246,7 @@ class SheppyArm:
             self._sim = make_sim()
         return self._sim
 
-    def _send(self, t, q, qd, impedance=None):
+    def _send(self, t, q, qd, impedance=None, monitor=None):
         g = ExecuteJointTrajectory.Goal()
         g.trajectory.joint_names = JOINTS
         for ti, qi, qdi in zip(t, q, qd):
@@ -280,8 +283,16 @@ class SheppyArm:
                 self.last_path.append((time.time() - t0, float(e[0]), float(e[1]), float(e[2])))
                 time.sleep(0.02)
         threading.Thread(target=_rec, daemon=True).start()
+        self.monitor_stopped = False
         try:
-            res = self._wait(gh.get_result_async(), t[-1] + 30.0)
+            rf, t_end, res = gh.get_result_async(), time.time() + t[-1] + 30.0, None
+            while not rf.done() and time.time() < t_end:
+                if monitor is not None and not self.monitor_stopped and monitor():
+                    self.monitor_stopped = True
+                    gh.cancel_goal_async()          # the driver stops the arm, then settles PREEMPTED
+                time.sleep(0.01)
+            if rf.done():
+                res = rf.result()
         except KeyboardInterrupt:
             gh.cancel_goal_async()
             print("  SheppyArm: Ctrl-C -- goal cancelled")
@@ -293,8 +304,13 @@ class SheppyArm:
             print("  SheppyArm: no result in time -- goal cancelled")
             return False
         code = res.result.error_code
+        if self.monitor_stopped and code == -6:
+            return True
         if code != 0:
             print(f"  SheppyArm: trajectory ended {ERRORS.get(code, code)} {res.result.error_string}")
+            fe = list(res.result.final_error.positions)
+            if fe:
+                print(f"  SheppyArm: final joint error (ref - actual) deg J1-J7 {np.round(np.degrees(fe), 1)}")
         return code == 0
 
     @staticmethod
