@@ -103,7 +103,9 @@ PRE_PARK_X = 0.216
 # --- --fridge: fridge_constants.OVERRIDES replaces the constants above of the same name (see main) ---
 FRIDGE = False
 DOOR_SAVE_FILE = None              # None = microwave_common.DOOR_FILE
-HINGE_OFFSET_FROM_GRASP = None     # fridge: measured hinge offset from the grasp point (no detected hinge)
+FRIDGE_HINGE_OFFSET_FROM_GRASP = None   # fridge: measured hinge offset from the closed-door grasp point
+                                        #   (door frame: into the door, along it toward the hinge, up)
+FRIDGE_HANDLE_DETECTOR = None      # fridge: "depth" (this file's detect_handle, fridge_detect.FridgeDepthDetector) or "sam3"
 
 
 def _swing_waypoints(start_pose, hinge, deg):
@@ -157,17 +159,22 @@ def _save_frame(d, tag, attempt, det, detector):
         print(f"  (could not save the detection frame: {e})")
 
 
+def _rounded(x, decimals):
+    return "-" if x is None else np.round(x, decimals)
+
+
 def detect_handle():
     """Two agreeing looks. Returns (handle position, handle orientation, door normal, door_z, door_mid, hinge)."""
-    if FRIDGE:
-        from fridge_detect import detect_fridge_handle
-        return detect_fridge_handle()
     rs = RealSenseROS2Interface(color_topic="/wrist_camera/color/image_raw",
                                 camera_info_topic="/wrist_camera/color/camera_info",
                                 depth_topic="/wrist_camera/aligned_depth_to_color/image_raw")
     if not rs.wait_for_frames(30.0):
         sys.exit("No RGB-D frames")
-    detector = HandleDetector()
+    if FRIDGE_HANDLE_DETECTOR is not None:
+        from fridge_detect import DETECTORS
+        detector = DETECTORS[FRIDGE_HANDLE_DETECTOR]()
+    else:
+        detector = HandleDetector()
 
     def look(tag):
         for attempt in range(1, MAX_EMPTY_RETRIES + 1):
@@ -180,8 +187,8 @@ def detect_handle():
             time.sleep(0.5)
         else:
             sys.exit(f"NO DETECTION ({tag}) after {MAX_EMPTY_RETRIES} retries")
-        print(f"  look {tag}: handle {np.round(det['handle'], 4)}  hinge {np.round(det['hinge'], 4)}  "
-              f"door normal {np.round(det['normal'], 3)}  door z {np.round(det['door_z'], 3)}")
+        print(f"  look {tag}: handle {np.round(det['handle'], 4)}  hinge {_rounded(det['hinge'], 4)}  "
+              f"door normal {np.round(det['normal'], 3)}  door z {_rounded(det['door_z'], 3)}")
         return det["handle"], det["quat"], det["normal"], det["door_z"], det["door_mid"], det["hinge"]
 
     looks, pair = [], None
@@ -195,21 +202,21 @@ def detect_handle():
         sys.exit(f"No two of {len(looks)} detections agreed within {DETECT_AGREE * 100:.0f} cm -- refusing.")
     (ha, _, na, zra, mida, hga), (hb, orient, nb, zrb, midb, hgb) = pair, looks[-1]
     print(f"detections agree to {np.linalg.norm(ha - hb) * 100:.1f} cm after {len(looks)} look(s); "
-          f"hinges to {np.linalg.norm(hga[:2] - hgb[:2]) * 100:.1f} cm")
-    if np.linalg.norm(hga[:2] - hgb[:2]) > HINGE_AGREE:
+          + (f"hinges to {np.linalg.norm(hga[:2] - hgb[:2]) * 100:.1f} cm" if hga is not None else "no hinge detected"))
+    if hga is not None and np.linalg.norm(hga[:2] - hgb[:2]) > HINGE_AGREE:
         sys.exit(f"the two hinge detections differ by more than {HINGE_AGREE * 100:.0f} cm -- refusing.")
     h = (ha + hb) / 2.0
-    hinge = (hga + hgb) / 2.0
+    hinge = None if hga is None else (hga + hgb) / 2.0      # None: the detector sees no door (fridge SAM 3)
     n = (na + nb) / np.linalg.norm(na + nb)
-    door_z = np.mean([zra, zrb], axis=0)
-    door_mid = np.mean([mida, midb], axis=0)
-    if not (door_z[0] < h[2] < door_z[1] and 0.15 <= door_z[1] - door_z[0] <= 0.60):
+    door_z = None if zra is None else np.mean([zra, zrb], axis=0)
+    door_mid = None if mida is None else np.mean([mida, midb], axis=0)
+    if door_z is not None and not (door_z[0] < h[2] < door_z[1] and 0.15 <= door_z[1] - door_z[0] <= 0.60):
         print(f"door z range {np.round(door_z, 3)} doesn't fit a door around the handle -- not saving it")
         door_z = None
     for nm, v, (lo, hi) in (("x", h[0], PLAUSIBLE_X), ("y", h[1], PLAUSIBLE_Y), ("z", h[2], PLAUSIBLE_Z)):
         if not lo <= v <= hi:
             sys.exit(f"handle {nm}={v:.3f} outside plausible {(lo, hi)} -- refusing.")
-    print(f"handle (mean) {np.round(h, 4)}  hinge (mean) {np.round(hinge, 4)}")
+    print(f"handle (mean) {np.round(h, 4)}  hinge (mean) {_rounded(hinge, 4)}")
     return h, orient, n, door_z, door_mid, hinge
 
 
@@ -262,7 +269,7 @@ def plan_approach(scene, rb, ee0, grasp, q0):
     return None, None
 
 
-def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG):
+def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG, min_swing=SWING_MIN_DEG):
     """Detect, plan, grasp, swing. Returns True when the swing finished (or the dry run passed); exits on any refusal."""
     scene, rb = make_sim()
 
@@ -278,10 +285,15 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG):
 
     h_raw, orient, n, door_z, door_mid, hinge_seen = detect_handle()
     if FRIDGE:
-        # no detected edge: the measured hinge offset from the (closed-door) grasp point
+        # the measured hinge offset from the closed-door grasp point, in the door's frame: into it, along it, up
         h, grasp = grasp_pose(h_raw, orient, n)
-        hinge = hinge_seen = np.asarray(grasp.position) + HINGE_OFFSET_FROM_GRASP
-        print(f"hinge: grasp + measured offset {np.round(HINGE_OFFSET_FROM_GRASP, 3)}")
+        into, along = -np.r_[n[:2], 0.0] / np.linalg.norm(n[:2]), np.cross(np.r_[n[:2], 0.0], [0.0, 0.0, 1.0])
+        along /= np.linalg.norm(along)
+        o = FRIDGE_HINGE_OFFSET_FROM_GRASP
+        if hinge_seen is not None:
+            print(f"detected door edge {np.round(hinge_seen, 4)} (not used: measured hinge)")
+        hinge = np.asarray(grasp.position) + into * o[0] + along * o[1] + np.array([0.0, 0.0, o[2]])
+        print(f"hinge: grasp + measured offset {np.round(o, 3)} (door frame) = {np.round(hinge, 4)}")
     else:
         # the real pivot sits behind the face and beyond the visible edge (HINGE_*), expressed in the door's own frame
         away = np.r_[hinge_seen[:2] - h_raw[:2], 0.0]
@@ -304,20 +316,20 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG):
         if leg_p is None:
             print(f"  tilt {pitch:2d} deg: grasp path fails a gate")
             continue
-        for d in range(max_swing, min(SWING_MIN_DEG, max_swing) - 1, -5):
+        for d in range(max_swing, min(min_swing, max_swing) - 1, -5):
             ok, _, msg = _check_arc(scene, rb, _swing_waypoints(g, hinge, d), leg_p[-1])
             if ok:
                 break
         else:
             d, ok = None, False
         print(f"  tilt {pitch:2d} deg: grasp J4 {np.degrees(leg_p[-1][3]):6.1f} J6 {np.degrees(leg_p[-1][5]):5.1f} -> "
-              + (f"swing {d} deg OK ({msg})" if ok else f"no swing >= {SWING_MIN_DEG} deg ({msg})"))
+              + (f"swing {d} deg OK ({msg})" if ok else f"no swing >= {min_swing} deg ({msg})"))
         if ok and (best is None or d > best[0]):
             best = (d, pitch, g, leg_p)
         if ok and d == max_swing:
             break                                 # smallest tilt that reaches the largest swing
     if best is None:
-        sys.exit(f"no tilt in {GRASP_PITCHES_DEG} gives a grasp + swing of >= {SWING_MIN_DEG} deg that passes the "
+        sys.exit(f"no tilt in {GRASP_PITCHES_DEG} gives a grasp + swing of >= {min_swing} deg that passes the "
                  f"sim gates -- refusing before any motion. Start joints {np.round(np.degrees(q0), 1)}.")
     deg, pitch, grasp, leg = best
     g_p, g_q = np.asarray(grasp.position), np.asarray(grasp.orientation)
@@ -409,8 +421,10 @@ def main():
     a.add_argument("--release", action="store_true",
                    help="after a --no-push-open swing: open the gripper, back off the handle, park")
     a.add_argument("--fridge", action="store_true",
-                   help="open a fridge instead: SAM 3 handle detection, measured hinge, fridge_constants.py; "
-                        "grasp + swing only (no push-open, no --release)")
+                   help="open a fridge instead: depth handle detection over the whole image (or SAM 3, see "
+                        "fridge_constants.HANDLE_DETECTOR), measured hinge, fridge_constants.py; "
+                        "grasp + swing only (no push-open, no --release). Swings exactly --swing-deg (default "
+                        "fridge_constants.SWING_DEG) or refuses")
     args = a.parse_args()
     if args.fridge:
         if args.release:
@@ -418,11 +432,15 @@ def main():
         import fridge_constants
         globals().update(fridge_constants.OVERRIDES, FRIDGE=True)
         args.no_push_open = True
-    swing = args.swing_deg or (SWING_MAX_TRY_DEG if args.no_push_open else PUSH_OPEN_SWING_DEG)
+    if args.fridge:
+        swing = min_swing = args.swing_deg or fridge_constants.SWING_DEG   # exactly this swing, or refuse
+    else:
+        swing = args.swing_deg or (SWING_MAX_TRY_DEG if args.no_push_open else PUSH_OPEN_SWING_DEG)
+        min_swing = SWING_MIN_DEG
     ai = SheppyArm()
     if args.release:
         release_and_back_off(ai, BACK_OFF_M, args.execute, pre_park_x=PRE_PARK_X)
-    elif open_task(ai, args.execute, swing) and not args.no_push_open:
+    elif open_task(ai, args.execute, swing, min_swing) and not args.no_push_open:
         push_open(ai, args.execute)
 
 
