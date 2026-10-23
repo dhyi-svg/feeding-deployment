@@ -3,6 +3,22 @@
 Working notes for the scripts in this folder. Newest learnings first within each section.
 
 
+## 2026-10-23 -- merged `microwave-placement` into the sheppy line (branch `microwave-integration`)
+
+- Base: `microwave-wip` (sheppy, kept as the ACTIVE code). Merged in: Amogh's `microwave-placement` -- the
+  `placement/` package, its tests (`tests/test_microwave_placement_*.py`, `tests/data/microwave_lookin_2026-10-20.npz`),
+  the 10-03 hand-guided swing fits in `demos/`, and `scripts/detect_handle_sam3.py`'s `mask_to_camera_points`.
+  The placement branch's 10-02/10-03 notes are kept below, in date order.
+- `real_gen3_ros2_grasp_and_swing_microwave.py` is wip's (sheppy) version unchanged. The placement branch's version
+  of it -- `--light-grip [RELAX]` and the `HINGE_DEPTH_RANGE` hinge-depth gate, on top of the older door-file hinge
+  carry-over (`_transfer_hinge`) + `ArmInterfaceClient` open -- is kept as reference only, not active:
+  `reference/microwave-placement/real_gen3_ros2_grasp_and_swing_microwave.py`. Port those two features in Part 1 if wanted.
+- **Not integrated yet (Part 1):** `placement/` (CLI, ROS 2 node, `impedance_lowering.py`, `bringup.sh`,
+  `tools/move_look_pose.py`) still drives the arm through `ArmInterfaceClient` (arm_server) and the task compliant
+  mode, not SheppyArm. 5 offline placement-planning tests fail after the merge because wip's shared
+  `microwave_common.execute_joint_plan` takes the SheppyArm path whenever the arm has `move_joints`, and the tests'
+  `MagicMock` arm has every attribute.
+
 ## 2026-10-23 -- fridge: push-open option and close (code only, NOT run on hardware)
 
 - **Close:** `real_gen3_ros2_close_microwave.py --fridge`, which is `fridge_push.close`, then `door_push.push_close`
@@ -341,6 +357,73 @@ sheppy down
   SUCCESSFUL, landed within 0.01 deg. `... gripper`: close 0.009 -> 0.969, open -> 0.009. (`cartesian` not run yet.)
   Driver RT telemetry: faults 0, but ~9% overrun cycles (20k / 225k) and n ~900/s, i.e. the 1 kHz loop runs late
   -- didn't affect tracking; watch it (host isolcpus=11/nohz_full=11 is set, core 11 is the driver's `--cpu`).
+
+## 2026-10-03 — PLAN FOR TODAY
+1. Test the open + close code on hardware (one-take open, then close).
+2. **Finish the close code** — must be done today.
+3. Make a diagram of the whole microwave flow (open / close / placement).
+
+**10-03 — why the swing dragged the microwave: the hinge was in the wrong place.** Fit a circle to a hand-guided
+gripping swing (`demos/microwave_swing_fit_2026-10-03_take2.csv`, 98 deg, rms 0.35 cm, r 31.7 cm): hinge is
+**+3.3 cm in front of the handle along the door normal, -30.4 cm along the face**. The carried-over hinge in the
+door file sat **17.8 cm behind** the handle (radius 34.3 looked right, position didn't), so the commanded arc
+started ~30 deg off straight-out and shoved the body sideways. Door file rewritten with the fit (backup
+`~/.microwave_door.json.bak_2026-10-03_prefit`). Open script now refuses a hinge outside -6..+6 cm depth vs the
+handle (`HINGE_DEPTH_RANGE`). Door also rose ~7 cm closed -> 98 deg (0.231 -> 0.300) -- NOT modeled (user call).
+New `--light-grip [RELAX]`: after closing, re-command the gripper to its contact reading minus RELAX
+(`set_gripper`, no server restart) so the bar can turn in the fingers. Untested on hardware.
+[10-23 merge: not in the active (sheppy) open script -- kept in `reference/microwave-placement/`, see the 10-23
+merge entry above.]
+
+## 2026-10-02 — container placement into the OPEN microwave (code + offline checks only, NOT run on hardware)
+
+`placement/real_gen3_ros2_place_container_microwave.py` (new; geometry in `placement/microwave_cavity.py`). Perceives the interior AFTER the door is open --
+nothing cached from the closed door.
+
+```bash
+# same bring-up/env as the open task; door open (the swing wrote door_open_deg), container held level,
+# wrist camera looking into the microwave
+python3 -u microwave/placement/real_gen3_ros2_place_container_microwave.py --container-drop <m>            # dry run
+python3 -u microwave/placement/real_gen3_ros2_place_container_microwave.py --container-drop <m> --execute  # insert + lower
+python3 -u microwave/placement/real_gen3_ros2_place_container_microwave.py --release                       # dry run
+python3 -u microwave/placement/real_gen3_ros2_place_container_microwave.py --release --execute             # open, back out, park
+```
+- **Look:** SAM 3 (`scripts/detect_handle_sam3.py`, prompt "inside of open microwave") -> mask eroded 5 px ->
+  every pixel with depth (`mask_to_camera_points`, new; `mask_to_camera_xyz` now calls it, output unchanged)
+  -> arm_base_link -> `placement/microwave_cavity.py` (percentile front/back/floor/top/sides, plausibility checks,
+  margins; refuses, never guesses). Two looks must agree within 3 cm. Overlays: `/tmp/microwave_place/<ts>/`.
+  Microwave axes from the door file's `closed_normal`. Depth correction 0 (as `handle_detect.py`), env
+  `PLACE_DEPTH_CORR` -- the SAM 3 fridge path uses +0.051.
+- **Motion:** hand orientation = the CURRENT one, fixed on every 2 cm `plan_cartesian` step (this is our
+  "EE Level/Fixed" -- no HOLD_LEVEL/HOLD_FIXED mode exists). current -> pre-insert (container's far end 10 cm
+  in front of the opening) -> insert 3 cm above the release height -> lower. Clearance to the door model
+  (+ microwave body until the opening; the body box is solid so it's dropped inside). Gates: approach
+  <= 30 deg off the microwave axis, tilt <= 10 deg, container fits front..back, tool 3 cm under the visible
+  top, reach <= 0.915. Release height = 1 cm above the estimated floor (no compliance yet).
+- **Release (`--release`):** open, straight back out along -approach to the recorded pre-insert
+  (`~/.microwave_place.json`), then park if the straight leg passes; else stops outside -- return by hand.
+  Own release, not `release_and_back_off` (its park rebuilds the door angle from the hand as if on the handle).
+- **Offline sim check (synthetic cavity, 09-29 container-hold start, door file as of 09-29):** cavity at the
+  door file's position needs 0.978 m reach -> refused (base must be ~10 cm closer); 10 cm closer: all legs
+  plan, 0 deg orientation change, >= 11 cm from the door, back-out OK, park leg fails J4 (hand return).
+- Tests: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_microwave_cavity.py` (12).
+
+**Still to do / validate on hardware:**
+1. **Impedance for the final lowering (BLOCKER, team decision).** Hook = `lower_container()`. Only mechanism
+   is the task compliant mode; `kinova.py:105` hardcodes `fix_joint_hack = True` (J6 frozen at -1.18 rad, 6-DOF
+   model; these poses run J6 ~ +30..90 deg), gains in `compliant_controller.py` tuned for bite transfer,
+   never run on rchi-cpu-5, transfer ran it with the collision sensor off. Needs Saisha/team: 7-DOF task
+   control, stiffness/damping, collision-sensor policy.
+2. Measure `--container-drop` (tool frame -> container bottom) and check `CONTAINER_LENGTH` 0.152 (from the
+   close task's hold offset; centre assumed at half of it).
+3. A look-inside pose while holding the container (none recorded yet), and whether SAM 3 segments the
+   interior with this prompt (try "microwave interior" / "open microwave cavity").
+4. Depth correction (0 vs the fridge's 0.051) -- compare a look's floor z against a touched floor.
+5. Base placement: ~10 cm closer to the microwave than the 09-29 door file for reach.
+6. Clearances: insert 3 cm, pre-insert standoff 10 cm, wall margins 10 cm, cavity limits, turntable = floor.
+
+The first (ROS1/main) draft is in the stash ("microwave-placement-main: ROS1 draft ...", `cf1425f5`) -- not
+needed any more except as reference.
 
 ## 2026-09-29 (late) — open script cleaned up: current commands
 
