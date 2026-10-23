@@ -196,6 +196,11 @@ class SheppyArm:
             return {"position": _wrap(q), "velocity": dq.copy(), "effort": tau.copy(),
                     "ee_pos": self._ee.copy(), "gripper_pos": self._grip}
 
+    def raw_joints(self):
+        """Measured joints as the driver reports them (not wrapped): where a cuRobo plan must start."""
+        with self._lock:
+            return np.array(self._js[0])
+
     # ---- commands ----------------------------------------------------------------------------
     def execute_command(self, cmd):
         if isinstance(cmd, JointCommand):

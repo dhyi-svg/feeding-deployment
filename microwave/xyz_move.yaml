@@ -1,0 +1,14 @@
+# Example target for microwave/xyz_move.py (python3 -u microwave/xyz_move.py --config microwave/xyz_move.yaml).
+# Keys = the command-line options with _ ; the command line wins. --execute is never read from here.
+# Metres / degrees, base_link (+x forward, +z up, origin at the arm base).
+xyz: [0.45, -0.20, 0.30]   # PLACEHOLDER -- set the real target
+frame: base                # base | relative (offset from where the point is now, base axes)
+target: tool               # tool (tool_frame, between the fingertips) | container (held container centre)
+# grasp_offset: [0.0, 0.0, 0.10]   # tool frame -> container centre, in the TOOL frame. MEASURE before use.
+roll_deg: 90               # about the approach; + = CCW seen facing the fingers (confirm the side in the dry run)
+# yaw_deg: 0               # approach heading; default = the current one
+max_deviation: 0.05        # m off the straight line
+z_min: 0.12
+z_max: 0.75
+speed_scale: 0.67
+impedance: false
