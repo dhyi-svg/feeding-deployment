@@ -7,6 +7,9 @@
 * `swing` / `push` / `both` -- while holding the handle: swing the door most of the way shut, then
   a small push along the approach axis to seat it (ran 2026-09-23 with `--smooth`).
 * `release` -- open the gripper, back off, park.
+* `push-close --fridge` -- the same push-close on the fridge (`fridge_push.close`): asks the user to move the
+  wheelchair back ~30 cm first, routes in front of the open door's free edge and left behind it (no going over a
+  fridge door), and swings the door only to 45 deg (it swings shut from there). fridge_constants.py.
 
 Adapted from the Cornell lab's `CloseDoorHLA.close_microwave()`
 (`src/feeding_deployment/actions/close_door.py` + `perceive_handle_closing_poses`). Their
@@ -270,9 +273,32 @@ def main():
     a.add_argument("--hinge", type=float, nargs=3, metavar=("X", "Y", "Z"), default=None,
                    help="override FIXED_HINGE (arm_base_link, m) -- pass the same hinge the opening swing used")
     add_push_args(a, close=True)
+    a.add_argument("--fridge", action="store_true",
+                   help="push-close a fridge (fridge_push.close, fridge_constants.py): prompts to move the wheelchair "
+                        "back --chair-back first, routes back in front of the open door's free edge and left behind "
+                        "it, swings the door to --close-to-deg, no torque push. Fridge defaults for --push-radius / "
+                        "--push-radius-end / --push-stop-short / --push-max / --keep-orientation "
+                        "(fridge_constants.CLOSE_ARG_DEFAULTS)")
+    a.add_argument("--chair-back", type=float, default=None,
+                   help="--fridge: how far the wheelchair is moved back before the close (m; default "
+                        "fridge_constants.CHAIR_BACK_M; 0 = not moved, no prompt)")
+    a.add_argument("--close-to-deg", type=float, default=None,
+                   help="--fridge: swing the door shut until it is open this far (deg; default "
+                        "fridge_constants.CLOSE_TO_DEG)")
+    if a.parse_known_args()[0].fridge:
+        import fridge_constants
+        a.set_defaults(**fridge_constants.CLOSE_ARG_DEFAULTS, phase="push-close", chair_back=fridge_constants.CHAIR_BACK_M,
+                       close_to_deg=fridge_constants.CLOSE_TO_DEG)
     args = a.parse_args()
+    if args.fridge and args.phase != "push-close":
+        sys.exit("--fridge is for --phase push-close")
 
     ai = SheppyArm()
+
+    if args.phase == "push-close" and args.fridge:
+        import fridge_push
+        fridge_push.close(ai, args)
+        return
 
     if args.phase == "push-close":
         push_close(ai, args)

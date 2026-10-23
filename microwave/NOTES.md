@@ -3,6 +3,32 @@
 Working notes for the scripts in this folder. Newest learnings first within each section.
 
 
+## 2026-10-23 -- fridge: push-open option and close (code only, NOT run on hardware)
+
+- **Close:** `real_gen3_ros2_close_microwave.py --fridge`, which is `fridge_push.close`, then `door_push.push_close`
+  with fridge options. It prompts to move the wheelchair back `CHAIR_BACK_M` (0.30) and plans against
+  `~/.fridge_door.json` shifted by that much. Route: back out in front of the open door's free edge, left, forward
+  (the 4th of push_close's routes, `behind=True`). It swings until the door model is at `CLOSE_TO_DEG` (45,
+  `stop_deg`), with no push (`--push-max 0`). Sim check against the 10-22 detection: passes from 2 of 3 start poses
+  (back to x 0.34, left to y +0.06, 57-deg swing, back out 20 cm). `FRIDGE_TESTING.md`.
+- **Push-open:** `--fridge --push-open` pulls 50 deg, then `demo_replay.replay` runs: off the handle, along the open
+  door past its free edge, round it, then the microwave demo's keypoints 4-5. **In sim this refuses on the 10-22
+  setup:** the wrist goes into the door model on the leg into the gap behind the door, at every pull (30-50 deg;
+  at 20/25 deg it gets round the edge, but a finger comes 0.8/1.5 cm from the door in the narrow gap),
+  orientation and clearance tried. The door points almost straight at the arm base once open, so the arm can't get
+  round behind it at that distance.
+- Shared code changes, with the microwave unchanged (offline planner regression byte-identical before/after):
+  - The door model reads optional per-door geometry from the door file (`microwave_common.door_dims`:
+    `face_behind_grasp`, `door_t`, `door_past_handle`, `body_depth`). The fridge open now writes them, plus `door_z`
+    from the handle height, `hinge` = the measured pivot, and `open_sign` via `record_door_angle(door_file=)`.
+  - `demo_replay.run` is split into `run` + `replay`.
+  - `push_close(door_file=, door_shift=, behind=, stop_deg=)`.
+- Fridge push-open pull default is now 35 deg (`PUSH_OPEN_PULL_DEG`; microwave stays 50): in the sim sweep 35 came
+  closest (finger +0.1 cm from the door model; 30/40 -0.8 cm, 50 -1.3 cm). None clear the 2 cm yet.
+- To measure: `DOOR_WIDTH_M` (placeholder 0.45, measure at the door's top), `DOOR_DEPTH_M` (front face to the
+  innermost point of the door's inside, bins included; placeholder = the 1.25 in thickness), the door top/bottom
+  vs the handle.
+
 ## 2026-10-22 (17:23) -- first SUCCESSFUL fridge open (`--fridge`, user-confirmed)
 
 - `real_gen3_ros2_grasp_and_swing_microwave.py --fridge --execute` (depth detector over the whole image, measured

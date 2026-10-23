@@ -535,6 +535,13 @@ MIN_CLEAR = 0.03                  # every arm/gripper link must stay >= 3 cm fro
 FINGER_JOINTS = [12, 14, 16, 17, 19, 21]
 
 
+def door_dims(door):
+    """(face behind the closed grasp, door thickness, free edge past the grasp, body depth) for the door model. A door
+    file may carry its own (the fridge's, written by its open); the microwave's doesn't -> the constants above."""
+    return (float(door.get("face_behind_grasp", FINGERTIP_PAST_TOOL + 0.005)), float(door.get("door_t", DOOR_T)),
+            float(door.get("door_past_handle", DOOR_PAST_HANDLE)), float(door.get("body_depth", BODY_DEPTH)))
+
+
 def save_door_geometry(door_file=None, **kw):
     """Merge door facts into `door_file` (default DOOR_FILE): closed_normal / closed_grasp_pos (grasp), hinge (swing)."""
     door_file = door_file or DOOR_FILE
@@ -559,8 +566,9 @@ def add_door_model(scene, rb, door, open_grasp_pos):
     t = np.cross([0, 0, 1.0], n)                                                     # along the door
     if np.dot(t, hinge - g0) < 0:
         t = -t                                                                       # t points to the hinge
-    face = g0[:2] - n[:2] * (FINGERTIP_PAST_TOOL + 0.005)                            # a point on the closed face
-    lo = float(np.dot(g0[:2] - face, t[:2])) - DOOR_PAST_HANDLE                      # free edge (along t)
+    face_off, door_t, past_handle, body_depth = door_dims(door)
+    face = g0[:2] - n[:2] * face_off                                                 # a point on the closed face
+    lo = float(np.dot(g0[:2] - face, t[:2])) - past_handle                           # free edge (along t)
     hi = float(np.dot(hinge[:2] - face, t[:2]))                                      # hinge edge
     ang = (np.arctan2(*(np.asarray(open_grasp_pos[:2]) - hinge[:2])[::-1])
            - np.arctan2(*(g0[:2] - hinge[:2])[::-1]))
@@ -581,10 +589,10 @@ def add_door_model(scene, rb, door, open_grasp_pos):
                                  baseOrientation=R.from_euler("z", yaw).as_quat().tolist(), physicsClientId=c)
 
     mid = (lo + hi) / 2
-    door_c_closed = face + t[:2] * mid - n[:2] * DOOR_T / 2
-    door_id = box(_yaw_about(hinge, door_c_closed, ang), [DOOR_T / 2, (hi - lo) / 2, zh], yaw_closed + ang)
-    body_c = face + t[:2] * mid - n[:2] * (DOOR_T + BODY_DEPTH / 2)
-    body_id = box(body_c, [BODY_DEPTH / 2, (hi - lo) / 2, zh], yaw_closed)
+    door_c_closed = face + t[:2] * mid - n[:2] * door_t / 2
+    door_id = box(_yaw_about(hinge, door_c_closed, ang), [door_t / 2, (hi - lo) / 2, zh], yaw_closed + ang)
+    body_c = face + t[:2] * mid - n[:2] * (door_t + body_depth / 2)
+    body_id = box(body_c, [body_depth / 2, (hi - lo) / 2, zh], yaw_closed)
     free_edge = _yaw_about(hinge, face + t[:2] * lo, ang)
     return [(door_id, "door"), (body_id, "microwave body")], {
         "open_deg": float(np.degrees(ang)), "free_edge": free_edge}

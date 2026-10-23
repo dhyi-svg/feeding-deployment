@@ -139,7 +139,6 @@ def run(enc_path, execute, trust_from, ai=None, wrist_side=None, max_end_trim=0.
     `wrist_side`: see the module doc. `max_end_trim` (m): if the last leg runs out of reach on today's door
     (e.g. the close's push when the microwave sits further out), pull its end back along the leg by up to this
     much. Returns True when it reached the last keypoint (or the dry run passed)."""
-    from sheppy_arm import SheppyArm
     enc = json.loads(Path(enc_path).read_text())
     door = json.loads(DOOR_FILE.read_text())
     pts = decode(enc, door)
@@ -148,6 +147,15 @@ def run(enc_path, execute, trust_from, ai=None, wrist_side=None, max_end_trim=0.
           f"{r * 100:.1f} cm now; door file says ~{door.get('door_open_deg', 0):.0f} deg open")
     for k, (p, _) in zip(enc["keypoints"], pts):
         print(f"  {k['label'][:30]:30s} -> {np.round(p, 3)}")
+    return replay(pts, [k["gripper"] for k in enc["keypoints"]], door, execute, trust_from, ai, wrist_side,
+                  max_end_trim)
+
+
+def replay(pts, grippers, door, execute, trust_from, ai=None, wrist_side=None, max_end_trim=0.0):
+    """`run` from the mapped keypoints on: `pts` [(pos, quat)] (the first = where the hand must be now), `grippers` the
+    gripper reading at each, `door` the door dict the legs are checked against. Also what the fridge push-open runs
+    (fridge_push.py: its keypoints are computed for today's door, not decoded from a recorded demo)."""
+    from sheppy_arm import SheppyArm
     own = ai is None
     ai = ai or SheppyArm()
     try:
@@ -168,7 +176,7 @@ def run(enc_path, execute, trust_from, ai=None, wrist_side=None, max_end_trim=0.
                 print(f"last keypoint out of reach: pulled back {trim * 100:.0f} cm along the last leg -> "
                       f"{np.round(end, 3)} (the push ends short of the demo's)")
                 pts[-1] = (end, pts[-1][1])
-        lift_off = enc["keypoints"][0]["gripper"] > 0.2 and enc["keypoints"][1]["gripper"] < 0.2
+        lift_off = grippers[0] > 0.2 and grippers[1] < 0.2
         legs = plan(scene, rb, door, st, pts[1:], trust_from, lift_off, wrist_side)
         if legs is None:
             print("a leg fails a gate -- refusing, arm untouched.")
@@ -177,7 +185,7 @@ def run(enc_path, execute, trust_from, ai=None, wrist_side=None, max_end_trim=0.
         if not execute:
             print("\nDRY RUN -- nothing commanded.")
             return True
-        g0, g1 = enc["keypoints"][0]["gripper"], enc["keypoints"][1]["gripper"]
+        g0, g1 = grippers[0], grippers[1]
         if g0 > 0.2 and g1 < 0.2:              # the demo let go of the handle first
             print("opening the gripper ...")
             ai.gripper(0.0)

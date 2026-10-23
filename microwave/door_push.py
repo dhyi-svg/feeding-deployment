@@ -37,9 +37,9 @@ from feeding_deployment.control.robot_controller.command_interface import (
     CartesianTrajectoryCommand, CloseGripperCommand, JointCommand, OpenGripperCommand)
 
 from microwave_common import (
-    BIG_MOVE_TIMEOUT_S, DOOR_FILE, J4_GUARD_DEG, DOOR_PAST_HANDLE, DOOR_T, FINGERTIP_PAST_TOOL, J6_GUARD_DEG, MAX_IK_ERR,
+    BIG_MOVE_TIMEOUT_S, DOOR_FILE, J4_GUARD_DEG, FINGERTIP_PAST_TOOL, J6_GUARD_DEG, MAX_IK_ERR,
     MAX_STEP_JUMP_DEG, MIN_CLEAR, PARK_FILE, add_door_model, check_joint_path, clearance,
-    continuous_ok, execute_joint_plan, run_cartesian_trajectory, load_park, make_sim, plan_cartesian,
+    continuous_ok, door_dims, execute_joint_plan, run_cartesian_trajectory, load_park, make_sim, plan_cartesian,
     save_door_geometry, solve_ik, wait_for_joints, wrap_joints)
 
 ARC_STEP_M = 0.02          # tool travel per sweep waypoint
@@ -73,10 +73,11 @@ class DoorFrame:
         e = self.g0[:2] - self.hinge[:2]
         e -= self.n * np.dot(e, self.n)
         self.e = e / np.linalg.norm(e)                                         # hinge -> free edge
-        face = self.g0[:2] - self.n * (FINGERTIP_PAST_TOOL + 0.005)           # as add_door_model
-        self.mid = float(np.dot(face - self.hinge[:2], self.n)) - DOOR_T / 2
+        face_off, self.t, past_handle, _ = door_dims(door)                   # as add_door_model
+        face = self.g0[:2] - self.n * face_off
+        self.mid = float(np.dot(face - self.hinge[:2], self.n)) - self.t / 2
         self.u_handle = float(np.dot(self.g0[:2] - self.hinge[:2], self.e))
-        self.length = self.u_handle + DOOR_PAST_HANDLE
+        self.length = self.u_handle + past_handle
 
     def _rot(self, deg):
         a = self.sign * np.radians(deg)
@@ -112,12 +113,12 @@ class DoorFrame:
         return add_door_model(scene, rb, self.door, self.bodies_point(deg))[0]
 
 
-def record_door_angle(ee):
-    """After a pull (hand still on the handle): save the opening sense and angle to DOOR_FILE,
-    which push-close reads."""
-    door = json.loads(DOOR_FILE.read_text())
+def record_door_angle(ee, door_file=None):
+    """After a pull (hand still on the handle): save the opening sense and angle to `door_file`
+    (default DOOR_FILE), which push-close reads."""
+    door = json.loads((door_file or DOOR_FILE).read_text())
     a = DoorFrame(door, 1.0).angle_of(ee)
-    save_door_geometry(door_open_deg=abs(a), open_sign=float(np.sign(a) or 1.0))
+    save_door_geometry(door_open_deg=abs(a), open_sign=float(np.sign(a) or 1.0), door_file=door_file)
     print(f"door file: open ~{abs(a):.1f} deg (sense {int(np.sign(a) or 1):+d})")
 
 
@@ -625,13 +626,16 @@ def retreat_over(ai, args, sim=None):
     return bool(ok)
 
 
-def _plan_close(scene, rb, df, st, args, deg0):
+def _plan_close(scene, rb, df, st, args, deg0, behind=False, stop_deg=0.0):
     """To `side_past_hinge` beyond the hinge and `push_radius` from it (diagonally, straight
     there, if that clears the door; else sideways in front of the free edge first), then swing
     about the hinge -- hand orientation unchanged the whole way, radius spiralling in to
     `push_radius_end` -- until it is `preload` into the closed door, then straight back out.
     This is the user's hand-demonstrated close (09-25): straight there kept J3 moving AWAY from
-    +-180, where sideways-first drove it across."""
+    +-180, where sideways-first drove it across.
+    `behind` (fridge: a tall door, no going over it): only the route back out in front of the open door's free edge,
+    left past it, then forward to the swing start. `stop_deg` > 0 (fridge: it swings shut by itself from there): the
+    swing ends where the door, pushed by the hand, is at `stop_deg` instead of `push_stop_short` from closed."""
     fwd = np.r_[-df.n, 0.0]                        # into the microwave, closed-door normal
     side = np.r_[-df.e, 0.0]                       # along the closed door, toward the hinge
     q0 = np.array(st["position"], float)
@@ -696,7 +700,9 @@ def _plan_close(scene, rb, df, st, args, deg0):
                    (f"round the free edge's corner via {np.round(corner[:2], 3)}", [start, (corner, quat), goal]),
                    (f"back to b {b_safe * 100:+.0f} cm, left, then forward",
                     [start, (pos(a(p_now), b_safe), quat), (pos(a_side, b_safe), quat), goal])]
-        if args.route_over:
+        if behind:
+            routes = routes[3:]                    # back in front of the free edge, left, forward -- the 4th above
+        elif args.route_over:
             # 09-28 (user): going left at hand height drives J4 into its limit, so instead go UP over
             # the open door, LEFT past the swing start, DOWN to mid microwave height, then RIGHT and
             # FORWARD into the swing start -- the swing and push after that are unchanged
@@ -723,8 +729,9 @@ def _plan_close(scene, rb, df, st, args, deg0):
     # the swing: rotate the start point about the hinge, fixed orientation, until the hand is
     # `push_stop_short` from the CLOSED door (model), found step by step then bisected. The
     # model's closed face came out 1-1.5 cm too deep on 09-25, so the swing stops short and the
-    # last bit is the torque-watched push (_push_until_shut).
-    closed = df.bodies(scene, rb, 0.0)
+    # last bit is the torque-watched push (_push_until_shut). With `stop_deg`, the door model at
+    # that angle stands in for the closed one: the hand reaching it = the door pushed to there.
+    closed = df.bodies(scene, rb, stop_deg)
     stop = args.push_stop_short
     r0 = pos(a_side, b_start) - h
     # radius spirals in from push_radius to push_radius_end over the swing
@@ -734,6 +741,7 @@ def _plan_close(scene, rb, df, st, args, deg0):
     at = lambda d: h + np.r_[df._rot(-d) @ r0[:2] * shrink(d), 0.0]
     step = np.degrees(ARC_STEP_M / args.push_radius)
     plan, poses, d, qq = [], [], 0.0, q
+    door_lbl = "closed door" if not stop_deg else f"{stop_deg:.0f}-deg door"
     try:
         while True:
             d_next = d + step
@@ -761,7 +769,7 @@ def _plan_close(scene, rb, df, st, args, deg0):
             k = len(plan) + 1
             if bad or last or k == 1 or k % 4 == 0:
                 print(f"  swing {k} ({d_next:5.1f} deg round the hinge) -> {np.round(at(d_next), 3)}  IK err "
-                      f"{err * 100:.2f}cm  jump {jump:.1f}deg  J4 {np.degrees(nq[3]):.1f}  J6 {j6:.1f}  to closed door "
+                      f"{err * 100:.2f}cm  jump {jump:.1f}deg  J4 {np.degrees(nq[3]):.1f}  J6 {j6:.1f}  to {door_lbl} "
                       f"{c_door * 100:+.1f}cm  body {c_body[0] * 100:.1f}cm ({c_body[1]})")
             if bad:
                 print(f"  swing: step {k} fails a gate.")
@@ -772,7 +780,8 @@ def _plan_close(scene, rb, df, st, args, deg0):
             if last:
                 break
             if d > deg0 + 60:
-                print("  swing never reached the closed door in the model -- refusing.")
+                print(f"  swing never reached the {'closed' if not stop_deg else f'{stop_deg:.0f}-deg'} door in the "
+                      "model -- refusing.")
                 return None
         end = at(d)
         u_end = float(np.dot(end[:2] - df.hinge[:2], df.e))
@@ -797,8 +806,11 @@ def _plan_close(scene, rb, df, st, args, deg0):
             push.append(nq)
             pq_ = nq
         c_max = clearance(rb, pq_, [closed[0]])[0]
-        print(f"  push: up to {len(push)} x {PUSH_STEP_M * 1000:.0f} mm straight in, stopping when the joint "
-              f"torques say the door is shut (model: last step {c_max * 100:+.1f} cm vs the closed door)")
+        if n_push:
+            print(f"  push: up to {len(push)} x {PUSH_STEP_M * 1000:.0f} mm straight in, stopping when the joint "
+                  f"torques say the door is shut (model: last step {c_max * 100:+.1f} cm vs the closed door)")
+        else:
+            print(f"  no push (--push-max 0): the swing leaves the door at ~{stop_deg:.0f} deg")
         back = None
         for dist in sorted({args.retreat_dist, 0.15, 0.10, 0.06}, reverse=True):
             if dist <= args.retreat_dist:
@@ -814,24 +826,37 @@ def _plan_close(scene, rb, df, st, args, deg0):
     return {"before": route, "sweep": (plan, poses), "push": push, "after": [("back out", back)]}
 
 
-def push_close(ai, args):
+def _shift_door(door, dxy):
+    """Move the door's recorded positions by `dxy` (arm-base x, y) -- a planning copy."""
+    for k in ("hinge", "closed_grasp_pos", "closed_handle", "door_mid"):
+        if k in door:
+            door[k] = [door[k][0] + dxy[0], door[k][1] + dxy[1], *door[k][2:]]
+
+
+def push_close(ai, args, door_file=None, door_shift=None, behind=False, stop_deg=0.0):
     """Push the open door shut with the hand facing forward throughout. The gripper is never
-    touched (it may be holding a container)."""
-    if not DOOR_FILE.exists():
-        print(f"need {DOOR_FILE} -- refusing.")
+    touched (it may be holding a container).
+    Fridge (`fridge_push.close`): `door_file` = its own door file; `door_shift` (x, y) = how far the recorded door has
+    moved in the arm's frame since it was detected (the wheelchair backed up); `behind` / `stop_deg`: see _plan_close
+    (route in front of the free edge instead of over the door; swing only until the door is at `stop_deg`, no push)."""
+    door_file = door_file or DOOR_FILE
+    if not door_file.exists():
+        print(f"need {door_file} -- refusing.")
         return False
-    door = json.loads(DOOR_FILE.read_text())
+    door = json.loads(door_file.read_text())
     deg0 = args.door_deg if args.door_deg is not None else door.get("door_open_deg")
     if deg0 is None or "open_sign" not in door:
         print("door file has no door_open_deg/open_sign (the pull and push-open write them) -- refusing.")
         return False
+    if door_shift is not None and np.any(door_shift):
+        _shift_door(door, door_shift)
+        print(f"door moved {np.round(np.asarray(door_shift) * 100, 1)} cm (x, y) since it was recorded; hinge for "
+              f"the plan {np.round(door['hinge'][:2], 3)}")
     if args.hold_offset_x:
         # holding a container that sticks out past the fingertips: plan against the door/microwave
         # shifted by this much in x (planning copy only, the door file is not changed), so the hand
         # stays that far back and the container fills the gap
-        for k in ("hinge", "closed_grasp_pos", "closed_handle", "door_mid"):
-            if k in door:
-                door[k] = [door[k][0] + args.hold_offset_x, *door[k][1:]]
+        _shift_door(door, (args.hold_offset_x, 0.0))
         print(f"hold offset: planning with the door shifted {args.hold_offset_x * 100:+.1f} cm in x "
               f"(container); hinge for the plan {np.round(door['hinge'][:2], 3)}")
     df = DoorFrame(door, door["open_sign"])
@@ -839,7 +864,7 @@ def push_close(ai, args):
     print(f"door open ~{deg0:.1f} deg ({'--door-deg' if args.door_deg is not None else 'door file'}); "
           f"gripper {float(st['gripper_pos']):.3f} (left as is)")
     scene, rb = make_sim()
-    plan = _plan_close(scene, rb, df, st, args, deg0)
+    plan = _plan_close(scene, rb, df, st, args, deg0, behind=behind, stop_deg=stop_deg)
     if plan is None:
         print("\nno plan passes every gate -- refusing, arm untouched.")
         return False
@@ -851,12 +876,13 @@ def push_close(ai, args):
             return False
     if not _run_sweep(ai, *plan["sweep"], args.smooth):
         return False
-    done = _push_until_shut(ai, plan["push"], args.push_contact_nm)
-    # back along the push steps actually taken, to the swing's end, then the planned back-out
-    back_steps = plan["push"][:max(done - 1, 0)][::-1] + [plan["sweep"][0][-1]]
-    if not execute_joint_plan(ai, back_steps, "off the door"):
-        return False
-    save_door_geometry(door_open_deg=0.0)
+    if plan["push"]:                          # none for the fridge (--push-max 0): it swings shut from stop_deg
+        done = _push_until_shut(ai, plan["push"], args.push_contact_nm)
+        # back along the push steps actually taken, to the swing's end, then the planned back-out
+        back_steps = plan["push"][:max(done - 1, 0)][::-1] + [plan["sweep"][0][-1]]
+        if not execute_joint_plan(ai, back_steps, "off the door"):
+            return False
+    save_door_geometry(door_open_deg=stop_deg, door_file=door_file)
     for label, leg in plan["after"]:
         if not execute_joint_plan(ai, leg, label):
             return False

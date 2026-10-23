@@ -24,6 +24,10 @@ go and push it further open -- one run.
 `--release` (separate run, after the swing; instead of the push-open): open the gripper, back straight off the
 handle, go toward the base to clear the door's free edge, joint move to `park_pose.json`.
 
+`--fridge` (fridge_constants.py): the same detect + grasp + swing on a fridge, then let go and back out of the handle.
+`--fridge --push-open`: the microwave's way instead -- a PUSH_OPEN_PULL_DEG pull, then let go and push the door
+further open, round its free edge instead of over it (fridge_push.push_open).
+
 Run from the repo root (the sim config path is relative). See NOTES.md for the bring-up and env.
 """
 import argparse, contextlib, io, json, sys, time
@@ -107,6 +111,8 @@ FRIDGE_HINGE_OFFSET_FROM_GRASP = None   # fridge: measured hinge offset from the
                                         #   (door frame: into the door, along it toward the hinge, up)
 FRIDGE_LAST_GRASP_FILE = None      # fridge: the release's grasp record (the microwave's stays microwave_common's)
 FRIDGE_HANDLE_DETECTOR = None      # fridge: "depth" (this file's detect_handle, fridge_detect.FridgeDepthDetector) or "sam3"
+FRIDGE_DOOR_MODEL = None           # fridge: door-model geometry written into its door file (microwave_common.door_dims)
+FRIDGE_DOOR_Z_FROM_HANDLE = None   # fridge: door bottom / top relative to the handle (its door is taller than any detection)
 
 
 def _swing_waypoints(start_pose, hinge, deg):
@@ -347,8 +353,12 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG, min_swing=SWING_MIN_DEG)
     if e > GRASP_TRACK_ABORT:
         sys.exit(f"Tracking {e * 100:.1f} cm at the grasp -- ABORT, gripper untouched.")
     # closed-door geometry for the close task (door_z/door_mid written even when None, so stale ones can't linger)
+    door_model = {}
+    if FRIDGE:
+        # the fridge's measured door (fridge_push's plans check against it): the camera sees only part of its height
+        door_z, door_model = h[2] + np.asarray(FRIDGE_DOOR_Z_FROM_HANDLE), FRIDGE_DOOR_MODEL
     save_door_geometry(closed_normal=n, closed_grasp_pos=g_p, closed_handle=h, door_z=door_z, door_mid=door_mid,
-                       door_file=DOOR_SAVE_FILE)
+                       door_file=DOOR_SAVE_FILE, **door_model)
     if hasattr(ai, "gripper"):
         ai.gripper(1.0, force=GRASP_FORCE)         # looser hold (sheppy)
     else:
@@ -372,7 +382,10 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG, min_swing=SWING_MIN_DEG)
     ok, _, msg = _check_arc(scene, rb, wps, st["position"])
     if not ok:
         sys.exit(f"swing re-check from the real grasp failed ({msg}) -- stopping, still holding the handle.")
-    save_door_geometry(hinge=hinge_seen, hinge_pivot=hinge, door_file=DOOR_SAVE_FILE)   # demos + door model use the detected edge; swing uses the pivot
+    if FRIDGE:   # no detected hinge: the door model turns about the measured pivot too
+        save_door_geometry(hinge=hinge, hinge_pivot=hinge, detected_edge=hinge_seen, door_file=DOOR_SAVE_FILE)
+    else:
+        save_door_geometry(hinge=hinge_seen, hinge_pivot=hinge, door_file=DOOR_SAVE_FILE)   # demos + door model use the detected edge; swing uses the pivot
     sent = wps[SWING_SEND_EVERY - 1::SWING_SEND_EVERY]
     if sent[-1] is not wps[-1]:
         sent.append(wps[-1])
@@ -395,7 +408,7 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG, min_swing=SWING_MIN_DEG)
     print(f"SWING {'DONE' if ok else 'STOPPED SHORT'}: EE {np.round(final['ee_pos'][:3], 4)} "
           f"({err * 100:.1f} cm from the last waypoint)")
     if FRIDGE:
-        save_door_geometry(door_open_deg=arc_deg, door_file=DOOR_SAVE_FILE)   # record_door_angle reads the microwave's
+        record_door_angle(final["ee_pos"], door_file=DOOR_SAVE_FILE)
     else:
         record_door_angle(final["ee_pos"])
     return bool(ok)
@@ -438,11 +451,19 @@ def main():
                         "grasp, swing, then let go and back out of the handle (no push-open, no park; --release "
                         "does just the let-go + back-out). Swings exactly --swing-deg (default fridge_constants.SWING_DEG) "
                         "or refuses")
+    a.add_argument("--push-open", action="store_true",
+                   help="with --fridge: open it the microwave's way -- pull fridge_constants.PUSH_OPEN_PULL_DEG (or "
+                        "--swing-deg), let go, go round the door's free edge at hand height and replay the microwave "
+                        "push-open demo's push (fridge_push.push_open). The microwave always does this unless "
+                        "--no-push-open")
     args = a.parse_args()
+    if args.push_open and not args.fridge:
+        sys.exit("--push-open is for --fridge (the microwave pushes open by default)")
     if args.fridge:
         import fridge_constants
         globals().update(fridge_constants.OVERRIDES, FRIDGE=True)
-        swing = min_swing = args.swing_deg or fridge_constants.SWING_DEG   # exactly this swing, or refuse
+        swing = min_swing = args.swing_deg or (fridge_constants.PUSH_OPEN_PULL_DEG if args.push_open
+                                               else fridge_constants.SWING_DEG)   # exactly this swing, or refuse
     else:
         swing = args.swing_deg or (SWING_MAX_TRY_DEG if args.no_push_open else PUSH_OPEN_SWING_DEG)
         min_swing = SWING_MIN_DEG
@@ -452,7 +473,10 @@ def main():
     elif args.release:
         release_and_back_off(ai, BACK_OFF_M, args.execute, pre_park_x=PRE_PARK_X)
     elif open_task(ai, args.execute, swing, min_swing):
-        if args.fridge:
+        if args.fridge and args.push_open:
+            import fridge_push
+            fridge_push.push_open(ai, args.execute)
+        elif args.fridge:
             fridge_release(ai, args.execute)
         elif not args.no_push_open:
             push_open(ai, args.execute)
