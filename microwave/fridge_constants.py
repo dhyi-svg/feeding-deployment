@@ -54,10 +54,10 @@ DOOR_WIDTH_M = 0.45               # PLACEHOLDER (not measured): the door's full 
                                   # free edge = this past the hinge pin, i.e. DOOR_WIDTH_M - HINGE_ALONG_DOOR_M past the
                                   # bar (8 cm here; the 10-22 depth detection suggests ~4-6). Too small = the plans pass
                                   # closer to the real edge than they think; err big
-DOOR_DEPTH_M = 1.25 * 0.0254      # PLACEHOLDER (not measured): the door's depth, front face to the innermost point of
-                                  # its inside (bins / shelves included). Modelled as a slab this deep across the whole
-                                  # door. Now just its thickness at the edge (1.25 in, 09-20): if the inside has bins,
-                                  # the real door reaches much further into the gap the push-open goes into
+DOOR_DEPTH_M = 4.2 * 0.0254       # measured estimate (by hand, ~4.2 in, may be slightly off): the door's depth, front
+                                  # face to the innermost point of its inside, bins / shelves included. Modelled as a
+                                  # slab this deep across the whole door: it sets how much room there is behind the
+                                  # open door for the push-open
 DOOR_ABOVE_HANDLE_M = 0.50        # door top / bottom above / below the middle of the handle bar. Generous (not measured):
 DOOR_BELOW_HANDLE_M = 0.50        #   the fridge's door is taller than the arm reaches around, and too tall is only safer
 BODY_DEPTH_M = 0.50               # cabinet behind the door
@@ -68,9 +68,9 @@ DOOR_MODEL = dict(face_behind_grasp=HANDLE_CENTRE_TO_FACE_M, door_t=DOOR_DEPTH_M
 # user's push-open demo relative to the door -- with the demo's up-and-over-the-door start replaced by a route round
 # the door's free edge at hand height (a fridge door is too tall to go over)
 PUSH_OPEN_PULL_DEG = 35           # the pull (--swing-deg N for another). Not the microwave's 50: in an offline sim check
-                                  # (10-22 detection, door width/depth guessed) 35 came closest to clearing the door going
-                                  # behind it -- smaller leaves the gap too narrow for the fingers, larger turns the door
-                                  # into the wrist's path. None of 20-50 cleared the 2 cm yet
+                                  # (10-22 detection, width guessed, depth then the 1.25 in edge thickness) 35 came
+                                  # closest to clearing the door going behind it -- smaller leaves the gap too narrow for
+                                  # the fingers, larger turns the door into the wrist's path. None of 20-50 cleared 2 cm
 PUSH_OPEN_OFF_HANDLE_M = BACK_OFF_M   # let go, then straight out off the handle this far (the release's 12 cm) ...
 PUSH_OPEN_EDGE_CLEAR_M = 0.16     # ... along the open door to this far past its free edge (tool point), round it ...
 PUSH_OPEN_DEMO = Path(__file__).resolve().parent / "demos" / "push_open_2026-10-07.door.json"   # ... then the

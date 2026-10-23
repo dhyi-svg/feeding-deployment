@@ -24,10 +24,10 @@ Working notes for the scripts in this folder. Newest learnings first within each
   - `demo_replay.run` is split into `run` + `replay`.
   - `push_close(door_file=, door_shift=, behind=, stop_deg=)`.
 - Fridge push-open pull default is now 35 deg (`PUSH_OPEN_PULL_DEG`; microwave stays 50): in the sim sweep 35 came
-  closest (finger +0.1 cm from the door model; 30/40 -0.8 cm, 50 -1.3 cm). None clear the 2 cm yet.
-- To measure: `DOOR_WIDTH_M` (placeholder 0.45, measure at the door's top), `DOOR_DEPTH_M` (front face to the
-  innermost point of the door's inside, bins included; placeholder = the 1.25 in thickness), the door top/bottom
-  vs the handle.
+  closest (finger +0.1 cm from the door model; 30/40 -0.8 cm, 50 -1.3 cm). None clear the 2 cm yet. (Sweep run
+  with the old 1.25 in door depth; `DOOR_DEPTH_M` is now the measured ~4.2 in -- rerun.)
+- `DOOR_DEPTH_M` measured by hand: ~4.2 in, front face to the innermost point of the door's inside, bins included.
+- To measure: `DOOR_WIDTH_M` (placeholder 0.45, measure at the door's top), the door top/bottom vs the handle.
 
 ## 2026-10-22 (17:23) -- first SUCCESSFUL fridge open (`--fridge`, user-confirmed)
 
