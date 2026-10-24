@@ -50,7 +50,8 @@ VIA_OFF_FACE = 0.12        # ... and this far off the face, either side
 GAP = 0.04                 # approach pose: closest link this far from the door (>= MIN_CLEAR)
 CLOSE_FRONT_MARGIN = 0.06  # push-close: sideways leg passes this far in front of the free edge (past fingertips)
 PUSH_STEP_M = 0.005        # push-close: final push step
-PUSH_SPEED_SCALE = 0.25    # push-close on sheppy: one continuous push at this x CART_SPEED (~1.2 cm/s average)
+PUSH_SPEED_SCALE = 0.25    # push-close on sheppy: one continuous push at this x the CONTACT speed (~1.2 cm/s average),
+                           # whatever CART_SPEED is (sheppy_arm.contact_speed_scale, 10-24)
 OPEN_RIGHT_MARGIN = 0.12   # push-open: go this far right of the open door's free edge before going in
 OPEN_OFF_DOOR = 0.12       # push-open: after the push, move this far right, off the door, before backing out
 OPEN_PUSH_LAG = 5.0        # push-open: door assumed this many deg past the hand after the push (way-out check)
@@ -962,7 +963,9 @@ def _push_continuous(ai, push, contact_nm):
         peak[0] = max(peak[0], sig)
         return sig > stop_nm
 
-    ai.move_joints(list(push), cart_lengths=[PUSH_STEP_M] * len(push), speed_scale=PUSH_SPEED_SCALE,
+    import sheppy_arm
+    ai.move_joints(list(push), cart_lengths=[PUSH_STEP_M] * len(push),
+                   speed_scale=PUSH_SPEED_SCALE * sheppy_arm.contact_speed_scale(),
                    monitor=latched)
     time.sleep(0.3)
     q = np.asarray(ai.get_state()["position"], float)

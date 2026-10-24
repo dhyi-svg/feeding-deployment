@@ -3,6 +3,26 @@
 Working notes for the scripts in this folder. Newest learnings first within each section.
 
 
+## 2026-10-24 (evening) -- microwave open + bare-hand close back to back; faster arm; contact moves capped
+
+- Open (`--execute`, 50 + push-open) and the bare-hand (no container) route-over push-close ran back to back, no dry
+  runs: `real_gen3_ros2_close_microwave.py --phase push-close --route-over --keep-orientation --door-deg 90
+  --push-radius 0.24 --push-radius-end 0.22 --over-above 0.18 --push-z 0.22 --push-contact-nm 6 --push-max 0.02
+  --execute` (gripper closed first). Door CLOSED (user). The swing itself shuts the door: the push never sees
+  contact (peak 2.5 Nm), and the default 3.5 cm push "pushed a little extra" -> `--push-max 0.02`. Not yet done:
+  record torques during the swing to detect the latch and skip the push.
+- Speed: `JOINT_SPEED` 0.5 -> 0.85 rad/s, `CART_SPEED` 0.09 -> 0.16 m/s ("everything felt slow"). **Contact moves
+  can't handle more speed**: at 0.65 / 0.12 the push-open's last leg (into the door, 68 deg hand turn) aborted
+  PATH_TOLERANCE_VIOLATED. The push-open replay and the push-close push now run at `CONTACT_*_SPEED` (the old
+  0.5 / 0.09) via `sheppy_arm.contact_speed_scale()`, however fast the rest is. First try at that cap MISSED:
+  the microwave push-open takes demo_replay's Cartesian branch (`run_cartesian_trajectory` -> `move_cartesian`), not
+  the `move_joints` one, so the 0.85 / 0.16 run pushed at full speed and aborted at the same spot (12.6 cm short).
+  Now both branches take `speed_scale`. At 0.85 / 0.16 the approach, grasp and 50-deg swing ran fine (0.0 cm).
+- **18:39 full open + close at 0.85 / 0.16 with the push-open capped: SUCCESS (user: "worked nicely").** Grasp,
+  swing, push-open all 0.0 cm; close push peak 7.3 Nm at +20 mm (no stop), door shut, close took 25 s incl. planning.
+- YOLO (`handle_detect._box`) now also tries the red/blue-swapped image: this red microwave scored 0.20 as given vs
+  0.77 swapped (NO DETECTION otherwise). YOLO is a dev stand-in -- the actual demo uses a different model.
+
 ## 2026-10-24 (latest) -- wheelchair keep-out for every fridge run (code + sim only)
 
 - Fridge close hardware run: FAIL, the arm ran into the back of the wheelchair (arm on the chair's left, person

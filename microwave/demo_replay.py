@@ -32,6 +32,7 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
+import sheppy_arm
 from door_push import DoorFrame, drop
 from microwave_common import (DOOR_FILE, make_sim, plan_cartesian, plan_side_path, run_cartesian_trajectory,
                               trim_to_reach, wrist_offset)
@@ -190,15 +191,22 @@ def replay(pts, grippers, door, execute, trust_from, ai=None, wrist_side=None, m
             print("opening the gripper ...")
             ai.gripper(0.0)
             time.sleep(0.5)
+        # The push-further-open CAN'T HANDLE MORE SPEED: always run it at the contact speed
+        # (sheppy_arm.CONTACT_*_SPEED = 0.5 rad/s / 0.09 m/s), never the faster free-air speed -- in BOTH
+        # branches below (the microwave takes the Cartesian `else`). 10-24: at 0.65/0.12 and 0.85/0.16 its
+        # last leg (keypoint 4 -> 5: the hand pushing into the door, which pushes back, while turning 68 deg)
+        # aborted PATH_TOLERANCE_VIOLATED ~12.5 cm short both times; it ran clean three times at 0.5 / 0.09.
+        slow = sheppy_arm.contact_speed_scale()
         if wrist_side:
             # the planned joints themselves: re-solving IK on the arm would drift back to the nearest configuration
             path = [(np.asarray(st["ee_pos"][:3]), np.asarray(st["ee_pos"][3:7]))] + pts[1:]
-            sent = ai.move_joints([qq for leg in legs for qq in leg], cart_lengths=leg_lengths(path, legs))
+            sent = ai.move_joints([qq for leg in legs for qq in leg], cart_lengths=leg_lengths(path, legs),
+                                  speed_scale=slow)
             time.sleep(0.3)
             err = float(np.linalg.norm(np.asarray(ai.get_state()["ee_pos"][:3]) - pts[-1][0]))
             ok = sent and err < 0.01
         else:
-            ok, err, _ = run_cartesian_trajectory(ai, [(list(p), list(q)) for p, q in pts[1:]])
+            ok, err, _ = run_cartesian_trajectory(ai, [(list(p), list(q)) for p, q in pts[1:]], speed_scale=slow)
         print(f"{'DONE' if ok else 'STOPPED SHORT'}: hand {np.round(ai.get_state()['ee_pos'][:3], 3)} "
               f"({err * 100:.1f} cm from the last keypoint)")
         return bool(ok)

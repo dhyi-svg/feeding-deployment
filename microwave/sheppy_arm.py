@@ -51,8 +51,22 @@ JOINTS = [f"joint_{i}" for i in range(1, 8)]
 CONTINUOUS = [0, 2, 4, 6]           # J1/J3/J5/J7 spin freely
 TOOL_Z = 0.120                      # end_effector_link -> tool_frame (Kinova's 2F-85 tool, robot_controller/urdfs)
 DT = 0.02                           # trajectory sample spacing (cuRobo's interpolation_dt)
-JOINT_SPEED = 0.5                   # rad/s peak for joint moves (~29 deg/s); was 0.35, "a little faster" (10-07)
-CART_SPEED = 0.09                   # m/s peak for Cartesian paths; was 0.06, "a little faster" (10-07)
+JOINT_SPEED = 0.85                  # rad/s peak for joint moves (~49 deg/s); was 0.35, 0.5 (10-07), 0.65 then 0.85 (10-24,
+                                    # "everything felt slow")
+CART_SPEED = 0.16                   # m/s peak for Cartesian paths; was 0.06, 0.09 (10-07), 0.12 then 0.16 (10-24)
+# Contact moves (the push-open into the door, the push-close push) CAN'T HANDLE MORE SPEED than the 10-07
+# values below -- keep them there however fast the rest goes: at 0.65 rad/s / 0.12 m/s the push-open's
+# last leg (door pushing back + a 68 deg hand turn) aborted PATH_TOLERANCE_VIOLATED (10-24); it ran clean
+# three times at these.
+CONTACT_JOINT_SPEED = 0.5
+CONTACT_CART_SPEED = 0.09
+
+
+def contact_speed_scale():
+    """speed_scale for move_joints that keeps a contact move at CONTACT_*_SPEED however fast the rest is."""
+    return min(1.0, CONTACT_CART_SPEED / CART_SPEED, CONTACT_JOINT_SPEED / JOINT_SPEED)
+
+
 MIN_DURATION_S = 1.0
 CART_STEP_M = 0.02                  # Cartesian segments are cut into steps this long ...
 CART_STEP_DEG = 5.0                 # ... and turning at most this much (= plan_cartesian)
@@ -238,7 +252,7 @@ class SheppyArm:
                     return False
         return self._send(t, q, qd, impedance, monitor)
 
-    def move_cartesian(self, traj, impedance=None):
+    def move_cartesian(self, traj, impedance=None, speed_scale=1.0):
         """`traj`: [(pos, quat xyzw), ...] in the base frame, like CartesianTrajectoryCommand. Each
         segment (from the current pose) is a straight line with slerped orientation -- what Kortex
         did -- cut into <= CART_STEP_M / CART_STEP_DEG steps before IK, the same density as
@@ -246,7 +260,7 @@ class SheppyArm:
         knots, lengths = cartesian_knots(self._sim_get(), np.array(self._ee), np.array(self._js[0]), traj)
         if knots is None:
             return False
-        return self.move_joints(knots, cart_lengths=lengths, impedance=impedance)
+        return self.move_joints(knots, cart_lengths=lengths, impedance=impedance, speed_scale=speed_scale)
 
     def _sim_get(self):
         if self._sim is None:

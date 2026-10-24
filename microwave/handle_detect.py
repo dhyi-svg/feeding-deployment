@@ -14,6 +14,10 @@ The handle-finding half of `AppliancePerception.detect_handle_and_placement`, co
 
 Dropped vs the original: the hinge/placement/top-of-appliance poses, overlays, RViz markers,
 image logging, the camera flip (this rig's camera is upright) and HANDLE_DEPTH_CORR (0 here).
+
+NOTE: YOLO (step 1) is a development stand-in only -- the actual demo will NOT use YOLO; a different
+detection model will provide the microwave box. Don't tune the task around YOLO's quirks (e.g. the
+red/blue swap in `_box`).
 """
 import numpy as np
 import open3d as o3d
@@ -22,7 +26,7 @@ from ultralytics import YOLO
 from feeding_deployment.perception.tf_interface import TFInterface
 
 COCO_MICROWAVE_CLASS_ID = 68
-YOLO_MODEL = "yolo26s.pt"
+YOLO_MODEL = "yolo26s.pt"          # dev stand-in: the actual demo uses a different model, not YOLO
 # COCO classes YOLO confuses this microwave with (bus 5, train 6, suitcase 28, oven 69,
 # refrigerator 72), used only when it finds no 'microwave' at all.
 YOLO_FALLBACK_CLASS_IDS = [5, 6, 28, 69, 72]
@@ -45,9 +49,15 @@ class HandleDetector(TFInterface):
         self._yolo = YOLO(YOLO_MODEL)
 
     def _box(self, rgb):
-        """Highest-confidence microwave box (x1, y1, x2, y2), or None."""
-        res = self._yolo.predict(rgb, classes=[COCO_MICROWAVE_CLASS_ID], conf=BOX_THRESHOLD, verbose=False)[0]
-        if len(res.boxes) == 0:
+        """Highest-confidence microwave box (x1, y1, x2, y2), or None.
+        Tries the image as given AND with red/blue swapped: this red microwave often scores far
+        higher swapped (10-24: 0.20 vs 0.77, 0.49 vs 0.67 -- red + boxy reads as bus/train)."""
+        res = None
+        for img in (rgb, np.ascontiguousarray(rgb[:, :, ::-1])):
+            r = self._yolo.predict(img, classes=[COCO_MICROWAVE_CLASS_ID], conf=BOX_THRESHOLD, verbose=False)[0]
+            if len(r.boxes) and (res is None or float(r.boxes.conf.max()) > float(res.boxes.conf.max())):
+                res = r
+        if res is None:
             res = self._yolo.predict(rgb, classes=YOLO_FALLBACK_CLASS_IDS, conf=BOX_THRESHOLD, verbose=False)[0]
             if len(res.boxes) == 0:
                 return None

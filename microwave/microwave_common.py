@@ -155,17 +155,19 @@ def fit_circle_xy(xy):
     return np.array([cx, cy]), r, float(np.sqrt(np.mean(resid ** 2)))
 
 
-def run_cartesian_trajectory(ai, traj, tol_m=0.01, settle_s=2.0, timeout_s=60.0, impedance=None):
+def run_cartesian_trajectory(ai, traj, tol_m=0.01, settle_s=2.0, timeout_s=60.0, impedance=None, speed_scale=1.0):
     """Send a CartesianTrajectoryCommand and judge it by where the arm ACTUALLY ends up, not
     the RPC return: the server's wait can be tripped by a stale END/ABORT notification and
     return False at once while Kortex runs the whole trajectory anyway (09-28: returned False
     with the arm still at the start, then reached every waypoint). Waits until the EE is within
     `tol_m` of the last waypoint, or has not moved for `settle_s` (after at least `settle_s`
     had passed, so a not-yet-started motion isn't mistaken for a stop). Returns (reached, err_m, rpc_ok).
-    `impedance` (SheppyArm only): run it compliant, e.g. the door swing (SheppyArm.IMPEDANCE)."""
-    if impedance is not None and hasattr(ai, "move_cartesian"):
-        # sheppy: compliant (joint impedance) execution -- see SheppyArm.IMPEDANCE
-        rpc_ok = ai.move_cartesian([(list(pp), list(qq)) for pp, qq in traj], impedance=impedance)
+    `impedance` (SheppyArm only): run it compliant, e.g. the door swing (SheppyArm.IMPEDANCE).
+    `speed_scale` (SheppyArm only): e.g. sheppy_arm.contact_speed_scale() for a move that pushes on the door."""
+    if (impedance is not None or speed_scale != 1.0) and hasattr(ai, "move_cartesian"):
+        # sheppy: compliant (joint impedance) and/or slowed execution -- see SheppyArm.IMPEDANCE
+        rpc_ok = ai.move_cartesian([(list(pp), list(qq)) for pp, qq in traj], impedance=impedance,
+                                   speed_scale=speed_scale)
     else:
         rpc_ok = ai.execute_command(CartesianTrajectoryCommand([(list(pp), list(qq)) for pp, qq in traj]))
     goal = np.asarray(traj[-1][0], dtype=float)
