@@ -103,8 +103,19 @@ def door_arc_waypoints(start_pose, hinge_position, arc_length_m, waypoint_spacin
     return waypoints
 
 
+KEEP_OUT = None     # fridge only (fridge_push.enable_keep_out): (rb, joints) -> message if the arm is in a keep-out
+                    # zone (the wheelchair), else None. None (the microwave): no such check anywhere
+KEEP_OUT_ERR = 9.0  # solve_ik's error for a solution in the keep-out zone: fails every IK gate
+
+
+def keep_out_message(rb, q):
+    """Why joints `q` are in the keep-out zone, or None (always None unless a fridge run switched it on)."""
+    return None if KEEP_OUT is None else KEEP_OUT(rb, q)
+
+
 def solve_ik(scene, rb, pos, quat, seed_joints):
-    """PyBullet IK seeded from `seed_joints`; returns (joints, position error in m)."""
+    """PyBullet IK seeded from `seed_joints`; returns (joints, position error in m). A solution in the keep-out zone
+    (fridge runs only, KEEP_OUT) returns KEEP_OUT_ERR as its error."""
     for j, jj in enumerate(ARM):
         p.resetJointState(rb.robot_id, jj, float(seed_joints[j]), physicsClientId=rb.physics_client_id)
     wpose = multiply_poses(scene.robot_base_pose, Pose(tuple(pos), tuple(quat)))
@@ -115,7 +126,10 @@ def solve_ik(scene, rb, pos, quat, seed_joints):
     for j, jj in enumerate(ARM):
         p.resetJointState(rb.robot_id, jj, float(joints[j]), physicsClientId=rb.physics_client_id)
     ls = p.getLinkState(rb.robot_id, rb.end_effector_id, physicsClientId=rb.physics_client_id)
-    return joints, float(np.linalg.norm(np.asarray(ls[4]) - np.asarray(wpose.position)))
+    err = float(np.linalg.norm(np.asarray(ls[4]) - np.asarray(wpose.position)))
+    if KEEP_OUT is not None and KEEP_OUT(rb, joints) is not None:
+        return joints, KEEP_OUT_ERR
+    return joints, err
 
 
 def wait_for_joints(ai, q, tol_deg=1.0, timeout_s=6.0):

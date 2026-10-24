@@ -42,6 +42,7 @@ import pybullet as p
 from scipy.spatial.transform import Rotation as R
 from pybullet_helpers.geometry import Pose, multiply_poses
 
+import sheppy_arm
 from sheppy_arm import SheppyArm
 from feeding_deployment.control.robot_controller.command_interface import CartesianTrajectoryCommand, JointCommand
 
@@ -273,6 +274,8 @@ def main():
     a.add_argument("--hinge", type=float, nargs=3, metavar=("X", "Y", "Z"), default=None,
                    help="override FIXED_HINGE (arm_base_link, m) -- pass the same hinge the opening swing used")
     add_push_args(a, close=True)
+    a.add_argument("--speed", type=float, default=1.0,
+                   help="scale the arm's speed for every motion (0 < s <= 1; e.g. 0.3 for a first test)")
     a.add_argument("--fridge", action="store_true",
                    help="push-close a fridge (fridge_push.close, fridge_constants.py): prompts to move the wheelchair "
                         "back --chair-back first, routes back in front of the open door's free edge and left behind "
@@ -292,6 +295,11 @@ def main():
     args = a.parse_args()
     if args.fridge and args.phase != "push-close":
         sys.exit("--fridge is for --phase push-close")
+    if not 0.0 < args.speed <= 1.0:
+        sys.exit("--speed must be in (0, 1]")
+    # SheppyArm times every trajectory from these at call time (Cartesian m/s, joint rad/s peaks)
+    sheppy_arm.CART_SPEED *= args.speed
+    sheppy_arm.JOINT_SPEED *= args.speed
 
     ai = SheppyArm()
 

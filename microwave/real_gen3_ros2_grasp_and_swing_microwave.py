@@ -44,8 +44,9 @@ from feeding_deployment.ros2.realsense_ros2_interface import RealSenseROS2Interf
 
 from door_push import record_door_angle
 from handle_detect import HandleDetector
-from microwave_common import (J4_GUARD_DEG, door_arc_waypoints, fit_circle_xy, make_sim, plan_cartesian,
-                              release_and_back_off, run_cartesian_trajectory, save_door_geometry, save_frame)
+from microwave_common import (J4_GUARD_DEG, door_arc_waypoints, fit_circle_xy, keep_out_message, make_sim,
+                              plan_cartesian, release_and_back_off, run_cartesian_trajectory, save_door_geometry,
+                              save_frame)
 
 ARM = [1, 2, 3, 4, 5, 6, 7]
 
@@ -113,6 +114,7 @@ FRIDGE_LAST_GRASP_FILE = None      # fridge: the release's grasp record (the mic
 FRIDGE_HANDLE_DETECTOR = None      # fridge: "depth" (this file's detect_handle, fridge_detect.FridgeDepthDetector) or "sam3"
 FRIDGE_DOOR_MODEL = None           # fridge: door-model geometry written into its door file (microwave_common.door_dims)
 FRIDGE_DOOR_Z_FROM_HANDLE = None   # fridge: door bottom / top relative to the handle (its door is taller than any detection)
+FRIDGE_AFTER_SWING = None          # fridge: "release" or "push_open" -- what follows the swing, planned with it (see main)
 
 
 def _swing_waypoints(start_pose, hinge, deg):
@@ -122,6 +124,39 @@ def _swing_waypoints(start_pose, hinge, deg):
         start_pose=start_pose, hinge_position=tuple(hinge), arc_length_m=radius * np.radians(deg),
         waypoint_spacing_m=SWING_WAYPOINT_SPACING_M, direction=SWING_DIRECTION, rotate_orientation=True)
     return [list(w.position) + list(w.orientation) for w in wps]
+
+
+class _SimState:
+    """An arm state for planning from a simulated pose (the after-swing check)."""
+
+    def __init__(self, ee, q, gripper):
+        self.st = {"ee_pos": list(ee), "position": list(q), "gripper_pos": gripper}
+
+    def get_state(self):
+        return self.st
+
+
+def _fridge_after_swing(scene, rb, end_wp, q_end, door):
+    """Fridge: plan what follows the swing from its end pose `end_wp` and joints `q_end`, against `door` (the door dict
+    as it will be after the swing): the release, back-off and route back round the door (fridge_push.
+    plan_release_around), or with --push-open the push-open. Returns (ok, message). Prints nothing."""
+    import fridge_push
+    if FRIDGE_AFTER_SWING == "push_open":
+        with contextlib.redirect_stdout(io.StringIO()):
+            ok = fridge_push.plan_push_open(door, _SimState(end_wp, q_end, 0.8).get_state())[0] is not None
+        return ok, ("push-open OK" if ok else "push-open: no hand placement behind the door passes every gate")
+    pts, msg = fridge_push.plan_release_around(scene, rb, door, end_wp, q_end)
+    return pts is not None, msg
+
+
+def _fridge_door_after(n, g_p, h, hinge, deg, end_pos):
+    """The fridge door dict as the open will have saved it once the swing ends (for planning the after-swing step)."""
+    door = dict(closed_normal=list(n), closed_grasp_pos=list(g_p), closed_handle=list(h),
+                door_z=list(h[2] + np.asarray(FRIDGE_DOOR_Z_FROM_HANDLE)), hinge=list(hinge), door_open_deg=float(deg),
+                **FRIDGE_DOOR_MODEL)
+    from door_push import DoorFrame
+    door["open_sign"] = float(np.sign(DoorFrame(door, 1.0).angle_of(end_pos)) or 1.0)
+    return door
 
 
 def _check_arc(scene, rb, wps, q0):
@@ -145,6 +180,9 @@ def _check_arc(scene, rb, wps, q0):
                 or abs(j6) > J6_GUARD_DEG or abs(np.degrees(nq[3])) > J4_GUARD_DEG):
             return False, q, (f"waypoint {i + 1}: ik_err {ikerr * 100:.2f}cm, reach {np.linalg.norm(pos):.3f}, "
                               f"jump {jump:.1f}deg, J6 {j6:.1f}deg")
+        ko = keep_out_message(rb, nq)          # fridge runs only (None for the microwave)
+        if ko is not None:
+            return False, q, f"waypoint {i + 1}: {ko}"
         q = nq
     return True, q, f"all {len(wps)} waypoints OK, final J6 {np.degrees(q[5]):.1f}deg"
 
@@ -324,7 +362,14 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG, min_swing=SWING_MIN_DEG)
             print(f"  tilt {pitch:2d} deg: grasp path fails a gate")
             continue
         for d in range(max_swing, min(min_swing, max_swing) - 1, -5):
-            ok, _, msg = _check_arc(scene, rb, _swing_waypoints(g, hinge, d), leg_p[-1])
+            wps_d = _swing_waypoints(g, hinge, d)
+            ok, q_end, msg = _check_arc(scene, rb, wps_d, leg_p[-1])
+            if ok and FRIDGE:
+                # the fridge plans what follows the swing too, before any motion (the microwave's push-open is
+                # planned after the swing, from where it really ends)
+                ok, m2 = _fridge_after_swing(scene, rb, wps_d[-1], q_end,
+                                             _fridge_door_after(n, g.position, h, hinge, d, wps_d[-1][:3]))
+                msg = f"{msg}; {m2}"
             if ok:
                 break
         else:
@@ -379,9 +424,15 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG, min_swing=SWING_MIN_DEG)
     st = ai.get_state()
     ee = list(st["ee_pos"])
     wps = _swing_waypoints(Pose(tuple(ee[:3]), tuple(ee[3:7])), hinge, deg)
-    ok, _, msg = _check_arc(scene, rb, wps, st["position"])
+    ok, q_end, msg = _check_arc(scene, rb, wps, st["position"])
     if not ok:
         sys.exit(f"swing re-check from the real grasp failed ({msg}) -- stopping, still holding the handle.")
+    if FRIDGE:
+        ok, m2 = _fridge_after_swing(scene, rb, wps[-1], q_end, _fridge_door_after(n, g_p, h, hinge, deg, wps[-1][:3]))
+        print(f"after-swing re-check from the real grasp: {m2}")
+        if not ok:
+            sys.exit("what follows the swing would fail from the real grasp -- stopping BEFORE the swing, still holding "
+                     "the handle (door closed). Run with --release instead of --swing-deg to let go and back off.")
     if FRIDGE:   # no detected hinge: the door model turns about the measured pivot too
         save_door_geometry(hinge=hinge, hinge_pivot=hinge, detected_edge=hinge_seen, door_file=DOOR_SAVE_FILE)
     else:
@@ -425,14 +476,30 @@ def push_open(ai, execute):
 
 
 def fridge_release(ai, execute):
-    """After a fridge swing: open the gripper and back straight out of the handle (sim-checked first; if the back-off
-    fails a check, nothing moves and the hand stays on the handle). No park: the park pose and door model are the
+    """After a full fridge pull: open the gripper, back straight out of the handle, then back round the door to its
+    inner side (fridge_push.plan_release_around). All of it is planned from where the arm really is before letting go;
+    if any of it fails a check, nothing moves and the hand stays on the handle. No park: the park pose is the
     microwave's."""
-    print("\n===== release + back off the handle =====")
+    import fridge_push
+    print("\n===== release, back off, round the door =====")
     if not execute:
         print("  (starts where the swing ends: planned and sim-checked then, before it moves)")
         return True
-    return release_and_back_off(ai, BACK_OFF_M, True, save_path=FRIDGE_LAST_GRASP_FILE, park=False)
+    st = ai.get_state()
+    pts, msg = fridge_push.plan_release_around(*fridge_push._sim(), json.loads(DOOR_SAVE_FILE.read_text()),
+                                               st["ee_pos"], st["position"])
+    print(f"  {msg}")
+    if pts is None:
+        print("  NOT releasing -- the hand stays on the handle. --release lets go and backs off only.")
+        return False
+    for pp, _, label in pts[1:]:
+        print(f"    {label[:40]:40s} -> {np.round(pp, 3)}")
+    if not release_and_back_off(ai, BACK_OFF_M, True, save_path=FRIDGE_LAST_GRASP_FILE, park=False):
+        return False
+    ok, err, _ = run_cartesian_trajectory(ai, [(list(pp), list(qq)) for pp, qq, _ in pts[1:]])
+    print(f"ROUND THE DOOR {'DONE' if ok else 'STOPPED SHORT'}: hand {np.round(ai.get_state()['ee_pos'][:3], 3)} "
+          f"({err * 100:.1f} cm from the last keypoint)")
+    return bool(ok)
 
 
 def main():
@@ -462,8 +529,11 @@ def main():
     if args.fridge:
         import fridge_constants
         globals().update(fridge_constants.OVERRIDES, FRIDGE=True)
+        import fridge_push
+        fridge_push.enable_keep_out()     # the wheelchair: every plan and every trajectory sent is checked
         swing = min_swing = args.swing_deg or (fridge_constants.PUSH_OPEN_PULL_DEG if args.push_open
                                                else fridge_constants.SWING_DEG)   # exactly this swing, or refuse
+        globals()["FRIDGE_AFTER_SWING"] = "push_open" if args.push_open else "release"
     else:
         swing = args.swing_deg or (SWING_MAX_TRY_DEG if args.no_push_open else PUSH_OPEN_SWING_DEG)
         min_swing = SWING_MIN_DEG

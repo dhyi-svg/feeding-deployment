@@ -228,6 +228,14 @@ class SheppyArm:
         joint_travel = float(np.sum([np.max(np.abs(b - a)) for a, b in zip(path[:-1], path[1:])]))
         duration = max(MIN_DURATION_S, 1.875 * s_knots[-1] / speed, 1.875 * joint_travel / (JOINT_SPEED * speed_scale))
         t, q, qd = _min_jerk_samples(path, s_knots, duration)
+        import microwave_common
+        if microwave_common.KEEP_OUT is not None:     # fridge runs only: the wheelchair keep-out, every 2nd sample + end
+            rb = self._sim_get()[1]
+            for qi in list(q[::2]) + [q[-1]]:
+                msg = microwave_common.KEEP_OUT(rb, qi)
+                if msg is not None:
+                    print(f"  SheppyArm: the trajectory enters the keep-out zone ({msg}) -- nothing sent.")
+                    return False
         return self._send(t, q, qd, impedance, monitor)
 
     def move_cartesian(self, traj, impedance=None):

@@ -3,6 +3,73 @@
 Working notes for the scripts in this folder. Newest learnings first within each section.
 
 
+## 2026-10-24 (latest) -- wheelchair keep-out for every fridge run (code + sim only)
+
+- Fridge close hardware run: FAIL, the arm ran into the back of the wheelchair (arm on the chair's left, person
+  behind it on its right). New `CHAIR_KEEP_OUT_BEHIND_M` (15 in; user estimated ~8, then 12, then 15) -- placeholder
+  for a real obstacle zone: no arm/gripper link > 15 in behind the arm base while at y < 0.
+- Real 10-24 teleop start, read from the arm (Kortex, read-only): joints -40.6, -74.8, -134.9, -104.7, 25.4, -41.7,
+  112.2 deg; sim FK = Kortex tool pose within 1 mm. Its forearm is ~14 in behind the base (x -0.30, y -0.27, z 0.40
+  at the link origin): inside an 8/12 in zone, clear at 15. From it, at 15 in (sim): the 90-deg open as written
+  passes (tilt 10); the close passes at z 0.81 (without the zone it picks z 0.61 and its sideways leg puts the forearm
+  6.5 cm into the 15 in zone = the collision); push-open fails. The 8/12 in results below are superseded. `fridge_push.keep_out`
+  (a collision box in the sim) is switched on by `fridge_push.enable_keep_out()` (every --fridge entry point):
+  `microwave_common.solve_ik` then fails any solution in it, so does the open's `_check_arc`, and `SheppyArm.move_joints`
+  refuses any trajectory entering it before sending. `microwave_common.KEEP_OUT` stays None for the microwave.
+- The usual teleop start (elbow folded back) is already inside the zone. An IK search at the 10-23/24 start tool
+  pose found elbow-high configs; from them (sim, 10-24 detection, zone on): push-open 50 plans from 22 of 46; the
+  90-deg open plans only if the release is the plain 12 cm back-off -- the route back round the door
+  (`plan_release_around`) enters the zone every time. Chair moved 15/30 cm right: the 90 swing itself fails, zone
+  on or off (wrist range at the end of the arc).
+- Added to the arm as a web-app joint action: "Fridge start (keep-out safe)" = 98.8, 10.2, 179.5, -94.7, 98.7, 100.2,
+  16.1 deg (nearest such config to Home; Home -> it stays >= 21 cm from the zone).
+
+## 2026-10-24 (afternoon) -- round-the-door ends upright; the close never tilts (code only, sim-checked)
+
+- 12:13 run (90-deg pull + release + round the door): SUCCESS, marked by the user
+  (~/microwave_detections/20261024_121327_fridge_open_SUCCESS.json).
+- 12:17 close (fridge_push.close): SUCCESS, marked by the user, with two problems: the hand swung the door
+  shut by hitting the HANDLE, and it kept going (the rest of the planned swing) after the door was already
+  shut (~/microwave_detections/20261024_121755_fridge_close_SUCCESS.json).
+- The 12:00 run (90-deg pull + round the door) worked but ended with the gripper upside down. Cause: with the
+  wheelchair keep-out on, the upright route enters the keep-out, so the planner took its tool-y-down fallback. Now the
+  last keypoint is always upright (tool y up, as the grasp); only the round-the-edge point may be upside down, rolling
+  upright on the last leg. Re-planned from the 12:00 run's real end-of-pull joints: passes, ends tool y [0 0 1].
+- Fridge close: refuses if any planned configuration tilts the hand (roll / pitch) more than CLOSE_MAX_TILT_DEG
+  (2 deg, the driver's HOLD_LEVEL tolerance); turning about vertical is free. The IK gates check position only, so
+  this is what confirms it. Sim from the round-the-door end: 0.1 deg. (HOLD_LEVEL itself is a /go_to_ee_pose cuRobo
+  option: one target pose, the planner's own path, no door/keep-out in its world, planner profile only -- it can't do
+  the swing arc, so not used.)
+
+## 2026-10-24 (later) -- fridge full pull now goes back round the door (code only, sim-checked, NOT run on the arm)
+
+- First hardware push-open (10:55, 50-deg pull, rolled parallel hand): FAIL, the door swung shut (marked in
+  ~/microwave_detections/20261024_105554_fridge_push_open_FAIL.json). The trajectory reached its end; the door doesn't
+  stay open at 50 once let go.
+- Un-rolled open hand also fits behind the door (sim: 43/116/154 clear poses at 50/60/70, tool point 13 cm off the
+  inner face) -- not wired in yet; push-open still uses the rolled hand.
+- Default fridge open (90-deg pull): after the release + 12 cm back-off it now goes back along the door to >= 10 cm past
+  its free edge, round it facing the fridge, and in beside the door (`fridge_push.plan_release_around`,
+  `AROUND_*` in fridge_constants.py). Planned up front with the grasp + swing, re-checked from the real grasp, and
+  planned again before letting go. Sim (10-24 detection): passes. At this fridge distance the 90-deg door's free edge
+  is ~10 cm in front of the arm base, so the route passes right beside the base (x ~0, z 0.67) -- no wheelchair/person
+  in the sim.
+
+## 2026-10-24 -- fridge push-open: parallel hand, 50 deg pull (code only, sim-checked, NOT run on the arm)
+
+- `DOOR_WIDTH_M` measured: ~18 in at the top (0.457 m). `DOOR_DEPTH_M` 4.2 in (10-23).
+- The microwave-demo push (keypoints 4-5) can't work on this fridge: it faces the hand into the cabinet, so the
+  gripper body goes through the door (5-13 cm into the 4.2 in door model at every pull 20-60).
+- New `fridge_push.push_open`: off the handle, past the free edge, round it turning the hand PARALLEL to the door
+  (fingers along it toward the hinge, rolled 90 = vertical) and 10 cm lower, in behind it 10 cm off the inner face,
+  onto the face (bisected in sim + 1 cm preload), push in the door's frame to 90. Tries placements (u 40/35/30/25 cm x
+  approach 0/15/-15/30 deg x tool y up/down) and takes the first whose route passes. A pose search (720 poses near
+  parallel) found clear poses from 35 (2) to 60 (193); pull default now 50.
+- The open (`--fridge`) now plans the after-swing step (release back-off, or the push-open) up front with the grasp +
+  swing, and re-checks it from the real grasp joints before the swing. 10-24 run: the back-off refused only after the
+  90-deg swing, the hand stayed on the handle, and the script then segfaulted on exit (rclpy not shut down; cosmetic).
+- Sim (10-24 detection): the whole push-open from a 50-deg pull passes, tightest 2.6 cm going in behind the door.
+
 ## 2026-10-23 -- fridge: push-open option and close (code only, NOT run on hardware)
 
 - **Close:** `real_gen3_ros2_close_microwave.py --fridge`, which is `fridge_push.close`, then `door_push.push_close`

@@ -50,32 +50,50 @@ LAST_GRASP_FILE = Path.home() / ".fridge_last_grasp.json"   # the release's gras
 # --- door model: the open writes these into DOOR_FILE, and every fridge plan near the door (push-open, close) checks
 # clearance against a box door + cabinet built from them (microwave_common.add_door_model; the microwave's door file has
 # none of these keys and keeps its own constants). MEASURE on the fridge being tested (see FRIDGE_TESTING.md).
-DOOR_WIDTH_M = 0.45               # PLACEHOLDER (not measured): the door's full width, hinge-side edge to free edge. The
-                                  # free edge = this past the hinge pin, i.e. DOOR_WIDTH_M - HINGE_ALONG_DOOR_M past the
-                                  # bar (8 cm here; the 10-22 depth detection suggests ~4-6). Too small = the plans pass
-                                  # closer to the real edge than they think; err big
+DOOR_WIDTH_M = 18 * 0.0254        # measured estimate (~18 in, at the top of the door): the door's full width, hinge-side
+                                  # edge to free edge. The free edge = this past the hinge pin, i.e. DOOR_WIDTH_M -
+                                  # HINGE_ALONG_DOOR_M past the bar (~9 cm). Too small = the plans pass closer to the real
+                                  # edge than they think
 DOOR_DEPTH_M = 4.2 * 0.0254       # measured estimate (by hand, ~4.2 in, may be slightly off): the door's depth, front
                                   # face to the innermost point of its inside, bins / shelves included. Modelled as a
                                   # slab this deep across the whole door: it sets how much room there is behind the
                                   # open door for the push-open
-DOOR_ABOVE_HANDLE_M = 0.50        # door top / bottom above / below the middle of the handle bar. Generous (not measured):
-DOOR_BELOW_HANDLE_M = 0.50        #   the fridge's door is taller than the arm reaches around, and too tall is only safer
+DOOR_ABOVE_HANDLE_M = 12.5 * 0.0254   # door top / bottom above / below the middle of the handle bar (measured 10-24,
+DOOR_BELOW_HANDLE_M = 18 * 0.0254     #   ~12.5 / ~18 in). The close only pushes at heights within these
 BODY_DEPTH_M = 0.50               # cabinet behind the door
 DOOR_MODEL = dict(face_behind_grasp=HANDLE_CENTRE_TO_FACE_M, door_t=DOOR_DEPTH_M,
                   door_past_handle=DOOR_WIDTH_M - HINGE_ALONG_DOOR_M, body_depth=BODY_DEPTH_M)
 
-# --- --push-open (fridge_push.push_open): the microwave's open -- pull a little holding the handle, let go, replay the
-# user's push-open demo relative to the door -- with the demo's up-and-over-the-door start replaced by a route round
-# the door's free edge at hand height (a fridge door is too tall to go over)
-PUSH_OPEN_PULL_DEG = 35           # the pull (--swing-deg N for another). Not the microwave's 50: in an offline sim check
-                                  # (10-22 detection, width guessed, depth then the 1.25 in edge thickness) 35 came
-                                  # closest to clearing the door going behind it -- smaller leaves the gap too narrow for
-                                  # the fingers, larger turns the door into the wrist's path. None of 20-50 cleared 2 cm
+# --- --push-open (fridge_push.push_open): the microwave's open -- pull a little holding the handle, let go, push the
+# door the rest of the way -- but with the hand turned PARALLEL to the door: round the door's free edge at hand height
+# (a fridge door is too tall to go over), then in behind it with the fingers pointing along the door toward the hinge,
+# rolled vertical, and the side of the hand pushing the inner face round to PUSH_OPEN_TO_DEG. (The microwave's demo
+# faces the hand into the cabinet, which puts the gripper through a fridge door this close to the arm.)
+PUSH_OPEN_PULL_DEG = 50           # the pull (--swing-deg N for another). An offline sim search (10-24 detection, 4.2 in
+                                  # door) found parallel hand poses behind the door from 35 (2 poses, 2.8 cm clear) to 60;
+                                  # 50 has many (75 of 720, up to 7.3 cm clear) and the gap behind the door is wider
+PUSH_OPEN_TO_DEG = 90             # push the door on to this
 PUSH_OPEN_OFF_HANDLE_M = BACK_OFF_M   # let go, then straight out off the handle this far (the release's 12 cm) ...
-PUSH_OPEN_EDGE_CLEAR_M = 0.16     # ... along the open door to this far past its free edge (tool point), round it ...
-PUSH_OPEN_DEMO = Path(__file__).resolve().parent / "demos" / "push_open_2026-10-07.door.json"   # ... then the
-PUSH_OPEN_DEMO_FROM = 4           # microwave demo from this keypoint on: "4" (into the gap behind the door) and "5"
-                                  # (the push). 1-3 are its up, over, down-beside-the-microwave
+PUSH_OPEN_EDGE_CLEAR_M = 0.16     # ... along the open door to this far past its free edge (tool point) ...
+PUSH_OPEN_GAP_M = 0.10            # ... round it to this far off the door's inner face (tool point), turning the hand ...
+PUSH_OPEN_DZ_M = -0.10            # ... and going this far below the handle's height (the search's best poses) ...
+PUSH_OPEN_AT_M = (0.40, 0.35, 0.30, 0.25)   # ... in along the inner face to this far from the hinge (tried in order) ...
+PUSH_OPEN_APPROACH_DEG = (0, 15, -15, 30)   # ... the fingers this far off "along the door toward the hinge", toward
+                                  # pointing into the cabinet (tried in order, each with the tool's y up and down) ...
+PUSH_OPEN_ROLL_DEG = 90           # ... rolled this far about the approach (90: fingers open vertically)
+PUSH_OPEN_PRELOAD_M = 0.01        # the push: the side of the hand this far past touching the inner face (sim) ...
+PUSH_OPEN_ARC_STEP_DEG = 10       # ... held in the door's frame, turned about the hinge in these steps
+
+# --- after the full pull (the default open, no --push-open): let go, back off BACK_OFF_M, then back round the door to
+# its inner side (fridge_push.plan_release_around), so the arm ends beside the open door, not stuck outside it. All of
+# it is planned with the grasp + swing, before anything moves
+AROUND_EDGE_CLEAR_M = (0.10, 0.15, 0.20)   # back along the door to this far past its free edge (tool point; the door's
+                                  # width is DOOR_WIDTH_M), tried in order; every link also stays >= MIN_CLEAR (3 cm)
+                                  # from the door model the whole way
+AROUND_OUT_M = 0.15               # ... at least this far off the door's mid-plane on the outside while going back ...
+AROUND_IN_M = 0.25                # ... round the edge to this far off it on the inside, turning to face the fridge ...
+AROUND_END_M = (0.25, 0.30)       # ... and in to this far from the hinge along the door, this far off its inside: beside
+                                  # the open door, in front of the fridge opening
 
 # --- close (`real_gen3_ros2_close_microwave.py --phase push-close --fridge`, fridge_push.close): the microwave's
 # push-close swing, but reached by backing out in front of the open door's free edge and going left behind it (no
@@ -84,11 +102,28 @@ CHAIR_BACK_M = 0.30               # the user moves the wheelchair back this far 
 CHAIR_BACK_DIR = (1.0, 0.0)       # ... which moves the recorded fridge this way in the arm's frame (arm-base x = the
                                   # chair's forward). The plan uses the door from the open, shifted by this
 CLOSE_TO_DEG = 45                 # swing the door shut until it is open this far, then back out (no torque push)
+CLOSE_Z_MARGIN_M = 0.08           # without --push-z the close tries swing heights within the door (DOOR_ABOVE/BELOW_
+CLOSE_Z_STEP_M = 0.05             # HANDLE_M), this far in from its top and bottom, every this far, nearest the hand first
+CONTAINER_M = 6.5 * 0.0254        # the tupperware held for the close (measured 10-24, ~6.5 in): the hand is kept back by
+                                  # this much (--hold-offset-x, as the microwave container close's 6 in)
+CLOSE_MAX_TILT_DEG = 2.0          # the close never tilts the hand -- no roll, no pitch; turning about vertical is fine
+                                  # (it may hold a container). Every planned configuration must keep the tool's tilt
+                                  # within this of where it starts, or it refuses (2 deg = the driver's HOLD_LEVEL
+                                  # tolerance)
 CLOSE_ARG_DEFAULTS = dict(        # replace the microwave close's argparse defaults for --fridge (any can still be given)
     push_radius=0.30, push_radius_end=0.28,     # the hand's distance from the hinge during the swing (handle at ~37 cm)
     push_stop_short=0.0,          # the swing ends AT the CLOSE_TO_DEG door model ...
     push_max=0.0,                 # ... and there is no final push
-    keep_orientation=True)        # holding a container (as the microwave container close)
+    keep_orientation=True,        # holding a container (as the microwave container close)
+    hold_offset_x=-CONTAINER_M)
+
+# --- the wheelchair: the arm is mounted on the chair's left and the person sits just behind it, to its right (10-24: a
+# fridge close ran the arm into the back of the chair). Until an actual obstacle-avoidance zone replaces this, no part
+# of the arm or gripper may be more than this far behind the arm base (arm-base x) while on its right (y < 0). Every
+# fridge plan (open, push-open, release, close) and every trajectory sent during a fridge run is checked
+# (fridge_push.enable_keep_out)
+CHAIR_KEEP_OUT_BEHIND_M = 15 * 0.0254   # user, 10-24: ~8 in estimated, then 12, then 15. The real teleop start (10-24
+                                        # joints) has the forearm ~14 in behind the base: inside 12, clear at 15
 
 # --- "sam3" option only: it sees no door, and its point is the handle's visible pixels, not the microwave detector's
 SAM3_DOOR_NORMAL = np.array([-1.0, 0.0, 0.0])   # assumed: the door faces the arm head-on

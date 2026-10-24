@@ -37,7 +37,7 @@ from feeding_deployment.control.robot_controller.command_interface import (
     CartesianTrajectoryCommand, CloseGripperCommand, JointCommand, OpenGripperCommand)
 
 from microwave_common import (
-    BIG_MOVE_TIMEOUT_S, DOOR_FILE, J4_GUARD_DEG, FINGERTIP_PAST_TOOL, J6_GUARD_DEG, MAX_IK_ERR,
+    ARM, BIG_MOVE_TIMEOUT_S, DOOR_FILE, J4_GUARD_DEG, FINGERTIP_PAST_TOOL, J6_GUARD_DEG, MAX_IK_ERR,
     MAX_STEP_JUMP_DEG, MIN_CLEAR, PARK_FILE, add_door_model, check_joint_path, clearance,
     continuous_ok, door_dims, execute_joint_plan, run_cartesian_trajectory, load_park, make_sim, plan_cartesian,
     save_door_geometry, solve_ik, wait_for_joints, wrap_joints)
@@ -833,12 +833,30 @@ def _shift_door(door, dxy):
             door[k] = [door[k][0] + dxy[0], door[k][1] + dxy[1], *door[k][2:]]
 
 
-def push_close(ai, args, door_file=None, door_shift=None, behind=False, stop_deg=0.0):
+def _max_tilt_deg(scene, rb, qs, quat):
+    """Largest TILT (deg) of the tool, over joint configurations `qs`, away from orientation `quat` (arm-base frame):
+    roll and pitch only -- turning about vertical (side to side) is free, as the driver's HOLD_LEVEL. Measured as how far
+    "up" (base +z) moves in the tool's own frame. The gates check positions only, so this is what confirms the hand
+    really stays level."""
+    base = R.from_quat(scene.robot_base_pose.orientation)
+    up0 = R.from_quat(quat).inv().apply([0.0, 0.0, 1.0])
+    worst = 0.0
+    for q in qs:
+        for j, jj in enumerate(ARM):
+            p.resetJointState(rb.robot_id, jj, float(q[j]), physicsClientId=rb.physics_client_id)
+        up = (base.inv() * R.from_quat(rb.get_end_effector_pose().orientation)).inv().apply([0.0, 0.0, 1.0])
+        worst = max(worst, float(np.degrees(np.arccos(np.clip(up @ up0, -1.0, 1.0)))))
+    return worst
+
+
+def push_close(ai, args, door_file=None, door_shift=None, behind=False, stop_deg=0.0, max_tilt_deg=None):
     """Push the open door shut with the hand facing forward throughout. The gripper is never
     touched (it may be holding a container).
     Fridge (`fridge_push.close`): `door_file` = its own door file; `door_shift` (x, y) = how far the recorded door has
     moved in the arm's frame since it was detected (the wheelchair backed up); `behind` / `stop_deg`: see _plan_close
-    (route in front of the free edge instead of over the door; swing only until the door is at `stop_deg`, no push)."""
+    (route in front of the free edge instead of over the door; swing only until the door is at `stop_deg`, no push);
+    `max_tilt_deg`: refuse unless every planned configuration keeps the hand's tilt (roll / pitch; turning about
+    vertical is free) within this of where it starts (holding a container: it must not tip)."""
     door_file = door_file or DOOR_FILE
     if not door_file.exists():
         print(f"need {door_file} -- refusing.")
@@ -868,6 +886,15 @@ def push_close(ai, args, door_file=None, door_shift=None, behind=False, stop_deg
     if plan is None:
         print("\nno plan passes every gate -- refusing, arm untouched.")
         return False
+    if max_tilt_deg is not None:
+        qs = ([q for _, leg in plan["before"] for q in leg] + list(plan["sweep"][0]) + list(plan["push"])
+              + [q for _, leg in plan["after"] for q in leg])
+        tilt = _max_tilt_deg(scene, rb, qs, st["ee_pos"][3:7])
+        print(f"hand tilt (roll / pitch) over the whole plan: at most {tilt:.1f} deg from where it starts "
+              f"(limit {max_tilt_deg:.0f}; turning about vertical is free)")
+        if tilt > max_tilt_deg:
+            print("the hand would tilt -- refusing, arm untouched.")
+            return False
     if not args.execute:
         print(f"\nDRY RUN (push-close from {deg0:.0f} deg) -- nothing commanded.")
         return True
