@@ -188,6 +188,7 @@ def _check_arc(scene, rb, wps, q0):
 
 
 DETECT_FRAMES_DIR = Path.home() / "microwave_detections"
+FRAME_ARM = None                   # fridge runs: the arm, so each saved detection frame also keeps its joints + tool pose
 
 
 def _save_frame(d, tag, attempt, det, detector):
@@ -199,7 +200,13 @@ def _save_frame(d, tag, attempt, det, detector):
         frame = {"rgb": d["rgb_image"], "depth_mm": d["depth_image"],          # bgr8, float32 mm
                  "K": np.asarray(d["camera_info"].K, dtype=float).reshape(3, 3),
                  "base_T_cam": None if t is None else detector.make_homogeneous_transform(t)}
-        save_frame(frame, f"look{tag}_try{attempt}", DETECT_FRAMES_DIR, result=det)
+        arm_state = None
+        if FRAME_ARM is not None:
+            try:
+                arm_state = FRAME_ARM.get_state()
+            except Exception as e:
+                print(f"  (could not read the arm for the detection frame: {e})")
+        save_frame(frame, f"look{tag}_try{attempt}", DETECT_FRAMES_DIR, result=det, arm_state=arm_state)
     except Exception as e:  # never let debugging output stop a run
         print(f"  (could not save the detection frame: {e})")
 
@@ -328,6 +335,9 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG, min_swing=SWING_MIN_DEG)
             if float(ai.get_state()["gripper_pos"]) > 0.2:
                 sys.exit("Gripper still closed after opening -- refusing to grasp.")
 
+    global FRAME_ARM
+    if FRIDGE:
+        FRAME_ARM = ai
     h_raw, orient, n, door_z, door_mid, hinge_seen = detect_handle()
     if FRIDGE:
         # the measured hinge offset from the closed-door grasp point, in the door's frame: into it, along it, up

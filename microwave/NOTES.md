@@ -31,6 +31,11 @@ Working notes for the scripts in this folder. Newest learnings first within each
 - 12:17 close (fridge_push.close): SUCCESS, marked by the user, with two problems: the hand swung the door
   shut by hitting the HANDLE, and it kept going (the rest of the planned swing) after the door was already
   shut (~/microwave_detections/20261024_121755_fridge_close_SUCCESS.json).
+- 13:00 open: FAIL, marked by the user -- refused before any motion. The fridge was 7 cm closer and 9 cm further
+  left than at 12:13 (hinge x 0.51, y -0.01; door turned 10.5 deg): at 90 deg its free edge would be ~6 cm in
+  front of the arm base, the route back round the door starts with the shoulder 1.1 cm from the door model
+  (3 cm needed), so every tilt was refused up front. Fix: chair ~7 cm further back, ~9 cm further left
+  (~/microwave_detections/20261024_130030_fridge_open_FAIL.json).
 - The 12:00 run (90-deg pull + round the door) worked but ended with the gripper upside down. Cause: with the
   wheelchair keep-out on, the upright route enters the keep-out, so the planner took its tool-y-down fallback. Now the
   last keypoint is always upright (tool y up, as the grasp); only the round-the-edge point may be upside down, rolling
