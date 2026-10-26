@@ -7,6 +7,14 @@
 > until Part 2 (microwave perception) supplies it.
 > `python3 -u microwave/placement/place_move.py --config microwave/placement/place_move.yaml [--execute]`
 > after `source microwave/sheppy/env.sh`; tests: `tests/test_place_move.py`.
+> **Part 2 perception (where the container goes): `perceive_placement.py`** -- camera frame(s) -> SAM 3
+> "inside of open microwave" mask (`cavity_segmentation.py`) -> valid-depth cavity cloud in arm_base_link
+> -> floor + cavity (`floor_target.py`, reusing `cavity_perception.estimate_cavity`/`merge_cavities`) ->
+> floor contact / container centre / tool centre + a `place_move.yaml` that Part 1 reads. Camera-agnostic
+> (`rgbd_source.py`: any colour + aligned depth + CameraInfo with its calibration on tf; topics in
+> `perception_config.yaml`). Never moves the robot.
+> `python3 -u microwave/placement/perceive_placement.py --live --frames 3` or `--recorded <npz|capture dir>`
+> (`--mask` reuses a saved SAM 3 mask); tests: `tests/test_placement_perception_part2.py`.
 > The motion and `bringup.sh` described below (`ArmInterfaceClient`, `arm_server`, the old
 > `compliant_controller` impedance lowering, PyBullet-planned legs) are the pre-sheppy version: do not use
 > them to move the arm. Their perception/cavity code is what Part 2 can build on.
