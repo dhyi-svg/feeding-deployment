@@ -15,6 +15,19 @@
 > `perception_config.yaml`). Never moves the robot.
 > `python3 -u microwave/placement/perceive_placement.py --live --frames 3` or `--recorded <npz|capture dir>`
 > (`--mask` reuses a saved SAM 3 mask); tests: `tests/test_placement_perception_part2.py`.
+> **Status 2026-10-26 (on the arm):** Part 1 position mode hit a hand-placed target to 0.2 mm; live SAM 3 ->
+> floor (z 0.126, tilt 0.9 deg) -> the arm moved in (level, straight Cartesian leg) to the floor centre with ~5 cm
+> under the hand, and back out to park. **Still to do:**
+> 1. Target the CONTAINER centre, not the tool point: per the user, with the container centred in the grasp the
+>    wrist camera sits 9.75 (units to confirm -- in or cm) behind the container centre; derive `grasp_offset` from that.
+> 2. Impedance is broken on this arm: default gains sagged the tool 4.3 cm, stiffer gains (kq 250/70) dropped it
+>    5.7 cm -- not tuning (gravity/torque-offset model or the mode switch?). `place_move.py` is impedance-only: unusable until fixed.
+> 3. Final insertion leg: use the straight Cartesian path (`sheppy_arm.cartesian_knots`); cuRobo HOLD_LEVEL bows ~2 cm.
+>    Level the gripper while moving out (in place at a folded pose trips the J4 guard). Fold both into `place_move.py`.
+> 4. Perception: door-open check (SAM 3 segments the interior through a closed glass door); prompt "inside of
+>    microwave" for close views (0.85 vs 0.50); calibrate `cloud.depth_corr_m` (measure the real 5 cm gap); measure the container.
+> 5. Camera calibration: the floor reads 4.5 deg tilted with the gripper rolled +90 (0.9 deg at roll 0) -- a few deg of
+>    hand-eye rotation error; perceive at roll ~0 until recalibrated.
 > The motion and `bringup.sh` described below (`ArmInterfaceClient`, `arm_server`, the old
 > `compliant_controller` impedance lowering, PyBullet-planned legs) are the pre-sheppy version: do not use
 > them to move the arm. Their perception/cavity code is what Part 2 can build on.

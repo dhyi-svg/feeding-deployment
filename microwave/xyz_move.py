@@ -39,13 +39,14 @@ TWO LEGS.
     transit; the plan must end at the full target orientation. It refuses a goal whose tilt differs from
     the start's, which is why the roll is its own leg first.
 Every plan is gated here before anything moves (sim FK of every point: reach, z band, J4/J6 guards,
-joint step, distance from the straight line, held tilt, end pose), then executed exactly as gated by
+joint step, held tilt, end pose; the distance from the straight line is logged, and gated only with
+--max-deviation), then executed exactly as gated by
 SheppyArm.move_joints -> /execute_joint_trajectory: position control, or joint impedance (--impedance,
 the driver's starting gains, sheppy_arm.IMPEDANCE) where the path tolerance then also acts as a force stop.
 
 cuRobo's collision world (gen3_real.yaml) is a placeholder table + pedestal: it does NOT contain the
-microwave, the counter, the wheelchair or the user. The straight-line gate is what keeps the path near
-the segment you asked for; clear that segment yourself.
+microwave, the counter, the wheelchair or the user, and nothing keeps the path near the straight segment
+unless --max-deviation is given: watch the path (the log says how far it strays), e-stop in hand.
 """
 from __future__ import annotations
 
@@ -73,7 +74,9 @@ MAX_JOINT_STEP_DEG = 10.0          # between consecutive points of a plan (cuRob
 END_POS_TOL_M = 0.005
 END_ROT_TOL_DEG = 1.0
 HOLD_TOL_DEG = 2.0                 # = cuRobo's constraint_tolerance_deg (it checks the hold itself too)
-MAX_DEVIATION_M = 0.05             # tool point off the straight start->goal segment (new; conservative)
+# Tool point off the straight start->goal segment: None = not gated (removed 2026-10-26 at the user's request --
+# the user watches the path instead; the worst deviation is still logged). --max-deviation gates it again.
+MAX_DEVIATION_M = None
 ROLL_MATCH_DEG = 1.0               # a J7-only roll must land this close to the target orientation
 START_DRIFT_DEG = 0.5              # the arm must still be where a leg was planned from when it is sent
 TRACK_ABORT_M = 0.01               # executed: final tool position this far off the target -> stop
@@ -187,7 +190,7 @@ class Gates:
     max_reach: float = MAX_REACH_M
     z_range: tuple = Z_RANGE_M
     max_step_deg: float = MAX_JOINT_STEP_DEG
-    max_deviation: float = MAX_DEVIATION_M
+    max_deviation: float | None = MAX_DEVIATION_M
 
 
 def gate_path(sim, qs, p_goal, rot_goal, hold_level, gates, name):
@@ -213,7 +216,7 @@ def gate_path(sim, qs, p_goal, rot_goal, hold_level, gates, name):
                 bad.append(f"joint step {step:.1f} deg > {gates.max_step_deg}")
         dev = seg_distance(pos, p_start, np.asarray(p_goal, float))
         worst["deviation_m"] = max(worst["deviation_m"], dev)
-        if dev > gates.max_deviation:
+        if gates.max_deviation is not None and dev > gates.max_deviation:
             bad.append(f"tool {dev * 100:.1f} cm off the straight line (max {gates.max_deviation * 100:.0f})")
         if hold_level:
             t = tilt_deg(rot, rot_goal)
@@ -368,6 +371,16 @@ def plan_move(sim, planner, q0, xyz, frame="base", target="tool", roll_deg=90.0,
     return legs
 
 
+def impedance_gains(kq=None, zeta=None, torque_limit=None, path_tol=None):
+    """sheppy_arm.IMPEDANCE with any of its entries overridden (7-vectors for kq / torque_limit)."""
+    import sheppy_arm
+    g = dict(sheppy_arm.IMPEDANCE)
+    for key, val in (("kq", kq), ("zeta", zeta), ("torque_limit", torque_limit), ("path_tol", path_tol)):
+        if val is not None:
+            g[key] = tuple(float(v) for v in val) if key in ("kq", "torque_limit") else float(val)
+    return g
+
+
 def execute_legs(arm, sim, planner, legs, gates=None, impedance=False, speed_scale=1.0, log=print):
     """Each leg as gated, through SheppyArm.move_joints. The move leg after a roll is re-planned (and
     re-gated) from where the roll actually ended. Stops at the first problem."""
@@ -387,7 +400,8 @@ def execute_legs(arm, sim, planner, legs, gates=None, impedance=False, speed_sca
         lengths = [max(1e-4, float(np.linalg.norm(b[0] - a[0])), (b[1] * a[1].inv()).magnitude() * sheppy_arm.ROT_EQUIV_M)
                    for a, b in zip(tool[:-1], tool[1:])]
         ok = arm.move_joints(list(leg.joints[1:]), cart_lengths=lengths, speed_scale=speed_scale,
-                             impedance=sheppy_arm.IMPEDANCE if impedance else None)
+                             impedance=(impedance if isinstance(impedance, dict)
+                                        else sheppy_arm.IMPEDANCE if impedance else None))
         time.sleep(0.3)
         ee = np.asarray(arm.get_state()["ee_pos"], float)
         err = float(np.linalg.norm(ee[:3] - leg.goal_pos))
@@ -411,10 +425,16 @@ def parse_args(argv=None):
                    help="tool frame -> held container centre, in the TOOL frame (m); required for --target container")
     a.add_argument("--roll-deg", type=float, default=90.0, help="about the approach; + = CCW seen facing the fingers")
     a.add_argument("--yaw-deg", type=float, help="approach heading about base z (default: the current one)")
-    a.add_argument("--max-deviation", type=float, default=MAX_DEVIATION_M, help="m off the straight line")
+    a.add_argument("--max-deviation", type=float, default=MAX_DEVIATION_M,
+                   help="m off the straight line (default: not gated, only logged)")
     a.add_argument("--z-min", type=float, default=Z_RANGE_M[0])
     a.add_argument("--z-max", type=float, default=Z_RANGE_M[1])
     a.add_argument("--impedance", action="store_true", help="execute in joint impedance (default: position)")
+    a.add_argument("--kq", type=float, nargs=7, metavar="K", help="impedance stiffness per joint (Nm/rad); "
+                   "default sheppy_arm.IMPEDANCE (80 x4, 30 x3 -- sagged ~4 cm on this arm 10-26)")
+    a.add_argument("--zeta", type=float, help="impedance damping ratio (default sheppy_arm.IMPEDANCE)")
+    a.add_argument("--torque-limit", type=float, nargs=7, metavar="NM", help="impedance torque limits (Nm)")
+    a.add_argument("--path-tol", type=float, help="impedance path tolerance (rad), the force stop")
     a.add_argument("--speed-scale", type=float, default=0.67,
                    help="x SheppyArm's speed caps (0.67 ~ the 0.06 m/s, 0.35 rad/s first-run speeds)")
     a.add_argument("--start-joints", type=float, nargs=7, metavar="DEG",
@@ -465,7 +485,11 @@ def main(argv=None):
         if not args.execute:
             print("\nDRY RUN -- planned and gated, nothing commanded.")
             return 0
-        execute_legs(arm, sim, planner, legs, gates, impedance=args.impedance, speed_scale=args.speed_scale)
+        imp = (impedance_gains(args.kq, args.zeta, args.torque_limit, args.path_tol) if args.impedance else False)
+        if imp:
+            print(f"impedance: kq {list(imp['kq'])} zeta {imp['zeta']} torque_limit {list(imp['torque_limit'])} "
+                  f"path_tol {imp['path_tol']} rad")
+        execute_legs(arm, sim, planner, legs, gates, impedance=imp, speed_scale=args.speed_scale)
         print("DONE")
         return 0
     except Refused as e:

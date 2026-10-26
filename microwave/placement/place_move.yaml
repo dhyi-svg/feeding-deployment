@@ -5,7 +5,7 @@ target: container          # container (held container centre) | tool (tool_fram
 # grasp_offset: [0.0, 0.0, 0.10]   # tool frame -> container centre, in the TOOL frame. MEASURE before use.
 roll_deg: -90              # wrist camera LEFT seen from behind the wrist (user-confirmed 10-23)
 # yaw_deg: 0               # approach heading; default = the current one
-max_deviation: 0.05        # m off the straight line
+# max_deviation: 0.05      # m off the straight line; default: not gated (only logged)
 z_min: 0.12
 z_max: 0.75
 speed_scale: 0.67

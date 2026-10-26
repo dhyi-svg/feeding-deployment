@@ -20,9 +20,9 @@ planning and the impedance execution below stay as they are.
 What moves (all from xyz_move, unchanged): one cuRobo HOLD_LEVEL move to the point (with --target tool and
 an empty gripper, first a J7-only roll to the task's roll: -90 = wrist camera on the LEFT seen from behind
 the wrist, confirmed 10-23). Every leg is gated in sim before anything moves (reach, z band, J4/J6
-guards, joint steps, distance from the straight line, held tilt, end pose); --execute also asks for `go`.
+guards, joint steps, held tilt, end pose; distance from the straight line logged, gated only with --max-deviation); --execute also asks for `go`.
 
-cuRobo's collision world does NOT contain the microwave, counter or user: the straight-line gate and the
+cuRobo's collision world does NOT contain the microwave, counter or user: the user watching the path and the
 impedance force stop are what protect the path -- clear the segment yourself until Part 2 adds the cavity.
 """
 from __future__ import annotations
@@ -81,7 +81,8 @@ def parse_args(argv=None):
                    help="tool frame -> held container centre, in the TOOL frame (m); required for --target container")
     a.add_argument("--roll-deg", type=float, default=TASK_ROLL_DEG, help="about the approach (see xyz_move.py)")
     a.add_argument("--yaw-deg", type=float, help="approach heading about base z (default: the current one)")
-    a.add_argument("--max-deviation", type=float, default=xm.MAX_DEVIATION_M, help="m off the straight line")
+    a.add_argument("--max-deviation", type=float, default=xm.MAX_DEVIATION_M,
+                   help="m off the straight line (default: not gated, only logged)")
     a.add_argument("--z-min", type=float, default=xm.Z_RANGE_M[0])
     a.add_argument("--z-max", type=float, default=xm.Z_RANGE_M[1])
     a.add_argument("--speed-scale", type=float, default=0.67, help="x SheppyArm's speed caps")
