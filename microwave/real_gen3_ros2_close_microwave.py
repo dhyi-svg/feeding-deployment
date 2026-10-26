@@ -300,6 +300,8 @@ def main():
     # SheppyArm times every trajectory from these at call time (Cartesian m/s, joint rad/s peaks)
     sheppy_arm.CART_SPEED *= args.speed
     sheppy_arm.JOINT_SPEED *= args.speed
+    # the cuRobo moves' speed_scale (the driver refuses anything below 0.01)
+    sheppy_arm.GO_TO_SPEED_SCALE = max(0.01, sheppy_arm.GO_TO_SPEED_SCALE * args.speed)
 
     ai = SheppyArm()
 

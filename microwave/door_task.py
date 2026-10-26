@@ -12,8 +12,8 @@
   real_gen3_ros2_grasp_and_swing_microwave.py), then the user's push-open demo replayed relative
   to the door (`demo_replay.py`, demos/push_open_2026-10-07.door.json).
 * close = the user's close demo (starts where the push-open ends; the hand may hold a container
-  -- the gripper is never touched), then RETRACT: straight back off the closed door and on to the
-  park pose (park_pose.json), sim-checked against the closed-door model.
+  -- the gripper is never touched), then RETRACT: straight back off the closed door (sim-checked against
+  the closed-door model), then cuRobo to the park joints (park_pose.json; goal checked, path not previewed).
 The close replays against the open task's closed-door detection (~/.microwave_door.json).
 --close-wrist-side: `left` (default) = the close as run on 10-07: IK from the arm's current joints, which keeps the
 elbow put, so the wrist ends left of it once the hand moves left. `right` = a searched joint path that keeps the
@@ -35,7 +35,8 @@ import demo_replay
 import sheppy_arm
 import real_gen3_ros2_grasp_and_swing_microwave as mw
 from door_push import DoorFrame, drop
-from microwave_common import DOOR_FILE, PARK_FILE, RunLog, make_sim, plan_cartesian, run_cartesian_trajectory
+from microwave_common import (DOOR_FILE, PARK_FILE, RunLog, check_curobo_goal, load_park, make_sim, plan_cartesian,
+                              run_cartesian_trajectory)
 from sheppy_arm import SheppyArm
 
 HERE = Path(__file__).resolve().parent
@@ -61,32 +62,40 @@ def show(enc_path):
 
 
 def retract(ai, execute):
-    """Back off the closed door along its normal, then straight to the park pose -- gripper untouched."""
+    """Back straight off the closed door along its normal (sim-checked), then cuRobo (go_to_joint_config)
+    to the park joints -- gripper untouched. The park goal is checked against the door model; cuRobo's
+    path is not previewed and its world has no microwave, so the back-off clears the door first."""
     door = json.loads(DOOR_FILE.read_text())
     st = ai.get_state()
     ee, q0 = np.asarray(st["ee_pos"], float), np.asarray(st["position"], float)
     n = np.r_[np.asarray(door["closed_normal"][:2], float), 0.0]
     n /= np.linalg.norm(n)
     back = ee[:3] + n * RETRACT_M
-    park = json.loads(PARK_FILE.read_text())
-    park_p, park_q = np.asarray(park["ee_pos"], float), np.asarray(park["quat"], float)
+    q_park = load_park()
+    if q_park is None:
+        print(f"Need {PARK_FILE} for the move to park -- arm left where it is.")
+        return False
     scene, rb = make_sim()
     bodies = DoorFrame(door, door.get("open_sign", -1.0)).bodies(scene, rb, 0.0)
     try:
         # the hand ends AT the door face (it pushed it shut): the back-off only moves away from it -> body only
         leg1 = plan_cartesian(scene, rb, ee[:3], ee[3:7], back, ee[3:7], q0, "back off",
                               [b for b in bodies if b[1] == "microwave body"])
-        leg2 = None if leg1 is None else plan_cartesian(scene, rb, back, ee[3:7], park_p, park_q, leg1[-1], "to park", bodies)
+        park_ok = leg1 is not None and check_curobo_goal(scene, rb, "to park", q=q_park, bodies=bodies) is not None
     finally:
         drop(rb, bodies)
-    if leg2 is None:
+    if not park_ok:
         print("retract fails a gate -- arm left where it is.")
         return False
-    print(f"retract: back {RETRACT_M * 100:.0f} cm to {np.round(back, 3)}, then park {np.round(park_p, 3)} -- passes")
+    print(f"retract: back {RETRACT_M * 100:.0f} cm to {np.round(back, 3)}, then cuRobo to park -- passes")
     if not execute:
         return True
-    ok, err, _ = run_cartesian_trajectory(ai, [(list(back), list(ee[3:7])), (list(park_p), list(park_q))])
-    print(f"RETRACT {'DONE' if ok else 'STOPPED SHORT'} ({err * 100:.1f} cm from park)")
+    ok, err, _ = run_cartesian_trajectory(ai, [(list(back), list(ee[3:7]))])
+    if not ok:
+        print(f"RETRACT STOPPED SHORT of the back-off point ({err * 100:.1f} cm) -- not parking.")
+        return False
+    ok = ai.go_to_joint_config(q_park, "to park")
+    print(f"RETRACT {'DONE' if ok else 'did NOT reach the park joints'}")
     return bool(ok)
 
 
@@ -152,6 +161,7 @@ def main():
     # SheppyArm times every trajectory from these at call time (Cartesian m/s, joint rad/s peaks)
     sheppy_arm.CART_SPEED *= args.speed
     sheppy_arm.JOINT_SPEED *= args.speed
+    sheppy_arm.GO_TO_SPEED_SCALE = max(0.01, sheppy_arm.GO_TO_SPEED_SCALE * args.speed)
     ai = SheppyArm()
     log = RunLog(args.what, vars(args), ai)
     ok = False

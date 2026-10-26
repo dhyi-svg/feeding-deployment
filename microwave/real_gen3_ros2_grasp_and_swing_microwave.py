@@ -9,10 +9,12 @@ go and push it further open -- one run.
 1. Detect (`handle_detect.py`): YOLO box around the microwave, depth -> door plane, the
    vertical cluster sticking out of it = handle, the door edge farthest from it = hinge. Looks
    until two agree within 3 cm (handle and hinge).
-2. Plan everything before any motion: the grasp (squared to the door face: a straight line
-   from the view pose to a line-up point 25 cm out (or less), then straight in along the door normal), and the
-   largest swing (75 down to 45 deg) whose whole arc passes the sim gates (IK, reach, joint jump, J4/J6 guards).
-3. Execute: one blended motion into the grasp, close, one blended swing. The hand stays on the
+2. Plan everything before any motion: the grasp (squared to the door face: cuRobo from the view pose to a
+   line-up point 25 cm out (or less) -- only that goal is checked, cuRobo's path is not previewed -- then
+   straight in along the door normal), and the largest swing (75 down to 45 deg) whose whole arc passes the
+   sim gates (IK, reach, joint jump, J4/J6 guards). cuRobo can't follow a line or an arc, so the straight-in
+   leg and the swing stay on joint paths planned and checked here.
+3. Execute: cuRobo to the line-up point, straight in, close, one blended swing. The hand stays on the
    handle at the end.
 
 4. Push-open (default; `--no-push-open` to stop after the swing): let go of the handle and replay the
@@ -44,9 +46,9 @@ from feeding_deployment.ros2.realsense_ros2_interface import RealSenseROS2Interf
 
 from door_push import record_door_angle
 from handle_detect import HandleDetector
-from microwave_common import (J4_GUARD_DEG, door_arc_waypoints, fit_circle_xy, keep_out_message, make_sim,
-                              plan_cartesian, release_and_back_off, run_cartesian_trajectory, save_door_geometry,
-                              save_frame)
+from microwave_common import (J4_GUARD_DEG, check_curobo_goal, door_arc_waypoints, fit_circle_xy, keep_out_message,
+                              make_sim, plan_cartesian, release_and_back_off, run_cartesian_trajectory,
+                              save_door_geometry, save_frame)
 
 ARM = [1, 2, 3, 4, 5, 6, 7]
 
@@ -306,18 +308,22 @@ def pregrasp_point(grasp, standoff):
     return np.asarray(grasp.position) - approach * standoff
 
 
-def plan_approach(scene, rb, ee0, grasp, q0):
-    """View pose -> line-up point (turning square to the door on the way) -> straight in to the grasp, for the
-    largest PREGRASP_STANDOFFS that passes. Returns (joint plan of both legs, line-up point), or (None, None)."""
+def plan_approach(scene, rb, grasp, q0):
+    """View pose -> line-up point (cuRobo, already squared to the door; only the goal is checked here) -> straight in
+    to the grasp, for the largest PREGRASP_STANDOFFS that passes. Returns (joint plan of the straight-in leg, line-up
+    point), or (None, None). The straight-in leg is planned from this IK's joints at the line-up point; cuRobo may end
+    on another branch, so the real run re-plans it from the measured joints (and re-checks the swing from the grasp)."""
     g_p, g_q = np.asarray(grasp.position), np.asarray(grasp.orientation)
     for standoff in PREGRASP_STANDOFFS:
         pre_p = pregrasp_point(grasp, standoff)
-        leg1 = plan_cartesian(scene, rb, ee0[:3], ee0[3:7], pre_p, g_q, q0, f"to line-up {standoff * 100:.0f} cm out")
-        if leg1 is None:
+        if not MIN_Z <= pre_p[2] <= MAX_Z:
             continue
-        leg2 = plan_cartesian(scene, rb, pre_p, g_q, g_p, g_q, leg1[-1], "straight in")
-        if leg2 is not None:
-            return leg1 + leg2, pre_p
+        q_pre = check_curobo_goal(scene, rb, f"to line-up {standoff * 100:.0f} cm out", pos=pre_p, quat=g_q, seed=q0)
+        if q_pre is None:
+            continue
+        leg = plan_cartesian(scene, rb, pre_p, g_q, g_p, g_q, q_pre, "straight in")
+        if leg is not None:
+            return leg, pre_p
     return None, None
 
 
@@ -326,7 +332,7 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG, min_swing=SWING_MIN_DEG)
     scene, rb = make_sim()
 
     st = ai.get_state()
-    ee0, q0 = np.asarray(st["ee_pos"], dtype=float), np.asarray(st["position"], dtype=float)
+    q0 = np.asarray(st["position"], dtype=float)
     if float(st["gripper_pos"]) > 0.2:
         print("gripper is closed -- " + ("opening it first" if execute else "the real run opens it first"))
         if execute:
@@ -374,7 +380,7 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG, min_swing=SWING_MIN_DEG)
     for pitch in GRASP_PITCHES_DEG:
         with contextlib.redirect_stdout(io.StringIO()):
             _, g = grasp_pose(h_raw, orient, n, pitch)
-            leg_p, _ = plan_approach(scene, rb, ee0, g, q0)
+            leg_p, _ = plan_approach(scene, rb, g, q0)
         if leg_p is None:
             print(f"  tilt {pitch:2d} deg: grasp path fails a gate")
             continue
@@ -403,14 +409,16 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG, min_swing=SWING_MIN_DEG)
     deg, pitch, grasp, leg = best
     g_p, g_q = np.asarray(grasp.position), np.asarray(grasp.orientation)
     print(f"chosen: tilt {pitch} deg nose-down, swing {deg} deg; grasp {np.round(g_p, 4)}")
-    _, pre_p = plan_approach(scene, rb, ee0, grasp, q0)                        # re-print the chosen path
+    _, pre_p = plan_approach(scene, rb, grasp, q0)                             # re-print the chosen path
 
     if not execute:
         print(f"\nDRY RUN -- would grasp, then swing {deg} deg. Nothing commanded.")
         return True
 
-    # --- grasp ---
-    _, e, _ = run_cartesian_trajectory(ai, [(list(pre_p), list(g_q)), (list(g_p), list(g_q))])
+    # --- grasp: cuRobo to the line-up point, then straight in (re-planned from the measured joints) ---
+    if not ai.go_to_ee_pose(pre_p, g_q, "to line-up"):
+        sys.exit("Did not reach the line-up point -- ABORT before touching the handle, gripper untouched.")
+    _, e, _ = run_cartesian_trajectory(ai, [(list(g_p), list(g_q))])
     print(f"grasp: tracking {e * 100:.1f} cm")
     if e > GRASP_TRACK_ABORT:
         sys.exit(f"Tracking {e * 100:.1f} cm at the grasp -- ABORT, gripper untouched.")

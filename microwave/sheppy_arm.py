@@ -12,6 +12,16 @@
                                                   joints, the same `solve_ik` the sim gates use), then
                                                   ONE `execute_joint_trajectory` goal through them
     execute_command(Open/CloseGripperCommand)  -> /setpoint/gripper streamed until it settles
+    go_to_ee_pose(pos, quat) / go_to_joint_config(q)
+                                               -> the driver's cuRobo-planned actions, for the free-space
+                                                  moves only (to view, to the line-up point, to park), as
+                                                  rammp_button_press does. The path is cuRobo's, not
+                                                  previewed, and cuRobo's world has no microwave/fridge/
+                                                  wheelchair in it: callers gate the goal and only use these
+                                                  where the straight line out of the door's way is already done.
+
+Every motion first checks /control_status (latched): refuses on an e-stop, when another sender owns
+the arm, or under enforced arbitration (no token is acquired here).
 
 All blocking; each returns True on success. The driver has no Cartesian-trajectory action, so
 the arm now follows the exact joint path the scripts' sim gates checked, not Kortex's own
@@ -35,14 +45,16 @@ from control_msgs.msg import JointTolerance
 from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+from geometry_msgs.msg import PoseStamped
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectoryPoint
 
 from scipy.spatial.transform import Rotation as R
 
-from rammp_arm_interfaces.action import ExecuteJointTrajectory
+from rammp_arm_interfaces.action import ExecuteJointTrajectory, GoToEEPose, GoToJointConfig
 from rammp_arm_interfaces.msg import EeState, GripperSetpoint, GripperState, JointImpedanceGains
+from rammp_common_interfaces.msg import ControlStatus
 
 from feeding_deployment.control.robot_controller.command_interface import (
     CartesianTrajectoryCommand, CloseGripperCommand, JointCommand, OpenGripperCommand)
@@ -82,7 +94,18 @@ GRIPPER_SPEED = 0.5
 IMPEDANCE = {"kq": (80.0, 80.0, 80.0, 80.0, 30.0, 30.0, 30.0), "zeta": 0.5,
              "torque_limit": (39.0, 39.0, 39.0, 39.0, 9.0, 9.0, 9.0), "path_tol": 0.08}
 ERRORS = {0: "SUCCESSFUL", -1: "INVALID_GOAL", -4: "PATH_TOLERANCE_VIOLATED",
-          -5: "GOAL_TOLERANCE_VIOLATED", -6: "PREEMPTED", -8: "NOT_AUTHORIZED", -9: "HALTED"}
+          -5: "GOAL_TOLERANCE_VIOLATED", -6: "PREEMPTED", -7: "PLANNING_FAILED", -8: "NOT_AUTHORIZED", -9: "HALTED"}
+# go_to_ee_pose / go_to_joint_config (cuRobo in the driver). FRAME: what /ee_state reports and the goal must be in
+# (base_link on the 1.1.0 driver, arm_mount on the nightly). The goal pose is Kinova's tool_frame, = ee_pos here.
+FRAME = "base_link"
+SENDER_ID = "microwave"
+# speed_scale of every go_to goal (1.0 = cuRobo's plan at the arm's full speed; the driver refuses, not clamps,
+# values outside [0.01, 1]). button_press 10-14: at 1.0 a 51 cm move took 1.16 s and hit the microwave cuRobo
+# can't see -- start slow here; the close script's --speed scales it too.
+GO_TO_SPEED_SCALE = 0.3
+GO_TO_TIMEOUT_S = 120.0           # planning + execution
+GO_TO_TRACK_M = 0.01              # go_to_ee_pose: tool this far from the goal at the end -> failed
+GO_TO_TRACK_DEG = 2.0             # go_to_joint_config: any joint this far from the goal at the end -> failed
 
 
 def _wrap(q):
@@ -163,11 +186,16 @@ class SheppyArm:
             rclpy.init()
         self.node = Node(node_name)
         self._lock = threading.Lock()
-        self._js = self._ee = self._grip = None
+        self._js = self._ee = self._grip = self._status = None
         self.node.create_subscription(JointState, "/joint_states", self._on_js, qos_profile_sensor_data)
         self.node.create_subscription(EeState, "/ee_state", self._on_ee, qos_profile_sensor_data)
         self.node.create_subscription(GripperState, "/gripper_state", self._on_grip, qos_profile_sensor_data)
+        self.node.create_subscription(
+            ControlStatus, "/control_status", self._on_status,
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self._traj = ActionClient(self.node, ExecuteJointTrajectory, "/execute_joint_trajectory")
+        self._goto_pose = ActionClient(self.node, GoToEEPose, "/go_to_ee_pose")
+        self._goto_joints = ActionClient(self.node, GoToJointConfig, "/go_to_joint_config")
         self._grip_pub = self.node.create_publisher(
             GripperSetpoint, "/setpoint/gripper",
             QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=1))
@@ -203,6 +231,24 @@ class SheppyArm:
     def _on_grip(self, m):
         with self._lock:
             self._grip = float(m.position)
+
+    def _on_status(self, m):
+        with self._lock:
+            self._status = m
+
+    def not_ready(self):
+        """Why the arm must not be commanded now (from /control_status), or None when it may be."""
+        with self._lock:
+            st = self._status
+        if st is None:
+            return "no /control_status (latched) -- arm driver not up?"
+        if st.estopped:
+            return "arm is E-STOPPED -- clear it first"
+        if st.arbitration_enabled:
+            if st.owned and st.owner_id != SENDER_ID:
+                return f"the arm is owned by {st.owner_id!r}"
+            return "arbitration is ENFORCED and this code holds no token (/acquire_control not implemented here)"
+        return None
 
     def get_state(self):
         with self._lock:
@@ -268,7 +314,74 @@ class SheppyArm:
             self._sim = make_sim()
         return self._sim
 
+    # ---- cuRobo (the driver's go_to_* actions): free-space moves only ----------------------------
+    def go_to_ee_pose(self, pos, quat, label="go_to_ee_pose", speed_scale=None):
+        """Tool (tool_frame = ee_pos) to (pos, quat xyzw) in FRAME: cuRobo plans from the measured joints and
+        the driver executes. Blocking; True if the driver succeeded and the tool ended within GO_TO_TRACK_M."""
+        g = GoToEEPose.Goal()
+        g.target = PoseStamped()
+        g.target.header.frame_id = FRAME
+        g.target.header.stamp = self.node.get_clock().now().to_msg()
+        g.target.pose.position.x, g.target.pose.position.y, g.target.pose.position.z = map(float, pos[:3])
+        o = g.target.pose.orientation
+        o.x, o.y, o.z, o.w = map(float, quat)
+        if not self._go_to(self._goto_pose, g, label, speed_scale):
+            return False
+        e = float(np.linalg.norm(np.array(self._ee[:3]) - np.asarray(pos[:3], float)))
+        print(f"  {label}: tool {e * 100:.1f} cm from the goal")
+        return e <= GO_TO_TRACK_M
+
+    def go_to_joint_config(self, q, label="go_to_joint_config", speed_scale=None):
+        """Joints to `q` (rad, J1..J7): cuRobo plans in joint space and the driver executes. Blocking; True if the
+        driver succeeded and every joint ended within GO_TO_TRACK_DEG (free joints compared the short way)."""
+        g = GoToJointConfig.Goal()
+        g.target_joints = [float(x) for x in q]
+        if not self._go_to(self._goto_joints, g, label, speed_scale):
+            return False
+        d = np.asarray(q, float) - np.array(self._js[0])
+        d[CONTINUOUS] = (d[CONTINUOUS] + np.pi) % (2 * np.pi) - np.pi
+        e = float(np.degrees(np.max(np.abs(d))))
+        print(f"  {label}: joints within {e:.1f} deg of the goal")
+        return e <= GO_TO_TRACK_DEG
+
+    def _go_to(self, client, g, label, speed_scale):
+        why = self.not_ready()
+        if why is not None:
+            print(f"  SheppyArm: {label}: {why} -- nothing sent.")
+            return False
+        if not client.wait_for_server(timeout_sec=5.0):
+            print(f"  SheppyArm: {label}: no action server (the go_to_* actions need the cuRobo planner: "
+                  "sheppy profile real-arm-camera-planner) -- nothing sent.")
+            return False
+        g.sender_id = SENDER_ID
+        g.speed_scale = float(GO_TO_SPEED_SCALE if speed_scale is None else speed_scale)
+        print(f"  {label}: cuRobo plans the path (not previewed), run at {g.speed_scale:g} x its speed ...")
+        gh = self._wait(client.send_goal_async(g), 5.0)
+        if gh is None or not gh.accepted:
+            print(f"  SheppyArm: {label}: goal REJECTED -- nothing moved")
+            return False
+        try:
+            res = self._wait(gh.get_result_async(), GO_TO_TIMEOUT_S)
+        except KeyboardInterrupt:
+            gh.cancel_goal_async()
+            print("  SheppyArm: Ctrl-C -- goal cancelled")
+            raise
+        if res is None:
+            gh.cancel_goal_async()
+            print(f"  SheppyArm: {label}: no result in {GO_TO_TIMEOUT_S:.0f} s -- goal cancelled")
+            return False
+        code = res.result.error_code
+        if code != 0:
+            print(f"  SheppyArm: {label} ended {ERRORS.get(code, code)} {res.result.error_string}")
+            return False
+        time.sleep(0.3)                    # let /ee_state and /joint_states catch up with the end of the move
+        return True
+
     def _send(self, t, q, qd, impedance=None, monitor=None):
+        why = self.not_ready()
+        if why is not None:
+            print(f"  SheppyArm: {why} -- nothing sent.")
+            return False
         g = ExecuteJointTrajectory.Goal()
         g.trajectory.joint_names = JOINTS
         for ti, qi, qdi in zip(t, q, qd):
@@ -289,7 +402,7 @@ class SheppyArm:
             g.gains = JointImpedanceGains(kq=list(impedance["kq"]), zeta=float(impedance["zeta"]),
                                           torque_limit=list(impedance["torque_limit"]))
         g.preemption = 0                   # QUEUE
-        g.sender_id = "microwave"
+        g.sender_id = SENDER_ID
         fut = self._traj.send_goal_async(g)
         gh = self._wait(fut, 5.0)
         if gh is None or not gh.accepted:

@@ -7,10 +7,16 @@ Used by `real_gen3_ros2_grasp_and_swing_microwave.py` (release after opening) an
   `LAST_GRASP_FILE`, opens the gripper, then backs straight off the handle along the
   gripper's approach axis in ~2 cm Cartesian steps.
 * `regrasp` -- for the close task, from ANY arm pose (other tasks run between opening
-  and closing): a door-model-checked joint move to the recorded back-off pose, then
+  and closing): cuRobo to the recorded back-off joints (goal door-model-checked), then
   straight back onto the recorded grasp, then close. No re-detection (the detector's
   plane fit assumes a door facing the camera, which an open door is not). Needs the
   door geometry the grasp/swing save to `DOOR_FILE`.
+
+cuRobo (RAMMP's planner, through the driver's go_to_ee_pose / go_to_joint_config) does the
+free-space moves: to park, to the regrasp back-off point, to the open-door view -- as
+rammp_button_press does. Everything on or along the door (straight on/off the handle, the
+swings, the pushes) stays on joint paths planned and checked here: the planner takes a goal
+only and can't follow a line or an arc. `check_curobo_goal` gates a cuRobo goal.
 
 All gripper motion goes through `execute_command(Open/CloseGripperCommand())` --
 `ArmInterfaceClient` has no `open_gripper()` method.
@@ -407,6 +413,47 @@ def plan_side_path(scene, rb, pts, q_start, side, bodies_per_leg, clear_per_leg,
     return legs
 
 
+def check_curobo_goal(scene, rb, label, q=None, pos=None, quat=None, seed=None, bodies=None):
+    """Gate the GOAL of a cuRobo move (SheppyArm.go_to_*): cuRobo plans the path in the driver, which can't be
+    previewed, so only where it ends is checked here -- joints `q`, or (pos, quat) IK'd from `seed`: IK, reach,
+    J4/J6 guards, the keep-out zone (fridge) and, with `bodies`, >= MIN_CLEAR from the door model. For a pose goal
+    cuRobo may end on another joint branch than this IK; the checked branch is the one nearest the seed.
+    Returns the checked goal joints, or None (refused)."""
+    if q is None:
+        if np.linalg.norm(pos) > MAX_REACH_M:
+            print(f"  {label}: goal {np.round(pos, 3)} is {np.linalg.norm(pos):.3f} m out (max {MAX_REACH_M}) -- refusing.")
+            return None
+        q, err = solve_ik(scene, rb, pos, quat, seed)
+        for _ in range(3):
+            if err <= MAX_IK_ERR:
+                break
+            q, err = solve_ik(scene, rb, pos, quat, q)
+        if err > MAX_IK_ERR:
+            print(f"  {label}: goal {np.round(pos, 3)} unreachable (IK err {err * 100:.1f} cm) -- refusing.")
+            return None
+    q = np.asarray(q, float)
+    j4, j6 = abs(np.degrees(q[3])), abs(np.degrees(q[5]))
+    if j4 > J4_GUARD_DEG or j6 > J6_GUARD_DEG:
+        print(f"  {label}: goal joints J4 {j4:.1f} / J6 {j6:.1f} deg past the guards -- refusing.")
+        return None
+    ko = keep_out_message(rb, q)
+    if ko is not None:
+        print(f"  {label}: goal is in the keep-out zone ({ko}) -- refusing.")
+        return None
+    if bodies is not None:
+        c = clearance(rb, q, bodies)
+        if c[0] < MIN_CLEAR:
+            print(f"  {label}: goal {c[0] * 100:.1f} cm from the door model ({c[1]}) -- refusing.")
+            return None
+        print(f"  {label}: goal ok, {c[0] * 100:.1f} cm from the door model; cuRobo plans the path (not previewed)")
+    else:
+        print(f"  {label}: goal ok; cuRobo plans the path (not previewed)")
+    return q
+
+
+MAX_REACH_M = 0.90
+
+
 def execute_joint_plan(ai, plan, label):
     """One JointCommand per step, waiting for convergence to the COMMANDED joints. Kortex
     sometimes rejects a command (ROBOT_MOVEMENT_IN_PROGRESS) and the arm just stays put --
@@ -441,12 +488,14 @@ def load_park():
 
 def release_and_back_off(ai, back_off_m, execute, save_path=LAST_GRASP_FILE, park=True, pre_park_x=None):
     """Record the current grasp, open the gripper, back straight off along -approach, then
-    (park=True) a door-model-checked joint move to the hand-placed park pose -- the end
+    (park=True) cuRobo (go_to_joint_config) to the hand-placed park joints -- the end
     position of both the open and the close task. `pre_park_x`: before the park move, go
     straight along world x (toward the base) to this x, same height and orientation -- on
     the open task this clears the open door's free edge, which sticks out toward the arm.
-    Everything is planned and checked before anything moves; a failed check means nothing
-    is commanded."""
+    The straight legs are planned and door-checked, and the park goal checked, before
+    anything moves; a failed check means nothing is commanded. cuRobo's path to park is
+    not previewed and its world has no door in it -- the straight legs get the hand out
+    of the door's way first."""
     st = ai.get_state()
     ee = list(st["ee_pos"])
     grasp_pos, quat = np.array(ee[:3]), tuple(ee[3:7])
@@ -483,26 +532,9 @@ def release_and_back_off(ai, back_off_m, execute, save_path=LAST_GRASP_FILE, par
                     print("toward-base leg too close to the door -- NOT releasing, arm untouched.")
                     return False
                 legs.append(("toward base", leg))
-                q_end = leg[-1]
-        park_rec = json.loads(PARK_FILE.read_text())
-        p_start = grasp_pos - approach * back_off_m
-        if pre_park_x is not None and pre_park_x < p_start[0]:
-            p_start = np.array([pre_park_x, p_start[1], p_start[2]])
-        leg = plan_cartesian(scene, rb, p_start, quat, park_rec["ee_pos"], park_rec["quat"], q_end,
-                             "to park", bodies)
-        if leg is None:
-            print("path to park fails a gate -- NOT releasing, arm untouched.")
+        if check_curobo_goal(scene, rb, "to park", q=q_park, bodies=bodies) is None:
+            print("park goal fails a check -- NOT releasing, arm untouched.")
             return False
-        snap = float(np.degrees(np.max(np.abs(wrap_joints(leg[-1]) - q_park))))
-        print(f"  stepped path ends {snap:.1f} deg (max joint) from the recorded park joints")
-        legs.append(("to park", leg))
-        if snap > 10.0:
-            print("  -> will stop at the park POSE on this joint branch instead of snapping to the recorded joints")
-            q_park = None
-        else:
-            ok, _ = check_joint_path(rb, leg[-1], q_park, bodies, "snap to recorded park joints")
-            if not ok:
-                q_park = None
     if not execute:
         print(f"\nDRY RUN (release + back-off{' + park' if park else ''}) -- nothing commanded.")
         return True
@@ -521,10 +553,9 @@ def release_and_back_off(ai, back_off_m, execute, save_path=LAST_GRASP_FILE, par
     ok = True
     for label, leg in legs:
         ok = ok and execute_joint_plan(ai, leg, label)
-    if ok and park and q_park is not None:
-        ai.execute_command(JointCommand(pos=q_park.tolist()))
-        ok = wait_for_joints(ai, q_park, timeout_s=BIG_MOVE_TIMEOUT_S)
-        print(f"  park: {'reached' if ok else 'did NOT reach the commanded joints'}")
+    if ok and park:
+        ok = ai.go_to_joint_config(q_park, "to park")
+        print(f"  park: {'reached' if ok else 'did NOT reach the park joints'}")
     final = ai.get_state()
     print(f"\nRELEASE {'DONE' if ok else 'STOPPED EARLY'}. final EE:", np.round(final["ee_pos"][:3], 4),
           "gripper:", final.get("gripper_pos"))
@@ -654,14 +685,11 @@ def check_joint_path(rb, q_from, q_to, bodies, label):
 # ---------------------------------------------------------------------------
 # Re-grasp the open door's handle (close task), from wherever the arm is now
 # ---------------------------------------------------------------------------
-REGRASP_VIA = (0.10, 0.10)        # fallback via point: +10 cm further out, +10 cm up
-
-
 def regrasp(ai, execute, save_path=LAST_GRASP_FILE):
     """Get back onto the handle recorded by the last release, from ANY arm pose (other
     tasks run between opening and closing):
-      1. joint move to the recorded back-off joints -- the whole joint path is checked
-         against the door model; if it clips, via a point further out and higher;
+      1. cuRobo (go_to_joint_config) to the recorded back-off joints -- the goal is checked
+         against the door model; cuRobo's path is not (its world has no door in it);
       2. straight Cartesian line from the back-off point onto the recorded grasp (the
          exact reverse of the back-off the arm already executed);
       3. close the gripper.
@@ -679,7 +707,6 @@ def regrasp(ai, execute, save_path=LAST_GRASP_FILE):
     cur = np.array(st["ee_pos"][:3])
     grasp_pos, quat = np.array(rec["grasp_pos"]), tuple(rec["quat"])
     back_off_pos, q_bo = np.array(rec["back_off_pos"]), np.array(rec["back_off_joints"], float)
-    approach = R.from_quat(quat).as_matrix()[:, 2]
     print(f"recorded release ({rec['time']}): grasp {np.round(grasp_pos, 4)}, back-off {np.round(back_off_pos, 4)}")
     print(f"current EE {np.round(cur, 4)}  gripper {g:.4f}")
     if g > 0.2:
@@ -693,22 +720,9 @@ def regrasp(ai, execute, save_path=LAST_GRASP_FILE):
     c0 = clearance(rb, q_cur, bodies)
     print(f"  clearance at the current pose: {c0[0] * 100:.1f} cm ({c0[1]})")
 
-    # 1. to the back-off point: direct, else via a point further out + up
-    moves = []
-    ok, _ = check_joint_path(rb, q_cur, q_bo, bodies, "direct -> back-off")
-    if ok:
-        moves = [("to back-off", q_bo)]
-    else:
-        via_pos = back_off_pos - approach * REGRASP_VIA[0] + np.array([0, 0, REGRASP_VIA[1]])
-        q_via, err = solve_ik(scene, rb, via_pos, quat, q_bo)
-        print(f"  trying via {np.round(via_pos, 3)} (IK err {err * 100:.2f}cm)")
-        ok1, _ = check_joint_path(rb, q_cur, q_via, bodies, "current -> via")
-        ok2, _ = check_joint_path(rb, q_via, q_bo, bodies, "via -> back-off")
-        if err > MAX_IK_ERR or not (ok1 and ok2):
-            print("No door-clear path to the back-off point found -- refusing. Move the arm somewhere "
-                  "clearer (e.g. further back, in front of the door) and retry.")
-            return False
-        moves = [("to via", q_via), ("to back-off", q_bo)]
+    # 1. to the back-off point: cuRobo (go_to_joint_config) -- only its goal can be checked here
+    if check_curobo_goal(scene, rb, "to back-off", q=q_bo, bodies=bodies) is None:
+        return False
 
     # 2. straight in -- the reverse of the executed back-off
     dist = float(np.linalg.norm(grasp_pos - back_off_pos))
@@ -717,16 +731,14 @@ def regrasp(ai, execute, save_path=LAST_GRASP_FILE):
     if line is None:
         return False
     if not execute:
-        print(f"\nDRY RUN (re-grasp) -- would do {len(moves)} joint move(s), then {len(line)} straight "
+        print(f"\nDRY RUN (re-grasp) -- would go to the back-off point (cuRobo), then {len(line)} straight "
               "steps onto the handle, then close. Nothing commanded.")
         return True
 
-    for label, q in moves:
-        ai.execute_command(JointCommand(pos=q.tolist()))
-        if not wait_for_joints(ai, q, timeout_s=BIG_MOVE_TIMEOUT_S):
-            print(f"  {label}: did not reach the commanded joints -- stopping here.")
-            return False
-        print(f"  {label}: EE {np.round(ai.get_state()['ee_pos'][:3], 4)}")
+    if not ai.go_to_joint_config(q_bo, "to back-off"):
+        print("  to back-off: did not get there -- stopping here.")
+        return False
+    print(f"  to back-off: EE {np.round(ai.get_state()['ee_pos'][:3], 4)}")
     if not execute_joint_plan(ai, line, "approach"):
         return False
     fin = np.array(ai.get_state()["ee_pos"][:3])
@@ -768,8 +780,8 @@ def open_door_state(door, rec, open_deg=None):
 def move_to_door_view(ai, execute, standoff=DOOR_VIEW_STANDOFF, open_deg=DOOR_VIEW_OPEN_DEG):
     """Move from wherever the arm is to a pose `standoff` out along the open door's face
     normal from its handle, gripper (and wrist camera) facing the door square-on --
-    the same kind of view the closed-door detection works from. Straight-line path with
-    the orientation slerped, every step checked against the door model."""
+    the same kind of view the closed-door detection works from. cuRobo (go_to_ee_pose):
+    the goal is checked against the door model, cuRobo's path is not."""
     if not LAST_GRASP_FILE.exists() or not DOOR_FILE.exists():
         print(f"Need {LAST_GRASP_FILE} (from the open task's release) and {DOOR_FILE} -- refusing.")
         return False
@@ -777,7 +789,7 @@ def move_to_door_view(ai, execute, standoff=DOOR_VIEW_STANDOFF, open_deg=DOOR_VI
     handle, n, quat, open_deg = open_door_state(door, rec, open_deg)
     view = handle + n * standoff
     st = ai.get_state()
-    cur, cur_quat = np.array(st["ee_pos"][:3]), tuple(st["ee_pos"][3:7])
+    cur = np.array(st["ee_pos"][:3])
     print(f"open door: {abs(open_deg):.1f} deg, handle ~{np.round(handle, 3)}, outward normal {np.round(n, 3)}")
     print(f"view pose {np.round(view, 3)} ({standoff * 100:.0f} cm out, facing the door); current EE {np.round(cur, 3)}")
     if float(st.get("gripper_pos")) > 0.2:
@@ -788,14 +800,14 @@ def move_to_door_view(ai, execute, standoff=DOOR_VIEW_STANDOFF, open_deg=DOOR_VI
     bodies, info = add_door_model(scene, rb, door, handle)
     c0 = clearance(rb, np.array(st["position"], float), bodies)
     print(f"  clearance now: {c0[0] * 100:.1f} cm ({c0[1]})")
-    path = plan_cartesian(scene, rb, cur, cur_quat, view, quat, np.array(st["position"], float), "to view", bodies)
-    if path is None:
-        print("No door-clear straight path to the view pose -- refusing, arm untouched.")
+    if check_curobo_goal(scene, rb, "to view", pos=view, quat=quat, seed=np.array(st["position"], float),
+                             bodies=bodies) is None:
+        print("View pose fails a check -- refusing, arm untouched.")
         return False
     if not execute:
         print("\nDRY RUN (to door view) -- nothing commanded.")
         return True
-    ok = execute_joint_plan(ai, path, "to view")
+    ok = ai.go_to_ee_pose(view, quat, "to view")
     print(f"{'AT VIEW POSE' if ok else 'STOPPED EARLY'}: EE {np.round(ai.get_state()['ee_pos'][:3], 4)}")
     return ok
 

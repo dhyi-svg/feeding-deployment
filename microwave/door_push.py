@@ -37,10 +37,10 @@ from feeding_deployment.control.robot_controller.command_interface import (
     CartesianTrajectoryCommand, CloseGripperCommand, JointCommand, OpenGripperCommand)
 
 from microwave_common import (
-    ARM, BIG_MOVE_TIMEOUT_S, DOOR_FILE, J4_GUARD_DEG, FINGERTIP_PAST_TOOL, J6_GUARD_DEG, MAX_IK_ERR,
-    MAX_STEP_JUMP_DEG, MIN_CLEAR, PARK_FILE, add_door_model, check_joint_path, clearance,
+    ARM, DOOR_FILE, J4_GUARD_DEG, FINGERTIP_PAST_TOOL, J6_GUARD_DEG, MAX_IK_ERR,
+    MAX_STEP_JUMP_DEG, MIN_CLEAR, PARK_FILE, add_door_model, check_curobo_goal, clearance,
     continuous_ok, door_dims, execute_joint_plan, run_cartesian_trajectory, load_park, make_sim, plan_cartesian,
-    save_door_geometry, solve_ik, wait_for_joints, wrap_joints)
+    save_door_geometry, solve_ik, wait_for_joints)
 
 ARC_STEP_M = 0.02          # tool travel per sweep waypoint
 TIP_INSIDE_EDGE = 0.02     # default u: tool point this far in from the free edge (tips ~8 cm in)
@@ -128,24 +128,15 @@ def drop(rb, bodies):
         p.removeBody(bid, physicsClientId=rb.physics_client_id)
 
 
-def plan_to_park(scene, rb, p_start, quat, q_start, bodies):
-    """Door-model-checked straight/slerped leg to the park pose, then (if close) a snap to
-    the recorded park joints. Returns (leg, q_park or None) or (None, None)."""
-    if not PARK_FILE.exists():
-        print(f"no {PARK_FILE} -- can't plan to park")
-        return None, None
-    rec = json.loads(PARK_FILE.read_text())
-    leg = plan_cartesian(scene, rb, p_start, quat, rec["ee_pos"], rec["quat"], q_start, "to park", bodies)
-    if leg is None:
-        return None, None
+def plan_to_park(scene, rb, bodies):
+    """The park joints, checked as a cuRobo goal against the door model (cuRobo plans the path;
+    it is not previewed and its world has no door, so the legs before it clear the door).
+    Returns q_park or None."""
     q_park = load_park()
-    snap = float(np.degrees(np.max(np.abs(wrap_joints(leg[-1]) - q_park))))
-    print(f"  to park ends {snap:.1f} deg (max joint) from the recorded park joints")
-    if snap > 10.0:
-        print("  -> will stop at the park POSE on this joint branch")
-        return leg, None
-    ok, _ = check_joint_path(rb, leg[-1], q_park, bodies, "snap to park joints")
-    return leg, (q_park if ok else None)
+    if q_park is None:
+        print(f"no {PARK_FILE} -- can't plan to park")
+        return None
+    return check_curobo_goal(scene, rb, "to park", q=q_park, bodies=bodies)
 
 
 def _chain(scene, rb, points, q, bodies, label, min_clear=None, closed=False):
@@ -265,12 +256,12 @@ def _plan_open(scene, rb, df, st, args, deg0, roll):
         out, q = _chain(scene, rb, out_pts, arc[-1], bodies1, "out")
         if out is None:
             return None
-        park, q_park = plan_to_park(scene, rb, out_pts[-1][0], quat, q, bodies1)
+        q_park = plan_to_park(scene, rb, bodies1)
     finally:
         drop(rb, bodies1)
-    if park is None:
+    if q_park is None:
         return None
-    return {"before": legs, "sweep": (arc, arc_poses), "after": out + [("to park", park)],
+    return {"before": legs, "sweep": (arc, arc_poses), "after": out,
             "q_park": q_park, "deg1": deg1}
 
 
@@ -543,9 +534,8 @@ def push_open(ai, args, sim=None):
     for label, leg in plan["after"]:
         if not execute_joint_plan(ai, leg, label):
             return False
-    if plan["q_park"] is not None:
-        ai.execute_command(JointCommand(pos=plan["q_park"].tolist()))
-        wait_for_joints(ai, plan["q_park"], timeout_s=BIG_MOVE_TIMEOUT_S)
+    if not ai.go_to_joint_config(plan["q_park"], "to park"):
+        return False
     print(f"\nPUSH-OPEN DONE: door pushed to ~{plan['deg1']:.0f} deg. final EE {np.round(ai.get_state()['ee_pos'][:3], 4)}")
     return True
 
