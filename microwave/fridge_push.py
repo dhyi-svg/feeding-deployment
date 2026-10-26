@@ -68,6 +68,36 @@ def enable_keep_out():
     microwave_common.KEEP_OUT = keep_out
 
 
+def placement_advice(handle, normal, start_joints=None):
+    """Where to move the wheelchair to get the handle into the placement that passed in sim."""
+    x, y = float(handle[0]), float(handle[1])
+    yaw = float(np.degrees(np.arctan2(-normal[1], -normal[0])))
+    cm = lambda d: f"~{max(1, round(d * 100))} cm"
+    moves = []
+    if x > F.PLACEMENT_X[1]:
+        moves.append(f"move the wheelchair {cm(x - F.PLACEMENT_X[1])} closer to the fridge")
+    elif x < F.PLACEMENT_X[0]:
+        moves.append(f"move the wheelchair {cm(F.PLACEMENT_X[0] - x)} back from the fridge")
+    if y < F.PLACEMENT_Y[0]:
+        moves.append(f"move the wheelchair {cm(F.PLACEMENT_Y[0] - y)} to its right")
+    elif y > F.PLACEMENT_Y[1]:
+        moves.append(f"move the wheelchair {cm(y - F.PLACEMENT_Y[1])} to its left")
+    if yaw > F.PLACEMENT_YAW_DEG[1]:
+        moves.append(f"turn the wheelchair ~{yaw - F.PLACEMENT_YAW_DEG[1]:.0f} deg so its front swings left")
+    elif yaw < F.PLACEMENT_YAW_DEG[0]:
+        moves.append(f"turn the wheelchair ~{F.PLACEMENT_YAW_DEG[0] - yaw:.0f} deg so its front swings right")
+    lines = [f"placement: handle x {x:.3f} y {y:.3f}, yaw {yaw:+.1f} deg (passed in sim: x {F.PLACEMENT_X[0]:.2f}-"
+             f"{F.PLACEMENT_X[1]:.2f}, y {F.PLACEMENT_Y[0]:.2f} to {F.PLACEMENT_Y[1]:.2f}, yaw "
+             f"{F.PLACEMENT_YAW_DEG[0]:+.0f} to {F.PLACEMENT_YAW_DEG[1]:+.0f}, with --push-open --swing-deg "
+             f"{F.PLACEMENT_PULL_DEG} from the Fridge start pose)"]
+    lines += [f"  -> {m}" for m in moves] or ["  -> inside that placement"]
+    if moves and len(moves) > 1:
+        lines.append("  (re-check after each move: turning the chair also shifts the handle)")
+    if start_joints is not None and np.degrees(start_joints[0]) < 0:
+        lines.append(f"  -> start from the web app's Fridge start pose (J1 now {np.degrees(start_joints[0]):.0f} deg)")
+    return "\n".join(lines)
+
+
 def _sim():
     """One planning sim for the candidate search (demo_replay.replay makes its own for the run itself)."""
     global _SIM

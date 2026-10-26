@@ -44,7 +44,7 @@ DOOR_FILE = Path.home() / ".fridge_door.json"   # hinge + closed-door grasp go h
 
 # --- release: let go, then back straight out of the handle. The microwave's 0.20 failed the sim checks from 4 of the
 # 5 real 09-20 swing endings (J6 / IK); 0.12 passed from all 5 (and is what worked on the microwave on 10-21)
-BACK_OFF_M = 0.12
+BACK_OFF_M = 0.06
 LAST_GRASP_FILE = Path.home() / ".fridge_last_grasp.json"   # the release's grasp record, never the microwave's
 
 # --- door model: the open writes these into DOOR_FILE, and every fridge plan near the door (push-open, close) checks
@@ -73,7 +73,7 @@ PUSH_OPEN_PULL_DEG = 50           # the pull (--swing-deg N for another). An off
                                   # door) found parallel hand poses behind the door from 35 (2 poses, 2.8 cm clear) to 60;
                                   # 50 has many (75 of 720, up to 7.3 cm clear) and the gap behind the door is wider
 PUSH_OPEN_TO_DEG = 90             # push the door on to this
-PUSH_OPEN_OFF_HANDLE_M = BACK_OFF_M   # let go, then straight out off the handle this far (the release's 12 cm) ...
+PUSH_OPEN_OFF_HANDLE_M = BACK_OFF_M   # let go, then straight out off the handle this far (the release's 6 cm) ...
 PUSH_OPEN_EDGE_CLEAR_M = 0.16     # ... along the open door to this far past its free edge (tool point) ...
 PUSH_OPEN_GAP_M = 0.10            # ... round it to this far off the door's inner face (tool point), turning the hand ...
 PUSH_OPEN_DZ_M = -0.10            # ... and going this far below the handle's height (the search's best poses) ...
@@ -124,6 +124,12 @@ CLOSE_ARG_DEFAULTS = dict(        # replace the microwave close's argparse defau
 # (fridge_push.enable_keep_out)
 CHAIR_KEEP_OUT_BEHIND_M = 15 * 0.0254   # user, 10-24: ~8 in estimated, then 12, then 15. The real teleop start (10-24
                                         # joints) has the forearm ~14 in behind the base: inside 12, clear at 15
+
+# --- wheelchair placement that passed in sim (70-deg pull + push-open, Fridge start pose)
+PLACEMENT_X = (0.50, 0.56)
+PLACEMENT_Y = (-0.45, -0.39)
+PLACEMENT_YAW_DEG = (-10.0, 10.0)
+PLACEMENT_PULL_DEG = 70
 
 # --- "sam3" option only: it sees no door, and its point is the handle's visible pixels, not the microwave detector's
 SAM3_DOOR_NORMAL = np.array([-1.0, 0.0, 0.0])   # assumed: the door faces the arm head-on

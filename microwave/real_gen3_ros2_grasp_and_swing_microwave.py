@@ -339,9 +339,16 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG, min_swing=SWING_MIN_DEG)
     if FRIDGE:
         FRAME_ARM = ai
     h_raw, orient, n, door_z, door_mid, hinge_seen = detect_handle()
+    advice = ""
     if FRIDGE:
+        import fridge_push
+        advice = "\n" + fridge_push.placement_advice(h_raw, n, q0)
+        print(advice[1:])
         # the measured hinge offset from the closed-door grasp point, in the door's frame: into it, along it, up
-        h, grasp = grasp_pose(h_raw, orient, n)
+        try:
+            h, grasp = grasp_pose(h_raw, orient, n)
+        except SystemExit as e:
+            sys.exit(f"{e}{advice}")
         into, along = -np.r_[n[:2], 0.0] / np.linalg.norm(n[:2]), np.cross(np.r_[n[:2], 0.0], [0.0, 0.0, 1.0])
         along /= np.linalg.norm(along)
         o = FRIDGE_HINGE_OFFSET_FROM_GRASP
@@ -360,7 +367,7 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG, min_swing=SWING_MIN_DEG)
     radius = float(np.linalg.norm(np.asarray(grasp.position)[:2] - hinge[:2]))
     print(f"hinge (detected) {np.round(hinge, 4)}  radius {radius * 100:.1f} cm")
     if not HINGE_RADIUS_RANGE[0] <= radius <= HINGE_RADIUS_RANGE[1]:
-        sys.exit(f"hinge radius {radius * 100:.1f} cm is implausible (door ~35 cm) -- refusing.")
+        sys.exit(f"hinge radius {radius * 100:.1f} cm is implausible (door ~35 cm) -- refusing.{advice}")
 
     # --- plan everything before any motion: grasp path + largest swing, for each nose-down tilt ---
     best = None                                   # (swing deg, pitch, grasp, leg)
@@ -392,7 +399,7 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG, min_swing=SWING_MIN_DEG)
             break                                 # smallest tilt that reaches the largest swing
     if best is None:
         sys.exit(f"no tilt in {GRASP_PITCHES_DEG} gives a grasp + swing of >= {min_swing} deg that passes the "
-                 f"sim gates -- refusing before any motion. Start joints {np.round(np.degrees(q0), 1)}.")
+                 f"sim gates -- refusing before any motion. Start joints {np.round(np.degrees(q0), 1)}.{advice}")
     deg, pitch, grasp, leg = best
     g_p, g_q = np.asarray(grasp.position), np.asarray(grasp.orientation)
     print(f"chosen: tilt {pitch} deg nose-down, swing {deg} deg; grasp {np.round(g_p, 4)}")
@@ -442,7 +449,8 @@ def open_task(ai, execute, max_swing=SWING_MAX_TRY_DEG, min_swing=SWING_MIN_DEG)
         print(f"after-swing re-check from the real grasp: {m2}")
         if not ok:
             sys.exit("what follows the swing would fail from the real grasp -- stopping BEFORE the swing, still holding "
-                     "the handle (door closed). Run with --release instead of --swing-deg to let go and back off.")
+                     "the handle (door closed). Run with --release instead of --swing-deg to let go and back off."
+                     + advice)
     if FRIDGE:   # no detected hinge: the door model turns about the measured pivot too
         save_door_geometry(hinge=hinge, hinge_pivot=hinge, detected_edge=hinge_seen, door_file=DOOR_SAVE_FILE)
     else:
