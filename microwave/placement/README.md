@@ -1,5 +1,16 @@
 # Microwave container placement
 
+> **Motion is on sheppy now: `place_move.py`** (built on Part 1, `microwave/xyz_move.py`). It carries the held
+> container to the placement point with cuRobo `HOLD_LEVEL` and executes every leg in **joint impedance**
+> (`sheppy_arm.IMPEDANCE`, the driver's path tolerance acting as a force stop) through `SheppyArm`.
+> The placement point is a **placeholder** (`place_move.placement_point`, from `--xyz` / `place_move.yaml`)
+> until Part 2 (microwave perception) supplies it.
+> `python3 -u microwave/placement/place_move.py --config microwave/placement/place_move.yaml [--execute]`
+> after `source microwave/sheppy/env.sh`; tests: `tests/test_place_move.py`.
+> The motion and `bringup.sh` described below (`ArmInterfaceClient`, `arm_server`, the old
+> `compliant_controller` impedance lowering, PyBullet-planned legs) are the pre-sheppy version: do not use
+> them to move the arm. Their perception/cavity code is what Part 2 can build on.
+
 Puts the OXO box the gripper is holding into the **open** microwave: real-time detection,
 cavity + floor from depth, obstacle-aware level insertion, impedance lowering, release, retract.
 **Perception run live on the rig 2026-10-20 (look-in works, see below); no placement motion into the microwave yet.** History of the SAM 3 version:
