@@ -6,7 +6,9 @@ moved into arm_base_link with the frame's `base_T_cam`. Nothing is taken from th
 1. cloud      every (dilated) cavity-mask pixel with depth in [depth_min, depth_max] -> camera
               points (+ depth_corr along the optical axis, 0 = uncorrected) -> arm_base_link ->
               8 mm voxels -> statistical outlier removal. Refused below min_valid_depth_frac / min_points.
-2. floor      `cavity_perception.estimate_cavity` (unchanged; regression-tested on the 10-20 rig frame):
+2. floor      cavity_method "opening": `opening_cavity.estimate_opening_cavity` instead (back wall, front
+              face and opening outline; no floor view needed). cavity_method "floor", the default:
+              `cavity_perception.estimate_cavity` (unchanged; regression-tested on the 10-20 rig frame):
               gravity-sorted planes; the floor is the biggest level, upward-facing sheet that runs up to
               the back wall (a countertop in front of the microwave does not), refit in a 4 mm band
               (separates a turntable ~1 cm above it); refused unless level (<= floor_max_tilt_deg --
@@ -38,6 +40,7 @@ import yaml
 import cavity_perception as cp
 import point_cloud as pcm
 from cavity_segmentation import SegmentationConfig
+from opening_cavity import OpeningConfig, estimate_opening_cavity
 from placement_config import CavityConfig, PointCloudConfig, _merge
 from rgbd_source import BASE_FRAME, CameraConfig
 
@@ -57,6 +60,7 @@ class ContainerSpec:
     height_m: float = 0.112            # bottom -> top (OXO POP, measured by RAMMP)
     # tool frame -> container centre, in the TOOL frame (Part 1's --grasp-offset). None = not measured
     grasp_offset: tuple = None
+    finger_below_tool_m: float = None  # lowest finger below the tool centre, gripper rolled to place. None = unchecked
     nominal: tuple = ("length_m", "width_m")   # which of the above are still guesses
 
 
@@ -71,6 +75,9 @@ class TargetConfig:
     roll_deg: float = -90.0            # Part 1's task roll (wrist camera LEFT, confirmed 10-23)
     max_reach_m: float = 0.91          # = xyz_move.MAX_REACH_M: reported, Part 1 enforces it
     z_range_m: tuple = (0.12, 0.75)    # = xyz_move.Z_RANGE_M
+    # cavity_method opening, footprint not seen: MEASURED height of the support above the shell floor
+    # (turntable; 0 = none). None = refuse: an unseen turntable would eat the whole place_gap.
+    blind_support_height_m: float = None
 
 
 @dataclass
@@ -81,6 +88,8 @@ class PerceptionConfig:
     cavity: CavityConfig = field(default_factory=CavityConfig)
     container: ContainerSpec = field(default_factory=ContainerSpec)
     target: TargetConfig = field(default_factory=TargetConfig)
+    cavity_method: str = "floor"       # "floor" (estimate_cavity, needs the floor in view) | "opening"
+    opening: OpeningConfig = field(default_factory=OpeningConfig)
 
 
 def load_perception_config(path=None, overrides=None):
@@ -90,6 +99,8 @@ def load_perception_config(path=None, overrides=None):
     if path is not None:
         _merge(cfg, yaml.safe_load(Path(path).read_text()) or {})
     _merge(cfg, copy.deepcopy(overrides or {}))
+    if cfg.cavity_method not in ("floor", "opening"):
+        raise ValueError(f"cavity_method must be 'floor' or 'opening', got {cfg.cavity_method!r}")
     go = cfg.container.grasp_offset
     if go is not None and len(go) != 3:
         raise ValueError("container.grasp_offset must be [x, y, z] (tool frame, m) or null")
@@ -143,6 +154,26 @@ def estimate_floor(clouds, cam_positions, cavity_cfg: CavityConfig, min_looks=No
             notes.append(f"look {i + 1}: {e}")
     if not cavs:
         raise PerceptionError("no look gave a valid cavity: " + "; ".join(notes))
+    return _merge_looks(cavs, cavity_cfg, min_looks, notes)
+
+
+def estimate_opening(observations, cfg: PerceptionConfig, min_looks=None):
+    """estimate_floor's return, from each look's back wall + front face + opening. Raises PerceptionError."""
+    cavs, notes = [], []
+    for i, o in enumerate(observations):
+        try:
+            cavs.append(estimate_opening_cavity(o.frame, o.cmask, cfg.cavity, cfg.opening))
+        except cp.CavityError as e:
+            notes.append(f"look {i + 1}: {e}")
+    if not cavs:
+        raise PerceptionError("no look gave a valid cavity: " + "; ".join(notes))
+    cams = np.array([o.frame.cam_pos for o in observations])
+    if len(cams) > 1 and np.ptp(cams, axis=0).max() < 0.01:
+        notes.append("all looks are from one viewpoint: their agreement checks depth noise, not the calibration")
+    return _merge_looks(cavs, cfg.cavity, min_looks, notes)
+
+
+def _merge_looks(cavs, cavity_cfg, min_looks, notes):
     need = cavity_cfg.min_looks if min_looks is None else min_looks
     mcfg = copy.copy(cavity_cfg)
     mcfg.min_looks = need
@@ -208,11 +239,12 @@ def support_surface(cav, points, center_f, center_l, half_f, half_l, band):
     pts = np.asarray(points, float)
     inside = (np.abs(pts @ cav.f - center_f) <= half_f) & (np.abs(pts @ cav.l - center_l) <= half_l)
     col = pts[inside]
-    out = {"height": 0.0, "n": len(col), "n_support": 0, "n_above": 0, "max_above": 0.0}
+    out = {"height": 0.0, "n": len(col), "n_near": 0, "n_support": 0, "n_above": 0, "max_above": 0.0}
     if len(col) == 0:
         return out
     a = col[:, 2] - np.array([cav.floor_z_at(p[:2]) for p in col])
     a = a[(a >= -band) & (a <= band)]
+    out["n_near"] = len(a)         # n counts the whole column, e.g. a ceiling seen from below
     best = None
     for lev in np.arange(-SUPPORT_BIN_M * 2, band + 1e-9, SUPPORT_BIN_M / 2):
         on = np.abs(a - lev) <= SUPPORT_BIN_M
@@ -228,8 +260,10 @@ def support_surface(cav, points, center_f, center_l, half_f, half_l, band):
     return out
 
 
-def placement_target(cav, cloud_points, spec: ContainerSpec, tcfg: TargetConfig, cavity_cfg: CavityConfig):
-    """The container centre on the usable floor, and the three target points. Raises PerceptionError."""
+def placement_target(cav, cloud_points, spec: ContainerSpec, tcfg: TargetConfig, cavity_cfg: CavityConfig,
+                     need_seen_support=False, frame=BASE_FRAME):
+    """The container centre on the usable floor, and the three target points. Raises PerceptionError.
+    need_seen_support: the floor came from the shell (opening_cavity), so an unseen footprint may hide a turntable."""
     import xyz_move as xm          # Part 1: its orientation convention is THE convention
     L, W, H = spec.length_m, spec.width_m, spec.height_m
     checks, warnings = [], []
@@ -261,10 +295,17 @@ def placement_target(cav, cloud_points, spec: ContainerSpec, tcfg: TargetConfig,
     z_floor_c = cav.floor_z_at(cav.point(c_f, c_l, 0.0)[:2])
     sup = support_surface(cav, cloud_points, c_f, c_l, L / 2 + 0.01, W / 2 + 0.01, cavity_cfg.support_band_m)
     support = z_floor_c + sup["height"]
-    kind = "floor" if sup["height"] < 0.003 else "raised support (turntable?)"
+    if sup["n_near"] < 30 and need_seen_support:
+        if tcfg.blind_support_height_m is None:
+            raise PerceptionError(f"only {sup['n_near']} depth points at the container footprint, so a turntable would "
+                                  "not be seen: set target.blind_support_height_m (measured, 0 = none)")
+        support += tcfg.blind_support_height_m
+        warnings.append(f"container footprint not seen ({sup['n_near']} depth points): support is the shell floor + the "
+                        f"configured {tcfg.blind_support_height_m * 1000:.0f} mm, and nothing checks the footprint is empty")
+    kind = "floor" if support - z_floor_c < 0.003 else "raised support (turntable?)"
     checks.append(f"support under the footprint: {kind} at z {support:.3f} ({sup['height'] * 1000:+.0f} mm vs the floor "
                   f"plane; {sup['n_support']} of {sup['n']} footprint points on it)")
-    if sup["n"] < 30:
+    if sup["n_near"] < 30 and not need_seen_support:
         warnings.append(f"only {sup['n']} depth points under the container footprint: the support height is the "
                         "floor plane extrapolated, not measured there")
     if sup["n_above"]:
@@ -296,6 +337,13 @@ def placement_target(cav, cloud_points, spec: ContainerSpec, tcfg: TargetConfig,
         tool = center - rot.apply(np.asarray(spec.grasp_offset, float))
         reach = float(np.linalg.norm(tool))
         checks.append(f"tool target reach {reach:.3f} m, z {tool[2]:.3f}")
+        if spec.finger_below_tool_m is None:
+            warnings.append("container.finger_below_tool_m not measured: finger clearance over the floor is unchecked")
+        else:
+            finger = tool[2] - spec.finger_below_tool_m
+            checks.append(f"lowest finger z {finger:.3f}, support {support:.3f}")
+            if finger < support:
+                raise PerceptionError(f"the lower finger would be {(support - finger) * 1000:.0f} mm into the support")
         if reach > tcfg.max_reach_m or not tcfg.z_range_m[0] <= tool[2] <= tcfg.z_range_m[1]:
             warnings.append(f"Part 1 will refuse this tool target: reach {reach:.3f} m (max {tcfg.max_reach_m}) / "
                             f"z {tool[2]:.3f} (band {tcfg.z_range_m}) -- bring the arm/microwave closer")
@@ -306,7 +354,7 @@ def placement_target(cav, cloud_points, spec: ContainerSpec, tcfg: TargetConfig,
     ucorners = np.array([cav.point(a, b, support) for a, b in
                          ((u["front"], u["right"]), (u["front"], u["left"]), (u["back"], u["left"]), (u["back"], u["right"]))])
     return PlacementResult(
-        frame=BASE_FRAME, floor_contact=floor_contact, container_center=center, tool_center=tool,
+        frame=frame, floor_contact=floor_contact, container_center=center, tool_center=tool,
         yaw_deg=yaw, roll_deg=float(tcfg.roll_deg), grasp_offset=spec.grasp_offset,
         floor_z=float(cav.floor_z), floor_normal=np.asarray(cav.floor_normal, float), floor_tilt_deg=tilt,
         floor_rms_m=float(cav.floor_rms), support_z=float(support), support_kind=kind, insertion_axis=f,
@@ -332,11 +380,20 @@ def run_pipeline(frames, segmenter, cfg: PerceptionConfig, min_looks=None, masks
     """frames -> (PlacementResult, observations, Cavity). `masks` (optional, one per frame) skips SAM 3
     (a saved CavityMask). Raises PerceptionError with every per-frame reason."""
     obs, problems = [], []
+    opening = cfg.cavity_method == "opening"
     for i, fr in enumerate(frames):
         try:
             cm = masks[i] if masks is not None else segmenter.segment(fr)
             o = Observation(fr, cm)
-            o.cloud = cavity_cloud(fr, cm.mask, cfg.cloud)
+            if opening and cm.microwave is None and segmenter is not None:
+                segmenter.add_context(cm, fr)
+            try:
+                o.cloud = cavity_cloud(fr, cm.mask, cfg.cloud)
+            except PerceptionError as e:
+                if not opening:                      # opening needs no depth beyond the back wall's
+                    raise
+                o.cloud = CavityCloud(np.empty((0, 3)), int(cm.mask.sum()), 0)
+                cm.notes.append(f"no footprint depth: {e}")
             log(f"frame {i + 1}: SAM 3 '{cm.prompt}' score {cm.score:.2f}, mask {int(cm.sam_mask.sum())} px "
                 f"(upright turns {cm.k_upright}), depth valid {o.cloud.valid_frac * 100:.0f}%, "
                 f"{len(o.cloud.points)} cavity points" + "".join(f"; {n}" for n in cm.notes))
@@ -352,12 +409,16 @@ def run_pipeline(frames, segmenter, cfg: PerceptionConfig, min_looks=None, masks
     try:
         if not good:
             raise PerceptionError("no usable frame: " + "; ".join(problems))
-        cav, _, _, notes = estimate_floor([o.cloud for o in good], [o.frame.cam_pos for o in good], cfg.cavity,
-                                          min_looks)
+        if opening:
+            cav, _, _, notes = estimate_opening(good, cfg, min_looks)
+        else:
+            cav, _, _, notes = estimate_floor([o.cloud for o in good], [o.frame.cam_pos for o in good], cfg.cavity,
+                                              min_looks)
         for n in notes:
             log(f"  {n}")
         cloud = np.vstack([o.cloud.points for o in good])
-        res = placement_target(cav, cloud, cfg.container, cfg.target, cfg.cavity)
+        res = placement_target(cav, cloud, cfg.container, cfg.target, cfg.cavity, need_seen_support=opening,
+                               frame=good[0].frame.base_frame)
     except PerceptionError as e:
         e.observations, e.cavity = obs, cav          # for the debug images of a refusal
         raise

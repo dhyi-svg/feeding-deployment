@@ -150,6 +150,7 @@ class SheppyArm:
         self.node = Node(node_name)
         self._lock = threading.Lock()
         self._js = self._ee = self._grip = None
+        self._ee_vel = np.zeros(3)         # tool twist, linear, world-aligned (driver: J(q) qd at the flange)
         self.node.create_subscription(JointState, "/joint_states", self._on_js, qos_profile_sensor_data)
         self.node.create_subscription(EeState, "/ee_state", self._on_ee, qos_profile_sensor_data)
         self.node.create_subscription(GripperState, "/gripper_state", self._on_grip, qos_profile_sensor_data)
@@ -162,6 +163,8 @@ class SheppyArm:
         threading.Thread(target=self._exec.spin, daemon=True).start()
         self._sim = None
         self.last_path = []
+        self.last_duration = 0.0
+        self.monitor_stopped = False
         t0 = time.time()
         while (self._js is None or self._ee is None or self._grip is None) and time.time() - t0 < 10.0:
             time.sleep(0.05)
@@ -183,8 +186,10 @@ class SheppyArm:
         p, o = m.pose.position, m.pose.orientation
         quat = np.array([o.x, o.y, o.z, o.w])
         tool = np.array([p.x, p.y, p.z]) + R.from_quat(quat).apply([0.0, 0.0, TOOL_Z])
+        v = m.twist.linear
         with self._lock:
             self._ee = np.concatenate([tool, quat])
+            self._ee_vel = np.array([v.x, v.y, v.z])
 
     def _on_grip(self, m):
         with self._lock:
@@ -194,7 +199,7 @@ class SheppyArm:
         with self._lock:
             q, dq, tau = self._js
             return {"position": _wrap(q), "velocity": dq.copy(), "effort": tau.copy(),
-                    "ee_pos": self._ee.copy(), "gripper_pos": self._grip}
+                    "ee_pos": self._ee.copy(), "ee_vel": self._ee_vel.copy(), "gripper_pos": self._grip}
 
     def raw_joints(self):
         """Measured joints as the driver reports them (not wrapped): where a cuRobo plan must start."""
@@ -232,8 +237,16 @@ class SheppyArm:
         # never faster than JOINT_SPEED on any joint either, whatever the Cartesian length says
         joint_travel = float(np.sum([np.max(np.abs(b - a)) for a, b in zip(path[:-1], path[1:])]))
         duration = max(MIN_DURATION_S, 1.875 * s_knots[-1] / speed, 1.875 * joint_travel / (JOINT_SPEED * speed_scale))
+        self.last_duration = float(duration)
         t, q, qd = _min_jerk_samples(path, s_knots, duration)
         return self._send(t, q, qd, impedance, monitor)
+
+    def hold_joints(self, q, seconds, impedance=None, monitor=None):
+        """A one-point goal holding joints `q` for `seconds`, replacing whatever holds the arm. In impedance it
+        is what makes the arm compliant; in position, with q = the measured joints, it leaves impedance without
+        a jump. `monitor` as in move_joints."""
+        q = np.asarray(q, dtype=float)
+        return self._send(np.array([float(seconds)]), q[None, :], np.zeros((1, 7)), impedance, monitor, preemption=1)
 
     def move_cartesian(self, traj, impedance=None):
         """`traj`: [(pos, quat xyzw), ...] in the base frame, like CartesianTrajectoryCommand. Each
@@ -251,7 +264,7 @@ class SheppyArm:
             self._sim = make_sim()
         return self._sim
 
-    def _send(self, t, q, qd, impedance=None, monitor=None):
+    def _send(self, t, q, qd, impedance=None, monitor=None, preemption=0):
         g = ExecuteJointTrajectory.Goal()
         g.trajectory.joint_names = JOINTS
         for ti, qi, qdi in zip(t, q, qd):
@@ -271,7 +284,7 @@ class SheppyArm:
             g.control_mode = 1             # IMPEDANCE
             g.gains = JointImpedanceGains(kq=list(impedance["kq"]), zeta=float(impedance["zeta"]),
                                           torque_limit=list(impedance["torque_limit"]))
-        g.preemption = 0                   # QUEUE
+        g.preemption = preemption          # 0 = QUEUE, 1 = LATEST_WINS
         g.sender_id = "microwave"
         fut = self._traj.send_goal_async(g)
         gh = self._wait(fut, 5.0)

@@ -28,6 +28,15 @@
 >    microwave" for close views (0.85 vs 0.50); calibrate `cloud.depth_corr_m` (measure the real 5 cm gap); measure the container.
 > 5. Camera calibration: the floor reads 4.5 deg tilted with the gripper rolled +90 (0.9 deg at roll 0) -- a few deg of
 >    hand-eye rotation error; perceive at roll ~0 until recalibrated.
+> **Status 2026-10-30 (on the arm, bare mount, no box):** opening method (`opening_cavity.py`, works without seeing
+> the floor; for the scene camera, tested on the wrist camera) -> placement point; J7 roll; close; lift to pre-insert;
+> 27.6 cm straight in; down 1 in; stepped release; straight back; all in POSITION control, sub-mm. Those last steps ran from
+> one-off scripts: `place_move.py --execute` still lowers in impedance and has no release or retract.
+> **TO FIX: impedance on the descent.** With the driver's default gains (the same as the reference's) the hand ROSE
+> 3.1 cm and tilted 4.6 deg on switching to impedance, and rose to tilt 8.9 deg when commanded down; it never reached
+> anything, so contact stopping (`lower.py`) is untested on hardware. Likely model/gravity compensation (camera mount
+> ~0.44 kg and the held load are not in the driver's model), not gains: 10-26 stiffer gains were worse; driver 1.1.0
+> has no "medium" profile. Until fixed: height-based lowering in position control, which feels no contact.
 > The motion and `bringup.sh` described below (`ArmInterfaceClient`, `arm_server`, the old
 > `compliant_controller` impedance lowering, PyBullet-planned legs) are the pre-sheppy version: do not use
 > them to move the arm. Their perception/cavity code is what Part 2 can build on.

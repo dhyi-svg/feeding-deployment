@@ -7,10 +7,14 @@
     python3 -u microwave/placement/perceive_placement.py --recorded tests/data/microwave_lookin_2026-10-20.npz
     # skip SAM 3 with a saved mask (e.g. on a machine without the GPU model):
     python3 -u microwave/placement/perceive_placement.py --recorded <f.npz> --mask <f_mask.npz>
+
+    # back wall + front face + opening instead of the floor (the scene-camera method; works on any camera):
+    python3 -u microwave/placement/perceive_placement.py --live --frames 3 --cavity-method opening
 Run from the repo root.
 
 Steps: acquire frame(s) -> SAM 3 cavity mask -> valid-depth cavity cloud (arm_base_link) -> floor and
-cavity (planes, gravity-sorted) -> agreement across frames -> usable floor -> placement target. Prints
+cavity (planes, gravity-sorted; or opening_cavity.py) -> agreement across frames -> usable floor ->
+placement target. Prints
 the floor contact, container-centre and tool-centre targets with their frame and units, every check,
 and every warning; refusals say why (exit 2). Writes to --out (default ~/microwave_place_logs/perception_<t>/):
   overlay_<i>.jpg     camera view with mask, floor points, cavity box, usable floor, footprint, targets
@@ -37,12 +41,13 @@ import yaml  # noqa: E402
 import floor_target as ft  # noqa: E402
 import perception_viz as viz  # noqa: E402
 from cavity_segmentation import CavitySegmenter, SegmentationError  # noqa: E402
-from rgbd_source import AcquisitionError, RecordedSource, RosRGBDSource  # noqa: E402
+from rgbd_source import BASE_FRAME, AcquisitionError, RecordedSource, RosRGBDSource  # noqa: E402
 
 
 def save_mask(path, cm):
+    extra = {k: v for k, v in (("microwave", cm.microwave), ("door", cm.door)) if v is not None}
     np.savez_compressed(path, mask=cm.mask, sam_mask=cm.sam_mask, score=cm.score, k_upright=cm.k_upright,
-                        prompt=cm.prompt)
+                        prompt=cm.prompt, **extra)
 
 
 def load_mask(path, frame, seg_cfg):
@@ -57,7 +62,10 @@ def load_mask(path, frame, seg_cfg):
     if seg_cfg.upright == "gravity":
         from point_cloud import upright_k
         k = upright_k(frame.base_T_cam)
-    return CavitySegmenter(seg_cfg, model=Saved()).segment(frame)
+    cm = CavitySegmenter(seg_cfg, model=Saved()).segment(frame)
+    cm.microwave = d["microwave"] if "microwave" in d else None
+    cm.door = d["door"] if "door" in d else None
+    return cm
 
 
 def parse_args(argv=None):
@@ -71,6 +79,8 @@ def parse_args(argv=None):
     a.add_argument("--min-looks", type=int, help="looks that must agree (default: cavity.min_looks, but at most "
                                                  "the number of frames given)")
     a.add_argument("--config", type=Path, help=f"YAML overrides (default {ft.DEFAULT_CONFIG_FILE.name} if present)")
+    a.add_argument("--cavity-method", choices=("floor", "opening"),
+                   help="how the cavity is measured (default: cavity_method in the config)")
     a.add_argument("--grasp-offset", type=float, nargs=3, metavar=("X", "Y", "Z"),
                    help="tool frame -> container centre in the TOOL frame (m), MEASURED; enables the tool target")
     a.add_argument("--out", type=Path, help="output dir (default ~/microwave_place_logs/perception_<time>)")
@@ -83,7 +93,9 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
-    over = {"container": {"grasp_offset": list(args.grasp_offset)}} if args.grasp_offset else None
+    over = {"container": {"grasp_offset": list(args.grasp_offset)}} if args.grasp_offset else {}
+    if args.cavity_method:
+        over["cavity_method"] = args.cavity_method
     cfg = ft.load_perception_config(args.config, over)
     out = args.out or Path.home() / "microwave_place_logs" / f"perception_{time.strftime('%Y%m%d_%H%M%S')}"
     out.mkdir(parents=True, exist_ok=True)
@@ -150,6 +162,7 @@ def main(argv=None):
         return 2
     f = res.frame
     print(f"FRAME: {f} (= Part 1's base_link: +x forward, +z up, origin at the arm base). UNITS: metres, degrees.")
+    print(f"  cavity from      {cfg.cavity_method}: {res.cavity['sources']}")
     print(f"  floor            z {res.floor_z:.4f} at the cavity centre, normal {np.round(res.floor_normal, 3).tolist()} "
           f"(tilt {res.floor_tilt_deg:.2f} deg), rms {res.floor_rms_m * 1000:.1f} mm")
     print(f"  support          {res.support_kind}, z {res.support_z:.4f}")
@@ -168,6 +181,10 @@ def main(argv=None):
     for w in res.warnings:
         print(f"  ! {w}")
     (out / "result.json").write_text(json.dumps({"ok": True, **res.to_dict()}, indent=1, default=float))
+    if res.frame != BASE_FRAME:     # Part 1's goal, yaw and level are all in its base frame; nothing converts yet
+        print(f"\n{status}\nNO Part 1 input written: the target is in {res.frame}, Part 1 works in {BASE_FRAME}")
+        _show(out, args.show)
+        return 0
     (out / "place_move.yaml").write_text(
         "# Written by perceive_placement.py -- Part 1 input (python3 -u microwave/placement/place_move.py --config "
         "<this file>)\n" + yaml.safe_dump(res.part1_config(), sort_keys=False))

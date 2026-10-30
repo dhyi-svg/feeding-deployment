@@ -347,3 +347,155 @@ def test_cli_on_the_real_frame_writes_everything_and_refuses_with_exit_2(tmp_pat
     rc = pp.main(["--recorded", str(DATA / "microwave_lookin_2026-10-20.npz"), "--mask", str(bad),
                   "--out", str(tmp_path / "bad")])
     assert rc == 2 and "REFUSED" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------- cavity_method: opening (opening_cavity.py)
+def context_masks(scene, frame):
+    """(cavity, microwave, door) the way SAM 3 returns them, from the ray-cast surfaces. The shell's front is 2 cm
+    before scene.truth()'s front, so the rim is there."""
+    depth, _, hit = render(scene, frame.base_T_cam, K9)
+    names = [b.name for b in scene.boxes]
+    door = hit == (names.index("door") if "door" in names else -2)
+    shell = np.isin(hit, [names.index(n) for n in ("floor", "ceiling", "back", "hinge wall", "panel")])
+    rays = np.stack(np.meshgrid((np.arange(640) - K9[2]) / K9[0], (np.arange(480) - K9[5]) / K9[4]) + [np.ones((480, 640))], -1)
+    P = rays @ frame.base_T_cam[:3, :3].T * (depth[..., None] / 1000.0) + frame.base_T_cam[:3, 3]
+    pf, pl = P @ scene.f, P @ scene.l
+    t = scene.truth()
+    cav = (depth > 0) & (pf > t["front"] - 0.019) & (pf < t["back"] + 0.08) & (pl > t["right"] - 0.002) & (pl < t["left"] + 0.002) \
+        & (P[:, :, 2] > t["floor_z"] - 0.002) & (P[:, :, 2] < t["top"] + 0.002)
+    return cav, shell | cav | door, door
+
+
+def opening_masks(scene, fr):
+    cav, mw, door = context_masks(scene, fr)
+    cm = cs.CavitySegmenter(cs.SegmentationConfig(upright="none"), model=type("M", (), {"segment": lambda s, r: (cav, 0.9)})()).segment(fr)
+    cm.microwave, cm.door = mw, door
+    return cm
+
+
+def run_opening(scene, Ts, min_looks=1, blind=None, seed=0, **over):
+    cfg = ft.load_perception_config(overrides={
+        "cavity_method": "opening", "container": {"grasp_offset": [0.0, 0.0, 0.10]},
+        "target": {"blind_support_height_m": blind}, "cloud": {"depth_max_m": 3.0}, **over})
+    frames = [synth_frame(scene, T, seed=seed + i) for i, T in enumerate(Ts)]
+    return ft.run_pipeline(frames, None, cfg, min_looks=min_looks, masks=[opening_masks(scene, f) for f in frames], log=quiet)
+
+
+def scene_view(scene, back=1.1, up=-0.03, side=0.15):
+    """A fixed camera in front, just below the cavity floor: no depth reaches the floor."""
+    o = np.asarray(scene.origin)
+    return look_at_camera(o - scene.f * back + np.array([0, 0, up]) + scene.l * side, o + scene.f * 0.15 + np.array([0, 0, 0.08]))
+
+
+def scene_for_opening(**kw):
+    return MicrowaveScene(**{"origin": (0.62, 0.02, 0.12), "yaw_deg": 8, "height": 0.24, "turntable": 0.0, **kw})
+
+
+def check_box(cav, scene):
+    t = scene.truth()
+    # the scene anchors a sloped back wall 5 cm below the floor, so at floor height it is further back
+    back = t["back"] + 0.05 * np.tan(np.radians(scene.back_tilt_deg))
+    assert abs(cav.front - (t["front"] - 0.02)) < 0.008 and abs(cav.back - back) < 0.008
+    assert abs(cav.left - t["left"]) < 0.012 and abs(cav.right - t["right"]) < 0.012
+    assert abs(cav.floor_z - t["floor_z"]) < 0.01 and abs(cav.top - t["top"]) < 0.012
+    assert np.degrees(np.arccos(np.clip(cav.f @ scene.f, -1, 1))) < 2.0
+
+
+def test_opening_method_measures_the_cavity_from_a_low_scene_camera():
+    scene = scene_for_opening()
+    res, _, cav = run_opening(scene, [scene_view(scene)], blind=0.0)
+    check_box(cav, scene)
+    assert "not seen" in " ".join(res.warnings) and res.support_kind == "floor"
+    assert res.container_center[2] == pytest.approx(cav.floor_z + 0.01 + 0.112 / 2, abs=0.002)
+
+
+def test_opening_method_refuses_an_unseen_turntable_until_it_is_measured():
+    scene = scene_for_opening(turntable=0.012)
+    with pytest.raises(ft.PerceptionError, match="blind_support_height_m"):
+        run_opening(scene, [scene_view(scene)])
+    res, _, cav = run_opening(scene, [scene_view(scene)], blind=0.012)
+    assert res.support_z == pytest.approx(cav.floor_z + 0.012, abs=1e-6) and "raised" in res.support_kind
+
+
+def test_opening_method_matches_the_floor_method_from_the_wrist():
+    scene = scene_for_opening(turntable=0.012, height=0.24)
+    T = wrist_view(scene, roll=0.0, back=0.75, up=0.32, side=0.02)
+    res, _, cav = run_opening(scene, [T])
+    check_box(cav, scene)
+    assert res.support_z == pytest.approx(scene.truth()["support_z"], abs=0.006)
+    floor_res = run(scene, [T], min_looks=1)[0]
+    assert np.linalg.norm(res.container_center - floor_res.container_center) < 0.03
+
+
+def test_opening_method_handles_a_sloped_back_wall():
+    scene = scene_for_opening(back_tilt_deg=12.5)
+    _, _, cav = run_opening(scene, [scene_view(scene)], blind=0.0)
+    check_box(cav, scene)
+
+
+def test_opening_method_refuses_a_rolled_calibration():
+    scene = scene_for_opening()
+    T = scene_view(scene)
+    fr = synth_frame(scene, T)
+    cm = opening_masks(scene, fr)
+    bad = T.copy()
+    c, s = np.cos(np.radians(8)), np.sin(np.radians(8))
+    Rx = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+    bad[:3, :3] = T[:3, :3] @ Rx
+    fr2 = rs.RGBDFrame(fr.bgr, fr.depth_m, K9, bad, source="synthetic")
+    cfg = ft.load_perception_config(overrides={"cavity_method": "opening", "cloud": {"depth_max_m": 3.0}})
+    with pytest.raises(ft.PerceptionError, match="level|disagree|no look"):
+        ft.run_pipeline([fr2], None, cfg, min_looks=1, masks=[cm], log=quiet)
+
+
+def test_opening_method_refuses_without_the_microwave_mask_or_with_a_cut_off_opening():
+    scene = scene_for_opening()
+    fr = synth_frame(scene, scene_view(scene))
+    cfg = ft.load_perception_config(overrides={"cavity_method": "opening", "cloud": {"depth_max_m": 3.0}})
+    cm = opening_masks(scene, fr)
+    cm.microwave = None
+    with pytest.raises(ft.PerceptionError, match="microwave"):
+        ft.run_pipeline([fr], None, cfg, min_looks=1, masks=[cm], log=quiet)
+    cm = opening_masks(scene, fr)
+    ys, xs = np.nonzero(cm.sam_mask)
+    cut = (ys.min() + ys.max()) // 2
+    cm.sam_mask = cm.sam_mask.copy()
+    cm.sam_mask[cut:] = False
+    with pytest.raises(ft.PerceptionError):
+        ft.run_pipeline([fr], None, cfg, min_looks=1, masks=[cm], log=quiet)
+
+
+def test_opening_looks_from_one_viewpoint_are_flagged():
+    scene = scene_for_opening()
+    T = scene_view(scene)
+    res, _, _ = run_opening(scene, [T, T, T], min_looks=3, blind=0.0)
+    assert "one viewpoint" in " ".join(res.warnings)
+
+
+def test_add_context_keeps_each_prompts_mask_and_tolerates_no_door():
+    fr = synth_frame(scene_for_opening(), np.eye(4) @ scene_view(scene_for_opening()))
+    a = np.zeros((480, 640), bool)
+    a[100:200, 100:300] = True
+
+    class Model:
+        def __init__(self, table):
+            self.table = table
+
+        def segment(self, rgb, prompt="inside of open microwave"):
+            return self.table.get(prompt)
+    seg = cs.CavitySegmenter(cs.SegmentationConfig(upright="none", dilate_px=0), model=Model({"inside of open microwave": (a, 0.9), "microwave": (a, 0.8)}))
+    cm = seg.add_context(seg.segment(fr), fr)
+    assert cm.microwave.sum() == a.sum() and cm.door is None and "door" in " ".join(cm.notes)
+    seg = cs.CavitySegmenter(cs.SegmentationConfig(upright="none", dilate_px=0), model=Model({"inside of open microwave": (a, 0.9)}))
+    with pytest.raises(cs.SegmentationError, match="microwave"):
+        seg.add_context(seg.segment(fr), fr)
+
+
+def test_a_non_part1_frame_writes_no_part1_input(tmp_path, capsys):
+    import perceive_placement as pp
+    src = np.load(DATA / "microwave_lookin_2026-10-20.npz")
+    f = tmp_path / "f.npz"
+    np.savez_compressed(f, **{k: src[k] for k in src.files}, base_frame="arm_mount")
+    assert pp.main(["--recorded", str(f), "--mask", str(DATA / "microwave_lookin_2026-10-20_sam3mask.npz"),
+                    "--out", str(tmp_path / "o")]) == 0
+    assert "NO Part 1 input" in capsys.readouterr().out and not (tmp_path / "o" / "place_move.yaml").exists()

@@ -9,6 +9,15 @@
 #   container.length_m / width_m   then drop them from container.nominal
 #   container.grasp_offset         tool frame -> container centre, TOOL frame (Part 1's --grasp-offset)
 #   cloud.depth_corr_m             compare a perceived floor z with a touched floor
+#
+# A scene camera (floor not visible): cavity_method: opening (opening_cavity.py, opening.* keys there). Also set
+#   camera.base_frame             a gravity-aligned frame (+z up). Not arm_base_link if the base is pitched; then
+#                                 no place_move.yaml is written, because Part 1 works in arm_base_link
+#   target.blind_support_height_m turntable height above the shell floor, MEASURED (0 = none); refused without it
+#                                 when depth does not reach the container's footprint
+#   opening.back_dist_m           raise it if the back wall's depth is noisy at that range
+#   cloud.depth_max_m             raise it past the microwave's distance (1.30 clips a far camera's footprint depth)
+cavity_method: floor
 camera:
   color_topic: /wrist_camera/color/image_raw
   info_topic: /wrist_camera/color/camera_info
@@ -18,7 +27,10 @@ container:
   length_m: 0.16          # NOMINAL
   width_m: 0.12           # NOMINAL
   height_m: 0.112         # OXO POP (RAMMP)
-  grasp_offset: null      # e.g. [0.0, 0.0, 0.10] once measured
+  # WRIST CAMERA rig, roll -90 (change for the scene camera): container centre 9 in ahead of the wrist camera
+  # (6.7 cm behind the tool), its bottom 1.875 in below the grasp point.
+  grasp_offset: [-0.0084, 0.0, 0.1613]
+  finger_below_tool_m: 0.0127 # ESTIMATE (0.5 in, not measured): lower finger below the grasp point at roll -90
   nominal: [length_m, width_m]
 target:
   roll_deg: -90

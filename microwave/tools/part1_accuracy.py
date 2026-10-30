@@ -114,12 +114,13 @@ def show(arm, label="now"):
     return q, e
 
 
-def do_park(arm, sim, speed, dry):
-    park = np.asarray(json.loads(PARK_FILE.read_text())["joints"], float)
+def do_park(arm, sim, speed, dry, park=None):
+    """To `park` (raw joints, rad), default park_pose.json."""
+    park = np.asarray(json.loads(PARK_FILE.read_text())["joints"] if park is None else park, float)
     q = arm.raw_joints()
     target = q + short_delta(q, park)
     target[[1, 3, 5]] = park[[1, 3, 5]]
-    print(f"park target {deg(target)} deg ({PARK_FILE.name})")
+    print(f"target {deg(target)} deg")
     if abs(np.degrees(q[3])) > J4_GUARD_DEG:
         qn = q.copy()
         qn[3] = np.sign(q[3]) * np.radians(J4_GUARD_DEG - 1.0)
